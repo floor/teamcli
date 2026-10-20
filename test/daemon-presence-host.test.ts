@@ -17,9 +17,12 @@ import { daemonHealth, probeDaemonHealth } from '../src/daemon/health.ts';
 import { daemonLockPath, daemonSocketPath } from '../src/daemon/paths.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 import type { PresenceActivityResult } from '../src/daemon/presence/activity.ts';
-import { PRESENCE_HEALTH_GRACE_MS } from '../src/daemon/presence/health.ts';
+import {
+  PRESENCE_HEALTH_GRACE_MS, type PresenceSource, type PresenceSourceStatus,
+} from '../src/daemon/presence/health.ts';
 import type { PresenceIngestResult, PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import type { PresencePublishResult } from '../src/daemon/presence/publish.ts';
+import { STATE_FILE } from '../src/state.ts';
 
 const CREW = `format: 1
 project: acme-web
@@ -501,5 +504,152 @@ describe('the health answer', () => {
       session: 'crew', state: 'serving', healthy: true, why: null,
     });
     await daemon.close();
+  }, 15_000);
+});
+
+// Runtime sources are per seat and per managed incarnation. The route's answer stays the ingest
+// answer; a seat's own answer is a fresh in-memory sample fenced on the seat's current binding
+// and this daemon epoch, and a failed expected attachment is an explicit unproven source rather
+// than silence. A quiet channel is never expired by an event's age.
+describe('the per-seat runtime sources', () => {
+  const BINDING = 'prs_0123456789ab';
+
+  function writeSeatBindings(bindings: Record<string, string>): void {
+    const seats: Record<string, unknown> = {};
+    for (const [seat, binding] of Object.entries(bindings)) {
+      seats[seat] = { stage: 'ready', presence_binding: binding };
+    }
+    writeFileSync(join(world.root, '.agents', STATE_FILE), JSON.stringify({
+      format: 1,
+      sessions: { crew: { seats, worktrees: {} } },
+    }));
+  }
+
+  function servingIngester(): PresenceIngester {
+    return {
+      step: async () => ingest({ healthy: true }),
+      close: async () => ({ quiesced: true }),
+      isClosed: () => false,
+    };
+  }
+
+  function started(
+    seat: string,
+    reading: () => PresenceSourceStatus,
+    close: () => Promise<{ quiesced: true }> = async () => ({ quiesced: true }),
+  ): PresenceSource {
+    return { seat, step: async () => {}, status: reading, close };
+  }
+
+  test('a current-incarnation source serves one seat while a refused expected attachment stays pending', async () => {
+    const clock = new Date('2026-10-20T00:00:00.000Z');
+    writeSeatBindings({ 'worker-1': BINDING, 'crew-op': 'prs_ffffffffffff' });
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => servingIngester(),
+      presenceActivity: () => async () => activityResult(),
+      presenceSubscriptions: (): PresenceSource[] => [
+        started('worker-1', () => ({
+          seat: 'worker-1', binding: BINDING, threadId: 'thread-1', channel: 'connected',
+          stream: 'initialized', baseline: 'read', evidenceAt: clock.toISOString(), why: null,
+        })),
+      ],
+      presenceUnproven: () => [{ seat: 'crew-op', why: 'the managed thread is archived' }],
+    });
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats?.[0]?.healthy === true);
+    const presence = daemon.health().roots?.[0]?.presence;
+    // The route's own answer is still the ingest answer, and the refused seat never inherits it.
+    expect(presence).toMatchObject({ session: 'crew', state: 'serving', healthy: true, why: null });
+    expect(presence?.seats).toEqual([
+      { seat: 'worker-1', state: 'serving', healthy: true, why: null },
+      { seat: 'crew-op', state: 'pending', healthy: false, why: 'the managed thread is archived' },
+    ]);
+    await daemon.close();
+  }, 15_000);
+
+  test('a predecessor binding never serves a seat, and a quiet current channel serves with old evidence', async () => {
+    const clock = new Date('2026-10-20T00:00:00.000Z');
+    writeSeatBindings({ 'worker-1': BINDING, 'crew-op': 'prs_ffffffffffff' });
+    const old = new Date(clock.getTime() - 8 * 60 * 60_000).toISOString();
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => servingIngester(),
+      presenceActivity: () => async () => activityResult(),
+      presenceSubscriptions: (): PresenceSource[] => [
+        started('worker-1', () => ({
+          seat: 'worker-1', binding: 'prs_999999999999', threadId: 'thread-1', channel: 'connected',
+          stream: 'initialized', baseline: 'read', evidenceAt: clock.toISOString(), why: null,
+        })),
+        started('crew-op', () => ({
+          seat: 'crew-op', binding: 'prs_ffffffffffff', threadId: 'thread-2', channel: 'connected',
+          stream: 'initialized', baseline: 'read', evidenceAt: old, why: null,
+        })),
+      ],
+    });
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats?.[1]?.healthy === true);
+    expect(daemon.health().roots?.[0]?.presence?.seats).toEqual([
+      {
+        seat: 'worker-1', state: 'pending', healthy: false,
+        why: 'the runtime channel belongs to another incarnation',
+      },
+      { seat: 'crew-op', state: 'serving', healthy: true, why: null },
+    ]);
+    await daemon.close();
+  }, 15_000);
+
+  test('sources close before the ingester drain, and a rejected close retains ownership until it drains', async () => {
+    const order: string[] = [];
+    let reject = true;
+    let ingestClosed = 0;
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      presenceIngest: () => ({
+        step: async () => ingest({ healthy: true }),
+        close: async () => {
+          ingestClosed += 1;
+          order.push('ingest-close');
+          return { quiesced: true };
+        },
+        isClosed: () => false,
+      }),
+      presenceActivity: () => async () => activityResult(),
+      presenceSubscriptions: (): PresenceSource[] => [
+        started('worker-1', () => ({
+          seat: 'worker-1', binding: '', threadId: '', channel: 'unknown',
+          stream: 'uninitialized', baseline: 'pending', evidenceAt: null,
+          why: 'the source is not connected',
+        }), async () => {
+          order.push('source-close');
+          if (reject) throw new Error('the source socket is still open');
+          return { quiesced: true };
+        }),
+      ],
+    });
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats !== undefined);
+
+    await daemon.close();
+    // The ingester stays open while a source that may still stage spool is not closed.
+    expect(order).toEqual(['source-close']);
+    expect(ingestClosed).toBe(0);
+    expect(existsSync(daemonLockPath(world.home))).toBe(true);
+    const retained = readDaemonState(world.home);
+    expect(retained.kind).toBe('ok');
+    if (retained.kind === 'ok') {
+      expect(retained.state.roots[0]?.presence).toEqual({
+        state: 'pending', why: 'the source socket is still open',
+      });
+    }
+
+    // A later close retries the source; only a resolved drain closes the ingester and releases.
+    reject = false;
+    await daemon.close();
+    expect(order).toEqual(['source-close', 'source-close', 'ingest-close']);
+    expect(ingestClosed).toBe(1);
+    expect(existsSync(daemonLockPath(world.home))).toBe(false);
   }, 15_000);
 });

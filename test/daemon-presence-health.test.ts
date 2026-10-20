@@ -9,7 +9,8 @@ import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { hostedWatchSources } from '../src/daemon/watch-run.ts';
 import {
-  PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth, presenceStepHealth,
+  PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth, presenceStepHealth, unprovenSource,
+  type PresenceSourceStatus,
 } from '../src/daemon/presence/health.ts';
 import { presenceId } from '../src/daemon/presence/contract.ts';
 import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
@@ -96,6 +97,123 @@ describe('a step is not healthy just because it finished', () => {
     // The host passes the typed answer, which a throwing step never produces.
     health.stepped(presenceStepHealth({}), after(10));
     expect(health.healthy(after(10))).toBe(false);
+  });
+});
+
+// A runtime source answers for one seat's channel only. Its continuity is fenced on the seat's
+// current managed binding, tagged with the daemon epoch that sampled it, and renewed by the live
+// read this pass — never by an event's age, so a quiet channel stays serving.
+describe('the per-seat runtime answer', () => {
+  const SEAT = 'worker-1';
+  const BINDING = 'prs_0123456789ab';
+  const reading = (over: Partial<PresenceSourceStatus> = {}): PresenceSourceStatus => ({
+    seat: SEAT, binding: BINDING, threadId: 'thread-1', channel: 'connected',
+    stream: 'initialized', baseline: 'read', evidenceAt: START.toISOString(), why: null, ...over,
+  });
+
+  test('an expected seat is not served before its first sample, and a current sample serves it', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    health.seatExpected(SEAT);
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatReason(SEAT, START)).toBe('the runtime channel has not been sampled yet');
+    health.seatObserved({ source: reading(), currentBinding: BINDING, epoch: 'epoch-a' }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(true);
+    expect(health.seatReason(SEAT, START)).toBeNull();
+  });
+
+  test('a seat with no source keeps the route answer, and one non-serving source never touches a sibling', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    expect(health.seatHealthy('crew-op', START)).toBe(true);
+    health.seatObserved({
+      source: reading({ channel: 'unknown', why: 'no measured delivery yet' }),
+      currentBinding: BINDING,
+      epoch: 'epoch-a',
+    }, START);
+    expect(health.seatHealthy('crew-op', START)).toBe(true);
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatReason(SEAT, START)).toBe('no measured delivery yet');
+  });
+
+  test('a quiet channel does not age out: old measured evidence still serves a connected channel', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    const old = new Date(START.getTime() - 6 * 60 * 60_000).toISOString();
+    health.seatObserved({ source: reading({ evidenceAt: old }), currentBinding: BINDING, epoch: 'epoch-a' }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(true);
+  });
+
+  test('a sample older than the shared grace is not current, even with no failure since', () => {
+    const late = after(PRESENCE_HEALTH_GRACE_MS + 1);
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, late);
+    health.seatObserved({ source: reading(), currentBinding: BINDING, epoch: 'epoch-a' }, START);
+    expect(health.seatHealthy(SEAT, late)).toBe(false);
+    expect(health.seatReason(SEAT, late)).toBe(
+      'no runtime-channel answer from the seat inside the liveness window',
+    );
+  });
+
+  test('an initialized stream over a read baseline is required, and evidence must be measured', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    health.seatObserved({
+      source: reading({ stream: 'uninitialized' }), currentBinding: BINDING, epoch: 'epoch-a',
+    }, START);
+    expect(health.seatReason(SEAT, START)).toBe('the runtime stream is not initialized');
+    health.seatObserved({
+      source: reading({ baseline: 'pending' }), currentBinding: BINDING, epoch: 'epoch-a',
+    }, START);
+    expect(health.seatReason(SEAT, START)).toBe('the bound thread baseline is not read');
+    health.seatObserved({
+      source: reading({ evidenceAt: null }), currentBinding: BINDING, epoch: 'epoch-a',
+    }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatReason(SEAT, START)).toBe(
+      'the runtime channel has no measured bound-thread evidence',
+    );
+  });
+
+  test('binding, daemon epoch and the source state are fences, not decoration', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    health.seatObserved({ source: reading(), currentBinding: 'prs_ffffffffffff', epoch: 'epoch-a' }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatReason(SEAT, START)).toBe('the runtime channel belongs to another incarnation');
+
+    health.seatObserved({ source: reading(), currentBinding: BINDING, epoch: 'epoch-b' }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatReason(SEAT, START)).toBe('the runtime channel answer is from another daemon epoch');
+
+    health.seatObserved({
+      source: reading({ channel: 'stopped', why: 'the socket closed' }),
+      currentBinding: BINDING,
+      epoch: 'epoch-a',
+    }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatReason(SEAT, START)).toBe('the socket closed');
+  });
+
+  test('gone never renders continuity: its non-idle verdict is the projection\'s', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    health.stepped(true, START);
+    health.seatObserved({
+      source: reading({ channel: 'gone' }), currentBinding: BINDING, epoch: 'epoch-a',
+    }, START);
+    expect(health.seatHealthy(SEAT, START)).toBe(false);
+    expect(health.seatReason(SEAT, START)).toBe('the runtime reports the session ended');
+  });
+
+  test('a refused attachment is registered as an explicit unproven source that closes cleanly', async () => {
+    const source = unprovenSource(SEAT, 'the managed thread could not be resolved');
+    await source.step(START);
+    expect(source.status(START)).toEqual({
+      seat: SEAT, binding: '', threadId: '', channel: 'unknown',
+      stream: 'uninitialized', baseline: 'pending', evidenceAt: null,
+      why: 'the managed thread could not be resolved',
+    });
+    expect(await source.close()).toEqual({ quiesced: true });
   });
 });
 

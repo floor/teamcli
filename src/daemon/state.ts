@@ -14,12 +14,27 @@ export type DaemonFeatures = { broker: 'on' | 'off' | 'absent' };
 export type DaemonStuckRequest = { id: string; op: string; since: string; ageMs: number };
 
 /**
+ * One seat's fresh runtime-continuity answer inside a route's presence health. It is additive to
+ * the route's ingest answer and never replaces it: a seat with no managed runtime source keeps
+ * the route's own answer, and a route whose ingest is healthy can still carry a pending seat.
+ * `serving` with `healthy: true` is the only combination a reader may treat as proof for that
+ * seat; every other combination names why.
+ */
+export type DaemonRootSeatPresenceHealth = {
+  seat: string;
+  state: 'serving' | 'pending';
+  healthy: boolean;
+  why: string | null;
+};
+
+/**
  * One route's fresh presence answer, computed for the health request that carries it and never
  * persisted. `session` is the session of the team file this daemon actually loaded for the route;
  * `checkedAt` is the request's snapshot instant, not an age of the native event. `serving` with
  * `healthy: true` is the only combination a reader may treat as proof: a gap, a fault, a known
  * backlog, a closing daemon or a route this process does not own answer `pending` with
- * `healthy: false` and a non-empty why.
+ * `healthy: false` and a non-empty why. `seats` carries the per-seat runtime answer when the route
+ * owns managed sources; it is absent for a hook-only route, never an empty serving claim.
  */
 export type DaemonRootPresenceHealth = {
   session: string;
@@ -27,6 +42,8 @@ export type DaemonRootPresenceHealth = {
   healthy: boolean;
   checkedAt: string;
   why: string | null;
+  /** One entry per managed seat whose runtime channel this daemon is fencing. */
+  seats?: DaemonRootSeatPresenceHealth[];
 };
 
 /**

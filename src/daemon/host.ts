@@ -27,7 +27,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine } from '../launch/plain.ts';
-import { pidAlive } from '../state.ts';
+import { pidAlive, readState } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
@@ -40,8 +40,10 @@ import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
+import { isPresenceBinding } from './presence/contract.ts';
 import {
-  createPresenceChannelHealth, presenceStepHealth, type PresenceChannelHealth,
+  PRESENCE_HEALTH_GRACE_MS, createPresenceChannelHealth, presenceStepHealth, unprovenSource,
+  type PresenceChannelHealth, type PresenceSource, type PresenceSourceStatus,
 } from './presence/health.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
@@ -123,6 +125,21 @@ export type StartMachineDaemonInput = {
   /** Builds one route's presence publisher step. The default appends through the bus event log;
    *  a test injects its own to observe what is published and when. */
   presencePublish?: (route: HostedRoute, stateDir: string) => PresencePublisherStep;
+  /**
+   * Builds one canonical route's subscribed per-seat read-only runtime sources. The default is
+   * none: a seat with no source keeps the route's own hook answer, correct only for a seat that
+   * genuinely has no managed native channel (the target resolver's `skip`). A resolution or start
+   * failure is not a skip: it belongs in `presenceUnproven`, so the seat is explicitly unhealthy.
+   * The wiring resolves targets under the existing policy; the host only fences, samples and
+   * closes what it is given.
+   */
+  presenceSubscriptions?: (route: HostedRoute, stateDir: string) => PresenceSource[];
+  /**
+   * Seats this route expected to carry a managed native channel but whose target resolution or
+   * start did not succeed, with the truthful why. Each becomes an explicit unproven source, so a
+   * failed expected attachment can never fall back to the route's hook answer.
+   */
+  presenceUnproven?: (route: HostedRoute, stateDir: string) => Array<{ seat: string; why: string }>;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
 };
@@ -309,10 +326,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   /** The presence work per accepted route, and this process's one in-flight run per route. */
   const presenceWork: {
     route: HostedRoute;
+    /** The team file's folder; the seat's current binding is read from its state record. */
+    stateDir: string;
     ingester: PresenceIngester;
     activity: PresenceActivityStep;
     publisher: PresencePublisherStep;
-    /** This route's fixed liveness, answered to its hosted watch's dispatcher. */
+    /** One read-only runtime source per managed seat; empty for a hook-only route. */
+    sources: PresenceSource[];
+    /** This route's fixed liveness, answered per seat to its hosted watch's dispatcher. */
     health: PresenceChannelHealth;
   }[] = [];
   const presenceRuns = new Map<string, Promise<void>>();
@@ -353,6 +374,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         : closed
           ? 'the daemon is closing'
           : presence.health.reason(at) ?? 'the presence channel is not current';
+      // The route's answer stays the ingest answer. Each managed seat carries its own, so one
+      // seat's unproven runtime channel never marks a sibling or the route pending.
+      const seats = presence.sources.map((source) => {
+        const seatHealthy = !closed && presence.health.seatHealthy(source.seat, at);
+        const seatWhy = seatHealthy
+          ? null
+          : closed
+            ? 'the daemon is closing'
+            : presence.health.seatReason(source.seat, at) ?? 'the runtime channel is not serving';
+        return {
+          seat: source.seat,
+          state: seatHealthy ? 'serving' as const : 'pending' as const,
+          healthy: seatHealthy,
+          why: seatWhy,
+        };
+      });
       return {
         root: route.root,
         presence: {
@@ -361,6 +398,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           healthy,
           checkedAt,
           why,
+          ...(seats.length === 0 ? {} : { seats }),
         },
       };
     });
@@ -516,8 +554,32 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // A root with no readable team file or a second spelling of a hosted checkout got no route,
       // so it gets no ingester.
       const stateDir = dirname(loaded.path);
+      const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, since);
+      // Every expected seat is registered before the first pass, so an unsampled seat can never
+      // inherit the route's answer. A resolution or start failure is registered as an explicit
+      // unproven source; only a resolver's `skip` leaves a seat on the route's hook answer. A
+      // factory that throws is an integration fault: nothing was started, and the call is logged
+      // rather than hidden.
+      const sources: PresenceSource[] = [];
+      const register = (source: PresenceSource): void => {
+        health.seatExpected(source.seat);
+        sources.push(source);
+      };
+      try {
+        for (const source of input.presenceSubscriptions?.(route, stateDir) ?? []) register(source);
+      } catch (error) {
+        appendDaemonLog(home, `presence ${route.root}: runtime subscriptions were not built: ${messageOf(error)}`, now());
+      }
+      try {
+        for (const failed of input.presenceUnproven?.(route, stateDir) ?? []) {
+          register(unprovenSource(failed.seat, failed.why));
+        }
+      } catch (error) {
+        appendDaemonLog(home, `presence ${route.root}: runtime resolutions were not built: ${messageOf(error)}`, now());
+      }
       presenceWork.push({
         route,
+        stateDir,
         ingester: input.presenceIngest?.(route, stateDir)
           ?? createPresenceIngester({ stateDir, session: loaded.team.session }),
         activity: input.presenceActivity?.(route, stateDir)
@@ -530,7 +592,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
             root: canonical,
             home,
           }),
-        health: createPresenceChannelHealth(),
+        sources,
+        health,
       });
     }
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
@@ -630,7 +693,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           log,
           ...(presence === undefined
             ? {}
-            : { presenceChannelHealthy: () => !closed && presence.health.healthy(now()) }),
+            : {
+                // The consumer's contract is per seat and only `=== true` qualifies: a seat with
+                // no source keeps the route's fresh ingest answer, an expected native seat needs
+                // its own current sample, and a missing or false answer holds the projection.
+                presenceChannelHealthy: (seat: string) =>
+                  !closed && presence.health.seatHealthy(seat, now()),
+              }),
           // The shared verifier judges the captured identity against the record under its own
           // lock immediately before every effect; a lifecycle report is never a substitute.
           verifyAuthority: (check) => verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK }),
@@ -669,6 +738,71 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     appendDaemonLog(home, `presence ${route.root}: ${text}`, now());
   };
 
+  /** The seat's current managed binding, read at the moment of use. A missing seat record, an
+   *  absent binding or an unreadable team state means no continuity may be granted: the source's
+   *  own binding is then fenced against nothing. */
+  const currentBindingOf = (stateDir: string, session: string, seat: string): string | null => {
+    try {
+      const record = readState(stateDir).sessions[session]?.seats?.[seat];
+      return record !== undefined && isPresenceBinding(record.presence_binding)
+        ? record.presence_binding
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** One in-memory sample of one source, forced to answer for its own seat and never allowed to
+   *  throw into the pass: a source whose bounded step failed is unproven, which is not healthy.
+   *  Only the sample taken here counts; a persisted source record is never read for health. */
+  const observeSource = async (
+    one: (typeof presenceWork)[number],
+    source: PresenceSource,
+    at: Date,
+  ): Promise<void> => {
+    let reading: PresenceSourceStatus;
+    try {
+      // The stream pump is the pass's measured read. A pump that fails leaves no current
+      // evidence for this seat even when its last status still said connected.
+      await source.step(at);
+      reading = source.status(at);
+    } catch (error) {
+      reading = {
+        seat: source.seat,
+        binding: '',
+        threadId: '',
+        channel: 'unknown',
+        stream: 'uninitialized',
+        baseline: 'pending',
+        evidenceAt: null,
+        why: `the runtime source step failed: ${messageOf(error)}`,
+      };
+    }
+    if (reading.seat !== source.seat) {
+      reading = {
+        seat: source.seat,
+        binding: reading.binding,
+        threadId: reading.threadId,
+        channel: 'unknown',
+        stream: reading.stream,
+        baseline: reading.baseline,
+        evidenceAt: null,
+        why: 'the runtime source answered for another seat',
+      };
+    }
+    one.health.seatObserved({
+      source: reading,
+      currentBinding: currentBindingOf(one.stateDir, one.route.session, source.seat),
+      epoch: since,
+    }, at);
+    if (!one.health.seatHealthy(source.seat, at)) {
+      logPresenceOnce(
+        one.route,
+        `${source.seat}: ${one.health.seatReason(source.seat, at) ?? 'the runtime channel is not serving'}`,
+      );
+    }
+  };
+
   /**
    * One presence pass for one route: the ingester's bounded step, the activity reconciler over
    * what it appended, then the publisher that copies applied current-binding transitions to the
@@ -698,6 +832,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // The channel's fixed liveness is that typed outcome: only a step that finished with no
       // persistent fault and no known backlog vouches for the grace window.
       one.health.stepped(healthy, now(), why);
+      // Each managed seat's runtime evidence is sampled from memory on every pass and fenced
+      // now: this daemon epoch, the seat's current managed binding, this instant. A seat's
+      // source answer never changes the route's ingest answer or a sibling's.
+      for (const source of one.sources) await observeSource(one, source, now());
       try {
         // The transitions are consumed under the state lock only after the step that appended
         // them resolved, so the projection is at least as new as the lines read.
@@ -833,6 +971,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     attempt: null as Promise<unknown> | null,
     closed: false,
   }));
+  /** Per-source close state, under the same rule: a resolved close is quiescence, a rejection
+   *  clears the in-flight slot and names why, so a later close retries only what did not quiesce. */
+  const presenceSourceCloses = presenceWork.map((one) => one.sources.map(() => ({
+    attempt: null as Promise<unknown> | null,
+    closed: false,
+    why: null as string | null,
+  })));
 
   const closeIngester = (index: number): Promise<unknown> => {
     const slot = presenceCloses[index];
@@ -862,8 +1007,57 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     return slot.attempt;
   };
 
+  /** Closes one source and maps its answer: `close` resolves to quiescence only once the drain
+   *  actually finished; a rejection retains ownership and is retried by a later close. */
+  const closeSource = (workIndex: number, sourceIndex: number): Promise<unknown> => {
+    const slot = presenceSourceCloses[workIndex]?.[sourceIndex];
+    const source = presenceWork[workIndex]?.sources[sourceIndex];
+    if (slot === undefined || source === undefined || slot.closed) return Promise.resolve();
+    if (slot.attempt === null) {
+      let attempt: Promise<unknown>;
+      try {
+        attempt = Promise.resolve(source.close());
+      } catch (error) {
+        attempt = Promise.reject(error);
+      }
+      slot.attempt = attempt;
+      slot.why = null;
+      void attempt.then(
+        (value) => {
+          if (slot.attempt !== attempt) return;
+          const quiesced = value !== null && typeof value === 'object'
+            && (value as { quiesced?: unknown }).quiesced === true;
+          if (quiesced) {
+            slot.closed = true;
+          } else {
+            slot.why = 'the runtime source did not quiesce';
+            slot.attempt = null;
+          }
+        },
+        (error) => {
+          if (slot.attempt !== attempt) return;
+          slot.why = messageOf(error);
+          slot.attempt = null;
+        },
+      );
+    }
+    return slot.attempt;
+  };
+
+  /** Starts (or retries) every source cancel on one route. Sources must be quiesced before the
+   *  route's ingester closes: a live source must never stage spool behind a claimed closure. */
+  const closeSources = (workIndex: number): Promise<unknown> => {
+    const one = presenceWork[workIndex];
+    if (one === undefined) return Promise.resolve();
+    return Promise.all(one.sources.map((_source, sourceIndex) => closeSource(workIndex, sourceIndex)));
+  };
+
   const closeOnce = async (): Promise<void> => {
     if (ownershipReleased) return;
+    // A call that joins after the first admission close is a retry: it may retry a source close
+    // that did not resolve earlier, while a first attempt already started every close once in
+    // the admission block and must not call one twice in the same attempt.
+    const resumed = admissionClosed;
     if (!admissionClosed) {
       admissionClosed = true;
       closed = true;
@@ -874,6 +1068,13 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // answering at once through the `closed` guard; its listener stays bound until release,
       // because closing it unlinks the socket a pending drain must retain.
       const admissions: Promise<unknown>[] = [];
+      // Runtime sources stop first, beside the watch and bus admissions and before any drain: an
+      // expected-native source must not stage new spool after its route's ingester declares
+      // quiescence. A close that has not resolved retains ownership below, exactly as a
+      // non-quiesced ingester does.
+      for (let index = 0; index < presenceWork.length; index += 1) {
+        admissions.push(closeSources(index).catch(() => undefined));
+      }
       for (const one of hostedWatches) {
         let stopping: Promise<unknown>;
         try {
@@ -916,8 +1117,24 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // that follows it) finishes, then every ingester's own truthful close. No timeout races the
     // teardown: a write that cannot finish is the honest reason ownership is not released.
     await Promise.allSettled([...presenceRuns.values()]);
+    // A later attempt retries the sources whose close did not resolve. It runs before any
+    // ingester close, and only a resolved drain now counts as quiescence.
+    if (resumed) {
+      await Promise.all(presenceWork.map((_one, index) => closeSources(index).catch(() => undefined)));
+    }
     const unsettled: { route: HostedRoute; why: string }[] = [];
     await Promise.all(presenceWork.map(async (one, index) => {
+      const sourceSlots = presenceSourceCloses[index] ?? [];
+      const openSource = sourceSlots.findIndex((slot) => !slot.closed);
+      if (openSource !== -1) {
+        // The ingester stays open on purpose: closing it while its source may still stage spool
+        // would claim a quiescence the route has not reached.
+        unsettled.push({
+          route: one.route,
+          why: sourceSlots[openSource]?.why ?? 'the runtime source did not close',
+        });
+        return;
+      }
       try {
         const value = await closeIngester(index);
         if (presenceCloses[index]?.closed === true) return;

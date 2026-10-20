@@ -5,6 +5,111 @@
 // owns the route and runs its ingester: it knows whether a pass has finished recently, and a pass
 // that hung ages the answer to unknown instead of claiming the channel still serves. This module
 // is that fixed liveness, kept in memory and never persisted.
+//
+// A route can also carry read-only runtime sources (one per seat, built by the Codex source
+// adapter). Their continuity is a second, per-seat truth: a source answers for one seat's
+// runtime channel only, and its last measured bound-thread evidence is a moment, not a standing
+// proof. A source's own persisted record is never health — only the in-memory sample this
+// process took, tagged with this daemon epoch and fenced on the seat's current binding, can
+// answer. One seat's unproven source never changes a sibling's answer.
+import { isPresenceTime, presenceFutureBeyond } from './contract.ts';
+
+// Continuity is the source's own live transport state, sampled fresh every pass — never an
+// event-age timer. A quiet subscription must not expire because native events are old: only a
+// disconnect, error, closed/finished stream or an incarnation change takes continuity away.
+// Baseline evidence taken at connect is a point-in-time observation, so the source reports it as
+// unproven until measured notification delivery (or measured stream semantics) proves the
+// channel serves; the host never invents a second, event-age horizon on top.
+
+/** One seat's runtime-source reading, in the source's own measured words: `channel` is the
+ *  transport's liveness, `stream` is whether the subscription initialized, `baseline` is whether
+ *  the bound thread's initial state was read, and `evidenceAt` is the instant of the latest
+ *  measured bound-thread evidence. None is a wall-clock guess, and the host adds no event-age
+ *  horizon of its own. */
+export type PresenceSourceStatus = {
+  seat: string;
+  /** The runtime incarnation the source was started for; compared whole against current state. */
+  binding: string;
+  threadId: string;
+  channel: 'connecting' | 'connected' | 'unknown' | 'gone' | 'stopped';
+  stream: 'uninitialized' | 'initialized' | 'lost';
+  baseline: 'pending' | 'read' | 'failed';
+  evidenceAt: string | null;
+  /** Display detail when the source has one; never a verdict and never persisted. */
+  why?: string | null;
+};
+
+/** The read-only runtime source a route owns for one seat. `step` is the bounded stream pump
+ *  the host drives once per pass; `status` is a synchronous read of the source's own measured
+ *  words; `close` (or its `cancel` alias) resolves `{ quiesced: true }` only once the drain
+ *  actually finished, and a rejection retains ownership. */
+export type PresenceSource = {
+  seat: string;
+  step(at: Date): Promise<unknown>;
+  status(at: Date): PresenceSourceStatus;
+  close(): Promise<{ quiesced: true }>;
+};
+
+/**
+ * An explicit source for a seat that expects a managed native runtime channel but whose target
+ * resolution or start failed. It answers unproven forever, so the seat can never silently fall
+ * back to the route's hook health as if no native attachment had been expected.
+ */
+export function unprovenSource(seat: string, why: string): PresenceSource {
+  return {
+    seat,
+    async step(_at: Date): Promise<void> {},
+    status(_at: Date): PresenceSourceStatus {
+      return {
+        seat,
+        binding: '',
+        threadId: '',
+        channel: 'unknown',
+        stream: 'uninitialized',
+        baseline: 'pending',
+        evidenceAt: null,
+        why,
+      };
+    },
+    async close(): Promise<{ quiesced: true }> {
+      return { quiesced: true };
+    },
+  };
+}
+
+/** Whether a source's reading establishes a serving channel this pass. Only a connected,
+ *  initialized stream with a read baseline on the current incarnation qualifies; `gone` never
+ *  renders continuity (its non-idle verdict comes from the canonical projection), and every
+ *  other last-known word is unproven. Event age is deliberately not consulted — a quiet channel
+ *  stays serving. */
+export function sourceContinuity(
+  source: PresenceSourceStatus,
+  currentBinding: string | null,
+  at: Date,
+): { continuous: boolean; why: string | null } {
+  if (source.channel === 'gone') {
+    return { continuous: false, why: source.why ?? 'the runtime reports the session ended' };
+  }
+  if (source.channel !== 'connected') {
+    return { continuous: false, why: source.why ?? `the runtime channel is ${source.channel}` };
+  }
+  if (source.stream !== 'initialized') {
+    return { continuous: false, why: source.why ?? 'the runtime stream is not initialized' };
+  }
+  if (source.baseline !== 'read') {
+    return { continuous: false, why: source.why ?? 'the bound thread baseline is not read' };
+  }
+  if (currentBinding === null || source.binding !== currentBinding) {
+    return { continuous: false, why: 'the runtime channel belongs to another incarnation' };
+  }
+  if (!isPresenceTime(source.evidenceAt)) {
+    return { continuous: false, why: 'the runtime channel has no measured bound-thread evidence' };
+  }
+  if (presenceFutureBeyond(source.evidenceAt, at)) {
+    return { continuous: false, why: 'the runtime channel evidence is in the future' };
+  }
+  return { continuous: true, why: null };
+}
 
 /**
  * How long a finished pass vouches for the channel. The production pass runs every 250 ms; eight
@@ -34,14 +139,38 @@ export type PresenceChannelHealth = {
   /** Why the answer at `at` is not healthy, for display; null when it is healthy. Never a
    *  substitute for `healthy`: no step, a false step and an aged-out step all answer false. */
   reason(at: Date): string | null;
+  /** Records this pass's in-memory sample of one seat's runtime source, fenced on the seat's
+   *  current binding and tagged with the daemon epoch that took it. A persisted source record is
+   *  never passed here; the caller runs `source.step(at)` then samples `source.status(at)`. */
+  seatObserved(input: {
+    source: PresenceSourceStatus;
+    currentBinding: string | null;
+    epoch: string;
+  }, at: Date): void;
+  /** Registers a seat whose route expects a managed runtime source, before the first sample. An
+   *  expected seat that has not been sampled yet is not healthy, so the window before the first
+   *  pass can never inherit the route's ingest answer. */
+  seatExpected(seat: string): void;
+  /** Whether this seat's runtime channel is serving now: the route's ingest is healthy and, when
+   *  the seat has a source, its last sample inside this grace window was continuous under this
+   *  epoch. A seat with no source keeps the route's answer; siblings never affect each other. */
+  seatHealthy(seat: string, at: Date): boolean;
+  /** Why this seat's answer at `at` is false, for display; null when it is true. */
+  seatReason(seat: string, at: Date): string | null;
 };
 
 export function createPresenceChannelHealth(
   graceMs = PRESENCE_HEALTH_GRACE_MS,
+  epoch = '',
 ): PresenceChannelHealth {
   let lastOkAt: number | null = null;
   let lastStepOk = false;
   let lastWhy: string | null = null;
+  const seats = new Map<
+    string,
+    { epoch: string; continuous: boolean; why: string | null; atMs: number }
+  >();
+  const expected = new Set<string>();
   const healthy = (at: Date): boolean => {
     if (!lastStepOk || lastOkAt === null) return false;
     const age = at.getTime() - lastOkAt;
@@ -58,6 +187,39 @@ export function createPresenceChannelHealth(
       if (healthy(at)) return null;
       if (!lastStepOk) return lastWhy ?? 'the presence channel did not answer healthy';
       return 'no presence step finished inside the liveness window';
+    },
+    seatObserved(input, at) {
+      const verdict = sourceContinuity(input.source, input.currentBinding, at);
+      seats.set(input.source.seat, {
+        epoch: input.epoch,
+        continuous: verdict.continuous,
+        why: verdict.why,
+        atMs: at.getTime(),
+      });
+    },
+    seatExpected(seat) {
+      expected.add(seat);
+    },
+    seatHealthy(seat, at) {
+      if (!healthy(at)) return false;
+      const record = seats.get(seat);
+      if (record === undefined) return !expected.has(seat);
+      if (record.epoch !== epoch) return false;
+      const age = at.getTime() - record.atMs;
+      return record.continuous && age >= 0 && age <= graceMs;
+    },
+    seatReason(seat, at) {
+      if (!healthy(at)) return this.reason(at);
+      const record = seats.get(seat);
+      if (record === undefined) {
+        return expected.has(seat) ? 'the runtime channel has not been sampled yet' : null;
+      }
+      if (record.epoch !== epoch) return 'the runtime channel answer is from another daemon epoch';
+      if (!record.continuous) return record.why ?? 'the runtime channel is not serving';
+      const age = at.getTime() - record.atMs;
+      if (age < 0) return 'the runtime channel answer is stamped in the future';
+      if (age > graceMs) return 'no runtime-channel answer from the seat inside the liveness window';
+      return null;
     },
   };
 }
