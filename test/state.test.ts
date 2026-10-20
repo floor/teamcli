@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logLine } from '../src/log.ts';
@@ -13,6 +13,7 @@ import {
   isSeatId,
   mintSeatId,
   readState,
+  storedWatchRecord,
   updateState,
   withLock,
   writeAtomic,
@@ -199,6 +200,30 @@ describe('the state file', () => {
     writeAtomic(join(dir, 'x.json'), 'two');
     expect(readFileSync(join(dir, 'x.json'), 'utf8')).toBe('two');
     expect(readdirSync(dir)).toEqual(['x.json']);
+  });
+});
+
+describe('the raw watch record', () => {
+  test('an absent state file is an absent holder', () => {
+    expect(storedWatchRecord(dir, 'crew')).toBeUndefined();
+  });
+
+  test('a record the read door would clean is still visible here', () => {
+    writeFileSync(join(dir, STATE_FILE), JSON.stringify({
+      format: 1,
+      sessions: { crew: { watch: { pid: 4242, heartbeat: 42 } } },
+    }));
+    expect(storedWatchRecord(dir, 'crew')).toEqual({ pid: 4242, heartbeat: 42 });
+  });
+
+  test('a corrupt state file is not read as an absent holder', () => {
+    writeFileSync(join(dir, STATE_FILE), '{not json');
+    expect(() => storedWatchRecord(dir, 'crew')).toThrow();
+  });
+
+  test('a state path that cannot be read is not an absent holder', () => {
+    mkdirSync(join(dir, STATE_FILE));
+    expect(() => storedWatchRecord(dir, 'crew')).toThrow();
   });
 });
 

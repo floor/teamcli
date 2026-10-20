@@ -706,16 +706,21 @@ export function updateState<T>(
 
 /** The watch record exactly as the state file holds it, before the read door cleans it. A record
  *  the parser cannot use must not look absent to a writer that has to judge the holder: this lets
- *  a locked writer tell a malformed record that stands from no record at all. */
+ *  a locked writer tell a malformed record that stands from no record at all.
+ *
+ *  Only a file that is not there is an absent holder. Any other read or parse failure refuses
+ *  upward: an I/O error is never permission for a writer to acquire. */
 export function storedWatchRecord(dir: string, session: string): unknown {
+  const path = join(dir, STATE_FILE);
+  let text: string;
   try {
-    const raw = JSON.parse(readFileSync(join(dir, STATE_FILE), 'utf8')) as {
-      sessions?: Record<string, { watch?: unknown }>;
-    };
-    return raw.sessions?.[session]?.watch;
-  } catch {
-    return undefined;
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
   }
+  const raw = JSON.parse(text) as { sessions?: Record<string, { watch?: unknown }> };
+  return raw?.sessions?.[session]?.watch;
 }
 
 export function writeAtomic(path: string, text: string): void {

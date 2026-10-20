@@ -128,6 +128,13 @@ describe('acquire', () => {
     expect(current()).toBeUndefined();
   });
 
+  test('a corrupt state refuses acquire and is left exactly as it stood', () => {
+    writeFileSync(join(agents, STATE_FILE), '{not json');
+    expect(() => acquireWatchAuthority(agents, 'crew', { now: at(T0) })).toThrow();
+    expect(readFileSync(join(agents, STATE_FILE), 'utf8')).toBe('{not json');
+    expect(existsSync(join(agents, LOCK_FILE))).toBe(false);
+  });
+
   test('a stale fenced record of this runtime is an old host and is not re-acquired', () => {
     const epoch = mintWatchEpoch();
     seed({ pid: process.pid, epoch, heartbeat: iso(T0) });
