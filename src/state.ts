@@ -103,6 +103,15 @@ export type SeatState = {
    */
   agent_session?: string;
   /**
+   * The presence runtime incarnation of the seat's current launch (`prs_<12 lowercase hex>`),
+   * minted when that launch installs a presence writer and compared whole by the daemon's
+   * presence ingester. Presence events carry it, so a late event from a predecessor process
+   * cannot move a successor seat; a mismatch is set aside, never repaired. Internal state, not
+   * a credential or a public identity, and never printed. Absent when the launch installs no
+   * presence writer, which the ingester treats as no live presence rather than guessing.
+   */
+  presence_binding?: string;
+  /**
    * What this launch declared, written when the idle prompt appears and left in place when a
    * later ready write merges onto the record. A skip of a seat that is already ready does not
    * set them: the file may have drifted, and the record has to stay the launch. Absent on a
