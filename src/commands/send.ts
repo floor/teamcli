@@ -34,6 +34,7 @@ import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor } from '../send/names.ts';
+import { deliverCodexNativeRoute } from '../send/push-adapters.ts';
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
@@ -47,6 +48,8 @@ import { declaredInboundOf, inboundIsLive, inboundSkipReason, type InboundDeclar
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
+import { projectIdOfTeam } from '../dev_mode.ts';
+import { deliveryTimeoutInForce } from '../policy/delivery.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 
@@ -871,12 +874,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // typed leg types, its own outcome is the send's. The drop leg
   // writes the typed leg's own file and stops there, with nothing typed. The mcp-inbox leg
   // takes the send only while the seat's own inbox server is listening, and is otherwise
-  // recorded and passed. The native leg is skipped while SOCKET_SEND is off — the frame path is
-  // a socket write this build does not make — and a walk that reaches it records the skip; a
-  // sender whose own file declares Claude Code gets the handoff instead (unless `--wait` is set,
-  // since a handoff returns immediately to the caller before the frame is sent). A human's walk is
-  // the drop leg alone; the legs this rule kept out are recorded first, so the history line the
-  // drop leg writes (or the refusal) names what the pane was spared.
+  // recorded and passed. The native leg reaches a Codex seat through its own runtime queue, with
+  // nothing typed into a pane; a sender whose own file declares Claude Code gets the handoff
+  // instead (unless `--wait` is set, since a handoff returns immediately to the caller before the
+  // frame is sent). A human's walk is the drop leg alone; the legs this rule kept out are
+  // recorded first, so the history line the drop leg writes (or the refusal) names what the pane
+  // was spared.
   const failures: string[] = [];
   if (human) {
     for (const leg of order) {
@@ -936,6 +939,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
     };
   };
+  // The staged copy is assigned inside `ensureEpisode`'s closure, so the walk reads it through
+  // this call: the declared type, not the narrowing control flow takes at the declaration.
+  const stagedRecordOf = (): RecordWritten | null => stagedWalk;
   // A direct-only send stages its record before its first attempt: no route the watch can take
   // asks anything of the receiver's pane, and the ending the caller reads names that record. An
   // order with no direct route left attempts nothing, so it stages nothing and reports no ending.
@@ -1014,8 +1020,97 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       continue;
     }
     if (leg === 'native') {
-      // A seat whose CLI has no cross-session socket has no native leg to walk: the leg is
-      // skipped without a failure, since no send of this seat's could ever leave by it.
+      // A Codex seat's native route is its own runtime's queue: one pointer line, built from the
+      // signed record's sender, handed to the app-server thread the seat's own record binds. The
+      // route is the receiving seat's: its `codex-daemon` policy, its bound session and the
+      // `native` budget its signed chain sets decide whether the attempt stands. Nothing is typed
+      // into a pane, and a queue acceptance is transport only — the signed read receipt the seat's
+      // own `inbox_read` writes is still the one proof of a read.
+      if (to.cli === 'codex') {
+        // The route's clock starts here, before this process prepares anything for it: the
+        // policy read, the staged copy and the bounded readiness probe all spend the signed
+        // attempt budget rather than getting a fresh one.
+        const routeStartedAt = host.now().getTime();
+        // The signed copy is on disk before the attempt, under the same message id every other
+        // route carries; a copy that cannot be written leaves the route with nothing to hand to
+        // the runtime, so it is passed over.
+        await ensureEpisode();
+        // The control-flow view of `stagedWalk` is the value before the closure ran, so the
+        // staged copy is read through its declared type here.
+        const staged = stagedRecordOf();
+        if (staged === null || !staged.ok) {
+          const why = staged === null ? 'the record could not be written' : staged.reason;
+          failures.push(`native: ${why}`);
+          note(walkAttempt('native', 'unreachable', liveRoutesAfter(walk, at), host.now(), startedAt, { reason: why }));
+          continue;
+        }
+        // The receiving seat's signed chain sets the attempt budget. A chain that does not read
+        // refuses the route rather than falling back to a release default no level chose.
+        const policyTeam = receiving.ok ? receiving.team : null;
+        const deliveryTimeout = policyTeam === null
+          ? { ok: false as const, why: 'the receiving team file could not be read; the native attempt budget is undecided' }
+          : deliveryTimeoutInForce({
+              home: host.home,
+              entity: policyTeam.entity ?? '',
+              projectId: projectIdOfTeam(host.home, policyTeam, to.root) ?? '',
+              root: to.root,
+              team: policyTeam,
+              seat: to.seat,
+              now: host.now(),
+            });
+        const attempt = await deliverCodexNativeRoute(
+          {
+            route: 'native',
+            runtime: 'codex',
+            copy: { dir: dropDir, name: msgId },
+            root: to.root,
+            home: host.home,
+            session: to.session,
+            seat: to.seat,
+            sender: { seat: from, team: teamIdOf(root) },
+          },
+          { id: msgId, record: staged.record },
+          {
+            now: host.now,
+            startedAt,
+            routeStartedAt,
+            deliveryTimeout,
+            liveRoutesRemain: liveRoutesAfter(walk, at),
+            skipStage: true,
+            // Readiness is always read live: a queue that would hold the pointer is a route that
+            // did not take the send, never a hopeful enqueue.
+            liveProbe: true,
+          },
+        );
+        note(attempt.walkAttempt);
+        if (attempt.outcome === 'enqueue') {
+          report.sent = msgId;
+          const failed = failures.length > 0 ? { failed: [...failures] } : {};
+          const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
+          if (wait) {
+            return finishThreadWait(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, 'native', timeoutS, host, report, startedAt, failures, to.sentAs, undefined, callerRoot);
+          }
+          // The queue took the pointer; a read is only what the seat's own signed receipt says.
+          // The receipt check is the same central one every leg uses, bounded by the same grace.
+          const grace = host.inboxGraceMs ?? INBOX_GRACE_MS;
+          if (await awaitReceipt(dropDir, msgId, { to: to.seat, root: to.root, session: to.session }, host.home, grace, claimBindingIn(to.root, to.session, to.seat, msgId))) {
+            clearPending(dropDir, msgId);
+            logLine(dir, 'send', who, `${to.seat}: delivered (read) (drop ${String(body.length)} characters, native queue receipt)`, host.now());
+            appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'delivered (read)', ms: host.now().getTime() - startedAt, via: 'native', ...failed });
+            return delivered(io, to.seat, report, 'read', 'native');
+          }
+          const ms = host.now().getTime() - startedAt;
+          logLine(dir, 'send', who, `${to.seat}: queued to its native runtime (drop ${String(body.length)} characters); no receipt within ${String(grace)} ms`, host.now());
+          appendHistory(to.project, to.root, host.home, { ...entry, ...historySender(report), outcome: 'sent (unconfirmed)', ms, via: 'native', ...failed });
+          return sentUnconfirmed(io, to.seat, report, ms, 'native');
+        }
+        // A held thread, an unreachable or refused queue, or an unreadable policy: the route did
+        // not take the send, and the walk moves to the leg behind it.
+        failures.push(`native: ${attempt.reason}`);
+        continue;
+      }
+      // Any other CLI has no native route this build can walk: the leg is skipped without a
+      // failure, since no send of this seat's could ever leave by it.
       if (to.cli !== 'claude-code') continue;
       // The native leg is the sender's own call, never this build's frame: a sender whose own
       // file declares Claude Code makes the handoff — the pending record, the exact target and
@@ -1176,16 +1271,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
  *  none of them prints it. */
 function walkPhrase(order: readonly DeliveryLeg[], cli: string, handoffEligible: boolean, socketDialable: boolean): string {
   // The socket leg is walkable only where this run would dial it: a Claude receiver that itself
-  // declares accept. The native leg is the sender's own handoff, and only a sender whose own
-  // file declares Claude Code makes it.
+  // declares accept. The native leg is a Codex receiver's own runtime queue, and for any other
+  // receiver only the sender's own handoff — a sender whose own file declares Claude Code.
   const socketWalkable = SOCKET_SEND && socketDialable;
-  const nativeWalkable = cli === 'claude-code' && handoffEligible;
+  const nativeWalkable = cli === 'codex' || (cli === 'claude-code' && handoffEligible);
   const typed = profileFor(cli)?.compose != null
     ? 'a typed brief through its own screens'
     : 'a 0600 drop file and one trigger line';
   const words = (leg: DeliveryLeg): string => {
     if (leg === 'socket') return 'its cross-session socket';
-    if (leg === 'native') return 'the native handoff (your own SendMessage, then --confirm)';
+    if (leg === 'native') {
+      return cli === 'codex' ? 'its native runtime queue' : 'the native handoff (your own SendMessage, then --confirm)';
+    }
     if (leg === 'mcp-inbox') return "the seat's own MCP inbox";
     if (leg === 'drop') return 'a 0600 drop file, with nothing typed into the pane';
     return typed;
@@ -1920,7 +2017,7 @@ async function finishThreadWait(
   seatName: string,
   dropDir: string,
   payload: RecordPayload,
-  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox',
+  via: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native',
   timeoutS: number,
   host: SendHost,
   report: Report,
@@ -3236,7 +3333,7 @@ function seatList(team: TeamFile): string {
  *  `socket` — and `read` for a signed receipt (the mcp-inbox leg's, or a typed trigger's own),
  *  whose own words are `delivered (read)`: the seat read the message, which is not a claim that
  *  it acted on it. `via` names the channel for a read that came through the typed leg. */
-function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed'): number {
+function delivered(io: Io, seat: string, report: Report, note?: string, via?: 'typed' | 'native'): number {
   const summary = `${seat}: delivered${note === undefined ? '' : ` (${note})`}`;
   const read = note === 'read';
   if (report.json) {
@@ -3256,7 +3353,7 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
  *  drop file in the seat's folder and nothing was typed; on the typed leg the trigger left the
  *  composer and the drop is still the message. The `note` says which — a typed send's names the
  *  trigger and the receipt that has not come back. Exit 0, always. */
-function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed', note?: string): number {
+function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed' | 'native', note?: string): number {
   const summary = `${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`;
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
@@ -3273,7 +3370,7 @@ function answered(
   seat: string,
   read: { reply: string; msg_id: string | null },
   report: Report,
-  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' = 'socket',
+  channel: 'socket' | 'typed' | 'drop' | 'mcp-inbox' | 'native' = 'socket',
   thread: string | null = report.sent,
 ): number {
   const summary = `${seat}: answered`;
