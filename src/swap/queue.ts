@@ -129,17 +129,21 @@ export function noteHandover(dir: string, seat: string, queuedAt: string, path: 
 }
 
 /**
- * Whether a swap runs on this pass. A forced swap and a broken seat's swap run at once; every
- * other one runs at the boundary the watch observed — quiet, no turn, no dialog, no task — and
- * past its deadline at the next pause between two turns, which is the same observation minus
- * the task condition. The caller owns that observation; the queue owns the rule.
+ * Whether a swap runs on this pass. An explicit force is the owner's own instruction for this
+ * record and runs at once; every automatic route — a broken screen, the observed boundary
+ * (quiet, no turn, no dialog, no task) and the past-deadline pause between two turns — waits
+ * while the native presence proof holds the seat. The caller owns that observation; the queue
+ * owns the rule.
  */
 export function swapDue(
   swap: QueuedSwap,
-  observed: { working: boolean; prompt: boolean; boundary: boolean; broken: boolean; unsent: boolean },
+  observed: { working: boolean; prompt: boolean; boundary: boolean; broken: boolean; unsent: boolean; nativeHeld?: boolean },
   now: Date,
 ): boolean {
   if (swap.forced) return true;
+  // A runtime turn, a person wait, a session end or an unproven record is not a pause between
+  // two turns: no automatic flag below may stop such a seat.
+  if (observed.nativeHeld === true) return false;
   if (observed.broken) return true;
   if (observed.boundary) return true;
   const pastDeadline = Date.parse(swap.deadline) <= now.getTime();

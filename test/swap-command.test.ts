@@ -87,6 +87,44 @@ function setRule(value: string): void {
   if (!wrote.ok) throw new Error(wrote.why);
 }
 
+const SEAT_ID = 'seat_0123456789ab';
+const BINDING = 'prs_0123456789ab';
+/** The run reads the store itself, so a scene that exercises the hold writes the daemon's own
+ *  projection shape and the seat record that fences it: identity, binding, the canonical fence
+ *  at the projection's exact seq and instant, and the persisted activity stamp. */
+function writePresence(state: 'working' | 'idle'): void {
+  const since = '2026-10-19T08:50:00.000Z';
+  const observedAt = '2026-10-19T08:51:00.000Z';
+  const seatDir = join(root, '.agents', 'presence', 'acme', 'lead');
+  mkdirSync(seatDir, { recursive: true });
+  writeFileSync(join(seatDir, 'current.json'), `${JSON.stringify({
+    v: 1,
+    seq: 7,
+    id: `${since}-a1b2c3d4`,
+    state,
+    source: 'runtime-hook',
+    event: state === 'working' ? 'turn-start' : 'turn-end',
+    binding: BINDING,
+    since,
+    observedAt,
+  })}\n`);
+  const stateDir = join(root, '.agents');
+  const stored = readState(stateDir);
+  const session = stored.sessions.acme ?? { seats: {}, worktrees: {} };
+  session.seats.lead = {
+    ...(session.seats.lead ?? {}),
+    stage: 'ready',
+    id: SEAT_ID,
+    presence_binding: BINDING,
+    presence_applied: { seat_id: SEAT_ID, binding: BINDING, seq: 7, applied_at: observedAt },
+    last_active: since,
+  };
+  writeFileSync(
+    join(stateDir, 'team.state.json'),
+    `${JSON.stringify({ ...stored, format: 1, sessions: { ...stored.sessions, acme: session } })}\n`,
+  );
+}
+
 async function swap(
   argv: string[],
   caller: Caller = OWNER,
@@ -511,6 +549,100 @@ describe('team swap now and --run', () => {
     const ran = await swap(['--run'], OWNER, { sources: world.sources });
     expect(ran.code).toBe(0);
     expect(ran.out).toContain('swapped: lead in pane-new-1 (read-back unread)');
+    expect(queue()).toEqual({});
+  });
+
+  // At the boundary, before the deadline could rescue it: herdr reads idle and the screen reads
+  // idle, but the projected turn is the authority, so the seat is not free.
+  test('--run does not call a seat free while the native proof says a turn runs', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    writePresence('working');
+    const world = fakeHerdr();
+    const ran = await swap(['--run'], OWNER, {
+      sources: world.sources,
+      presenceChannelHealthy: () => true,
+    });
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('lead: stays queued (not due yet)');
+    expect(world.did.typed).toEqual([]);
+    expect(world.did.closed).toEqual([]);
+    expect(queue().lead).toBeDefined();
+  });
+
+  // Past its wait, with herdr reading idle and an idle screen: the screen's word is not the
+  // authority. The run reads the projected turn itself and leaves the seat alone.
+  test('--run past its wait holds a seat the native proof says is working', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    writePresence('working');
+    const world = fakeHerdr();
+    const later = new Date(NOW.getTime() + 31 * 60_000);
+    const ran = await swap(['--run'], OWNER, { sources: world.sources, now: () => later, presenceChannelHealthy: () => true });
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('lead: stays queued (past its wait; the native presence proof holds the seat)');
+    expect(world.did.typed).toEqual([]);
+    expect(world.did.closed).toEqual([]);
+    expect(queue().lead).toBeDefined();
+  });
+
+  test('--run counts a qualified native idle, with the caller\'s channel proof, as the boundary', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    writePresence('idle');
+    const world = fakeHerdr();
+    const later = new Date(NOW.getTime() + 31 * 60_000);
+    const ran = await swap(['--run'], OWNER, {
+      sources: world.sources,
+      now: () => later,
+      presenceChannelHealthy: () => true,
+    });
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('swapped: lead in pane-new-1 (read-back unread)');
+    expect(queue()).toEqual({});
+  });
+
+  // The contract makes an unproven channel a hold, never a fallback: no provider means the
+  // native idle projection cannot license the stop, even though herdr shows an idle screen.
+  test('--run without a channel proof holds even a native idle projection', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    writePresence('idle');
+    const world = fakeHerdr();
+    const later = new Date(NOW.getTime() + 31 * 60_000);
+    const ran = await swap(['--run'], OWNER, { sources: world.sources, now: () => later });
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('lead: stays queued (past its wait; the native presence proof holds the seat)');
+    expect(queue().lead).toBeDefined();
+  });
+
+  test('an automatic broken screen does not bypass the native hold', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    writePresence('working');
+    const world = fakeHerdr({ screen: 'provider error' });
+    const later = new Date(NOW.getTime() + 31 * 60_000);
+    const ran = await swap(['--run'], OWNER, { sources: world.sources, now: () => later, presenceChannelHealthy: () => true });
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('lead: stays queued (past its wait; the native presence proof holds the seat)');
+    expect(world.did.closed).toEqual([]);
+  });
+
+  // The one override is the owner's explicit force for this record: it keeps its own semantics.
+  test('an explicit force still runs a seat the native proof holds', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    writePresence('working');
+    const world = fakeHerdr();
+    const forced = await swap(['now', 'lead'], OWNER, { sources: world.sources });
+    expect(forced.code).toBe(0);
+    expect(forced.out).toContain('swapped: lead in pane-new-1');
     expect(queue()).toEqual({});
   });
 

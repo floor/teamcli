@@ -57,7 +57,14 @@ A <target> is <cli>:<model>, and the recipe is copied from a seat of the entity 
 Exits 0 when the queue or the listing is shown, or a swap is queued, forced, run or cancelled, 1 when refused, a run failed or the entity rule cannot be read, 2 when the invocation or team file is invalid.
 `;
 
-export type SwapCommandOptions = { home?: string; now?: Date | (() => Date); sources?: RestartSources };
+export type SwapCommandOptions = {
+  home?: string;
+  now?: Date | (() => Date);
+  sources?: RestartSources;
+  /** The caller's fresh per-seat native channel health, when it has a provider. Unset leaves
+   *  every native projection unproven, so the run holds such a seat. */
+  presenceChannelHealthy?: (seat: string) => boolean;
+};
 
 function resolveNow(now: Date | (() => Date) | undefined): Date {
   if (typeof now === 'function') return now();
@@ -107,6 +114,8 @@ type RunPlan = {
   owner: boolean;
   now: Date;
   sources: RestartSources;
+  /** The caller's per-seat native channel health, when it has a provider. */
+  presenceChannelHealthy?: (seat: string) => boolean;
   /** `team swap now`: the seat it forced and the record it stands on; absent for `--run`. */
   forcedSeat?: { seat: Seat; record: QueuedSwap; donor: RuleDonor | null };
 };
@@ -306,6 +315,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
         owner,
         now,
         sources: options.sources ?? realSources,
+        ...(options.presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy: options.presenceChannelHealthy }),
       };
     }
   }
@@ -369,6 +379,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     owner,
     now,
     sources: options.sources ?? realSources,
+    ...(options.presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy: options.presenceChannelHealthy }),
   };
 
   if (sub === 'now') {
@@ -497,7 +508,7 @@ function forcedPlan(
  * signed-off seat or a read-back mismatch is a failure and the exit says so.
  */
 async function performRun(origin: RunPlan): Promise<Outcome> {
-  const { dir, root, home, path, team, session, io, rawIo, json, base, by, owner, now, sources, forcedSeat } = origin;
+  const { dir, root, home, path, team, session, io, rawIo, json, base, by, owner, now, sources, presenceChannelHealthy, forcedSeat } = origin;
   if (sources.agents(session) === null) {
     const what = forcedSeat ? 'the forced swap cannot run' : 'no swap can be run';
     refuse(rawIo, io, json, 'swap.herdr', `herdr cannot be read, so ${what} now`, null, base.notice ?? undefined, null);
@@ -517,6 +528,7 @@ async function performRun(origin: RunPlan): Promise<Outcome> {
     sources,
     by,
     owner,
+    ...(presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy }),
     now: () => now,
   };
   let results: SwapRunResult[];

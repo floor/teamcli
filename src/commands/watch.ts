@@ -1103,6 +1103,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               sources: sources.swapSources,
               by: 'the watch',
               owner: false,
+              ...(sources.presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy: sources.presenceChannelHealthy }),
               now: sources.now,
             });
             // A ready swap is said once per new pane; a failure or a read-back mismatch once per

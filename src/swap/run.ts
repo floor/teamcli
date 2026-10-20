@@ -22,6 +22,7 @@ import { readState, type QueuedSwap } from '../state.ts';
 import { approvalStanding } from '../store/store.ts';
 import { liveLeaseOf } from '../tasks/lease.ts';
 import { seatHasAssignedWorkOnDisk } from '../watch/status-events.ts';
+import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { finishSwap, handoverPath, needsHandover, noteHandover, queuedSwaps, swapDue } from './queue.ts';
 
 /** What one observation says about a seat, in the words `swapDue` reads. `boundary` is the mark
@@ -38,6 +39,10 @@ export type SwapObservation = {
   unsent: boolean;
   broken: boolean;
   boundary: boolean;
+  /** The native presence proof does not allow stopping this seat (a turn, a person wait, a
+   *  session end, an unproven record or an unproven channel). Not a boundary, and never due
+   *  past the deadline: the screen's `idle` word cannot overrule the runtime's own record. */
+  nativeHeld?: boolean;
 };
 
 /** The bounded wait the old conversation is given to write its handover. The design names a
@@ -93,6 +98,10 @@ export type SwapRunOptions = {
   /** Whether the run acts with the owner's authorization. A rule-driven swap does (the rule in
    *  force is the owner's word); a `config` swap does only when its caller was the owner. */
   owner: boolean;
+  /** The caller's fresh per-seat native channel health, when it has one (the watch does). Unset
+   *  leaves every native projection unproven, so the run holds such a seat; a run with no
+   *  presence record is unaffected. */
+  presenceChannelHealthy?: (seat: string) => boolean;
   now(): Date;
 };
 
@@ -109,12 +118,15 @@ export function observeSwap(
   /** The team's project: with `sources.home` it reaches the entity event log the assigned-work
    *  check reads beside the project's own. */
   project: string,
+  /** Whether this run's own native presence read holds the seat. The run reads the store itself
+   *  at decision time, so a watch caller and a `team swap` caller reach the same answer. */
+  nativeHeld = false,
 ): SwapObservation | null {
   const agents = sources.agents(session);
   if (agents === null) return null;
   const agent = agents.find((candidate) => candidate.name === seat.name);
   if (!agent) {
-    return { running: false, quiet: false, working: false, prompt: false, unsent: false, broken: false, boundary: false };
+    return { running: false, quiet: false, working: false, prompt: false, unsent: false, broken: false, boundary: false, nativeHeld };
   }
   const cwd = sources.foregroundCwd ? sources.foregroundCwd(session, agent.pane) : null;
   const screen = sources.screen(session, agent.pane, seat.cli, cwd);
@@ -141,16 +153,18 @@ export function observeSwap(
   // live lease, an assigned worktree or temporary task, an unacked message drop (all read by the
   // one assigned-work check the status engine already uses) and a work drop the watch wrote
   // before the record was queued. None of them is a turn, but starting one is exactly what the
-  // stop would cut.
+  // stop would cut. The native proof is the same kind of fact about the runtime itself: a seat
+  // it holds is never free, whatever the screen's word.
   const assigned = seatHasAssignedWorkOnDisk(root, session, seat.name, now.getTime(), {
     project,
     home: sources.home,
   });
   const boundary = quiet && !working && !prompt
+    && !nativeHeld
     && liveLeaseOf(root, seat.name, now.getTime()) === null
     && !assigned
     && !workDropWaiting(root, session, seat.name);
-  return { running: true, quiet, working, prompt, unsent, broken, boundary };
+  return { running: true, quiet, working, prompt, unsent, broken, boundary, nativeHeld };
 }
 
 /** Whether a work drop the watch wrote still waits in the seat's folder. A work drop carries no
@@ -213,7 +227,21 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
     return { kind: 'failed', seat: name, why };
   }
 
-  const observed = observeSwap(sources, session, declared, root, now(), team.project);
+  // This run reads the presence store itself, at decision time, rather than borrowing the
+  // watch's held set: `team swap` reaches the same answer with no watch in the process. Only an
+  // explicit force (handled by `swapDue`) may override the hold; every automatic route honours
+  // it, including a screen that reads broken.
+  const recorded = readState(dir);
+  const presence = await prefetchPresence({ stateDir: dir, session, seatNames: [name] });
+  const read = presence.get(name) ?? { kind: 'absent' as const, why: 'the run read no presence for this seat' };
+  const native = presenceVerdict(
+    read,
+    presenceSeatOf(recorded.sessions[session], name, input.presenceChannelHealthy),
+    { now: now(), thresholdSeconds: 0 },
+  );
+  const nativeHeld = !nativeAllowsTyping(native);
+
+  const observed = observeSwap(sources, session, declared, root, now(), team.project, nativeHeld);
   if (observed === null) {
     return { kind: 'retry', seat: name, why: 'herdr cannot be read; the queue stands' };
   }
@@ -365,6 +393,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
  *  already run out. */
 function waitWhy(swap: QueuedSwap, observed: SwapObservation, now: Date): string {
   if (Date.parse(swap.deadline) > now.getTime()) return 'not due yet';
+  if (observed.nativeHeld === true) return 'past its wait; the native presence proof holds the seat';
   if (observed.unsent) return 'past its wait; the input box holds unsent text';
   if (observed.working) return 'past its wait; the seat is mid-turn';
   if (observed.prompt) return 'past its wait; the seat is at a dialog';
