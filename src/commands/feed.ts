@@ -597,7 +597,12 @@ function presenceSources(
     if (heldAt(store).kind !== 'folder') continue;
     const recorded = recordedRoot(store);
     if (recorded === null) continue;
-    out.push({ key: name, project: name.replace(/-[0-9a-f]{12}$/, ''), root: recorded });
+    const project = name.replace(/-[0-9a-f]{12}$/, '');
+    // The record must locate this very folder. One that names another store's root would read
+    // that store's log under this folder's name — an alias, and a duplicate beside the record
+    // that truthfully locates it. An index that does not hash to its own folder is not read.
+    if (storePath(project, recorded, home) !== store) continue;
+    out.push({ key: name, project, root: recorded });
   }
   return out;
 }
@@ -623,6 +628,13 @@ function itemTime(item: FeedItem): string {
 function byTime(a: FeedItem, b: FeedItem): number {
   const left = itemTime(a);
   const right = itemTime(b);
+  // The presence contract accepts whole-second UTC and 1..3 fractional digits, and byte order
+  // disagrees with the instant inside one second ("01Z" sorts after "01.500Z"). Compare the
+  // instants when both parse; when either does not, keep the history's own byte order, which is
+  // what a legacy line has always been ordered by. Equal instants keep their stable order.
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (!Number.isNaN(leftMs) && !Number.isNaN(rightMs)) return leftMs - rightMs;
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
