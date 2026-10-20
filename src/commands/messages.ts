@@ -19,8 +19,7 @@ import { runClientMessages } from '../client/inbox.ts';
 import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
-import { heldAt, type Held } from '../launch/rules-file.ts';
-import { flushReceipt, publishReadReceipt } from '../mcp/inbox-admission.ts';
+import { type Held } from '../launch/rules-file.ts';
 import {
   contextLine,
   formatRelativeTime,
@@ -51,15 +50,13 @@ import {
 } from '../store/keys.ts';
 import {
   isRead,
-  receiptFile as recordReceiptFile,
   recordFile,
   signedRecordOf,
-  signReceiptPayload,
   verifyRecord,
-  type ReceiptPayload,
   type RecordPayload,
   type SignedRecord,
 } from '../send/record.ts';
+import { publishRecordRead } from '../send/read-receipt.ts';
 
 export const USAGE = `Usage: team messages [--json]
 Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]
@@ -436,6 +433,10 @@ function heldReceipt(candidate: Candidate, status: 'read' | 'replied', entry: Ex
   };
 }
 
+/** The shared receipt act (`publishRecordRead`), in this command's words: a published receipt is
+ *  the right to show the body; a valid receipt another reader wrote is `served`, with no body
+ *  printed; an entry at a receipt name is left exactly as it is; and a receipt this run could not
+ *  confirm is a refusal that names why, never a body. */
 function openRecord(
   candidate: Candidate,
   root: string,
@@ -445,47 +446,27 @@ function openRecord(
   at: string,
 ): ReadGate {
   const recordSession = candidate.session ?? session;
-  const dropDir = recordDir(root, recordSession, candidate.seat);
-  const context = { to: candidate.seat, root, session: recordSession };
-  const servedNow = (): boolean => isRead(dropDir, candidate.id, context, key);
-  // The waiting filter already asked `isRead`; this re-check is the race with every other reader.
-  if (servedNow()) return { kind: 'served' };
-  const readName = recordReceiptFile(dropDir, candidate.id, 'read');
-  const atRead = heldAt(readName);
-  if (atRead.kind === 'file') return servedNow() ? { kind: 'served' } : heldReceipt(candidate, 'read', 'file');
-  if (atRead.kind !== 'missing') return heldReceipt(candidate, 'read', atRead.kind);
-  const atReplied = heldAt(recordReceiptFile(dropDir, candidate.id, 'replied'));
-  if (atReplied.kind === 'file') {
-    // A replied receipt is the read that came before the answer: a valid one serves this id, and
-    // one that does not verify may still be evidence of an earlier exposure, so it stays.
-    return servedNow() ? { kind: 'served' } : heldReceipt(candidate, 'replied', 'file');
-  }
-  if (atReplied.kind !== 'missing') return heldReceipt(candidate, 'replied', atReplied.kind);
-  const receipt: ReceiptPayload = {
-    kind: 'receipt',
-    status: 'read',
+  const outcome = publishRecordRead({
+    dropDir: recordDir(root, recordSession, candidate.seat),
     id: candidate.id,
     to: candidate.seat,
     root,
     session: recordSession,
+    home,
+    key,
     at,
-  };
-  const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home), null, 2)}\n`);
-  if (published === 'exists') {
-    // A rival won the name between the checks and this link. Its entry is the one serving of this
-    // id: verify it, and leave it exactly as it is either way.
-    if (servedNow()) return { kind: 'served' };
-    const atName = heldAt(readName);
-    if (atName.kind === 'missing') {
-      return {
-        kind: 'refused',
-        what: `${candidate.seat}/${candidate.id} was not shown: the read receipt name changed while it was being published`,
-        repair: 'run team messages again',
-      };
-    }
-    return heldReceipt(candidate, 'read', atName.kind);
+  });
+  if (outcome.kind === 'published') return { kind: 'shown' };
+  if (outcome.kind === 'served') return { kind: 'served' };
+  if (outcome.kind === 'held') return heldReceipt(candidate, outcome.status, outcome.entry);
+  if (outcome.reason === 'changed') {
+    return {
+      kind: 'refused',
+      what: `${candidate.seat}/${candidate.id} was not shown: the read receipt name changed while it was being published`,
+      repair: 'run team messages again',
+    };
   }
-  if (published === 'failed') {
+  if (outcome.reason === 'write') {
     return {
       kind: 'refused',
       what: `${candidate.seat}/${candidate.id} was not shown: the read receipt could not be written`,
@@ -494,14 +475,11 @@ function openRecord(
   }
   // The receipt must survive a crash before the body is shown. A receipt that cannot be flushed is
   // not proof: the id stays spent, and this run shows nothing.
-  if (!flushReceipt(readName, dropDir)) {
-    return {
-      kind: 'refused',
-      what: `${candidate.seat}/${candidate.id} was not shown: the read receipt could not be made durable`,
-      repair: 'leave the receipt in place: it already records this read, and the message stays spent',
-    };
-  }
-  return { kind: 'shown' };
+  return {
+    kind: 'refused',
+    what: `${candidate.seat}/${candidate.id} was not shown: the read receipt could not be made durable`,
+    repair: 'leave the receipt in place: it already records this read, and the message stays spent',
+  };
 }
 
 /**
