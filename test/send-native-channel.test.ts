@@ -148,6 +148,11 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     to: address,
     confirm: `team send --confirm ${ID}`,
     message: HANDOFF_BODY,
+    delivery: [
+      { leg: 'native', state: 'attempted' },
+      { leg: 'mcp-inbox', state: 'not-reached' },
+      { leg: 'typed', state: 'not-reached' },
+    ],
     ids: { sent: ID, reply: null },
   });
   // Nothing was delivered by the handoff: no frame, no trigger. The signed record the native

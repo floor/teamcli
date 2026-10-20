@@ -102,6 +102,11 @@ test('--json --wait on a native seat sends the record and reports send.timeout w
       message: 'native: timeout: sent, no reply on the thread within 5s; the thread stays open',
       repair: null,
     },
+    // The error document carries the resolved walk, as the delivered one does.
+    delivery: [
+      { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+      { leg: 'typed', state: 'attempted' },
+    ],
   });
   expect(pane.typed.length).toBe(1);
   expect(pane.enters).toBe(1);

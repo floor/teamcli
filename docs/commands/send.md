@@ -183,22 +183,31 @@ the whole body as an ordinary send, while `memory` refuses the send (exit `send.
 that transport keeps nothing on disk. An ordinary send that names no brief never reads the policy. `--timeout` is a
 whole number of seconds, 1 to 86,400, and is only meaningful with
 `--wait`; without it a wait runs 120 seconds. `--json` prints one document instead of the lines: the action surface and the outcome in one —
-`{format, dry_run, status, action_summary, project, session, seat, channel, ids, thread?, reply?, plan?}` —
+`{format, dry_run, status, action_summary, project, session, seat, channel, ids, thread?, reply?, plan?, delivery?}` —
 where `ids.sent` is the id of the message this command composed and `ids.reply` the reply
 record's own, when there is one (`thread` is the thread id on an answered wait); `channel` is the leg that took it, `null` on a dry run, and
 `plan` is the dry run's own step; a handoff's document also carries the exact `to:` target, the
-`confirm` line and the body the sender's own call carries. `--list` prints its own document —
+`confirm` line and the body the sender's own call carries. `delivery` is the resolved walk's
+legs, in order: a real send marks each `attempted` (its transport was reached, with a `reason`
+when the transport did not take the send), `skipped` (a rule kept it out, with the `reason`),
+`refused` (a rule ended the walk, with the `reason`) or leaves it `not-reached` (the walk ended
+before it), and a Claude receiver whose files keep the implied socket default out gets a
+`skipped` socket entry naming the word that did. `--list` prints its own document —
 `{format, project, session, seats, summary}`. A run that exits 1 or 2 writes the structured
-error document instead — `{error: {id, message, repair}}` — and stderr stays empty.
+error document instead — `{error: {id, message, repair}}` — and stderr stays empty; a send that
+resolved its walk carries the same `delivery` list on that document.
 `--dry-run` resolves the seat and names the channel its walk would take — the first leg it can
 walk and the fallbacks behind it, in order, with `native` left out while no socket write is
 made: `the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line, then a
 0600 drop file, with nothing typed into the pane` for a plain send today, the native handoff
 then that chain for a sender whose own file declares Claude Code and a receiver whose order
 adds `native`, and only an order that keeps no leg this build can walk prints `no leg of its
-delivery order this build can walk`. It
-writes no record, types nothing and appends no line to `.agents/team.log`: a dry run
-writes nothing, and the log records writes.
+delivery order this build can walk`. Under `--json`, its `delivery` lists every leg of the walk
+as `candidate` (with `eligible: true`) or `skipped` (with `eligible: false` and the `reason`),
+including the implied socket leg a Claude receiver's files do not let the walk dial, so an
+omitted socket always carries its reason. It
+writes no record, dials no socket, types nothing and appends no line to `.agents/team.log`: a
+dry run writes nothing, and the log records writes.
 
 ## Addressing
 

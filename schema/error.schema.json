@@ -68,6 +68,47 @@
     "key_isolation": {
       "type": "string",
       "minLength": 1
+    },
+    "delivery": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "leg",
+          "state"
+        ],
+        "properties": {
+          "leg": {
+            "type": "string",
+            "enum": [
+              "socket",
+              "native",
+              "mcp-inbox",
+              "typed",
+              "drop",
+              "headless-resume"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "attempted",
+              "skipped",
+              "refused",
+              "not-reached",
+              "candidate"
+            ]
+          },
+          "eligible": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     }
   }
 }

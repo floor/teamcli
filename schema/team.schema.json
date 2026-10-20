@@ -607,6 +607,14 @@
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
           },
+          "inbound": {
+            "enum": [
+              "accept",
+              "hold",
+              "refuse"
+            ],
+            "$comment": "the seat accepts cross-session socket frames: accept makes it eligible for the socket leg, and a send also needs the receiving launch itself to declare crossSessionInbound accept; hold and refuse never dial it"
+          },
           "count": {
             "type": "integer",
             "minimum": 1
