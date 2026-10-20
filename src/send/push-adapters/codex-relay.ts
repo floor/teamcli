@@ -29,7 +29,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { isAbsolute, join, resolve as resolvePath } from 'node:path';
+import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
 import {
   stage as relayStage,
   type CopyTarget,
@@ -52,6 +52,7 @@ import {
   DELIVERY_TIMEOUT_DEFAULTS,
   type DeliveryTimeoutRoute,
 } from '../../policy/types.ts';
+import { loadTeamFile } from '../../file/load.ts';
 import {
   recordedSeatSession,
   type RecordedSeatSession,
@@ -351,7 +352,25 @@ export function probeCodexNativeRoute(input: CodexNativeProbeInput): CodexNative
 
   let binding = input.sessionBinding;
   if (binding === undefined) {
-    const dir = join(input.root, '.agents');
+    // The seat state lives beside the team file that was actually loaded, never at a hardcoded
+    // `.agents`: a plain-folder or custom layout keeps it elsewhere. A folder that cannot be
+    // resolved is unproven and holds; it is never taken for a seat with no state.
+    let dir: string;
+    try {
+      const loaded = loadTeamFile(input.root, { home: input.home });
+      if (!loaded.ok) {
+        return {
+          status: 'unavailable',
+          reason: `the team file could not be read, so the seat state folder cannot be resolved (${loaded.errors[0]?.message ?? 'unknown error'})`,
+        };
+      }
+      dir = dirname(loaded.path);
+    } catch (error) {
+      return {
+        status: 'unavailable',
+        reason: `the seat state folder could not be resolved (${error instanceof Error ? error.message : String(error)})`,
+      };
+    }
     let state: SeatState | undefined;
     if (existsSync(join(dir, 'team.state.json'))) {
       try {

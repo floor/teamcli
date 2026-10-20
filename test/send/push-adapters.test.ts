@@ -9,7 +9,7 @@ import type {
 } from '../../src/send/push-adapters/codex-relay.ts';
 import { entitiesPath } from '../../src/entities.ts';
 import { grantsDir } from '../../src/grant.ts';
-import { lobbyDir } from '../../src/lobby/gate.ts';
+import { resolveLobby } from '../../src/lobby/gate.ts';
 import { policySignaturePayload } from '../../src/policy/sources.ts';
 import { POLICY_DOMAIN, type PolicyLevel } from '../../src/policy/types.ts';
 import { registerAgent, updateAgent } from '../../src/registry/agents.ts';
@@ -340,7 +340,10 @@ describe('codexPushAdapter (OpenAI Codex 0.161.0 runtime-push adapter)', () => {
       `floor:\n  roots:\n    - ${JSON.stringify(base)}\n`,
     );
     mkdirSync(sockets, { recursive: true });
-    mkdirSync(lobbyDir(home), { recursive: true, mode: 0o700 });
+    // The team declares `entity: floor`, so its lobby is the entity one under `lobbies/`; a
+    // trust list naming only the machine-global lobby does not admit the file this scene loads.
+    const lobby = resolveLobby(home, { entity: 'floor' });
+    mkdirSync(lobby, { recursive: true, mode: 0o700 });
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
     const teamFile = join(dir, 'team.yaml');
     writeFileSync(
@@ -354,7 +357,7 @@ session: teamcli
 workspace:
   mode: shared
 trust:
-  - ${lobbyDir(home)}
+  - ${lobby}
   - ${root}
 seats:
   - role: coordinator
