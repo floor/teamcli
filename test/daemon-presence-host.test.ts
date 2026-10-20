@@ -788,6 +788,17 @@ describe('the per-seat runtime sources', () => {
       sessions: { crew: { seats: Record<string, { presence_applied?: Record<string, unknown> }> } };
     }).sessions.crew.seats['worker-1']?.presence_applied;
     expect(applied).toMatchObject({ seat_id: seatId, binding: BINDING, seq: 2 });
+    // The same applied identity crosses the real socket into the client reconstruction: the
+    // reading `team seats` consumes carries exactly the event id the canonical position applied.
+    const reading = await daemonHealth(world.home, { now: () => clock });
+    const freshPresence = reading.roots[0]?.presence;
+    const freshSeats = freshPresence !== undefined && 'seats' in freshPresence
+      ? freshPresence.seats
+      : undefined;
+    expect(freshSeats?.find((entry) => entry.seat === 'worker-1')).toMatchObject({
+      seat: 'worker-1', state: 'serving', healthy: true, source: 'runtime',
+      binding: BINDING, appliedEventId: NEW,
+    });
     // Eight hours later, with no new event, the seat still serves: there is no event-age expiry.
     const before = pumps;
     clock.setTime(clock.getTime() + 8 * 60 * 60_000);
