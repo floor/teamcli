@@ -474,6 +474,30 @@ export function resolveCodexControlSocketPath(
   return null;
 }
 
+/** The one endpoint a `native` attempt binds both its readiness probe and its queue to: the
+ *  caller's explicit socket, else the control socket under `CODEX_HOME` when the queue's own
+ *  process names one, else the team home's `.codex`. A ws/wss remote has no local socket, so the
+ *  remote itself stays the endpoint. */
+export function resolveCodexAttemptEndpoint(
+  home: string,
+  remote?: string,
+  socketPath?: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+): { socketPath: string | null; remote: string | undefined } {
+  const codexHome = env.CODEX_HOME?.trim();
+  const socket =
+    socketPath !== undefined && socketPath !== null
+      ? socketPath
+      : resolveCodexControlSocketPath(
+          home,
+          remote,
+          codexHome === undefined || codexHome === '' ? undefined : codexHome,
+        );
+  if (socket === null) return { socketPath: null, remote };
+  const queueRemote = socket.startsWith('/') ? `unix://${socket}` : `unix:///${socket}`;
+  return { socketPath: socket, remote: queueRemote };
+}
+
 function encodeMaskedWsTextFrame(text: string): Buffer {
   const payload = Buffer.from(text, 'utf8');
   const mask = randomBytes(4);
@@ -1206,6 +1230,10 @@ export async function deliverCodexNativeRoute(
     };
   }
 
+  // The endpoint a live probe reads is the one the queue below is given. Left to their own
+  // defaults the two can name different daemons: the probe reads the team home's `.codex` while
+  // `codex queue` reads the queue process's inherited `CODEX_HOME`.
+  let boundEndpoint: ReturnType<typeof resolveCodexAttemptEndpoint> | null = null;
   if (options.liveProbe !== undefined && options.liveProbe !== false) {
     const elapsedBeforeProbeMs = Math.max(0, nowFn().getTime() - routeStartedAtMs);
     const remainingBeforeProbeMs = budget.timeoutMs - elapsedBeforeProbeMs;
@@ -1229,6 +1257,8 @@ export async function deliverCodexNativeRoute(
       };
     }
 
+    const endpoint = resolveCodexAttemptEndpoint(target.home, target.remote, options.socketPath);
+    boundEndpoint = endpoint;
     const live = await probeCodexLiveReadiness({
       root: target.root,
       home: target.home,
@@ -1242,7 +1272,7 @@ export async function deliverCodexNativeRoute(
       codexDaemon: 'on',
       sessionBinding: { kind: 'bound', recorded: precheck.recorded },
       timeoutMs: Math.min(CODEX_PREPROBE_TIMEOUT_MS, remainingBeforeProbeMs),
-      ...(options.socketPath !== undefined ? { socketPath: options.socketPath } : {}),
+      socketPath: endpoint.socketPath,
       ...(typeof options.liveProbe === 'function' ? { liveProbe: options.liveProbe } : {}),
     });
 
@@ -1292,11 +1322,12 @@ export async function deliverCodexNativeRoute(
     };
   }
 
+  const queueRemote = boundEndpoint === null ? target.remote : boundEndpoint.remote;
   const adapter =
     options.adapter
     ?? codexPushAdapter({
       ...(options.binary !== undefined ? { binary: options.binary } : {}),
-      ...(target.remote !== undefined ? { remote: target.remote } : {}),
+      ...(queueRemote !== undefined ? { remote: queueRemote } : {}),
       codexDaemon: 'on',
       resolveSession: () => ({ kind: 'bound', recorded: precheck.recorded }),
       ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),

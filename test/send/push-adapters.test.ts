@@ -1675,4 +1675,78 @@ seats:
     expect(spawned).toBe(false);
     expect(existsSync(join(dropDir, SAMPLE_ID))).toBe(false);
   });
+
+  test('a live-probed native attempt binds its probe and its queue to one explicit endpoint', async () => {
+    const { deliverCodexNativeRoute, resolveCodexAttemptEndpoint, resolveCodexControlSocketPath } =
+      await import('../../src/send/push-adapters/codex-relay.ts');
+    const scene = makeCodexPushScene();
+    const sockPath = resolveCodexControlSocketPath(scene.home);
+    if (sockPath === null) throw new Error('expected a local control socket path');
+
+    // One resolver: the team home's `.codex` by default, `CODEX_HOME` when the queue's own
+    // process names one, and an explicit socket ahead of both.
+    expect(resolveCodexAttemptEndpoint(scene.home, undefined)).toEqual({
+      socketPath: sockPath,
+      remote: `unix://${sockPath}`,
+    });
+    const codexHome = join(scene.dir, 'codex-home');
+    expect(resolveCodexAttemptEndpoint(scene.home, undefined, undefined, { CODEX_HOME: codexHome })).toEqual({
+      socketPath: join(codexHome, 'app-server-control', 'app-server-control.sock'),
+      remote: `unix://${join(codexHome, 'app-server-control', 'app-server-control.sock')}`,
+    });
+    const explicit = join(scene.dir, 'explicit.sock');
+    expect(resolveCodexAttemptEndpoint(scene.home, undefined, explicit)).toEqual({
+      socketPath: explicit,
+      remote: `unix://${explicit}`,
+    });
+    // A ws/wss remote is its own endpoint: there is no local socket to read or pass.
+    expect(resolveCodexAttemptEndpoint(scene.home, 'ws://127.0.0.1:8791')).toEqual({
+      socketPath: null,
+      remote: 'ws://127.0.0.1:8791',
+    });
+
+    // The attempt hands the probe socket P and the queue `--remote unix://P`: one endpoint, not
+    // one default per side.
+    const savedCodexHome = process.env.CODEX_HOME;
+    delete process.env.CODEX_HOME;
+    const probedSocket: (string | null | undefined)[] = [];
+    const spawnArgs: (readonly string[])[] = [];
+    try {
+      const attempt = await deliverCodexNativeRoute(
+        {
+          route: 'native',
+          runtime: 'codex',
+          copy: { dir: join(scene.dir, 'drops'), name: SAMPLE_ID },
+          root: scene.root,
+          home: scene.home,
+          session: 'teamcli',
+          seat: 'builder-3',
+          sender: { seat: 'tester-2', team: 'teamcli' },
+        },
+        { id: SAMPLE_ID, record: 'unused: skipStage', pointer: SAMPLE_POINTER },
+        {
+          deliveryTimeout: { native: 5 },
+          skipStage: true,
+          liveProbe: async (probeReq) => {
+            probedSocket.push(probeReq.socketPath);
+            return {
+              ok: true,
+              thread: { id: probeReq.threadId, status: { type: 'idle' }, canAcceptDirectInput: true },
+            };
+          },
+          spawn: (_bin, args) => {
+            spawnArgs.push(args);
+            return { status: 0, stdout: 'Queued\n', stderr: '' };
+          },
+        },
+      );
+      expect(attempt.outcome).toBe('enqueue');
+    } finally {
+      if (savedCodexHome !== undefined) process.env.CODEX_HOME = savedCodexHome;
+    }
+    expect(probedSocket).toEqual([sockPath]);
+    expect(spawnArgs).toEqual([
+      ['queue', '--remote', `unix://${sockPath}`, '--thread', scene.sessionId, '--message', SAMPLE_POINTER],
+    ]);
+  });
 });
