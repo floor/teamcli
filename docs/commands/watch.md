@@ -58,8 +58,8 @@ repository's main checkout, found through git's common directory; a folder that 
 repository is read from `.agents/team.yaml` in that folder only, not from a parent, and a link at
 `.agents` or at the file is not followed. A file at another path is what this command reads when `up` recorded it for the watch
 this session's state names: the command `up` runs carries no `--file`, and any other non-owner
-is refused. It also reads the machine's load, free memory, free disk and
-swap, and, when a temporary seat's end is judged, git.
+is refused. It also reads the machine's load, free memory, free disk, swap and
+the OS's memory-pressure level, and, when a temporary seat's end is judged, git.
 
 Writes `.agents/team.state.json` (the pane it runs in, the workspace, its pid and a heartbeat, once
 a pass; a temporary seat's `worked` and `own_commits` when it sees them; the accounts' latest screen
@@ -172,11 +172,12 @@ or a machine that stays full, is said once, not every pass.
 
 Two things go to `.agents/team.log` without being printed: the watch writes the machine's own
 readings once every ten minutes per watch — `readings: load 1.0/core, memory 69%, disk
-227700000000 B free, swap used 7300000000 B of 8600000000 B (free 1300000000 B)`, `unread` where
-a figure couldn't be read — and `up` and `add` write one line per machine refusal, carrying the
-refusal and the readings it was decided on. The readings are the byte figures the gate compared,
-in this fixed order — load, memory, disk, swap — so a later launch reads the figure that was
-compared, not prose about it; the rounded-GB sentence stays the refusal the owner reads. At the
+227700000000 B free, pressure normal, swap used 7300000000 B of 8600000000 B (free 1300000000 B)`,
+`unread` where a figure or the platform's pressure level couldn't be read — and `up` and `add`
+write one line per machine refusal, carrying the refusal and the readings it was decided on. The
+readings are the byte figures and the level the gate compared, in this fixed order — load, memory,
+disk, pressure, swap — so a later launch reads the figure that was compared, not prose about it;
+the rounded-GB sentence stays the refusal the owner reads. At the
 watch's worst rate that is 144 readings lines a day plus refusals, ≈170 bytes a line and ≈25 KB
 a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 

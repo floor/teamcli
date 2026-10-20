@@ -3,6 +3,10 @@ import { readFileSync, statfsSync } from 'node:fs';
 import { cpus, loadavg } from 'node:os';
 import type { TeamFile } from '../file/types.ts';
 
+// The OS's own memory-pressure level, where it offers one: macOS's kernel level, and Linux's PSI
+// stalls mapped to the same three names.
+export type MemoryPressure = 'normal' | 'warn' | 'critical';
+
 // The machine's figures, each null when it can't be read here: a figure that isn't read is never
 // reported as fine or as bad.
 export type Machine = {
@@ -12,6 +16,9 @@ export type Machine = {
   swapTotal: number | null;    // bytes; null when the machine has no swap
   swapFree: number | null;     // bytes; null when the machine has no swap
   swapUsed: number | null;     // bytes
+  // The OS's level; null when this platform or this machine has no readable signal. Older
+  // readings omit it, and an omitted level is unread too, never normal.
+  pressure?: MemoryPressure | null;
 };
 
 function command(name: string, args: string[]): string | null {
@@ -39,6 +46,18 @@ export function parseSwapUsage(text: string): { total: number; used: number; fre
 export function parseMemoryPressure(text: string): number | null {
   const match = /free percentage:\s*([0-9]+)%/.exec(text);
   return match ? Number(match[1]) : null;
+}
+
+// "1", as `sysctl -n kern.memorystatus_vm_pressure_level` prints macOS's kernel level: 1 normal,
+// 2 warning, 4 critical (the NOTE_MEMORYSTATUS_PRESSURE flags XNU's handler returns). Any other
+// value is a level this code doesn't know; an unknown level is unread, never normal.
+export function parseVmPressureLevel(text: string): MemoryPressure | null {
+  switch (text.trim()) {
+    case '1': return 'normal';
+    case '2': return 'warn';
+    case '4': return 'critical';
+    default: return null;
+  }
 }
 
 // "0.52 0.58 0.59 1/1234 5678", as /proc/loadavg holds it: the one-minute average first.
@@ -74,10 +93,28 @@ export function parseMeminfo(text: string): { memoryFree: number | null; swapTot
   };
 }
 
+// The share of the last ten seconds in which at least one task stalled on memory, from the `some`
+// line of Linux's /proc/pressure/memory. PSI gives stalls, not a level, so these two thresholds
+// are this tool's mapping to the same names macOS gives: a tenth of the time stalled is a
+// warning, half the time is critical. A file without a readable `some avg10` is unread, never
+// normal.
+const PSI_WARN_AVG10 = 10;
+const PSI_CRITICAL_AVG10 = 50;
+
+export function parsePsiMemory(text: string): MemoryPressure | null {
+  const match = /^some\s+avg10=([0-9.]+)/m.exec(text);
+  if (!match) return null;
+  const stalled = Number(match[1]);
+  if (!Number.isFinite(stalled)) return null;
+  if (stalled >= PSI_CRITICAL_AVG10) return 'critical';
+  if (stalled >= PSI_WARN_AVG10) return 'warn';
+  return 'normal';
+}
+
 // This platform's figures: macOS's commands on darwin, Linux's /proc everywhere Linux runs.
 // `platform` and `proc` are parameters for the tests; the command passes neither.
 export function readMachine(root: string, platform: string = process.platform, proc = '/proc'): Machine {
-  const machine: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null };
+  const machine: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null, pressure: null };
   const cores = cpus().length;
   try {
     const volume = statfsSync(root);
@@ -87,6 +124,7 @@ export function readMachine(root: string, platform: string = process.platform, p
     if (cores) machine.loadPerCore = (loadavg()[0] as number) / cores;
     const pressure = command('memory_pressure', []);
     if (pressure) machine.memoryFree = parseMemoryPressure(pressure);
+    machine.pressure = parseVmPressureLevel(command('sysctl', ['-n', 'kern.memorystatus_vm_pressure_level']) ?? '');
     const swap = parseSwapUsage(command('sysctl', ['-n', 'vm.swapusage']) ?? '');
     if (swap && swap.total > 0) {
       machine.swapTotal = swap.total;
@@ -100,6 +138,10 @@ export function readMachine(root: string, platform: string = process.platform, p
     if (cores && one !== null) machine.loadPerCore = one / cores;
     const info = procFile(proc, 'meminfo');
     if (info !== null) Object.assign(machine, parseMeminfo(info));
+    // PSI is a kernel option: a kernel built or booted without it has no file, and the level is
+    // unread rather than normal.
+    const psi = procFile(proc, 'pressure/memory');
+    if (psi !== null) machine.pressure = parsePsiMemory(psi);
   } else if (cores) {
     machine.loadPerCore = (loadavg()[0] as number) / cores;
   }
@@ -112,9 +154,9 @@ export function gb(bytes: number): string {
 }
 
 /**
- * The gate's readings as one sentence, for the log: the same figures the gate compares, in a
- * fixed order, `unread` where a figure wasn't taken — a line in the log never guesses a
- * reading. Disk and swap print the bytes the gate compared, never a rounded-GB spelling of
+ * The gate's readings as one sentence, for the log: the same figures and level the gate
+ * compares, in a fixed order, `unread` where one wasn't taken — a line in the log never guesses
+ * a reading. Disk and swap print the bytes the gate compared, never a rounded-GB spelling of
  * them: a later launch seeds its growth samples from the newest line's swap figures and must
  * read the figure that was compared, not prose about it (the rounded sentence is for people;
  * the log is also read by the tool). Any of the three swap figures missing makes the whole swap
@@ -125,10 +167,13 @@ export function readingsText(machine: Machine): string {
   const load = machine.loadPerCore === null ? 'unread' : `${machine.loadPerCore.toFixed(1)}/core`;
   const memory = machine.memoryFree === null ? 'unread' : `${Math.round(machine.memoryFree)}%`;
   const disk = machine.diskFree === null ? 'unread' : `${machine.diskFree} B free`;
+  // An omitted level (an older reading object) is unread like an unreadable one: a missing
+  // signal is never printed as `normal`.
+  const pressure = machine.pressure ?? 'unread';
   const swap = machine.swapTotal === null || machine.swapUsed === null || machine.swapFree === null
     ? 'unread'
     : `used ${machine.swapUsed} B of ${machine.swapTotal} B (free ${machine.swapFree} B)`;
-  return `load ${load}, memory ${memory}, disk ${disk}, swap ${swap}`;
+  return `load ${load}, memory ${memory}, disk ${disk}, pressure ${pressure}, swap ${swap}`;
 }
 
 export type SwapSample = { at: number; used: number };
@@ -146,8 +191,11 @@ export function recordSwap(samples: SwapSample[], used: number, now: number, win
 
 /**
  * The first `machine:` start limit this reading crosses, or null. A figure that was not read
- * (null) is neither fine nor a refusal. Swap growth uses the samples this command has already
- * taken; one reading on its own never crosses it.
+ * (null) is neither fine nor a refusal, and neither is a pressure level that wasn't read. Free
+ * swap is not a launch limit: macOS keeps swap nearly full while physical memory is free, so
+ * `swap_free_min` belongs to the watch and never refuses a launch on its own; the OS's pressure
+ * level does, at `critical`. Swap growth uses the samples this command has already taken; one
+ * reading on its own never crosses it.
  */
 export function launchLimit(
   machine: Machine,
@@ -164,8 +212,8 @@ export function launchLimit(
   if (machine.diskFree !== null && machine.diskFree < limits.diskMin) {
     return `free disk is ${gb(machine.diskFree)}, below ${gb(limits.diskMin)}`;
   }
-  if (machine.swapFree !== null && machine.swapFree < limits.swapFreeMin) {
-    return `free swap is ${gb(machine.swapFree)}, below ${gb(limits.swapFreeMin)}`;
+  if (machine.pressure === 'critical') {
+    return 'memory pressure is critical';
   }
   if (machine.swapUsed !== null) {
     const growth = recordSwap(samples, machine.swapUsed, now, limits.swapGrowthWindow);
@@ -178,19 +226,18 @@ export function launchLimit(
 }
 
 /**
- * The swap the machine check asks for, when this reading cannot meet it: more free swap than the
- * machine has in total. `launchLimit` refuses on `swapFree < swapFreeMin`, and within one reading
- * free is never above total, so this is the one refusal this reading cannot outrun — this
- * reading's only: macOS's `vm.swapusage` total moves with pressure, so a later run reads a total
- * of its own and the sentence says which reading it came from (`would refuse now`), never what a
- * later `team up` will do. Null when either figure wasn't read, and when the check can pass in
+ * The swap the watch check asks for, when this reading cannot meet it: more free swap than the
+ * machine has in total. Within one reading free is never above total, so the `swap-free` check
+ * cannot pass against this reading; the warning says what this reading holds, never what a later
+ * pass will. Free swap is not a launch limit, so this is a configuration the watch reports, not
+ * a launch that refused. Null when either figure wasn't read, and when the check can pass in
  * principle: a machine with no swap at all is not this case, and neither is one that merely lacks
  * free swap right now.
  */
 export function swapTotalProblem(machine: Machine, limits: TeamFile['machine']): string | null {
   if (machine.swapTotal === null || machine.swapFree === null) return null;
   if (limits.swapFreeMin <= machine.swapTotal) return null;
-  return `the machine check asks for ${gb(limits.swapFreeMin)} free swap; at this reading the machine has ${gb(machine.swapTotal)} in total, so \`team up\` would refuse now; set \`machine.swap_free_min\` to a figure this machine can keep`;
+  return `the machine check asks for ${gb(limits.swapFreeMin)} free swap; at this reading the machine has ${gb(machine.swapTotal)} in total, so this reading cannot meet it; set \`machine.swap_free_min\` to a figure this machine can keep`;
 }
 
 /**
@@ -198,10 +245,10 @@ export function swapTotalProblem(machine: Machine, limits: TeamFile['machine']):
  *
  * `--serial` (or an unreadable load or memory figure, which never counts as fine) runs one seat
  * at a time (`1`). When `launchLimit` passes but the machine is already under load — load per
- * core above 70% of `load_start`, free memory within 10 percentage points of `memory_start`, or
- * free swap below 1.5x `swap_free_min` — it falls back to `1` so `allow` re-reads after each
- * seat settles. When headroom is present, concurrency scales between `2` and `8` from both
- * remaining load and remaining free memory.
+ * core above 70% of `load_start`, free memory within 10 percentage points of `memory_start`, free
+ * swap below 1.5x `swap_free_min`, or the OS's pressure level at `warn` — it falls back to `1` so
+ * `allow` re-reads after each seat settles. When headroom is present, concurrency scales between
+ * `2` and `8` from both remaining load and remaining free memory.
  */
 export function launchConcurrency(
   machine: Machine | undefined,
@@ -213,6 +260,8 @@ export function launchConcurrency(
   if (machine.loadPerCore > limits.loadStart * 0.7) return 1;
   if (machine.memoryFree < limits.memoryStart + 10) return 1;
   if (machine.swapFree !== null && machine.swapFree < limits.swapFreeMin * 1.5) return 1;
+  // A warning level does not refuse a launch, but it is no weather for several at once.
+  if (machine.pressure === 'warn' || machine.pressure === 'critical') return 1;
   const loadSlots = Math.floor((limits.loadStart - machine.loadPerCore) * 4);
   const memorySlots = Math.floor((machine.memoryFree - limits.memoryStart) / 3);
   return Math.max(2, Math.min(8, loadSlots, memorySlots));

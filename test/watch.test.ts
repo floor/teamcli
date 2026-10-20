@@ -16,7 +16,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { parseLoadavg, parseMeminfo, parseMemoryPressure, parseSwapUsage, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
+import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parsePsiMemory, parseSwapUsage, parseVmPressureLevel, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { newMemory, NUDGE_TEXT, pass, ringText } from '../src/watch/pass.ts';
@@ -172,6 +172,15 @@ describe('the machine\'s figures', () => {
     expect(parseMemoryPressure('…\nSystem-wide memory free percentage: 49%\n')).toBe(49);
     expect(parseMemoryPressure('')).toBeNull();
   });
+  test('macOS memory pressure level', () => {
+    expect(parseVmPressureLevel('1\n')).toBe('normal');
+    expect(parseVmPressureLevel('2\n')).toBe('warn');
+    expect(parseVmPressureLevel('4\n')).toBe('critical');
+    // A value this code doesn't know is unread, never normal.
+    expect(parseVmPressureLevel('3\n')).toBeNull();
+    expect(parseVmPressureLevel('critical\n')).toBeNull();
+    expect(parseVmPressureLevel('')).toBeNull();
+  });
   test('Linux meminfo, with and without swap', () => {
     const info = 'MemTotal:       16000000 kB\nMemAvailable:    4000000 kB\nSwapTotal:       2000000 kB\nSwapFree:         500000 kB\n';
     expect(parseMeminfo(info)).toEqual({ memoryFree: 25, swapTotal: 2000000 * 1024, swapFree: 500000 * 1024, swapUsed: 1500000 * 1024 });
@@ -183,22 +192,39 @@ describe('the machine\'s figures', () => {
     expect(parseLoadavg('')).toBeNull();
     expect(parseLoadavg('load average: 1.00')).toBeNull();
   });
+  test('Linux PSI memory pressure, on the same three levels', () => {
+    const psi = (avg10: string) => `some avg10=${avg10} avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n`;
+    expect(parsePsiMemory(psi('0.00'))).toBe('normal');
+    expect(parsePsiMemory(psi('9.99'))).toBe('normal');
+    expect(parsePsiMemory(psi('10.00'))).toBe('warn');
+    expect(parsePsiMemory(psi('49.99'))).toBe('warn');
+    expect(parsePsiMemory(psi('50.00'))).toBe('critical');
+    expect(parsePsiMemory(psi('100.00'))).toBe('critical');
+    // No readable `some` line is unread, never normal: a kernel without PSI has no file at all.
+    expect(parsePsiMemory('full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n')).toBeNull();
+    expect(parsePsiMemory('some avg10=x avg60=0.00')).toBeNull();
+    expect(parsePsiMemory('')).toBeNull();
+  });
 
-  test('Linux: memory, swap and load read from a captured /proc, not from macOS commands', () => {
-    // A 16 GB machine halfway through its memory, 2 GB of swap with 1.5 GB of it used, load 0.52.
+  test('Linux: memory, swap, load and pressure read from a captured /proc, not from macOS commands', () => {
+    // A 16 GB machine halfway through its memory, 2 GB of swap with 1.5 GB of it used, load 0.52,
+    // and PSI `some avg10=12.34`: a warning level.
     const machine = readMachine(process.cwd(), 'linux', new URL('./fixtures/linux/proc', import.meta.url).pathname);
     expect(machine.memoryFree).toBe(50);
     expect(machine.swapTotal).toBe(2 * 1024 ** 3);
     expect(machine.swapFree).toBe(512 * 1024 ** 2);
     expect(machine.swapUsed).toBe(1536 * 1024 ** 2);
     expect(machine.loadPerCore).toBeCloseTo(0.52 / cpus().length, 10);
+    expect(machine.pressure).toBe('warn');
   });
 
-  test('this machine: every figure it can read is a number', () => {
+  test('this machine: every figure it can read is a number, and its level is a known one', () => {
     const machine = readMachine(process.cwd());
     expect(machine.loadPerCore).toBeGreaterThanOrEqual(0);
     expect(machine.diskFree).toBeGreaterThan(0);
-    for (const value of Object.values(machine)) expect(value === null || Number.isFinite(value)).toBe(true);
+    const { pressure, ...figures } = machine;
+    for (const value of Object.values(figures)) expect(value === null || Number.isFinite(value)).toBe(true);
+    expect(pressure === null || pressure === 'normal' || pressure === 'warn' || pressure === 'critical').toBe(true);
   });
 
   test('the swap total the check can never meet', () => {
@@ -208,36 +234,66 @@ describe('the machine\'s figures', () => {
     };
     const small: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
     expect(swapTotalProblem(small, limits)).toBe(
-      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep',
+      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep',
     );
     // The check can pass in principle — its floor sits under the machine's total — and the free
-    // figure is low right now: `up`'s refusal and the watch's finding, and nothing here.
+    // figure is low right now: the watch's finding, and nothing here.
     expect(swapTotalProblem({ ...small, swapTotal: 16e9, swapFree: 0.5e9 }, limits)).toBeNull();
     // Exactly the total the check asks for is meetable.
     expect(swapTotalProblem({ ...small, swapTotal: 2e9 }, limits)).toBeNull();
     // A figure that wasn't read is neither fine nor bad: a machine with no swap at all leaves
-    // both null, and `launchLimit`'s swap rule can't fire there either.
+    // both null, and neither this warning nor `launchLimit` can fire there.
     expect(swapTotalProblem({ ...small, swapTotal: null, swapFree: null }, limits)).toBeNull();
     expect(swapTotalProblem({ ...small, swapFree: null }, limits)).toBeNull();
   });
 
+  test('the launch gate: critical pressure refuses, free swap alone never does', () => {
+    const limits: TeamFile['machine'] = {
+      loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
+      swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
+    };
+    // The host this slice was measured on: 49% of physical memory free, the OS level normal, and
+    // 0.99 GB of a 15.36 GB swap free — under the 2 GB the file asks, and still no refusal.
+    const host: Machine = { loadPerCore: 0.4, memoryFree: 49, diskFree: 120e9, swapTotal: 15.36e9, swapFree: 0.99e9, swapUsed: 14.37e9, pressure: 'normal' };
+    const now = Date.parse('2026-10-20T09:00:00Z');
+    expect(launchLimit(host, limits, [], now)).toBeNull();
+    // A warning level does not refuse either.
+    expect(launchLimit({ ...host, pressure: 'warn' }, limits, [], now)).toBeNull();
+    // A critical level does, whatever the figures say.
+    expect(launchLimit({ ...host, pressure: 'critical' }, limits, [], now)).toBe('memory pressure is critical');
+    // A level that wasn't read is neither fine nor bad: the other limits still decide.
+    expect(launchLimit({ ...host, pressure: null }, limits, [], now)).toBeNull();
+    const older: Machine = { loadPerCore: 0.4, memoryFree: 49, diskFree: 120e9, swapTotal: 15.36e9, swapFree: 0.99e9, swapUsed: 14.37e9 };
+    expect(launchLimit(older, limits, [], now)).toBeNull();
+    // Physical free memory is its own limit, independent of the level.
+    expect(launchLimit({ ...host, memoryFree: 10 }, limits, [], now)).toBe('free memory is 10%, below 25%');
+    expect(launchLimit({ ...host, memoryFree: 10, pressure: 'critical' }, limits, [], now)).toBe('free memory is 10%, below 25%');
+    // The swap-growth guard is kept.
+    expect(launchLimit({ ...host, swapUsed: 15e9, swapFree: 0.36e9 }, limits, [{ at: now - 60_000, used: 13e9 }], now))
+      .toBe('swap grew by 2.0 GB in 10 minutes, above 1.0 GB');
+  });
+
   test('the readings as one sentence, in the log\'s fixed order, in the bytes the gate compared', () => {
-    expect(readingsText({ loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 }))
-      .toBe('load 1.0/core, memory 69%, disk 200000000000 B free, swap used 7000000000 B of 8200000000 B (free 1200000000 B)');
-    // The watch spelling: the disk figure no moment recorded, the rest from a reading taken.
+    expect(readingsText({ loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9, pressure: 'normal' }))
+      .toBe('load 1.0/core, memory 69%, disk 200000000000 B free, pressure normal, swap used 7000000000 B of 8200000000 B (free 1200000000 B)');
+    // The watch spelling: the disk figure and the pressure level no moment recorded, the rest
+    // from a reading taken.
     expect(readingsText({ loadPerCore: 0.7, memoryFree: 69, diskFree: null, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 6.9e9 }))
-      .toBe('load 0.7/core, memory 69%, disk unread, swap used 6900000000 B of 8200000000 B (free 1200000000 B)');
+      .toBe('load 0.7/core, memory 69%, disk unread, pressure unread, swap used 6900000000 B of 8200000000 B (free 1200000000 B)');
     // Not a rounding of the bytes: a figure the gate compared byte for byte prints byte for byte,
     // so a later launch parsing the newest line's swap figures reads the figure it compared.
-    expect(readingsText({ loadPerCore: 0.5, memoryFree: 68, diskFree: 199_999_999_999, swapTotal: 8_192_620_000, swapFree: 1_314_750_000, swapUsed: 6_877_870_000 }))
-      .toBe('load 0.5/core, memory 68%, disk 199999999999 B free, swap used 6877870000 B of 8192620000 B (free 1314750000 B)');
+    expect(readingsText({ loadPerCore: 0.5, memoryFree: 68, diskFree: 199_999_999_999, swapTotal: 8_192_620_000, swapFree: 1_314_750_000, swapUsed: 6_877_870_000, pressure: 'critical' }))
+      .toBe('load 0.5/core, memory 68%, disk 199999999999 B free, pressure critical, swap used 6877870000 B of 8192620000 B (free 1314750000 B)');
   });
   test('a figure that wasn\'t read prints unread, never a guessed number', () => {
-    const none: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null };
-    expect(readingsText(none)).toBe('load unread, memory unread, disk unread, swap unread');
+    const none: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null, pressure: null };
+    expect(readingsText(none)).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
     // One of the three swap figures missing makes the whole swap reading unread.
-    expect(readingsText({ ...none, swapUsed: 6.9e9 })).toBe('load unread, memory unread, disk unread, swap unread');
-    expect(readingsText({ ...none, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: null })).toBe('load unread, memory unread, disk unread, swap unread');
+    expect(readingsText({ ...none, swapUsed: 6.9e9 })).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
+    expect(readingsText({ ...none, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: null })).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
+    // An older reading object that omits the level is unread too, never normal.
+    const older: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null };
+    expect(readingsText(older)).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
   });
 });
 
@@ -1121,9 +1177,9 @@ describe('team watch', () => {
     const lines = readFileSync(join(dir, '.agents', 'team.log'), 'utf8')
       .split('\n').filter((line) => line.includes('watch [watch] readings: '));
     expect(lines).toEqual([
-      '2026-10-03T14:00:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
-      '2026-10-03T14:10:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
-      '2026-10-03T14:20:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:00:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure unread, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:10:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure unread, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:20:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure unread, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
     ]);
   });
 
@@ -1131,7 +1187,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     expect(await runWatch(['--file', file], io, sources(1, { machine: () => ({ ...fine, memoryFree: null, swapFree: null }) }))).toBe(0);
     const log = readFileSync(join(dir, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain('watch [watch] readings: load 1.0/core, memory unread, disk 200000000000 B free, swap unread');
+    expect(log).toContain('watch [watch] readings: load 1.0/core, memory unread, disk 200000000000 B free, pressure unread, swap unread');
   });
 
   test('a log that cannot be written does not kill the pass', async () => {

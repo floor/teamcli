@@ -681,6 +681,21 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     }
 
     const who = callerText;
+    // The launch's machine decision, taken under the run lock at the last point a refusal can
+    // still leave the seat as it is. The preflight above refuses early, outside the lock; this
+    // reading decides the stop, and it shares the run's samples so swap growth across the
+    // preflight (or a handover wait) is measured rather than hidden. Nothing below the stop
+    // reads the machine again: a seat already closed and then refused for a reading taken after
+    // it is a stranded seat, with no pane to go back to.
+    const machineRefusal = (): string | null => {
+      const machine = sources.machine?.(root);
+      if (!machine) return null;
+      const problem = launchLimit(machine, team.machine, samples, sources.now().getTime());
+      if (problem !== null) {
+        logLine(dir, input.command, callerText, `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now());
+      }
+      return problem;
+    };
     const oldPane = rechecked.agent?.pane ?? freshRecorded?.pane ?? 'none';
     let handoverPath: string | undefined;
     let stopObs: Extract<InspectedSeat, { kind: 'ok' }> = rechecked;
@@ -722,6 +737,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
         stopObs = seen;
       }
+
+      // The last refusal before the stop: the reading is taken here, immediately before the
+      // pane is closed, so a seat that goes down is never left down by a guard below.
+      const stopMachineProblem = machineRefusal();
+      if (stopMachineProblem) return { kind: 'not-ready', message: stopMachineProblem };
 
       // A pane herdr still lists is stopped; one it no longer lists is not typed into, and the
       // old record is cleared below either way.
@@ -777,6 +797,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       // The old pane is closed: the seat's agent is stopped until the relaunch below re-points it.
       const ended = registerEnd({ home, team, root, by: who, session }, name, 'stopped', input.endReason);
       if (ended) logLine(dir, input.command, who, ended.note, sources.now());
+    } else {
+      // Nothing was stopped in this run, so the launch's one machine decision is taken here,
+      // before the declaration lands and the plan is built.
+      const machineProblemNow = machineRefusal();
+      if (machineProblemNow) return { kind: 'not-ready', message: machineProblemNow };
     }
 
     // The team file's new declaration lands after the old pane is closed and before the hooks
@@ -899,9 +924,6 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       devMode: devModeMark(dev, devFolded),
       now: sources.now,
       launch: sources.upLaunch,
-      readMachine: sources.machine,
-      samples,
-      limits: team.machine,
       io: json
         ? { ...out, stdout: () => {}, stderr: (text: string) => { notes.push(...text.split('\n').filter((line) => line !== '')); } }
         : out,
@@ -1320,9 +1342,6 @@ function hostOf(input: {
   devMode: boolean;
   now(): Date;
   launch: Launch;
-  readMachine?: (root: string) => Machine;
-  samples: SwapSample[];
-  limits: TeamFile['machine'];
   io: Io;
   standing: Standing;
   teamFile: string;
@@ -1415,14 +1434,6 @@ function hostOf(input: {
     sleep: launch.sleep,
     now: () => input.now().getTime(),
     allow(name) {
-      if (input.readMachine) {
-        const machine = input.readMachine(input.root);
-        const problem = launchLimit(machine, input.limits, input.samples, input.now().getTime());
-        if (problem) {
-          logLine(dir, input.command, input.caller, `refused: ${problem} — readings: ${readingsText(machine)}`, input.now());
-          return problem;
-        }
-      }
       if (name !== seat.name) return null;
       return ceilingProblem(input.ceilings, running, seat);
     },

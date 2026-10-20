@@ -25,7 +25,7 @@ import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
-const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9, pressure: 'normal' };
 const IDLE = CLAUDE_IDLE;
 const PERMISSION = 'Do you want to proceed?\n1. Yes\n';
 
@@ -866,7 +866,7 @@ describe('team add', () => {
     const cases: { machine: Machine; text: string }[] = [
       { machine: { ...fine, loadPerCore: 9 }, text: 'the load is 9.0 per core, above 3' },
       { machine: { ...fine, memoryFree: 10 }, text: 'free memory is 10%, below 25%' },
-      { machine: { ...fine, swapFree: 1.1e9 }, text: 'free swap is 1.1 GB, below 2.0 GB' },
+      { machine: { ...fine, pressure: 'critical' }, text: 'memory pressure is critical' },
     ];
     for (const item of cases) {
       const made = world();
@@ -881,24 +881,24 @@ describe('team add', () => {
   test('a machine refusal writes one line with the printed refusal and its readings', async () => {
     const made = world();
     const io = testIo(project, owner);
-    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 };
+    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9, pressure: 'critical' };
     expect(await runAdd(['worker'], io, sources(made, { machine: () => machine }))).toBe(1);
-    expect(io.err).toContain('team add: free swap is 1.2 GB, below 2.0 GB');
+    expect(io.err).toContain('team add: memory pressure is critical');
     const lines = readFileSync(join(project, '.agents', 'team.log'), 'utf8').split('\n')
-      .filter((line) => line.includes('refused: free swap is '));
+      .filter((line) => line.includes('refused: memory pressure is critical'));
     expect(lines).toEqual([
-      '2026-10-03T14:02:00.000Z add [owner] refused: free swap is 1.2 GB, below 2.0 GB — readings: load 1.0/core, memory 69%, disk 200000000000 B free, swap used 7000000000 B of 8200000000 B (free 1200000000 B)',
+      '2026-10-03T14:02:00.000Z add [owner] refused: memory pressure is critical — readings: load 1.0/core, memory 69%, disk 200000000000 B free, pressure critical, swap used 7000000000 B of 8200000000 B (free 1200000000 B)',
     ]);
   });
 
   test('a dry run and a caller refused before the gate write no line', async () => {
-    const refusing = { ...fine, swapFree: 1.2e9 };
+    const refusing = { ...fine, pressure: 'critical' as const };
     const log = join(project, '.agents', 'team.log');
     const logged = () => (existsSync(log) ? readFileSync(log, 'utf8') : null);
     // A dry run decides nothing and writes nothing, though its refusal reads as the real one's.
     const dry = testIo(project, owner);
     expect(await runAdd(['--dry-run', 'worker'], dry, sources(world(), { machine: () => refusing }))).toBe(1);
-    expect(dry.err).toContain('team add: free swap is 1.2 GB, below 2.0 GB');
+    expect(dry.err).toContain('team add: memory pressure is critical');
     expect(logged()).toBeNull();
     // A caller the caller gate refuses returns before the machine gate is even read.
     const seat = testIo(project, { kind: 'seat', name: 'stranger', pane: 'w1:p1' });
@@ -925,8 +925,15 @@ describe('team add', () => {
     const lines = readFileSync(join(project, '.agents', 'team.log'), 'utf8').split('\n')
       .filter((line) => line.includes('refused: swap grew by '));
     expect(lines).toEqual([
-      '2026-10-03T14:02:00.000Z add [owner] refused: swap grew by 2.0 GB in 10 minutes, above 1.0 GB — readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 3000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:02:00.000Z add [owner] refused: swap grew by 2.0 GB in 10 minutes, above 1.0 GB — readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure normal, swap used 3000000000 B of 9000000000 B (free 8000000000 B)',
     ]);
+  });
+
+  test('free swap under the file does not refuse a launch on its own', async () => {
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker'], io, sources(made, { machine: () => ({ ...fine, swapFree: 1.2e9 }) }))).toBe(0);
+    expect(made.creates).toEqual(['worker']);
   });
 
   test('readings inside every limit still start the seat', async () => {
