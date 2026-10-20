@@ -4,6 +4,49 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "ack",
+      "positionals": [
+        {
+          "name": "id",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team ack <id> [--json]"
+      ],
+      "who": {
+        "gate": "owner-or-own-team",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a seat of this team"
+        },
+        "why": "marking a message read is the record's addressee on its own pane, or the owner: the signed receipt is the same gate team messages writes, and it never reaches another seat's folder"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
