@@ -68,6 +68,24 @@ running and that heartbeat is older than two in-force intervals, the reading als
 difference `the watch's last pass was <n> minutes ago`, repaired with `team watch --session
 <session>`, which starts the watch in its workspace again.
 
+A watch the machine daemon hosts is a different watch from that one, and the reading says it after
+the daemon's own line: `watch: in daemon, last cycle <age>` for a watch whose last pass completed,
+with the age the record gives it and never a borrowed one, and `watch: in daemon, not yet cycled`
+while no pass has completed. The phases say themselves: `watch: starting in the daemon, not yet
+cycled`, `watch: stopping in the daemon`, `watch: stopped in the daemon (<reason>)` and `watch:
+failed in the daemon (<reason>)`, with `no reason recorded` where the record gives none. A watch
+standing down for a live pane watch reads `watch: standing by; a live pane watch owns this session
+(<reason>)`: it leaves that session to the pane watch and touches nothing there. A watch whose
+outbound effects are closed adds `watch: outbound effects blocked (no verified admitted sender is
+injected); it is not enforcing anything` — it can cycle while those effects are closed, and the
+reading never prints it as enforcing. The phase line says how old the last pass is, not whether it
+failed; the check names a failed pass. A stopped or failed watch is terminal in the record: nothing
+here restarts it, and the daemon does not bring it back by itself, so it runs again only when it is
+started again. A route the daemon records no watch for prints no such line: a watch exists only
+where one was started on purpose. With more than one watched route, each line ends with its route,
+`… (<root>)`, so a failed route still reads beside a good one. These lines are notes: never a
+difference, never in a total, never an exit.
+
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]

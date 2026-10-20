@@ -109,6 +109,23 @@ with this one line, so a held seat is named once. A temporary seat — one `team
 recorded and the file never names — is read the same way, from its record, with its like-seat's
 CLI.
 
+A watch the machine daemon hosts is read on the same pass, as notes only. The check names the ones
+a reader would act on: a watch whose last pass failed reads `watch: the last cycle failed`, with
+the age the record gives that pass when it holds one (`watch: the last cycle failed <age>`); a
+watch standing down for a live pane watch reads `watch: standing by; a live pane watch owns this
+session (<reason>)`, and it touches nothing in that session; a required watch that stopped or
+failed reads `watch: stopped in the daemon (<reason>)` or `watch: failed in the daemon (<reason>)`;
+and a watch whose outbound effects are closed adds `watch: outbound effects blocked (no verified
+admitted sender is injected); it is not enforcing anything`, whatever its phase — it can cycle
+while those effects are closed, and the check never prints it as enforcing. The rest of the watch
+is quiet: a watch that is simply cycling, one still starting or stopping, one that has not
+completed its first pass, and a stopped or failed watch the record does not call required add no
+phase line, and a route the daemon records no watch for prints nothing at all — a watch exists
+only where one was started on purpose. A stopped or failed watch is terminal in the record: nothing
+here restarts it, and the daemon does not bring it back by itself, so it runs again only when it is
+started again. With more than one watched route, each line ends with its route, `… (<root>)`. These
+notes never enter the total and never change the exit.
+
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of
 the team in it are both named: `<seat>: left the team file but its record still claims pane <pane>` (its pane
