@@ -620,6 +620,10 @@ describe('team send: --wait', () => {
       session: 'acme',
       seat: 'lead',
       channel: 'typed',
+      delivery: [
+        { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+        { leg: 'typed', state: 'attempted' },
+      ],
       thread: sentId,
       ids: { sent: sentId, reply: 'reply-1' },
       reply: 'pong',
@@ -841,6 +845,7 @@ describe('team send: --json documents', () => {
       session: string;
       seat: string;
       channel: string;
+      delivery: { leg: string; state: string; reason?: string }[];
       ids: { sent: string; reply: string | null };
     }>(io.out, SEND_OUTPUT_SCHEMA);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
@@ -855,6 +860,10 @@ describe('team send: --json documents', () => {
       session: 'acme',
       seat: 'lead',
       channel: 'typed',
+      delivery: [
+        { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+        { leg: 'typed', state: 'attempted' },
+      ],
       ids: { sent: doc.ids.sent, reply: null },
     });
   });
@@ -1110,6 +1119,10 @@ describe('team send: native drop', () => {
       session: 'acme',
       seat: 'lead',
       channel: null,
+      delivery: [
+        { leg: 'mcp-inbox', state: 'candidate', eligible: true },
+        { leg: 'typed', state: 'candidate', eligible: true },
+      ],
       ids: { sent: null, reply: null },
       plan: [{ step: 'send', seat: 'lead', detail: 'claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written', prefix: '+' }],
     });

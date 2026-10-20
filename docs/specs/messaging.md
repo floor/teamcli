@@ -191,9 +191,12 @@ team send --list [--json]
   send once it ships. `--timeout <s>` sets the wait window, a whole number of seconds, and is only
   meaningful with `--wait`.
 - `--json` prints one document: `{format, dry_run, status, action_summary, project, session, seat,
-  channel, ids, reply?, plan?}`; `--list` prints its own: `{format, project, session, seats,
-  summary}`. A run that exits 1 or 2 writes the structured error.
-- `--dry-run` resolves the seat and shows what would be sent, and sends nothing.
+  channel, ids, delivery?, reply?, plan?}`; `--list` prints its own: `{format, project, session, seats,
+  summary}`. A run that exits 1 or 2 writes the structured error. `delivery` is the resolved walk's
+  legs in order, each `attempted`, `skipped`, `refused` or `not-reached`, with the reason a leg was
+  kept out; a dry run lists `candidate` or `skipped` with `eligible` instead.
+- `--dry-run` resolves the seat and shows what would be sent, and sends nothing: no record, no
+  socket dial, no type, no log line.
 - `--list` shows the seats a message could reach; it sends nothing and needs no caller check.
 - `--record` writes no drop file, sends no frame and touches no pane: the sender writes down a
   delivery it made itself — one history line, outcome `delivered`, `via` `native`, with `--ms`.

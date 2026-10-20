@@ -190,6 +190,25 @@ export function publishCommandOutputSchema(
   return { ok: true, path: target };
 }
 
+/** One ordered entry of a send's delivery report: the leg, its state, and — on a dry run —
+ *  whether the walk would take it, with the word that keeps it out when it would not. Shared by
+ *  the action document and the error document, so a failed send reports the same legs a
+ *  delivered one does. */
+const DELIVERY_LEGS_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['leg', 'state'],
+    properties: {
+      leg: { type: 'string', enum: [...DELIVERY_LEGS] },
+      state: { type: 'string', enum: ['attempted', 'skipped', 'refused', 'not-reached', 'candidate'] },
+      eligible: { type: 'boolean' },
+      reason: { type: 'string', minLength: 1 },
+    },
+  },
+};
+
 /** Standard schema for `team.error` (`schema/error.schema.json`). */
 export const ERROR_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.error',
@@ -211,6 +230,9 @@ export const ERROR_OUTPUT_SCHEMA: CommandSchemaSpec = {
     notice: { type: ['string', 'null'] },
     /** The declared limitation of a client app key, carried on a client invocation's usage error. */
     key_isolation: { type: 'string', minLength: 1 },
+    /** A send's resolved walk, on a run that reached one: the failed send reports the same
+     *  ordered legs a delivered one does. Other commands' errors never carry it. */
+    delivery: DELIVERY_LEGS_SCHEMA_FRAGMENT,
   },
 };
 
@@ -1934,6 +1956,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         reply: { type: 'string' },
         address: { type: ['string', 'null'] },
         plan: { type: 'array', items: PLAN_STEP_SCHEMA_FRAGMENT },
+        delivery: DELIVERY_LEGS_SCHEMA_FRAGMENT,
       },
     },
     {
