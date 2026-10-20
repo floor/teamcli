@@ -64,8 +64,9 @@ nothing to `messages.jsonl`.
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 `--follow` and `--json` can't be used together: a follow runs until it is stopped, and `--json`
-is one document per run. The refusal is an invocation error — the usage on stderr, exit 2 — and
-it does not print a `team.error` document, since the run was told to follow.
+is one document per run. The refusal is an invocation error, exit 2. `--json` decides the output,
+never whether an envelope exists: the run prints the `team.error` document (`feed.usage`, message
+`--follow and --json can't be used together`) on stdout.
 
 ## What it reads and writes
 
