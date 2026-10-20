@@ -1294,3 +1294,161 @@ describe('native presence before any dispatch', () => {
     expect(result.pushed).toEqual([{ seat: 'worker-1', ok: true, outcome: 'typed (unconfirmed)' }]);
   });
 });
+
+// A declared tracker has no readable source in this build: the only snapshot the dispatcher may
+// count is one a caller supplies, and this suite proves both faces of that seam — a present
+// snapshot dispatches exactly like a queue, and every other answer holds silently. No broker,
+// socket or credential is involved; the reader is a function in the test process.
+describe("a declared tracker's snapshot", () => {
+  const LINEAR = `${CREW}tasks:
+  source: linear
+  linear:
+    project: 01234567-89ab-cdef-0123-456789abcdef
+    keychainService: team.linear.acme
+`;
+
+  function oneWorker(pane = 'w1:p1'): SessionState {
+    const state = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    state.seats['worker-1']!.pane = pane;
+    return state;
+  }
+
+  test('a present snapshot wakes the seat after asking once for its recorded pane', async () => {
+    const asked: { seat: string; pane: string }[] = [];
+    const calls: WorkPushRequest[] = [];
+    const result = await dispatchIdleWork(input({
+      team: teamOf(LINEAR),
+      state: oneWorker(),
+      push: async (request) => {
+        calls.push(request);
+        return { ok: true, outcome: 'delivered' };
+      },
+      readTaskSnapshot: async (caller) => {
+        asked.push(caller);
+        return { kind: 'records', at: new Date(NOW).toISOString(), records: [{ id: 't1', title: 'First' }] };
+      },
+    }));
+    expect(asked).toEqual([{ seat: 'worker-1', pane: 'w1:p1' }]);
+    expect(calls.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(result.pushed).toEqual([{ seat: 'worker-1', ok: true, outcome: 'delivered' }]);
+  });
+
+  test('an absent snapshot holds: no push, no notice, and no fallback record', async () => {
+    let asked = 0;
+    const result = await dispatchIdleWork(input({
+      team: teamOf(LINEAR),
+      state: oneWorker(),
+      push: async () => {
+        throw new Error('an absent snapshot must never reach the route');
+      },
+      readTaskSnapshot: async () => {
+        asked += 1;
+        return null;
+      },
+    }));
+    expect(asked).toBe(1);
+    expect(result.pushed).toEqual([]);
+    expect(result.fallback).toBeUndefined();
+  });
+
+  test('a refused snapshot holds with the broker’s own sentence', async () => {
+    let asked = 0;
+    const result = await dispatchIdleWork(input({
+      team: teamOf(LINEAR),
+      state: oneWorker(),
+      push: async () => {
+        throw new Error('a refused snapshot must never reach the route');
+      },
+      readTaskSnapshot: async () => {
+        asked += 1;
+        return { kind: 'refused', at: new Date(NOW).toISOString(), why: 'the broker is not running' };
+      },
+    }));
+    expect(asked).toBe(1);
+    expect(result.pushed).toEqual([]);
+    expect(result.fallback).toBeUndefined();
+  });
+
+  test('a caller-supplied snapshot is counted without a second read', async () => {
+    const calls: WorkPushRequest[] = [];
+    const result = await dispatchIdleWork(input({
+      team: teamOf(LINEAR),
+      state: oneWorker(),
+      push: async (request) => {
+        calls.push(request);
+        return { ok: true, outcome: 'delivered' };
+      },
+      broker: { kind: 'records', at: new Date(NOW).toISOString(), records: [{ id: 't1', title: 'First' }] },
+      readTaskSnapshot: async () => {
+        throw new Error('a supplied snapshot must not be read twice');
+      },
+    }));
+    expect(calls.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(result.pushed).toEqual([{ seat: 'worker-1', ok: true, outcome: 'delivered' }]);
+  });
+
+  test('a reader that throws is a held pass, never a crashed watch', async () => {
+    const result = await dispatchIdleWork(input({
+      team: teamOf(LINEAR),
+      state: oneWorker(),
+      push: async () => {
+        throw new Error('a failed read must never reach the route');
+      },
+      readTaskSnapshot: async () => {
+        throw new Error('the socket went away');
+      },
+    }));
+    expect(result.pushed).toEqual([]);
+    expect(result.fallback).toBeUndefined();
+  });
+
+  test('a file source never asks the tracker reader', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const result = await dispatchIdleWork(input({
+      state: stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']),
+      push: async (request) => {
+        calls.push(request);
+        return { ok: true, outcome: 'delivered' };
+      },
+      readTaskSnapshot: async () => {
+        throw new Error('a local queue must not read a tracker');
+      },
+    }));
+    expect(calls.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(result.pushed).toEqual([{ seat: 'worker-1', ok: true, outcome: 'delivered' }]);
+  });
+
+  test('no direct route means no tracker read', async () => {
+    let asked = 0;
+    const result = await dispatchIdleWork(input({
+      team: teamOf(LINEAR),
+      state: oneWorker(),
+      readTaskSnapshot: async () => {
+        asked += 1;
+        return { kind: 'records', at: new Date(NOW).toISOString(), records: [{ id: 't1', title: 'First' }] };
+      },
+    }));
+    expect(asked).toBe(0);
+    expect(result.pushed).toEqual([]);
+  });
+
+  test('a seat with no recorded pane is never named to a reader', async () => {
+    const state = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    let asked = 0;
+    const result = await dispatchIdleWork(input({
+      team: teamOf(LINEAR),
+      state,
+      push: async () => {
+        throw new Error('no pane means no reader and no push');
+      },
+      readTaskSnapshot: async () => {
+        asked += 1;
+        return { kind: 'records', at: new Date(NOW).toISOString(), records: [{ id: 't1', title: 'First' }] };
+      },
+    }));
+    expect(asked).toBe(0);
+    expect(result.pushed).toEqual([]);
+    expect(result.fallback).toBeUndefined();
+  });
+});

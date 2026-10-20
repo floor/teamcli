@@ -22,9 +22,10 @@ import { createHash } from 'node:crypto';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator } from '../bus/seats.ts';
 import type { DirectSendResult } from '../commands/send.ts';
-import type { IdleWorkInput, IdleWorkReport } from '../idle_work.ts';
+import type { BrokerWorkSnapshot, IdleWorkInput, IdleWorkReport } from '../idle_work.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { liveLeases } from '../tasks/lease.ts';
+import { fileSourceOf } from '../tasks/queue.ts';
 import { captureIdleClaim, endIdleClaims, idleClaimOf, settleIdleClaim } from './claim.ts';
 import { isIdleClaim, type IdleClaim } from './claim-record.ts';
 import { idleWorkReport } from './idle-work.ts';
@@ -79,6 +80,14 @@ export type IdleDispatchInput = IdleWorkInput & {
   /** The body a pushed seat is told, rendered per seat by the caller. */
   body: (seat: string) => string;
   push?: WorkPush;
+  /**
+   * The watch's tracker reader, when its sources wire one. Called at most once per pass, and
+   * only for a team whose declared source is not a file, once this pass has proven a seat idle:
+   * the request names that seat and the pane its state record holds, never a made-up identity.
+   * The answer is the snapshot the dispatcher counts; a refusal, a throw, an absence or no
+   * reader at all leaves the count unknown and the pass holds. There is no reader in this build.
+   */
+  readTaskSnapshot?: (caller: { seat: string; pane: string }) => Promise<BrokerWorkSnapshot | null>;
 };
 
 export type IdleDispatchResult = {
@@ -180,7 +189,34 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
         seatNames: input.team.seats.map((seat) => seat.name),
       })
     : input.presence;
-  const report = idleWorkReport({ ...input, presence });
+  let report = idleWorkReport({ ...input, presence });
+  // A declared tracker has no count until its reader answers. Ask once per pass, for the first
+  // seat this pass proved idle and the pane its state record holds; the reader judges the pair.
+  // No reader, no route to push over, an untrustworthy reading, no idle seat, no recorded pane, a
+  // refusal or a throw all leave the count unknown, and the pass holds exactly as it did before
+  // a reader existed. A file source never asks, and a caller-supplied broker snapshot is never
+  // overridden by a second read.
+  if (report.takeable === null && input.broker === undefined && input.readTaskSnapshot !== undefined
+    && input.push !== undefined && report.threshold_unknown === undefined && report.presence_unknown === undefined
+    && fileSourceOf(input.team) === null && report.idle.length > 0) {
+    const seat = report.idle[0]!.seat;
+    const pane = input.state.seats[seat]?.pane;
+    let snapshot: BrokerWorkSnapshot | null;
+    if (pane === undefined) {
+      snapshot = null;
+    } else {
+      try {
+        snapshot = await input.readTaskSnapshot({ seat, pane });
+      } catch (error) {
+        snapshot = {
+          kind: 'refused',
+          at: input.now.toISOString(),
+          why: `the tracker snapshot read failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
+    report = idleWorkReport({ ...input, presence, broker: snapshot });
+  }
   // A reading that cannot be trusted dispatches nothing, announces nothing and resets nothing:
   // the dispatcher cannot tell a seat that left its episode from a reading it could not take.
   if (report.threshold_unknown !== undefined || report.takeable === null) return { pushed: [] };
