@@ -5,15 +5,20 @@
 // signed one in this checkout's session, addressed to the caller, in the caller's own folder.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readEvents } from '../src/bus/log.ts';
 import type { Caller } from '../src/caller.ts';
 import { plantRecord, recordDir } from '../src/commands/messages.ts';
 import { runReply, USAGE, type ReplyHost } from '../src/commands/reply.ts';
+import { entitiesPath } from '../src/entities.ts';
+import { lobbyDir } from '../src/lobby/gate.ts';
 import { EVENT_THRESHOLDS } from '../src/policy/events.ts';
-import { REPLY_RULE } from '../src/send/admit.ts';
+import { writePolicySet } from '../src/policy/index.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { REPLY_RULE, SAME_TEAM_RULE, ENTITY_RULE } from '../src/send/admit.ts';
 import { readHistory } from '../src/send/history.ts';
 import { signedCloseOf, signedReceiptOf, verifyClose, verifyReceipt } from '../src/send/record.ts';
 import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
@@ -169,7 +174,7 @@ describe('a reply is a record on the thread it answers', () => {
     });
   });
 
-  test('a reply between two seats no other rule pairs is admitted by the reply rule', async () => {
+  test('a reply between two seats of one team is admitted by its own team rule', async () => {
     place('helper', 'w2:p1');
     sentTo('helper', SENT, { from: 'worker' });
     const result = await run([SENT, 'answered'], { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' }, { newId: () => REPLY });
@@ -179,10 +184,10 @@ describe('a reply is a record on the thread it answers', () => {
     expect(record.payload).toMatchObject({
       from: 'helper',
       to: 'worker',
-      rule: REPLY_RULE,
+      rule: SAME_TEAM_RULE,
       thread: SENT,
       in_reply_to: SENT,
-      body: `from the file's seat helper (no registry record yet) — admitted by: ${REPLY_RULE}\n\nanswered`,
+      body: `from the file's seat helper (no registry record yet) — admitted by: ${SAME_TEAM_RULE}\n\nanswered`,
     });
   });
 
@@ -210,7 +215,7 @@ describe('a reply is a record on the thread it answers', () => {
     expect(record.payload).toMatchObject({
       from: 'helper',
       to: 'worker',
-      rule: REPLY_RULE,
+      rule: SAME_TEAM_RULE,
       thread: SENT,
       in_reply_to: SENT,
     });
@@ -359,12 +364,15 @@ describe('who and which record', () => {
     expect(result.err).toBe(`team reply: the message ${SENT} was written by an earlier build and has no thread; it is read, not answered\n`);
   });
 
-  test('a seat cannot answer a record the owner sent', async () => {
+  test('a seat cannot answer a record the owner sent when the team names no owner-reply endpoint', async () => {
     place('lead', 'w1:p1');
     sentTo('lead', SENT, { from: 'owner' });
     const result = await run([SENT, 'hello'], { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
     expect(result.code).toBe(1);
-    expect(result.err).toBe(`team reply: record ${SENT} was sent by the owner, and this build does not deliver a reply to the owner; nothing was written\n`);
+    expect(result.err).toBe(
+      `team reply: record ${SENT} was sent by the owner, and the owner's reply endpoint is missing ` +
+        '(the team names no entity, so there is no owner-reply target); nothing was written\n',
+    );
   });
 
   test('a sender the file no longer declares is not reached by a reply', async () => {
@@ -418,6 +426,157 @@ describe('who and which record', () => {
     const result = await run([SENT, 'hello'], { kind: 'owner-no-tty' });
     expect(result.code).toBe(1);
     expect(result.err).toBe('team reply: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane\n');
+  });
+});
+
+// An owner-origin record has no seat of this file to answer it: the reply goes to the entity's
+// `owner-reply-to` endpoint — the address the owner-origin frame names — resolved through the
+// registry, across teams, and written into that team's drop folder. Entity floor ships its
+// orchestrator; every other entity must declare one, and a missing, unreadable or unresolvable
+// endpoint is refused before anything is written.
+describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
+  /** The registry world an endpoint reply needs: the replying seat's own record — a declared
+   *  sender's judgement stops at its own team — the floor team, and the seats the policy can
+   *  name. The team file names the entity the policy is read for. */
+  function endpointWorld(): { floorRoot: string; leadId: string; orchestratorId: string; inboxId: string } {
+    writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n'));
+    const lead = registerAgent(home, {
+      name: 'lead of acme',
+      signing: { model: 'Test', version: '1', role: 'coordinator' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamIdOf(root), seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    const orchestrator = registerAgent(home, {
+      name: 'orchestrator of floor',
+      signing: { model: 'Test', version: '1', role: 'coordinator' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: 'floor', seat: 'orchestrator', session: 'floor', pane: 'w5:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    const inbox = registerAgent(home, {
+      name: 'inbox of floor',
+      signing: { model: 'Test', version: '1', role: 'implementer' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: 'floor', seat: 'inbox', session: 'floor', pane: 'w6:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    const floorRoot = join(base, 'floor');
+    mkdirSync(floorRoot, { recursive: true });
+    upsertTeam(home, 'floor', {
+      project: 'floor',
+      entity: 'floor',
+      session: 'floor',
+      root: floorRoot,
+      lobby: lobbyDir(home),
+      roster: [
+        { agent: orchestrator.id, seat: 'orchestrator', role: 'coordinator', leads: true },
+        { agent: inbox.id, seat: 'inbox', role: 'implementer' },
+      ],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    return { floorRoot, leadId: lead.id, orchestratorId: orchestrator.id, inboxId: inbox.id };
+  }
+
+  const replying = (): Caller => ({ kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
+
+  test("the floor default delivers to the entity's orchestrator, across teams, and cites the record", async () => {
+    const { floorRoot, leadId, orchestratorId } = endpointWorld();
+    place('lead', 'w1:p1');
+    sentTo('lead', SENT, { from: 'owner' });
+    const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
+
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\norchestrator: replied\n', err: '' });
+    const record = recordAt(join(recordDir(floorRoot, 'floor', 'orchestrator'), REPLY));
+    expect(record.payload).toEqual({
+      kind: 'message',
+      id: REPLY,
+      to: 'orchestrator',
+      to_id: orchestratorId,
+      root: floorRoot,
+      session: 'floor',
+      at: NOW_ISO,
+      body: 'from lead — admitted by: an orchestrator to another orchestrator\n\nthe answer',
+      from: 'lead',
+      from_id: leadId,
+      rule: 'an orchestrator to another orchestrator',
+      thread: SENT,
+      in_reply_to: SENT,
+    });
+    // The receipt stays beside the answered record, where the local seat reads it.
+    const receipt = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'lead'), `${SENT}.replied.json`), 'utf8')));
+    if (receipt === null) throw new Error('no receipt was written');
+    expect(receipt.payload).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'lead', root, session: 'acme', at: NOW_ISO });
+  });
+
+  test('a declared endpoint replaces the default, and the reply lands on that seat', async () => {
+    const { floorRoot, inboxId } = endpointWorld();
+    const wrote = writePolicySet(home, { level: 'entity', target: 'floor', name: 'owner-reply-to', value: 'inbox@floor' }, { now: NOW });
+    expect(wrote.ok).toBe(true);
+    place('lead', 'w1:p1');
+    sentTo('lead', SENT, { from: 'owner' });
+    const result = await run([SENT, 'the answer'], replying(), { newId: () => REPLY });
+
+    expect(result).toEqual({ code: 0, out: 'team acme, session "acme"\ninbox: replied\n', err: '' });
+    const record = recordAt(join(recordDir(floorRoot, 'floor', 'inbox'), REPLY));
+    expect(record.payload).toMatchObject({
+      to: 'inbox',
+      to_id: inboxId,
+      root: floorRoot,
+      session: 'floor',
+      rule: ENTITY_RULE,
+      from: 'lead',
+      thread: SENT,
+      in_reply_to: SENT,
+    });
+  });
+
+  test('an endpoint the registry cannot resolve is refused, and nothing is written', async () => {
+    writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n'));
+    place('lead', 'w1:p1');
+    sentTo('lead', SENT, { from: 'owner' });
+    const result = await run([SENT, 'hello'], replying());
+
+    expect(result.code).toBe(1);
+    expect(result.err).toBe(
+      `team reply: record ${SENT} was sent by the owner, and the owner's reply endpoint orchestrator@floor cannot be resolved: ` +
+        'orchestrator@floor: no team registry record matches "floor" (by id, project or session); nothing was written\n',
+    );
+  });
+
+  test('an unreadable entity source refuses the call before any record is written', async () => {
+    writeFileSync(join(root, '.agents', 'team.yaml'), TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n'));
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(entitiesPath(home), '- not a map of entities\n');
+    place('lead', 'w1:p1');
+    sentTo('lead', SENT, { from: 'owner' });
+    const result = await run([SENT, 'hello'], replying());
+
+    // The entity source feeds every entity-level policy, so the command refuses before it asks
+    // the endpoint reader: an unreadable declaration is never a silent fallback to the default.
+    expect(result.code).toBe(2);
+    expect(result.err).toContain('entity: policy source cannot be read or verified');
+    expect(result.err).toContain('expected a map of entities');
+    expect(existsSync(join(recordDir(root, 'acme', 'lead'), `${SENT}.replied.json`))).toBe(false);
   });
 });
 

@@ -5,15 +5,18 @@
 //
 // Pure decisions over the roster: no file, no clock, no herdr.
 import { describe, expect, test } from 'bun:test';
-import { admitSend, REPLY_RULE, RULE_SUMMARY, type AdmitContext, type AdmitTeams } from '../src/send/admit.ts';
+import { admitSend, REPLY_RULE, RULE_SUMMARY, SAME_TEAM_RULE, type AdmitContext, type AdmitTeams } from '../src/send/admit.ts';
 
 const TEAM = '1a2b3c4d5e6f';
+/** Another entity's team: no send rule pairs it with `TEAM`, so the reply rule is the only rule
+ *  that can admit the pair. */
+const ELSEWHERE = '9f8e7d6c5b4a';
 
 function teams(): AdmitTeams {
   return {
     [TEAM]: {
       project: 'acme',
-      entity: null,
+      entity: 'acme',
       orchestrator: 'lead',
       operator: null,
       session: 'acme',
@@ -23,12 +26,24 @@ function teams(): AdmitTeams {
         { agent: '', seat: 'helper', role: 'implementer' },
       ],
     },
+    [ELSEWHERE]: {
+      project: 'elsewhere',
+      entity: 'elsewhere',
+      orchestrator: 'lead',
+      operator: null,
+      session: 'elsewhere',
+      roster: [
+        { agent: '', seat: 'lead', role: 'coordinator', leads: true },
+        { agent: '', seat: 'stranger', role: 'implementer' },
+      ],
+    },
   };
 }
 
 const lead = { seat: 'lead', team: TEAM };
 const worker = { seat: 'worker', team: TEAM };
 const helper = { seat: 'helper', team: TEAM };
+const stranger = { seat: 'stranger', team: ELSEWHERE };
 
 function replying(): AdmitContext {
   return { projects: {}, crossTeams: {}, reply: 'open-thread' };
@@ -36,7 +51,7 @@ function replying(): AdmitContext {
 
 describe('the reply rule admits the pair no other rule pairs', () => {
   test('without the context the pair is refused, and the refusal names the send rules only', () => {
-    const verdict = admitSend(helper, worker, teams(), undefined, { projects: {}, crossTeams: {} });
+    const verdict = admitSend(helper, stranger, teams(), undefined, { projects: {}, crossTeams: {} });
     expect(verdict.ok).toBe(false);
     if (verdict.ok) return;
     expect(verdict.why).toContain('no rule admits it');
@@ -45,15 +60,20 @@ describe('the reply rule admits the pair no other rule pairs', () => {
   });
 
   test('with the context the same pair is admitted by the reply rule', () => {
-    expect(admitSend(helper, worker, teams(), undefined, replying())).toEqual({ ok: true, rule: REPLY_RULE });
-    expect(admitSend(worker, helper, teams(), undefined, replying())).toEqual({ ok: true, rule: REPLY_RULE });
+    expect(admitSend(helper, stranger, teams(), undefined, replying())).toEqual({ ok: true, rule: REPLY_RULE });
+    expect(admitSend(stranger, helper, teams(), undefined, replying())).toEqual({ ok: true, rule: REPLY_RULE });
   });
 
   test('a send with no context at all keeps the send-rule summary', () => {
-    const verdict = admitSend(worker, helper, teams());
+    const verdict = admitSend(stranger, helper, teams());
     expect(verdict.ok).toBe(false);
     if (verdict.ok) return;
     expect(verdict.why).not.toContain(REPLY_RULE);
+  });
+
+  test('a seat of one team admits its fellow seats without the reply context', () => {
+    expect(admitSend(helper, worker, teams())).toEqual({ ok: true, rule: SAME_TEAM_RULE });
+    expect(admitSend(worker, helper, teams(), undefined, replying())).toEqual({ ok: true, rule: SAME_TEAM_RULE });
   });
 });
 
@@ -70,7 +90,7 @@ describe('a rule that already admits the pair keeps its own name', () => {
   });
 
   test('an owner-signed grant keeps its own name', () => {
-    expect(admitSend(helper, worker, teams(), { name: 'pair' }, replying())).toEqual({
+    expect(admitSend(helper, stranger, teams(), { name: 'pair' }, replying())).toEqual({
       ok: true,
       rule: 'an owner-signed grant naming send (pair)',
     });

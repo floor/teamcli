@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { admitSend, type AdmitContext, type AdmitTeams } from '../src/send/admit.ts';
+import { admitSend, ENTITY_RULE, PROJECT_RULE_SUMMARY, RULE_SUMMARY, type AdmitContext, type AdmitTeams } from '../src/send/admit.ts';
 import type { Agent } from '../src/registry/agents.ts';
 
 // The project level decides a send before the team rules do. The project record names the lead —
 // by agent id — and the teams; the `leads` capability decides which seat leads a team, never a
 // role's name, which is each team's own word in any language. These scenes pin the three project
-// rules, the setting that opens crossing seats and who may open it, and the two states that stay
-// refused: a pair whose teams share no project, and a team a second project names.
+// rules, the setting that opens crossing seats and who may open it, the entity reach that stands
+// beside the setting for the teams of one entity, and the two states that stay refused: a pair
+// whose teams are not one entity's, and a team a second project names.
 function agent(id: string, seat: string, team: string): Agent {
   return {
     id,
@@ -125,33 +126,35 @@ describe('project admission: the project decides its own pairs', () => {
       ok: true,
       rule: 'an orchestrator or operator to a seat of its own team',
     });
-    // Another team's plain seat is reached through its own lead, not from the top of the project.
-    expect(admitSend(leadA, builder2, teams, undefined, context).ok).toBe(false);
-    expect(admitSend(leadA, roleWord, teams, undefined, context).ok).toBe(false);
+    // Another team's plain seat is no project pair: the project rules never name it. Both teams
+    // are one entity's, so the entity's seat rule admits it, in its own name.
+    expect(admitSend(leadA, builder2, teams, undefined, context)).toEqual({ ok: true, rule: ENTITY_RULE });
+    expect(admitSend(leadA, roleWord, teams, undefined, context)).toEqual({ ok: true, rule: ENTITY_RULE });
   });
 
   test('a lead is the `leads` capability, never a role name', () => {
     // The row whose role is the old word does not lead `legacy`; the seat holding the capability
     // does — and the capability reaches the project lead both ways, whatever the role is called.
     const rule = 'the project lead and the leads of its teams';
-    expect(admitSend(roleWord, leadA, teams, undefined, context).ok).toBe(false);
+    // The role word reaches a lead of another team by the entity's seat rule alone: it is neither
+    // a project pair nor a lead pair, so neither names it.
+    expect(admitSend(roleWord, leadA, teams, undefined, context)).toEqual({ ok: true, rule: ENTITY_RULE });
     expect(admitSend(legacyLead, leadA, teams, undefined, context)).toEqual({ ok: true, rule });
-    expect(admitSend(roleWord, leadB, teams, undefined, context).ok).toBe(false);
+    expect(admitSend(roleWord, leadB, teams, undefined, context)).toEqual({ ok: true, rule: ENTITY_RULE });
     expect(admitSend(legacyLead, leadB, teams, undefined, context)).toEqual({
       ok: true,
       rule: 'team leads within one project to each other',
     });
   });
 
-  test('seats crossing teams stay refused until the project allows it', () => {
-    const verdict = admitSend(builder1, builder2, teams, undefined, context);
+  test('a pair of one entity is the entity rule, and a refusal names every rule', () => {
+    // Both teams are one entity's, so the pair is admitted whatever the project setting says.
+    expect(admitSend(builder1, builder2, teams, undefined, context)).toEqual({ ok: true, rule: ENTITY_RULE });
+    // Across entities no rule pairs the two seats, and the refusal names the rules as they are.
+    const verdict = admitSend(builder1, builder3, teams, undefined, context);
     expect(verdict.ok).toBe(false);
     expect((verdict as { why: string }).why).toBe(
-      'builder-1@cli may not send to builder-2@site: no rule admits it (the project lead and the leads of its teams; ' +
-        'team leads within one project to each other; seats crossing teams within one project, where the project allows it; ' +
-        "the owner; an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; " +
-        "an operator to another operator of its own team; " +
-        "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)",
+      `builder-1@cli may not send to builder-3@radio: no rule admits it (${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY})`,
     );
   });
 
@@ -159,11 +162,16 @@ describe('project admission: the project decides its own pairs', () => {
     const rule = 'seats crossing teams within one project, where the project allows it';
     expect(admitSend(builder1, builder2, teams, undefined, crossed)).toEqual({ ok: true, rule });
     expect(admitSend(builder2, builder1, teams, undefined, crossed)).toEqual({ ok: true, rule });
-    // Every level below may close it again: the seat that closes it closes it on itself alone.
+    // Every level below may close it again — the entity reach reads the same word — and the seat
+    // that closes it closes it on itself alone.
     expect(admitSend(builder1, builder2, teams, undefined, { ...context, crossTeams: { project: true, team: false } }).ok).toBe(false);
     expect(admitSend(builder1, builder2, teams, undefined, { ...context, crossTeams: { project: true, seat: false } }).ok).toBe(false);
-    // An entity's word opens nothing: only the project level may loosen this setting.
-    expect(admitSend(builder1, builder2, teams, undefined, { ...context, crossTeams: { entity: true } }).ok).toBe(false);
+    // An entity's word opens nothing at the project level; the entity's own reach stands beside
+    // the setting and names itself.
+    expect(admitSend(builder1, builder2, teams, undefined, { ...context, crossTeams: { entity: true } })).toEqual({
+      ok: true,
+      rule: ENTITY_RULE,
+    });
   });
 
   test('cross-project stays refused, setting or not', () => {
@@ -188,7 +196,9 @@ describe('project admission: the project decides its own pairs', () => {
   });
 
   test('with no project context the project rules are not in play', () => {
-    const verdict = admitSend(builder1, builder2, teams);
+    // The entity's reach is not the project's: it stands with no project in hand, and names itself.
+    expect(admitSend(builder1, builder2, teams)).toEqual({ ok: true, rule: ENTITY_RULE });
+    const verdict = admitSend(builder1, builder3, teams);
     expect(verdict.ok).toBe(false);
     expect((verdict as { why: string }).why).not.toContain('project');
     // The team rules read the same capability: two leads of one entity are the orchestrator pair.

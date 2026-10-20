@@ -12,10 +12,11 @@ written. A message an earlier build left in `.agents/messages/` carries no threa
 not answered.
 
 A reply goes to the sender of the record it answers, never to a third seat, and the pair is
-admitted exactly as a send's own pair is — with the reply rule (`reply-on-open-thread`) asked
-last, so a reply between two seats no other rule pairs is admitted while the thread is open. The
-rule reads the thread, not the invitation: it admits a reply on any open thread, and a thread is
-open until it is closed or the clock or the cap ends it.
+admitted exactly as a send's own pair is — the team and entity seat rules admit the ordinary pairs
+first, and the reply rule (`reply-on-open-thread`) is asked last, so a reply between two seats no
+other rule pairs, two teams of different entities, is admitted while the thread is open. The rule
+reads the thread, not the invitation: it admits a reply on any open thread, and a thread is open
+until it is closed or the clock or the cap ends it.
 
 A record a client wrote is not answered in this release. A record carrying `from_client` is
 refused with `reply.client-refused` before any grant is read or any client inbox is created, and
@@ -82,10 +83,13 @@ The owner, or a seat of the team, from a terminal outside herdr or its own pane.
 terminal is refused. The caller must be the record's addressee — the record's `to` names it, and
 the record sits in its own folder — and the reply reaches the seat the record's `from` names: a
 sender the team file no longer declares is not reached by a reply. The owner answers a seat's
-record through this same path; a record the owner sent has no seat to answer in this build, and a
-reply to it is refused before anything is written. A record carrying `from_client` cannot be
-answered in this release for any caller; an answer writes nothing, while `--close` remains
-available.
+record through this same path. A record the owner sent is answered at its entity's
+`owner-reply-to` endpoint — the `seat@team` address an owner-origin message names — and the
+`floor` entity answers `orchestrator@floor` when it declares none. The reply is written into that
+endpoint seat's own folder, and the receipt stays beside the answered record; an entity that
+declares no endpoint, or an endpoint the registry cannot resolve, is refused and nothing is
+written. A record carrying `from_client` cannot be answered in this release for any caller; an
+answer writes nothing, while `--close` remains available.
 
 ## Output and exit codes
 
@@ -114,7 +118,8 @@ Refusals name what stopped them, and nothing is written:
     team reply: no message key; nothing was written
     team reply: record <id> does not verify against this message key
     team reply: record <id> is addressed to <seat>, not to <caller>
-    team reply: record <id> was sent by the owner, and this build does not deliver a reply to the owner; nothing was written
+    team reply: record <id> was sent by the owner, and the owner's reply endpoint is missing (<why>); nothing was written
+    team reply: record <id> was sent by the owner, and the owner's reply endpoint <target> cannot be resolved: <reason>; nothing was written
     team reply: client reply publication is not in this release: a client thread is read, not answered; nothing was written
     team reply: the thread <thread> is already closed; nothing was written
     team reply: the thread <thread> ended: no record on it for 72h; nothing was written

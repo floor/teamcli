@@ -302,11 +302,20 @@ through (`src/send/admit.ts`; proof: the admit tests at the tag):
 6. an orchestrator or operator to a seat of its own team;
 7. an assistant seat to its entity's coordinator;
 8. a seat to its own team's orchestrator;
-9. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
-   its agent id, never a runner or process name.
+9. a seat to another seat of its own team — any two seats of one team, whatever the caller's
+   place in the chain;
+10. a seat to a seat of another team in its entity — any two teams of one entity, whatever their
+    project; the reach reads the `seats_cross_teams` declaration, open unless the caller's own
+    chain closes it, and the project may open it again;
+11. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
+    its agent id, never a runner or process name.
 
 The project rules are asked first and are decided by the project record and the `leads`
 capability, never by a role's word; a pair whose teams share no project keeps the team rules.
+The two seat rules stand after the places: a pair of one team is admitted whatever either seat's
+place, and a crossing pair is admitted when both teams name the same entity and the
+`seats_cross_teams` word admits it. Two teams that name no entity, or name different entities, are
+refused however the seats are placed.
 "Orchestrator" and "operator" are places in the team file's chain, read from the roster's
 capabilities and the file's own keys, never role words. A record confers no right: registration, a
 lifecycle, a signing role — none admits anything by itself. A sender the registry holds no record
