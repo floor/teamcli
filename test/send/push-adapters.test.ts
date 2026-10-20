@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import type {
+  CodexThreadReadResult,
+  CodexThreadReadSnapshot,
+} from '../../src/send/push-adapters/codex-relay.ts';
 import { entitiesPath } from '../../src/entities.ts';
 import { grantsDir } from '../../src/grant.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
@@ -1211,7 +1215,15 @@ seats:
     // Start a local mock app-server WebSocket Unix socket (short /tmp path for macOS 104-byte sun_path limit)
     const testSockPath = join('/tmp', `codex-probe-${String(process.pid)}-${String(Date.now())}.sock`);
     const testRemote = `unix://${testSockPath}`;
-    let nextThreadMode: 'idle' | 'active-approval' | 'not-loaded' | 'hang' = 'idle';
+    let nextThreadMode:
+      | 'idle'
+      | 'active-approval'
+      | 'not-loaded'
+      | 'hang'
+      | 'masked-frame'
+      | 'reserved-bits'
+      | 'oversize-frame' = 'idle';
+    let misplaceAccept = false;
     const seenRpcMethods: string[] = [];
 
     const unmaskClientFrame = (buf: Buffer): { text: string; total: number } | null => {
@@ -1254,8 +1266,11 @@ seats:
           const accept = createHash('sha1')
             .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
             .digest('base64');
+          const acceptHeader = misplaceAccept
+            ? `X-Echoed-Accept: ${accept}\r\nSec-WebSocket-Accept: not-the-probe-key`
+            : `Sec-WebSocket-Accept: ${accept}`;
           conn.write(
-            `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n${acceptHeader}\r\n\r\n`,
           );
           upgraded = true;
         }
@@ -1269,6 +1284,29 @@ seats:
             sendServerFrame(conn, { id: msg.id, result: { userAgent: 'codex/0.161.0' } });
           } else if (msg.method === 'thread/read') {
             if (nextThreadMode === 'hang') {
+              return;
+            }
+            if (nextThreadMode === 'masked-frame') {
+              // SERVERS MUST NOT MASK; the probe refuses instead of unmasking a server frame.
+              const payload = Buffer.from(JSON.stringify({ id: msg.id, result: {} }));
+              const mask = Buffer.from([1, 2, 3, 4]);
+              const masked = Buffer.alloc(payload.length);
+              for (let i = 0; i < payload.length; i += 1) masked[i] = payload[i]! ^ mask[i % 4]!;
+              conn.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]));
+              return;
+            }
+            if (nextThreadMode === 'reserved-bits') {
+              // RSV1 set on a text frame: a malformed frame under RFC 6455.
+              conn.write(Buffer.from([0xc1, 0x02, 0x7b, 0x7d]));
+              return;
+            }
+            if (nextThreadMode === 'oversize-frame') {
+              // Header only, declaring 8 MiB: larger than this probe reads.
+              const hdr = Buffer.alloc(10);
+              hdr[0] = 0x81;
+              hdr[1] = 127;
+              hdr.writeBigUInt64BE(BigInt(8 * 1024 * 1024), 2);
+              conn.write(hdr);
               return;
             }
             if (nextThreadMode === 'idle') {
@@ -1419,9 +1457,222 @@ seats:
         timedOut: true,
         reason: 'codex app-server thread/read probe timed out after 40ms',
       });
+
+      const probeMock = () => probeCodexLiveReadiness({
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        id: SAMPLE_ID,
+        sender: { seat: 'lead', team: 'acme' },
+        remote: testRemote,
+      });
+
+      // 9f. A server must not mask its frames; the probe refuses rather than unmasking.
+      nextThreadMode = 'masked-frame';
+      expect(await probeMock()).toEqual({
+        status: 'unavailable',
+        reason: 'codex app-server sent a masked WebSocket frame',
+      });
+
+      // 9g. Reserved bits are a malformed frame under RFC 6455.
+      nextThreadMode = 'reserved-bits';
+      expect(await probeMock()).toEqual({
+        status: 'unavailable',
+        reason: 'codex app-server sent a WebSocket frame with reserved bits set',
+      });
+
+      // 9h. A declared frame larger than the probe reads fails fast instead of buffering.
+      nextThreadMode = 'oversize-frame';
+      expect(await probeMock()).toEqual({
+        status: 'unavailable',
+        reason: 'codex app-server declared a WebSocket frame larger than this probe reads',
+      });
+
+      // 9i. The upgrade is accepted only from the Sec-WebSocket-Accept header itself, compared
+      // exactly: the right value echoed in another header is not that header.
+      nextThreadMode = 'idle';
+      misplaceAccept = true;
+      expect(await probeMock()).toEqual({
+        status: 'unavailable',
+        reason: 'codex app-server control socket rejected WebSocket upgrade',
+      });
+      misplaceAccept = false;
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       rmSync(testSockPath, { force: true });
     }
+  });
+
+  test('live readiness requires the bound thread id exactly, idle exactly, and an explicit canAcceptDirectInput true', async () => {
+    const { probeCodexLiveReadiness } = await import('../../src/send/push-adapters/codex-relay.ts');
+    const scene = makeCodexPushScene();
+    const bound = {
+      root: scene.root,
+      home: scene.home,
+      session: 'teamcli',
+      seat: 'builder-3',
+      id: SAMPLE_ID,
+      sender: { seat: 'lead', team: 'acme' },
+    };
+    const probe = (thread: unknown) => probeCodexLiveReadiness({
+      ...bound,
+      liveProbe: async () => ({
+        ok: true as const,
+        thread: thread as CodexThreadReadSnapshot,
+      }),
+    });
+    const notAccepting = `codex thread ${scene.sessionId} does not report whether it accepts direct input; readiness is unknown`;
+    const otherId = '019a0000-9999-7bbb-8ccc-ddddeeeeffff';
+
+    // Ready: the bound thread, idle, and an explicit yes.
+    expect(await probe({ id: scene.sessionId, status: { type: 'idle' }, canAcceptDirectInput: true })).toMatchObject({
+      status: 'ready',
+      threadId: scene.sessionId,
+      threadStatus: 'idle',
+      canAcceptDirectInput: true,
+    });
+
+    // A reply for another thread, or one with no id, says nothing about this thread.
+    expect(await probe({ id: otherId, status: { type: 'idle' }, canAcceptDirectInput: true })).toEqual({
+      status: 'unavailable',
+      reason: `codex app-server answered for thread ${otherId}, not the bound thread ${scene.sessionId}`,
+    });
+    expect(await probe({ status: { type: 'idle' }, canAcceptDirectInput: true })).toEqual({
+      status: 'unavailable',
+      reason: 'codex app-server thread/read response is missing thread status',
+    });
+
+    // Idle is not enough: a null or missing direct-accepts reading is unknown, never assumed yes.
+    expect(await probe({ id: scene.sessionId, status: { type: 'idle' }, canAcceptDirectInput: null })).toEqual({
+      status: 'unavailable',
+      reason: notAccepting,
+    });
+    expect(await probe({ id: scene.sessionId, status: { type: 'idle' } })).toEqual({
+      status: 'unavailable',
+      reason: notAccepting,
+    });
+
+    // An explicit no holds; so does an active thread, even one that reports it accepts.
+    expect(await probe({ id: scene.sessionId, status: { type: 'idle' }, canAcceptDirectInput: false })).toMatchObject({
+      status: 'would-hold',
+      threadStatus: 'idle',
+      canAcceptDirectInput: false,
+    });
+    expect(
+      await probe({
+        id: scene.sessionId,
+        status: { type: 'active', activeFlags: ['waitingOnUserInput'] },
+        canAcceptDirectInput: true,
+      }),
+    ).toMatchObject({
+      status: 'would-hold',
+      threadStatus: 'active',
+      activeFlags: ['waitingOnUserInput'],
+      canAcceptDirectInput: true,
+    });
+
+    // The status is matched exactly; an unknown word is unavailable, never ready.
+    expect(await probe({ id: scene.sessionId, status: { type: 'IDLE' }, canAcceptDirectInput: true })).toEqual({
+      status: 'unavailable',
+      reason: `codex thread ${scene.sessionId} reports the unrecognised status "IDLE" on the app-server daemon`,
+    });
+    expect(await probe({ id: scene.sessionId, status: { type: 'systemError' }, canAcceptDirectInput: true })).toEqual({
+      status: 'unavailable',
+      reason: `codex thread ${scene.sessionId} is systemError on the app-server daemon`,
+    });
+
+    // The hard deadline covers an injected promise that never settles, not only the socket query.
+    const startedAt = Date.now();
+    expect(
+      await probeCodexLiveReadiness({
+        ...bound,
+        timeoutMs: 20,
+        liveProbe: () => new Promise<CodexThreadReadResult>(() => {}),
+      }),
+    ).toEqual({
+      status: 'unavailable',
+      timedOut: true,
+      reason: 'codex app-server thread/read probe timed out after 20ms',
+    });
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+
+    // An injected probe that throws reads as unavailable; it never escapes the probe.
+    expect(
+      await probeCodexLiveReadiness({
+        ...bound,
+        liveProbe: () => {
+          throw new Error('injected probe failed');
+        },
+      }),
+    ).toEqual({
+      status: 'unavailable',
+      reason: 'codex app-server thread/read probe failed: injected probe failed',
+    });
+  });
+
+  test('a route start that is invalid or in the future is refused before staging, never read as a fresh budget', async () => {
+    const { deliverCodexNativeRoute } = await import('../../src/send/push-adapters/codex-relay.ts');
+    const scene = makeCodexPushScene();
+    const nowMs = Date.parse('2026-10-20T01:00:00.000Z');
+    const dropDir = join(scene.dir, 'drops');
+    let spawned = false;
+    const deliver = (routeStartedAt: number | Date) => deliverCodexNativeRoute(
+      {
+        route: 'native',
+        runtime: 'codex',
+        copy: { dir: dropDir, name: SAMPLE_ID },
+        root: scene.root,
+        home: scene.home,
+        session: 'teamcli',
+        seat: 'builder-3',
+        sender: { seat: 'tester-2', team: 'teamcli' },
+      },
+      { id: SAMPLE_ID, record: 'unseen: rejected before staging', pointer: SAMPLE_POINTER },
+      {
+        now: () => new Date(nowMs),
+        routeStartedAt,
+        spawn: () => {
+          spawned = true;
+          return { status: 0, stdout: 'Queued\n', stderr: '' };
+        },
+      },
+    );
+
+    const invalid = 'the native route start time is not a valid instant; refusing to grant a fresh attempt budget';
+    expect(await deliver(Number.NaN)).toEqual({
+      route: 'native',
+      outcome: 'unsupported',
+      reason: invalid,
+      walkAttempt: {
+        route: 'native',
+        outcome: 'unreachable',
+        liveRoutesRemain: true,
+        at: new Date(nowMs),
+        ms: 0,
+        reason: invalid,
+        receipt: { kind: 'unknown' },
+      },
+    });
+    expect(await deliver(new Date('not an instant'))).toMatchObject({ outcome: 'unsupported', reason: invalid });
+
+    const future = 'the native route start time is 5000ms in the future; refusing to grant a fresh attempt budget';
+    expect(await deliver(nowMs + 5000)).toEqual({
+      route: 'native',
+      outcome: 'unsupported',
+      reason: future,
+      walkAttempt: {
+        route: 'native',
+        outcome: 'unreachable',
+        liveRoutesRemain: true,
+        at: new Date(nowMs),
+        ms: 0,
+        reason: future,
+        receipt: { kind: 'unknown' },
+      },
+    });
+
+    expect(spawned).toBe(false);
+    expect(existsSync(join(dropDir, SAMPLE_ID))).toBe(false);
   });
 });

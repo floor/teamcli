@@ -131,7 +131,7 @@ export function codexRelayCapabilities(version = '0.161.0'): CodexRelayCapabilit
     },
     limitations: [
       'probeCodexNativeRoute performs synchronous local validation only (codex-daemon policy, bound recordedSeatSession thread UUID, single-line pointer, and optional --remote URL).',
-      'probeCodexLiveReadiness performs a bounded <=400ms WebSocket JSON-RPC thread/read (includeTurns: false) probe against the app-server control socket ($CODEX_HOME/app-server-control/app-server-control.sock or unix:// --remote), classifying idle+accepting as ready, active/non-direct as would-hold, and notLoaded/systemError/missing socket/timeout as unavailable.',
+      'probeCodexLiveReadiness performs a bounded <=400ms WebSocket JSON-RPC thread/read (includeTurns: false) probe against the app-server control socket ($CODEX_HOME/app-server-control/app-server-control.sock or unix:// --remote), classifying the bound thread id exactly + idle + canAcceptDirectInput === true as ready, active or an explicit non-accept as would-hold, and any unknown, unbound, malformed or timed-out reading as unavailable.',
       'Requires codex-daemon: on and a bound recordedSeatSession (team.state.json + agents/<id>.yaml); fails closed when codex-daemon is off (seat launched with --no-daemon) or when policy/session binding cannot be verified.',
       'codex queue exit 0 proves daemon queue acceptance (transport only, receipt: maybe-consumed), never receiver turn consumption or read confirmation; signed <id>.read.json verification stays in the sender walk (send.ts).',
     ],
@@ -498,14 +498,33 @@ function encodeMaskedWsTextFrame(text: string): Buffer {
   return Buffer.concat([header, mask, masked]);
 }
 
-function decodeServerWsFrames(buffer: Buffer): { frames: string[]; rest: Buffer } {
+/** A `thread/read` reply is small; a frame this large is malformed for this probe, not buffered. */
+const MAX_SERVER_FRAME_BYTES = 1024 * 1024;
+
+/** While the handshake is incomplete, anything past this is not a handshake this probe reads. */
+const MAX_HANDSHAKE_BYTES = 16 * 1024;
+
+function decodeServerWsFrames(buffer: Buffer): { frames: string[]; rest: Buffer; error?: string } {
   const frames: string[] = [];
   let offset = 0;
   while (offset + 2 <= buffer.length) {
     const first = buffer[offset]!;
     const second = buffer[offset + 1]!;
+    if ((first & 0x70) !== 0) {
+      return {
+        frames,
+        rest: buffer.subarray(offset),
+        error: 'codex app-server sent a WebSocket frame with reserved bits set',
+      };
+    }
     const opcode = first & 0x0f;
-    const isMasked = (second & 0x80) !== 0;
+    if ((second & 0x80) !== 0) {
+      return {
+        frames,
+        rest: buffer.subarray(offset),
+        error: 'codex app-server sent a masked WebSocket frame',
+      };
+    }
     let payloadLen = second & 0x7f;
     let headerLen = 2;
     if (payloadLen === 126) {
@@ -515,27 +534,27 @@ function decodeServerWsFrames(buffer: Buffer): { frames: string[]; rest: Buffer 
     } else if (payloadLen === 127) {
       if (offset + 10 > buffer.length) break;
       const bigLen = buffer.readBigUInt64BE(offset + 2);
-      if (bigLen > BigInt(10 * 1024 * 1024)) break;
+      if (bigLen > BigInt(MAX_SERVER_FRAME_BYTES)) {
+        return {
+          frames,
+          rest: buffer.subarray(offset),
+          error: 'codex app-server declared a WebSocket frame larger than this probe reads',
+        };
+      }
       payloadLen = Number(bigLen);
       headerLen = 10;
     }
-    const maskLen = isMasked ? 4 : 0;
-    const totalLen = headerLen + maskLen + payloadLen;
-    if (offset + totalLen > buffer.length) break;
-    const payloadStart = offset + headerLen + maskLen;
-    const rawPayload = buffer.subarray(payloadStart, payloadStart + payloadLen);
-    if (opcode === 0x1) {
-      if (isMasked) {
-        const mask = buffer.subarray(offset + headerLen, offset + headerLen + 4);
-        const unmasked = Buffer.alloc(payloadLen);
-        for (let i = 0; i < payloadLen; i += 1) {
-          unmasked[i] = rawPayload[i]! ^ mask[i % 4]!;
-        }
-        frames.push(unmasked.toString('utf8'));
-      } else {
-        frames.push(rawPayload.toString('utf8'));
-      }
+    if (payloadLen > MAX_SERVER_FRAME_BYTES) {
+      return {
+        frames,
+        rest: buffer.subarray(offset),
+        error: 'codex app-server declared a WebSocket frame larger than this probe reads',
+      };
     }
+    const totalLen = headerLen + payloadLen;
+    if (offset + totalLen > buffer.length) break;
+    const payloadStart = offset + headerLen;
+    if (opcode === 0x1) frames.push(buffer.subarray(payloadStart, payloadStart + payloadLen).toString('utf8'));
     offset += totalLen;
   }
   return { frames, rest: buffer.subarray(offset) };
@@ -638,10 +657,19 @@ export function queryCodexAppServerThreadRead(input: {
       buffer = Buffer.concat([buffer, chunk]);
       if (!upgraded) {
         const headerEnd = buffer.indexOf('\r\n\r\n');
-        if (headerEnd === -1) return;
+        if (headerEnd === -1) {
+          if (buffer.length > MAX_HANDSHAKE_BYTES) {
+            done({
+              ok: false,
+              reason: 'codex app-server WebSocket handshake is larger than this probe reads',
+            });
+          }
+          return;
+        }
         const headerText = buffer.subarray(0, headerEnd).toString('utf8');
         buffer = buffer.subarray(headerEnd + 4);
-        if (!/^HTTP\/1\.1 101\b/i.test(headerText) || !headerText.includes(expectedAccept)) {
+        const accept = /^sec-websocket-accept:\s*(\S+)\s*$/im.exec(headerText)?.[1];
+        if (!/^HTTP\/1\.1 101\b/i.test(headerText) || accept !== expectedAccept) {
           done({
             ok: false,
             reason: 'codex app-server control socket rejected WebSocket upgrade',
@@ -672,6 +700,17 @@ export function queryCodexAppServerThreadRead(input: {
 
       const decoded = decodeServerWsFrames(buffer);
       buffer = decoded.rest;
+      if (decoded.error !== undefined) {
+        done({ ok: false, reason: decoded.error });
+        return;
+      }
+      if (buffer.length > MAX_SERVER_FRAME_BYTES + 16) {
+        done({
+          ok: false,
+          reason: 'codex app-server sent more WebSocket data than this probe reads',
+        });
+        return;
+      }
       for (const raw of decoded.frames) {
         let msg: Record<string, unknown>;
         try {
@@ -754,16 +793,63 @@ export type CodexLiveReadinessOutcome =
     };
 
 /**
+ * Runs one `thread/read` probe under a hard deadline. `queryCodexAppServerThreadRead` owns its
+ * own socket timer, but an injected probe is only a promise: this deadline covers it too, so a
+ * probe that never settles, or one that throws or rejects, reads as unavailable rather than
+ * escaping the `<= 400ms` readiness budget.
+ */
+async function probeThreadReadWithinBudget(
+  probeFn: CodexThreadReadProbe,
+  request: Parameters<CodexThreadReadProbe>[0],
+  budgetMs: number,
+): Promise<CodexThreadReadResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (result: CodexThreadReadResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    timer = setTimeout(() => {
+      finish({
+        ok: false,
+        timedOut: true,
+        reason: `codex app-server thread/read probe timed out after ${String(budgetMs)}ms`,
+      });
+    }, budgetMs);
+    let pending: Promise<CodexThreadReadResult>;
+    try {
+      pending = probeFn(request);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      finish({ ok: false, reason: `codex app-server thread/read probe failed: ${message}` });
+      return;
+    }
+    void pending.then(
+      (result) => finish(result),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        finish({ ok: false, reason: `codex app-server thread/read probe failed: ${message}` });
+      },
+    );
+  });
+}
+
+/**
  * Bounded `<= 400ms` (`DELIVERY_PREPROBE_MS`) live readiness probe for the Codex `native` route:
  *   1. Runs synchronous `probeCodexNativeRoute` for `codex-daemon` policy, bound `recordedSeatSession`,
  *      single-line pointer, and `--remote` validation.
  *   2. Queries `thread/read` (`includeTurns: false`) on the app-server control socket within
- *      `Math.min(400ms, timeoutMs)`:
- *      - `thread.status.type === 'idle'` and `canAcceptDirectInput !== false` -> `'ready'`
+ *      `Math.min(400ms, timeoutMs)`, under a hard deadline that covers an injected probe too:
+ *      - the response's `thread.id` exactly the bound thread id, `thread.status.type === 'idle'`
+ *        exactly, and `canAcceptDirectInput === true` -> `'ready'`
  *      - `thread.status.type === 'active'` (running turn or waitingOnApproval/waitingOnUserInput)
- *        or `canAcceptDirectInput === false` -> `'would-hold'`
- *      - `thread.status.type === 'notLoaded' | 'systemError'`, socket missing/error, or `> 400ms`
- *        timeout -> `'unavailable'`
+ *        or an idle thread with `canAcceptDirectInput === false` -> `'would-hold'`
+ *      - any other thread id, any other or unrecognised status, a missing or null direct-accepts
+ *        reading, `notLoaded`/`systemError`, socket missing/error, a malformed handshake or
+ *        WebSocket frame, or the hard `<= 400ms` deadline -> `'unavailable'`
  */
 export async function probeCodexLiveReadiness(
   input: CodexLiveProbeInput,
@@ -791,13 +877,17 @@ export async function probeCodexLiveReadiness(
       : resolveCodexControlSocketPath(input.home, input.remote);
 
   const probeFn = input.liveProbe ?? queryCodexAppServerThreadRead;
-  const read = await probeFn({
-    socketPath,
-    ...(input.remote !== undefined ? { remote: input.remote } : {}),
-    threadId: local.threadId,
-    timeoutMs: probeTimeoutMs,
-    home: input.home,
-  });
+  const read = await probeThreadReadWithinBudget(
+    probeFn,
+    {
+      socketPath,
+      ...(input.remote !== undefined ? { remote: input.remote } : {}),
+      threadId: local.threadId,
+      timeoutMs: probeTimeoutMs,
+      home: input.home,
+    },
+    probeTimeoutMs,
+  );
 
   if (!read.ok) {
     return {
@@ -807,15 +897,31 @@ export async function probeCodexLiveReadiness(
     };
   }
 
-  const { status, canAcceptDirectInput = null } = read.thread;
-  if (status.type === 'notLoaded' || status.type === 'systemError') {
+  const thread = read.thread as CodexThreadReadSnapshot | undefined;
+  if (!thread || typeof thread.id !== 'string' || !thread.status || typeof thread.status.type !== 'string') {
     return {
       status: 'unavailable',
-      reason: `codex thread ${local.threadId} is ${status.type} on the app-server daemon`,
+      reason: 'codex app-server thread/read response is missing thread status',
+    };
+  }
+  // The answer must be the thread this route bound, exactly: a reply for another thread says
+  // nothing about this one, and a missing or different id is never read as ready.
+  if (thread.id !== local.threadId) {
+    return {
+      status: 'unavailable',
+      reason: `codex app-server answered for thread ${thread.id}, not the bound thread ${local.threadId}`,
+    };
+  }
+  const statusType: string = thread.status.type;
+  if (statusType === 'notLoaded' || statusType === 'systemError') {
+    return {
+      status: 'unavailable',
+      reason: `codex thread ${local.threadId} is ${statusType} on the app-server daemon`,
     };
   }
 
-  if (status.type === 'active') {
+  if (statusType === 'active') {
+    const status = thread.status as Extract<CodexThreadStatus, { type: 'active' }>;
     const flags = status.activeFlags ?? [];
     const flagNote = flags.length > 0 ? ` (${flags.join(', ')})` : '';
     return {
@@ -826,11 +932,19 @@ export async function probeCodexLiveReadiness(
       reason: `codex thread ${local.threadId} is active${flagNote}; codex queue would hold the message`,
       threadStatus: 'active',
       activeFlags: flags,
-      canAcceptDirectInput,
+      canAcceptDirectInput: thread.canAcceptDirectInput ?? null,
     };
   }
 
-  if (canAcceptDirectInput === false) {
+  // Any status this build does not know is not a readiness answer: unknown reads as unavailable.
+  if (statusType !== 'idle') {
+    return {
+      status: 'unavailable',
+      reason: `codex thread ${local.threadId} reports the unrecognised status "${statusType}" on the app-server daemon`,
+    };
+  }
+
+  if (thread.canAcceptDirectInput === false) {
     return {
       status: 'would-hold',
       threadId: local.threadId,
@@ -843,13 +957,22 @@ export async function probeCodexLiveReadiness(
     };
   }
 
+  // Ready means idle and an explicit yes: a missing or null direct-accepts reading is unknown,
+  // never assumed to accept.
+  if (thread.canAcceptDirectInput !== true) {
+    return {
+      status: 'unavailable',
+      reason: `codex thread ${local.threadId} does not report whether it accepts direct input; readiness is unknown`,
+    };
+  }
+
   return {
     status: 'ready',
     threadId: local.threadId,
     pointer: local.pointer,
     recorded: local.recorded,
     threadStatus: 'idle',
-    canAcceptDirectInput,
+    canAcceptDirectInput: true,
   };
 }
 
@@ -979,12 +1102,37 @@ export async function deliverCodexNativeRoute(
 ): Promise<CodexNativeAttempt> {
   const nowFn = options.now ?? (() => new Date());
   const entryMs = nowFn().getTime();
-  const routeStartedAtMs =
-    options.routeStartedAt instanceof Date
-      ? options.routeStartedAt.getTime()
-      : (options.routeStartedAt ?? options.startedAt ?? entryMs);
-  const startedAt = options.startedAt ?? routeStartedAtMs;
+  const suppliedRouteStart =
+    options.routeStartedAt instanceof Date ? options.routeStartedAt.getTime() : options.routeStartedAt;
+  const routeStartedAtMs = suppliedRouteStart ?? options.startedAt ?? entryMs;
+  const startedAt =
+    options.startedAt !== undefined && Number.isFinite(options.startedAt)
+      ? options.startedAt
+      : (Number.isFinite(routeStartedAtMs) ? routeStartedAtMs : entryMs);
   const liveRoutesRemain = options.liveRoutesRemain ?? true;
+  // A route start time this build cannot trust never grants a fresh budget: an unreadable one
+  // (NaN) or one in the future would otherwise read as zero elapsed. Rejected before staging.
+  const routeStartProblem =
+    !Number.isFinite(routeStartedAtMs)
+      ? 'the native route start time is not a valid instant; refusing to grant a fresh attempt budget'
+      : routeStartedAtMs > entryMs
+        ? `the native route start time is ${String(routeStartedAtMs - entryMs)}ms in the future; refusing to grant a fresh attempt budget`
+        : null;
+  if (routeStartProblem !== null) {
+    return {
+      route: CODEX_NATIVE_ROUTE,
+      outcome: 'unsupported',
+      reason: routeStartProblem,
+      walkAttempt: buildWalkAttempt(
+        'unreachable',
+        liveRoutesRemain,
+        new Date(entryMs),
+        startedAt,
+        routeStartProblem,
+        { kind: 'unknown' },
+      ),
+    };
+  }
 
   const budget = resolveCodexNativeAttemptTimeoutMs(options.deliveryTimeout, options.timeoutMs);
   if (!budget.ok) {
