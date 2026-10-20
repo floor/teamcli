@@ -300,19 +300,18 @@ describe('the reported effects', () => {
         log,
         now: () => new Date(clock.at),
         base: quietSources(clock),
-        sender: () => undefined,
+        // Narrow cast: the declared factory returns a WorkPush, so a runtime undefined result
+        // can only be exercised off the type. The blocked fallback is the thing under test.
+        sender: (() => undefined) as unknown as HostedWatchAuthorityInput['sender'],
         verifyAuthority: () => ({ ok: true }),
       }),
     });
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     try {
-      // The run has acquired and called the factory; it answered with no sender, so no effect can
-      // ever leave this host. Wait for that call, then for the next beat's state write.
-      await waitUntil(() => {
-        const path = daemonLogPath(home);
-        return existsSync(path) && readFileSync(path, 'utf8').includes('built no sender');
-      });
+      // The factory is called before the first pass and answered with no sender, so no effect can
+      // ever leave this host. Wait for that first pass, then for the next beat's state write.
+      await waitUntil(() => started.daemon.roots[0]?.watch?.cycles === 1);
       clock.at = NOW + HOSTED_AUTHORITY_TICK_MS;
       await waitUntil(() => {
         const read = readDaemonState(home);
@@ -482,10 +481,10 @@ describe('a pass in flight', () => {
         return { ok: true, outcome: 'typed (unconfirmed)' };
       },
     });
-    // A factory that does build a sender is the positive control for the effect report.
-    expect(build.effects).toBe('open');
     const host = composed(build, clock);
     await enteredPush;
+    // A factory that does build a sender is the positive control for the effect report.
+    expect(host.state().effects).toBe('open');
     // The pass is still inside its push; two beats renew the record and start no pass.
     for (const beat of [1, 2]) {
       clock.at = NOW + beat * HOSTED_AUTHORITY_TICK_MS;
