@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
 import { CONFIG_KEYS, CONFIG_LEVELS } from '../config/registry.ts';
+import { PRESENCE_EVENTS, PRESENCE_STATES, PRESENCE_WRITER_SOURCES } from '../daemon/presence/contract.ts';
 import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
@@ -1343,37 +1344,71 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
     session: { type: ['string', 'null'] },
     events: {
       type: 'array',
+      // Two shapes, one timeline. A message event keeps exactly the fields it had; a presence
+      // transition is its own typed event — the canonical words, the binding, both sequences and
+      // both ids — and carries no `from`, `to` or `body`, because a state is not a message.
       items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['ts', 'from', 'to', 'body', 'id', 'outcome', 'status'],
-        properties: {
-          ts: { type: 'string' },
-          from: { type: 'string' },
-          to: { type: 'string' },
-          body: { type: 'string' },
-          id: { type: 'string' },
-          outcome: { type: 'string' },
-          // The status the line's outcome derives (§3.3): `sent`, `held`, `delivered`, `read` or
-          // `replied`. An attempt outcome the history records — `timeout`, `not-submitted`,
-          // `unreachable` — folds to `sent`: it moved no status on the record.
-          status: { type: 'string' },
-          // The thread the message belongs to (the first message's id), and — on a reply — the
-          // record it answers. Present on every line a send of this version writes.
-          thread: { type: 'string' },
-          in_reply_to: { type: 'string' },
-          // The team the sender stood in, by team id, on a line a send of this version wrote: the
-          // feed reads a cross-team sender by its address from it, and prints the plain seat name
-          // for a line without one.
-          from_team: { type: 'string' },
-          // Present only on a line the sender measured, as the history log writes it.
-          ms: { type: 'number' },
-          via: { type: 'string' },
-          failed: { type: 'array', items: { type: 'string' } },
-          // The qualifier on an outcome the plain word cannot carry alone, as the history log
-          // writes it (`trigger taken, no read receipt yet` on a typed send; `taken but never acted on`).
-          note: { type: 'string' },
-        },
+        oneOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['ts', 'from', 'to', 'body', 'id', 'outcome', 'status'],
+            properties: {
+              ts: { type: 'string' },
+              from: { type: 'string' },
+              to: { type: 'string' },
+              body: { type: 'string' },
+              id: { type: 'string' },
+              outcome: { type: 'string' },
+              // The status the line's outcome derives (§3.3): `sent`, `held`, `delivered`, `read` or
+              // `replied`. An attempt outcome the history records — `timeout`, `not-submitted`,
+              // `unreachable` — folds to `sent`: it moved no status on the record.
+              status: { type: 'string' },
+              // The thread the message belongs to (the first message's id), and — on a reply — the
+              // record it answers. Present on every line a send of this version writes.
+              thread: { type: 'string' },
+              in_reply_to: { type: 'string' },
+              // The team the sender stood in, by team id, on a line a send of this version wrote: the
+              // feed reads a cross-team sender by its address from it, and prints the plain seat name
+              // for a line without one.
+              from_team: { type: 'string' },
+              // Present only on a line the sender measured, as the history log writes it.
+              ms: { type: 'number' },
+              via: { type: 'string' },
+              failed: { type: 'array', items: { type: 'string' } },
+              // The qualifier on an outcome the plain word cannot carry alone, as the history log
+              // writes it (`trigger taken, no read receipt yet` on a typed send; `taken but never acted on`).
+              note: { type: 'string' },
+            },
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: [
+              'kind', 'ts', 'session', 'seat', 'state', 'event', 'source', 'binding',
+              'seq', 'presence_seq', 'event_id', 'observed_at', 'id',
+            ],
+            properties: {
+              kind: { type: 'string', const: 'presence.changed' },
+              // The runtime event's own instant, the seat's session, and the seat it concerns.
+              ts: { type: 'string' },
+              session: { type: 'string' },
+              seat: { type: 'string' },
+              state: { type: 'string', enum: [...PRESENCE_STATES] },
+              event: { type: 'string', enum: [...PRESENCE_EVENTS] },
+              source: { type: 'string', enum: [...PRESENCE_WRITER_SOURCES] },
+              // The launch binding the transition was written under.
+              binding: { type: 'string' },
+              // The bus log's sequence, and the per-seat presence log's own.
+              seq: { type: 'integer' },
+              presence_seq: { type: 'integer' },
+              // The runtime event's id, and the publisher's derived record id.
+              event_id: { type: 'string' },
+              observed_at: { type: 'string' },
+              id: { type: 'string' },
+            },
+          },
+        ],
       },
     },
   },

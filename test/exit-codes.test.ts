@@ -4696,6 +4696,15 @@ scene('feed.unreadable', async (place) => {
   symlinkSync('/etc/passwd', log);
   return show(await fed(place, []), 'the history log cannot be read: a symbolic link was found and not followed');
 });
+scene('feed.presence-unreadable', async (place) => {
+  write(place, TEAM);
+  // The message log is fine; the bus event log the presence rows come from is not, and the feed
+  // refuses rather than print a timeline with a silence it cannot explain.
+  const log = join(storePath('acme', place.root, place.home), 'events.jsonl');
+  mkdirSync(dirname(log), { recursive: true, mode: 0o700 });
+  symlinkSync('/etc/passwd', log);
+  return show(await fed(place, []), 'the presence event log cannot be read: a symbolic link was found and not followed');
+});
 scene('feed.configuration', async (place) => {
   const inRepo = show(await fed(place, []), 'no team file');
   // Outside any checkout the same failure names only the project: feed takes no `--file`.

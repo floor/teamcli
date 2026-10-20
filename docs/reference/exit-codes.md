@@ -221,6 +221,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `drops.invocation` | `drops` | 2 | the invocation can't be read | `team drops extra` |
 | `drops.not-a-repo` | `drops` | 2 | not inside a git repository | `team drops` |
 | `feed.ok` | `feed` | 0 | the message feed was printed | `team feed` |
+| `feed.presence-unreadable` | `feed` | 1 | the presence event log cannot be read | `team feed` |
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |

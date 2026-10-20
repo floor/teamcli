@@ -2,8 +2,10 @@
 
 Reads the project's message history from `~/.config/team/<project>-<hash>/messages.jsonl`
 (mode `0600`, inside the project's state folder and never in a lobby or the repository), together
-with any `briefs/<from>-to-<to>.md` files and Desk audit lines when present. It reads: it writes
-nothing, and following the log never grows it.
+with any `briefs/<from>-to-<to>.md` files and Desk audit lines when present. It merges that
+timeline with the verified `presence.changed` records in the same state folder's bus event log
+(`events.jsonl`), which the daemon's presence publisher writes from each seat's durable presence
+log. It reads: it writes nothing, and following the logs never grows either of them.
 
 Each completed `team send` run (`delivered`, `delivered (read)`, `sent (unconfirmed)`,
 `answered`, `held`, `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
@@ -52,12 +54,12 @@ nothing to `messages.jsonl`.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--seat <name>` | a seat name | only entries where `from` or `to` is `<name>` |
-| `--limit <n>` | 1 to 10,000 | at most the last `<n>` entries (default 50) |
-| `--all` | — | merge `messages.jsonl` across every project state folder under `~/.config/team/<project>-<hash>/`, so a pane beside Desk can follow all team discussions even outside a project checkout |
+| `--seat <name>` | a seat name | only entries where `from` or `to` is `<name>`, and presence events whose `seat` is `<name>` |
+| `--limit <n>` | 1 to 10,000 | at most the last `<n>` events on the combined timeline (default 50) |
+| `--all` | — | merge `messages.jsonl` and the presence event log across every project state folder under `~/.config/team/<project>-<hash>/`, so a pane beside Desk can follow all team discussions even outside a project checkout |
 | `--audit <path>` | a JSONL file | read an explicit Desk or guard `audit.jsonl` file |
 | `--briefs <dir>` | a directory | read an explicit `briefs/<from>-to-<to>.md` directory, including timestamped `## <ISO-8601> — From <Name>: ...` sections |
-| `--follow` | — | keep reading as new entries arrive, including across log rotations |
+| `--follow` | — | keep reading as new entries arrive, including across log rotations; a bus-log gap is printed when it is found and the read resyncs from the retained log |
 | `--json` | — | print one `team.feed` document (`format: 1`, `project`, `session`, `events`), not one line per entry |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -71,8 +73,10 @@ Reads `.agents/team.yaml` to resolve the project name and checkout root (or scan
 `~/.config/team/<project>-<hash>/` folders when `--all` is given or when run outside a checkout),
 then reads `messages.jsonl` (and `.1`, `.2`) with `O_NOFOLLOW`, together with `briefs/*-to-*.md`
 and any Desk guard or bridge `audit.jsonl` and signed answer files under `~/.config/team/lobby/`.
-If a symbolic link or FIFO stands at the log or in the state folder ladder, `team feed` refuses and
-does not follow it. Writes nothing.
+It also reads the folder's `events.jsonl` (`O_NOFOLLOW`, signature-verified through the bus log)
+for the `presence.changed` records only, after a per-store cursor; `--all` locates each store
+through the root its approval record names. If a symbolic link or FIFO stands at a log or in the
+state folder ladder, `team feed` refuses and does not follow it. Writes nothing.
 
 ## Who may run it
 
@@ -87,9 +91,9 @@ summary line, `<n> event` or `<n> events`. The table's columns are:
 | Column | Meaning |
 | --- | --- |
 | TIME | when the entry was written, `HH:MM:SS` |
-| KIND | the send outcome, with `via <path>` and `in <n> ms` when the send measured them |
-| SEAT | `<from> -> <to>`; the sender reads as the project's [`sender_name`](../team-file.md#sender_name) word asks, resolved through the team the line records for it, and `--json` keeps the line's own `from`. A line that records no sender team — one a build before this field wrote — reads as the plain seat name, never as a local nickname for a sender that was not local |
-| DETAIL | the body, folded to one line; a reply opens with `re <id>: `, the record it answers |
+| KIND | the send outcome, with `via <path>` and `in <n> ms` when the send measured them; `presence.changed` for a presence transition |
+| SEAT | for a message, `<from> -> <to>`; the sender reads as the project's [`sender_name`](../team-file.md#sender_name) word asks, resolved through the team the line records for it, and `--json` keeps the line's own `from`. A line that records no sender team — one a build before this field wrote — reads as the plain seat name, never as a local nickname for a sender that was not local. A presence row prints the seat alone: nothing was addressed |
+| DETAIL | the body, folded to one line; a reply opens with `re <id>: `, the record it answers. A presence row prints its canonical transition, `<state> (<event> via <source>)` |
 
 An empty history prints the context line and `0 events` — no table. `--follow` prints one
 header, table and count each time a pass brings new entries, so a reader can tell one arrival
@@ -102,11 +106,23 @@ recorded (`spec`, `resolved`) stays on that row. The send's measured millisecond
 carried over, since they timed the send and not the outcome that followed it. A `--follow` pass
 prints the update when it arrives, because it is new information.
 
+A presence transition is its own row, never a message: the seat's state, the runtime event that
+established it and the source that wrote it, with the binding, both sequences and both ids in
+`--json`. It carries no sender, recipient or body, because a state is not something anyone sent.
+Message and presence rows share one timeline ordered by their own instants, `--limit` counts the
+combined timeline, and `--seat` keeps a message by its sender or recipient and a presence row by
+the seat it concerns. The records are read through the bus log's verification: an unverified or
+self-contradicting record is dropped, never repaired into a row. A `--follow` cursor asks only for
+records after the last one read; when retention has removed the records between that cursor and
+the retained head, the feed prints a `presence: gap` notice naming the range (and the project,
+under `--all`) and resyncs from the retained log rather than skip the hole in silence.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the feed was printed | the context line, the `TIME  KIND  SEAT  DETAIL` table, and `<n> event` or `<n> events` | 0 |
 | the history was empty | the context line and `0 events` | 0 |
 | the history log can't be read | `team feed: the history log cannot be read: <reason>` (with `--json`, a `team.error` document) | 1 |
+| the presence event log can't be read | `team feed: the presence event log cannot be read: <reason>` (with `--json`, a `team.error` document) | 1 |
 | the invocation can't be read (including `--follow` with `--json`), or this folder is not a git checkout, or the team file can't be read | `team feed: <problem>`, with the usage for the invocation (with `--json`, a `team.error` document) | 2 |
 
 With `--json` the run prints one pretty-printed `team.feed` document:
@@ -119,6 +135,18 @@ outcome, never stored: `delivered (read)` is `read`, `delivered` is `delivered`,
 `not-submitted`, an `unreachable`, a `refused` — is `sent`. `spec`, `resolved`, `from_team`, `ms`,
 `via`, `failed`, `note`, `thread` and `in_reply_to` appear on an event only when the history line
 carries them. The schema is published at `schema/feed.schema.json`.
+
+A presence transition is the second, typed shape in that same `events` array — never a message
+with an empty body or a borrowed address. It carries the canonical fields the presence contract
+defines, and no `from`, `to`, `body`, `outcome` or `status`:
+
+    {"kind":"presence.changed","ts":"<ISO-8601>","session":"<session>","seat":"<seat>","state":"<working|idle|waiting-for-a-person|gone>","event":"<turn-start|turn-end|human-wait|session-end>","source":"<runtime-hook|runtime-event|daemon-launch>","binding":"prs_<12 hex>","seq":<n>,"presence_seq":<n>,"event_id":"<uuid>","observed_at":"<ISO-8601>","id":"presence:<seat>:<binding>:<seq>:<uuid>"}
+
+`ts` is the runtime event's own instant and `observed_at` is when the ingester applied the record,
+which can be later; `seq` is the bus event's sequence, `presence_seq` the seat's durable presence
+log sequence, and `event_id` the runtime event's id. `id` is the published record's id. The
+`kind` is the published bus kind, so a reader can tell the two shapes apart without asking which
+fields are present. Both shapes live in `schema/feed.schema.json`.
 
 ## Examples
 

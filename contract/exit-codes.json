@@ -1509,6 +1509,13 @@
     {
       "code": 1,
       "command": "feed",
+      "id": "feed.presence-unreadable",
+      "meaning": "the presence event log cannot be read",
+      "trigger": "team feed"
+    },
+    {
+      "code": 1,
+      "command": "feed",
       "id": "feed.unreadable",
       "meaning": "the history log cannot be read",
       "trigger": "team feed"
