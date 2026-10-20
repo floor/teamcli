@@ -951,6 +951,7 @@ describe('team watch', () => {
   function sources(passes: number, over: Partial<WatchSources> = {}): WatchSources {
     let left = passes;
     return {
+      home: join(dir, 'home'),
       live: () => scene,
       machine: () => fine,
       standing: approvedNow(),
@@ -2053,7 +2054,7 @@ describe('team watch', () => {
   test('a record is not rung when the watch is not given a home', async () => {
     planted('claude-operator-acme', 'the message body itself', '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1, { live: () => live() }));
+    await runWatch(['--file', file], io, sources(1, { home: undefined, live: () => live() }));
     expect(typed).toEqual([]);
     expect(io.out).not.toContain(ringFor('claude-operator-acme'));
   });

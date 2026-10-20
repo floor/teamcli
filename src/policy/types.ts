@@ -112,6 +112,7 @@ export const ENFORCED_POLICY_NAMES = [
   'codex-daemon',
   'idle-threshold',
   'daemon.broker',
+  'watch-rhythm',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -188,6 +189,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   owner_reply_to: 'owner-reply-to',
   codex_daemon: 'codex-daemon',
   idle_threshold: 'idle-threshold',
+  watch_rhythm: 'watch-rhythm',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -268,6 +270,118 @@ function parseDurationSeconds(raw: unknown): number | null {
 function durationValueProblem(name: string, raw: unknown): string | null {
   if (parseDurationSeconds(raw) !== null) return null;
   return `policy "${name}" needs a duration above 0, such as 30s, 5m or 2h, or a whole number of seconds`;
+}
+
+/** The five watch rhythms, from the tightest pace to the quietest. */
+export const WATCH_RHYTHMS = ['urgent', 'normal', 'relaxed', 'night', 'dormant'] as const;
+export type WatchRhythmPreset = (typeof WATCH_RHYTHMS)[number];
+
+/** The final sweep a preset runs when its value names no explicit sweep. */
+export const WATCH_RHYTHM_SWEEP: Readonly<Record<WatchRhythmPreset, number>> = {
+  urgent: 60,
+  normal: 120,
+  relaxed: 240,
+  night: 3600,
+  dormant: 86_400,
+};
+
+/** How a preset scales the six watch waits. The sweep is never scaled by this. */
+export const WATCH_RHYTHM_FACTOR: Readonly<Record<WatchRhythmPreset, number>> = {
+  urgent: 0.5,
+  normal: 1,
+  relaxed: 2,
+  night: 12,
+  dormant: 24,
+};
+
+export const WATCH_SWEEP_MIN = 10;
+export const WATCH_SWEEP_MAX = 86_400;
+
+/** A watch rhythm resolved to its final sweep and its wait factor, ready for the watch. */
+export type WatchRhythm = { preset: WatchRhythmPreset; sweepSeconds: number };
+
+function watchPresetOf(raw: unknown): WatchRhythmPreset | null {
+  return typeof raw === 'string' && (WATCH_RHYTHMS as readonly string[]).includes(raw.trim())
+    ? (raw.trim() as WatchRhythmPreset)
+    : null;
+}
+
+function watchSweepOf(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= WATCH_SWEEP_MIN && raw <= WATCH_SWEEP_MAX
+    ? raw
+    : null;
+}
+
+/**
+ * The parts a raw watch-rhythm value names: a bare preset string, the canonical `preset@seconds`
+ * string, or a mapping `{ preset, sweepSeconds? }`. Null when the value is not one of those.
+ */
+function watchRhythmParts(raw: unknown): { preset: WatchRhythmPreset; sweepSeconds: number | null } | null {
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    const at = text.indexOf('@');
+    if (at < 0) {
+      const preset = watchPresetOf(text);
+      return preset === null ? null : { preset, sweepSeconds: null };
+    }
+    const preset = watchPresetOf(text.slice(0, at));
+    const sweep = watchSweepOf(Number(text.slice(at + 1)));
+    return preset === null || sweep === null ? null : { preset, sweepSeconds: sweep };
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'preset' && key !== 'sweepSeconds')) return null;
+  const preset = watchPresetOf(record.preset);
+  if (preset === null) return null;
+  if (record.sweepSeconds === undefined) return { preset, sweepSeconds: null };
+  const sweep = watchSweepOf(record.sweepSeconds);
+  return sweep === null ? null : { preset, sweepSeconds: sweep };
+}
+
+/**
+ * The canonical watch-rhythm value: a bare preset, or `preset@seconds` when the value names an
+ * explicit final sweep. The signed declaration stores this one scalar; the watch reads it back
+ * as a {@link WatchRhythm}. A mapping value is accepted at load and canonicalized here.
+ */
+export function parseWatchRhythmValue(raw: unknown): string | null {
+  const parts = watchRhythmParts(raw);
+  if (parts === null) return null;
+  return parts.sweepSeconds === null ? parts.preset : `${parts.preset}@${String(parts.sweepSeconds)}`;
+}
+
+/** A canonical watch-rhythm value as its final sweep and preset; null for a value this build cannot read. */
+export function watchRhythmValueOf(raw: unknown): WatchRhythm | null {
+  const canonical = parseWatchRhythmValue(raw);
+  if (canonical === null) return null;
+  const parts = watchRhythmParts(canonical);
+  if (parts === null) return null;
+  return {
+    preset: parts.preset,
+    sweepSeconds: parts.sweepSeconds ?? WATCH_RHYTHM_SWEEP[parts.preset],
+  };
+}
+
+function watchRhythmProblem(raw: unknown): string | null {
+  if (parseWatchRhythmValue(raw) !== null) return null;
+  if (typeof raw === 'string') {
+    const at = raw.indexOf('@');
+    const preset = watchPresetOf(raw.slice(0, at < 0 ? raw.length : at));
+    if (preset === null) {
+      return `policy "watch-rhythm" has no rhythm "${raw.trim()}": expected ${WATCH_RHYTHMS.join(', ')}`;
+    }
+    return `policy "watch-rhythm" needs a whole sweep between ${String(WATCH_SWEEP_MIN)} and ${String(WATCH_SWEEP_MAX)} seconds after "${preset}@"`;
+  }
+  if (typeof raw === 'object' && raw !== null && !Array.isArray(raw)) {
+    const record = raw as Record<string, unknown>;
+    if (Object.keys(record).some((key) => key !== 'preset' && key !== 'sweepSeconds')) {
+      return 'policy "watch-rhythm" takes only preset and sweepSeconds';
+    }
+    if (watchPresetOf(record.preset) === null) {
+      return `policy "watch-rhythm" needs a preset: ${WATCH_RHYTHMS.join(', ')}`;
+    }
+    return `policy "watch-rhythm" needs a whole sweepSeconds between ${String(WATCH_SWEEP_MIN)} and ${String(WATCH_SWEEP_MAX)}`;
+  }
+  return `policy "watch-rhythm" needs a preset (${WATCH_RHYTHMS.join(', ')}) or { preset, sweepSeconds? }`;
 }
 
 /** A positive whole count (a record cap, a number of days), without the seconds suffix. */
@@ -793,6 +907,32 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseOnOff,
     // 'off' is tighter than 'on': off is within on, on is not within off.
     isWithin: (lower: 'on' | 'off', higher: 'on' | 'off') => !(higher === 'off' && lower === 'on'),
+  },
+  // The watch's own pace: how often a pass sweeps and how long its six waits run. One value
+  // names a preset (`urgent`, `normal`, `relaxed`, `night`, `dormant`), optionally with an
+  // explicit final sweep (`night@1800`, or the mapping `{ preset: night, sweepSeconds: 1800 }`).
+  // The preset sets the six-wait factor and, when no sweep is named, its nominal sweep; an
+  // explicit sweep is final and is never multiplied. A shorter sweep and a smaller wait factor
+  // are both tighter, and a lower level must be no looser on either axis. Only explicit ancestor
+  // declarations bound it: the release default is not a parent, so a team with no ancestor word
+  // may choose any preset. This entry is the name, its aliases and the value rule; the watch
+  // reads the effective value itself.
+  'watch-rhythm': {
+    name: 'watch-rhythm',
+    kind: 'enforced',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'normal',
+    gateLifting: false,
+    parseValue: parseWatchRhythmValue,
+    valueProblem: watchRhythmProblem,
+    isWithin: (lower: string, higher: string) => {
+      const low = watchRhythmValueOf(lower);
+      const high = watchRhythmValueOf(higher);
+      return low !== null
+        && high !== null
+        && low.sweepSeconds <= high.sweepSeconds
+        && WATCH_RHYTHM_FACTOR[low.preset] <= WATCH_RHYTHM_FACTOR[high.preset];
+    },
   },
   'development-mode': {
     name: 'development-mode',

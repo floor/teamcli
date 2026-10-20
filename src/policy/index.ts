@@ -8,10 +8,17 @@ export {
   ENFORCED_POLICY_NAMES,
   getPolicySpec,
   normalizePolicyName,
+  parseWatchRhythmValue,
   POLICY_CATALOGUE,
   POLICY_DOMAIN,
   POLICY_LEVELS,
   POLICY_NAME_ALIASES,
+  WATCH_RHYTHM_FACTOR,
+  WATCH_RHYTHM_SWEEP,
+  WATCH_RHYTHMS,
+  WATCH_SWEEP_MAX,
+  WATCH_SWEEP_MIN,
+  watchRhythmValueOf,
   type AdvisedPolicyName,
   type CataloguePolicyName,
   type DeliveryTimeoutRoute,
@@ -22,6 +29,8 @@ export {
   type PolicyLevel,
   type PolicySpec,
   type PolicyValue,
+  type WatchRhythm,
+  type WatchRhythmPreset,
 } from './types.ts';
 
 export {

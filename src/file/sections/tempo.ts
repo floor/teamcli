@@ -4,8 +4,8 @@ import type { Section } from './section.ts';
 export const TEMPOS = ['relaxed', 'normal', 'urgent'] as const;
 export type Tempo = (typeof TEMPOS)[number];
 
-/** The six waits a tempo scales. `interval` is the pass rate and stays as written. */
-const SCALED = ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter'] as const;
+/** The six waits a tempo or a watch rhythm scales. `interval` is the pass rate and stays as written. */
+export const SCALED_WATCH_WAITS = ['idleFirst', 'idleRepeat', 'teamIdle', 'nudgeWait', 'unsentAfter', 'unreadAfter'] as const;
 
 export const tempo: Section = {
   name: 'tempo',
@@ -26,7 +26,7 @@ export function applyTempo(watch: TeamFile['watch'], word: Tempo): TeamFile['wat
   if (word === 'normal') return watch;
   const factor = word === 'relaxed' ? 2 : 0.5;
   const next: TeamFile['watch'] = { ...watch };
-  for (const key of SCALED) {
+  for (const key of SCALED_WATCH_WAITS) {
     const value = watch[key];
     if (value === undefined) continue;
     next[key] = Math.max(1, Math.round(value * factor));

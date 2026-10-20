@@ -14,7 +14,8 @@
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
-import { notInForce, watchInForceOf } from '../approve/approval.ts';
+import { notInForce } from '../approve/approval.ts';
+import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
@@ -334,8 +335,11 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
   const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
-  // at all: the setting is one record, never a file key and never a stale approval.
-  const inForce = watchInForceOf(standing, team);
+  // at all: the setting is one record, never a file key and never a stale approval. The pace is
+  // the watch's own: one policy value, converted legacy file values, and an unreadable chain
+  // reported as a note rather than silently replaced.
+  const watchPace = watchPaceOf({ team, root, home: sources.home, now: sources.now(), standing });
+  const inForce = watchInForceWithPace(standing, team, watchPace);
   const comparison = compare(team, session, state, live, sources.now(), inForce, undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
@@ -438,6 +442,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...record.notes,
     ...provenance.notes,
     ...idleNotes,
+    ...watchPaceNotes(watchPace),
   ]);
   if (args.json) {
     writeJson(io, 'team.check', {

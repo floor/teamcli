@@ -1,7 +1,7 @@
 import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
-import { budgetsInForceOf, watchInForceOf } from '../approve/approval.ts';
+import { budgetsInForceOf } from '../approve/approval.ts';
 import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } from '../caller.ts';
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
@@ -37,6 +37,7 @@ import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
 import { dispatchIdleWork, type IdleDispatchResult, type WorkPush, type WorkPushResult } from '../watch/dispatch.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
+import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
 import { readEnd, type EndView } from '../watch/end.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -503,7 +504,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const otherRunning = other && !handOver && other.pid !== sources.pid && watchRunning(other, {
     alive: (pid) => sources.alive(pid),
     now: sources.now().getTime(),
-    interval: watchInForceOf(standing, first.team).interval,
+    interval: watchInForceWithPace(standing, first.team, watchPaceOf({
+      team: first.team,
+      root: first.root,
+      home: sources.home,
+      standing,
+      now: sources.now(),
+    })).interval,
   });
   if (otherRunning) {
     const where = other.pid !== undefined ? `pid ${other.pid}` : `pane ${other.pane ?? 'not recorded'}`;
@@ -610,12 +617,22 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       // hand-over check already read; every later pass reads again.
       const standing = standingThisPass ?? sources.standing(root);
       standingThisPass = undefined;
+      // The pace in force for this pass: one policy value, never a second timer. A chain that
+      // cannot be read keeps the safe reading cadence but holds every automated effect until the
+      // policy is readable again; the pass says so once and never acts from the fallback as if
+      // the policy had chosen it.
+      const watchPace = watchPaceOf({ team, root, home: sources.home, standing, now: sources.now() });
+      const paceVerified = watchPace.unknown === undefined;
+      const inForce = watchInForceWithPace(standing, team, watchPace);
+      for (const line of watchPaceNotes(watchPace)) {
+        tellOnce(told, `watch-pace:${line}`, line, tell);
+      }
       const overrides: OverrideForce = sources.home
         ? overridesInForceOf(standing, team.project, root, sources.home)
         : { profiles: [], differences: [], problems: [] };
       if (!announced) {
         announced = true;
-        say(`watching the session "${session}" every ${watchInForceOf(standing, team).interval}s${args.flags.has('no-nudge') ? ', without nudges' : ''}`, false);
+        say(`watching the session "${session}" every ${inForce.interval}s${args.flags.has('no-nudge') ? ', without nudges' : ''}`, false);
       }
       for (const line of overrides.problems) {
         if (told.has(line)) continue;
@@ -677,8 +694,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       }
 
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
-      // `watch` or `tempo`, the watch keeps the waits that were approved, or the defaults.
-      const inForce = watchInForceOf(standing, team);
+      // `watch` or `tempo`, the watch keeps the waits that were approved, or the defaults. The
+      // pace computed at the top of the pass is the same object for the sweep and every wait.
       // The budget values in force, from the same snapshot: an unapproved edit to the marks, the
       // accounts or the cadence silences nothing here until the owner approves it.
       const budget = budgetsInForceOf(standing, team);
@@ -844,7 +861,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The entity's model rule, carried out without a caller: a breaching seat the queue does
         // not hold yet is queued here. Only the file's own watch queues — a foreign session
         // writes nothing, and a watch with no home has no policy chain to read the wait from.
-        if (!foreign && sources.home !== undefined && hosted === undefined) {
+        if (!foreign && sources.home !== undefined && hosted === undefined && paceVerified) {
           try {
             for (const [breaching, swap] of queueRuleBreaches({
               dir, root, home: sources.home, team, rule: modelRule, by: 'the watch', now: sources.now,
@@ -863,7 +880,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // cannot prove idle is typed at by nobody. `--no-nudge` is the watch that types nothing:
         // it dispatches nothing at all rather than spending an episode on a route it was told
         // not to use.
-        const idleDispatch: IdleDispatchResult = foreign || args.flags.has('no-nudge')
+        const idleDispatch: IdleDispatchResult = foreign || args.flags.has('no-nudge') || !paceVerified
           || (hosted !== undefined && sources.pushWork === undefined)
           ? { pushed: [], suppressed: [] }
           : await dispatchIdleWork({
@@ -891,6 +908,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // drops are not work requests and stay, and `--no-nudge` still names what it would not
         // type.
         if (!foreign && !args.flags.has('no-nudge') && whole.pause == null) result.work = [];
+        // An unreadable pace holds every automated work request: the pass keeps reading and
+        // reporting, and types nothing that depends on a rhythm it cannot verify.
+        if (!paceVerified) result.work = [];
         // A liveness word the chain set aside: said once per process, as a line, never typed
         // into a seat and never a desktop notice. The value in force stands.
         for (const refusal of result.refusals) {
@@ -918,7 +938,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // A prompt that is the lead's own, or one the lead has not cleared in time, climbs to the
         // entity's lead in that team's own mailbox. The registry names no entity lead: the climb
         // is still the event the line above published, whose routing always carries the owner.
-        if (!foreign && sources.home && hosted === undefined) {
+        if (!foreign && sources.home && hosted === undefined && paceVerified) {
           for (const line of escalatePromptReports(
             sources.home, root, team, session, result.reports, reportTs,
           ).failed) tell(line, true);
@@ -969,8 +989,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // The ring is a typed path of its own: a seat whose idle episode the dispatcher owns is
         // not typed at by it either. That episode is the dispatcher's to deliver (or to report
         // undelivered to the lead), and a stored signed copy waiting unread is not a wake. When
-        // the daemon hosts the watch, the hosted loop owns the ring and this pass types nothing.
-        if (result.ring && delivered.size === 0 && !suppressed.has(result.ring.to) && hosted === undefined) {
+        // the daemon hosts the watch, the hosted loop owns the ring and this pass types nothing;
+        // an unverified pace holds the ring with the rest of the automatic work.
+        if (result.ring && delivered.size === 0 && !suppressed.has(result.ring.to) && hosted === undefined && paceVerified) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${result.ring.text}`, false);
           else await deliver({
             pane: result.ring.pane,
@@ -990,7 +1011,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // A send held while a pane was busy leaves its drop and a record beside it: the pass
         // delivers one per seat once the box is free, bounded, and says the drop's path when it
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
-        if (!foreign && !args.flags.has('no-nudge') && hosted === undefined) {
+        if (!foreign && !args.flags.has('no-nudge') && hosted === undefined && paceVerified) {
           await retryHeldDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
@@ -1013,7 +1034,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // `--no-nudge` leaves it out.
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
-            { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') || hosted !== undefined ? { noNudge: true } : {}) },
+            { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },

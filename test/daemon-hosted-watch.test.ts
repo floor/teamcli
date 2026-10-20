@@ -137,7 +137,7 @@ describe('the shared watch loop under a host', () => {
       wait: async () => false,
       alive: () => true,
       pid: 4242,
-      home: undefined,
+      home: join(root, 'home'),
       statusSource: undefined,
     };
     const push: WorkPush = async (request) => {
