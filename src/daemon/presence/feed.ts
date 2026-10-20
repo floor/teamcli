@@ -16,6 +16,7 @@ import { readEventsFromCursor, type CursorReadResult } from '../../bus/log.ts';
 import {
   PRESENCE_ID, PRESENCE_STATE_OF, isPresenceBinding, isPresenceEvent, isPresenceState,
   isPresenceTime, isPresenceWriterSource,
+  type PresenceEvent, type PresenceState, type PresenceWriterSource,
 } from './contract.ts';
 import { PRESENCE_PUBLISH_KIND, presenceRecordIdOf } from './publish.ts';
 import { isPresenceSeatName } from './spool.ts';
@@ -27,9 +28,11 @@ export type PresenceFeedEvent = {
   ts: string;
   session: string;
   seat: string;
-  state: string;
-  event: string;
-  source: string;
+  /** The contract's own words, as validated above — never a wider string a consumer would have
+   *  to re-check before using it. */
+  state: PresenceState;
+  event: PresenceEvent;
+  source: PresenceWriterSource;
   binding: string;
   presenceSeq: number;
   eventId: string;
