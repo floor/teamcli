@@ -195,6 +195,67 @@ describe('the state file', () => {
     });
   });
 
+  test('an idle claim enters only as a claim; a malformed one stays as an unreadable hold', () => {
+    // The claim decides whether an idle episode's one attempt was already spent, so a value this
+    // build cannot read must never read as absence. A well-formed entry keeps its fields and
+    // drops the ones this build does not know; a malformed one keeps its seat as a hold.
+    writeFileSync(
+      join(dir, STATE_FILE),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          one: {
+            seats: { good: { stage: 'ready' }, bad: { stage: 'ready' } },
+            worktrees: {},
+            idle_claims: {
+              good: {
+                claim_id: '0123456789abcdef',
+                idle_since: '2026-10-20T02:50:00.000Z',
+                state: 'pending',
+                claimed_at: '2026-10-20T03:00:00.000Z',
+                body: 'not part of a claim',
+              },
+              bad: {
+                claim_id: '0123',
+                idle_since: '2026-10-20T02:50:00.000Z',
+                state: 'pending',
+                claimed_at: '2026-10-20T03:00:00.000Z',
+              },
+            },
+          },
+        },
+      }),
+    );
+    const claims = readState(dir).sessions.one?.idle_claims;
+    expect(claims?.good).toEqual({
+      claim_id: '0123456789abcdef',
+      idle_since: '2026-10-20T02:50:00.000Z',
+      state: 'pending',
+      claimed_at: '2026-10-20T03:00:00.000Z',
+    });
+    expect(claims?.bad).toEqual({ unreadable: true });
+  });
+
+  test('an idle claim map that is not a map holds every seat the session records', () => {
+    writeFileSync(
+      join(dir, STATE_FILE),
+      JSON.stringify({
+        format: 1,
+        sessions: {
+          one: {
+            seats: { a: { stage: 'ready' }, b: { stage: 'ready' } },
+            worktrees: {},
+            idle_claims: ['not', 'a', 'map'],
+          },
+        },
+      }),
+    );
+    expect(readState(dir).sessions.one?.idle_claims).toEqual({
+      a: { unreadable: true },
+      b: { unreadable: true },
+    });
+  });
+
   test('an atomic write leaves no temporary file', () => {
     writeAtomic(join(dir, 'x.json'), 'one');
     writeAtomic(join(dir, 'x.json'), 'two');

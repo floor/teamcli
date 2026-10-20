@@ -874,7 +874,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           || (hosted !== undefined && sources.pushWork === undefined)
           ? { pushed: [], suppressed: [] }
           : await dispatchIdleWork({
-            root, team, state, live, now: sources.now(),
+            root, dir, team, state, live, now: sources.now(),
             home: sources.home,
             pause: whole.pause ?? null,
             swaps: [...waiting],

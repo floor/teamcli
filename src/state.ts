@@ -7,6 +7,7 @@ import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
+import { cleanIdleClaims, type IdleClaimEntry } from './watch/claim-record.ts';
 import { isWatchEpoch } from './watch/epoch.ts';
 
 // What a team keeps: the live session's seats, worktrees and watch, and the project's last
@@ -298,6 +299,15 @@ export type SessionState = {
    * to it (`add`, `done`), because expiry is a reading, never a timer.
    */
   procs?: Record<string, ProcRecord>;
+  /**
+   * One seat's spend of the watch's single direct-work attempt in one idle episode, keyed by seat
+   * (src/watch/claim-record.ts holds the record's rules). The episode's identity is the seat's
+   * persisted `last_active`, so the record survives a watch or host restart and a second host
+   * reads the same spend. At most one entry per seat; no history. An entry this build cannot read
+   * is kept as `{ unreadable: true }` at the read door — a malformed claim holds the episode, it
+   * is never dropped to absence.
+   */
+  idle_claims?: Record<string, IdleClaimEntry>;
 };
 
 export type State = {
@@ -613,6 +623,18 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       }
     } else if (session.procs !== undefined) {
       delete session.procs;
+    }
+    // An idle-episode claim enters from the file like every other value, and is cleaned here at
+    // the same door. A claim this build cannot read is kept as `{ unreadable: true }` and never
+    // dropped to absence: its presence holds the seat's episode, because a claim that may
+    // already have spent the attempt must not be read as no claim at all. A map that is not a
+    // map at all holds every seat the session records; only a trusted episode end (the seat
+    // leaving the actionable reading) or manual recovery releases it. No other writer writes a
+    // seat key, so a surviving key is a seat name that was printed by a reader, never a path.
+    if (session.idle_claims !== undefined) {
+      const cleaned = cleanIdleClaims(session.idle_claims, Object.keys(session.seats));
+      if (Object.keys(cleaned).length === 0) delete session.idle_claims;
+      else session.idle_claims = cleaned;
     }
     // Read old, write new: readings used to be held under a session. They are the project's
     // (§ 4.4), so every session's records are merged to the top level here — no reader loses one,

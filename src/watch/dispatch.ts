@@ -7,6 +7,12 @@
 // owns, whether or not a direct route is wired: a seat the dispatcher cannot reach is told
 // nothing rather than typed at by a second path.
 //
+// The spend is durable: the episode's identity is the seat's persisted `last_active`, and the
+// claim that spends its one attempt lives in the session's state record (src/watch/claim.ts).
+// A watch restart, a new host or a second watch on the same root reads the same claim, so an
+// episode is never attempted twice — and a capture left `pending` by a stop is held, never read
+// as absence and never retried.
+//
 // Two production readings leave the dispatcher with nothing to deliver, and each says so once
 // through the same lead+main announcement: a source with zero takeable records while seats sit
 // idle ("N idle, nothing queued"), and a seat still idle a minute after an accepted wake with no
@@ -19,6 +25,8 @@ import type { DirectSendResult } from '../commands/send.ts';
 import type { IdleWorkInput, IdleWorkReport } from '../idle_work.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { liveLeases } from '../tasks/lease.ts';
+import { captureIdleClaim, endIdleClaims, idleClaimOf, settleIdleClaim } from './claim.ts';
+import { isIdleClaim, type IdleClaim } from './claim-record.ts';
 import { idleWorkReport } from './idle-work.ts';
 
 /** The direct route's request: the seat, the pane and CLI the pass read for it, and the body
@@ -64,6 +72,9 @@ export type FallbackDelivery = {
 };
 
 export type IdleDispatchInput = IdleWorkInput & {
+  /** The state directory the pass read its snapshot from. The claim is captured, settled and
+   *  pruned under that directory's state lock. */
+  dir: string;
   /** The body a pushed seat is told, rendered per seat by the caller. */
   body: (seat: string) => string;
   push?: WorkPush;
@@ -77,31 +88,45 @@ export type IdleDispatchResult = {
    *  attempted now and the episodes attempted earlier in the same idle stretch. */
   suppressed?: string[];
   /** Present when an announcement had to be written: an unavailable or refused route, an empty
-   *  source with idle seats, or a failed pickup. One announcement per episode and subject: the
-   *  team lead and the main orchestrator, deduplicated when one target, each with its own signed
-   *  runtime mailbox record. */
+   *  source with idle seats, a failed pickup, or a capture whose outcome is unknown after a
+   *  stop. One announcement per episode and subject: the team lead and the main orchestrator,
+   *  deduplicated when one target, each with its own signed runtime mailbox record. */
   fallback?: FallbackDelivery;
 };
 
 /** How long an accepted wake may take to show a real claim or activity before the episode is
- *  reported once as a failed pickup. The watch's own pass clock measures it. */
+ *  reported once as a failed pickup — and how long a capture with no recorded outcome is held
+ *  silently before its one unknown-outcome notice. The watch's own pass clock measures both. */
 const PICKUP_GRACE_MS = 60_000;
 
 const SEP = '\u0000';
 
-/** One seat's idle episode in this process: opened with its one attempt, and, when a route
- *  accepted it, closed out at the first pass past the pickup grace. A refused or unwired route
- *  leaves `wakeAt` absent, so it is never read as a wake that failed. */
-type Episode = {
-  /** The pass clock at which the route accepted the wake. */
-  wakeAt?: number;
-  /** The grace was handled (a notice written, or activity seen); never handled twice. */
-  settled?: boolean;
+/**
+ * A settle the state lock refused, owed by this process only: the route was called exactly once
+ * and gave its answer, and only the record of that answer is still to be written. Keyed by the
+ * capture's `claim_id`, so it lands on that capture and no other. Never durable, never a retry
+ * of the push; a stop before it is written leaves the claim `pending`, which is held.
+ */
+type PendingSettle = {
+  session: string;
+  seat: string;
+  idle_since: string;
+  claim_id: string;
+  outcome: 'accepted' | 'refused';
+  /** The pass clock of the push, as ISO, so `accepted` stores the wake time the pass read. */
+  at: string;
+  /** The route's words, for the announcement this process can still make. Never persisted. */
+  refused?: string;
 };
 
-/** The in-process episode ledger. Keyed by root, session and seat; an entry is removed only when
- *  an actionable reading no longer counts the seat idle. */
-const episodes = new Map<string, Episode>();
+const pendingSettles = new Map<string, PendingSettle>();
+
+/** The notices this process already published from a claim, keyed by kind and binding. It is a
+ *  publication memory, not a spend: the claim's `notice` field holds the durable intent, and a
+ *  new process starts with this empty and replays it (the same `once: true` ids make the replay
+ *  the same records). Without it, a notice the claim still owes would be re-announced on every
+ *  pass that follows its publication. */
+const publishedNotices = new Set<string>();
 
 /** The empty-source notice ledger, keyed by scope: the signature of the idle stretch already
  *  announced. Removed when nothing is idle or the source has takeable work, so a later empty
@@ -113,31 +138,32 @@ function scopeOf(input: IdleWorkInput): string {
   return `${input.root}${SEP}${input.team.session}`;
 }
 
-function episodeKey(scope: string, seat: string): string {
-  return `${scope}${SEP}${seat}`;
-}
-
-/** Test and restart seam: forget every episode. A watch process's own restart starts the idle
- *  stretches again, exactly as the typed nudge's process memory already does. */
+/** Test and restart seam: forget every in-process memory — the empty-source notice ledger and
+ *  the settles a held lock still owes. The durable claims are deliberately not forgotten: a
+ *  restart re-reads them from the state file, which is the point of the record. */
 export function forgetIdleEpisodes(): void {
-  episodes.clear();
+  pendingSettles.clear();
+  publishedNotices.clear();
   emptyNotices.clear();
   emptyNoticeSeq = 0;
 }
 
 /**
- * One dispatch pass. The snapshot is read here, once; nothing else is read to pick work. Each
- * eligible seat with no attempt in this episode is pushed its body through `push`, when one is
- * wired, and the attempt is spent before the route is called, so a throw still spends it. An
- * unavailable or refused route leaves one fallback announcement per episode. A seat whose route
+ * One dispatch pass. The snapshot is read here, once; nothing else is read to pick work. The
+ * claims the reading no longer counts are pruned first, then each eligible seat follows its
+ * durable claim: none (or one of an earlier episode) is captured before any push, so the attempt
+ * is spent before the route is called and a throw still spends it; a claim of this episode is
+ * held. A refused route keeps the one fallback announcement, and the claim remembers it, so a
+ * later pass or a new host replays that notice and never pushes again. A seat whose route
  * accepted the wake is checked again at the first pass a minute later: a live lease it holds or
- * an activity clock past the wake counts as a claim and settles the episode silently; a seat
- * still idle with neither is announced once and never woken again in that episode. An actionable
- * reading with zero takeable records announces the empty stretch once; an unreadable reading
- * (unknown threshold, unreadable source) announces nothing and resets nothing. Every record is
- * written as a signed runtime mailbox record to the team lead and the main orchestrator through
- * the same machinery a prompt climb uses. No bus event kind is invented; no owner identity is
- * used here.
+ * an activity clock past the wake counts as a claim and settles the claim silently; a seat still
+ * idle with neither is announced once. A capture with no recorded outcome (a stop between the
+ * write and the settle) is held, and past the grace one honest unknown-outcome notice is
+ * written. An actionable reading with zero takeable records ends every claim and announces the
+ * empty stretch once; an unreadable reading (unknown threshold, unreadable source) announces
+ * nothing, resets nothing and writes nothing. Every record is written as a signed runtime
+ * mailbox record to the team lead and the main orchestrator through the same machinery a prompt
+ * climb uses. No bus event kind is invented; no owner identity is used here.
  */
 export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDispatchResult> {
   const report = idleWorkReport(input);
@@ -148,7 +174,9 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
   const result: IdleDispatchResult = { pushed: [] };
 
   if (report.takeable === 0) {
-    endEpisodes(scope, new Set());
+    // The current contract's own end of episode: no takeable work ends every claim. A busy or
+    // unreadable lock leaves them standing; nothing is pushed on this path either way.
+    endIdleClaims(input.dir, { session: input.team.session, current: [] });
     // A paused team has no takeable work by rule, not because the source is empty: the pause's
     // own drops say what is happening, and "nothing queued" would be a claim about a queue the
     // pause itself has withdrawn.
@@ -162,52 +190,182 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
   }
 
   // Takeable work exists: any empty stretch is over, and a seat no longer counted leaves its
-  // episode (and any pending pickup check) behind.
+  // claim behind.
   emptyNotices.delete(scope);
   const eligible = report.idle.map((item) => item.seat);
-  endEpisodes(scope, new Set(eligible.map((seat) => episodeKey(scope, seat))));
-  if (eligible.length === 0) return result;
   result.suppressed = [...eligible];
+  if (eligible.length === 0) return result;
+  const ended = endIdleClaims(input.dir, {
+    session: input.team.session,
+    current: report.idle.map((item) => ({ seat: item.seat, idle_since: item.since ?? 'watch-start' })),
+  });
+  if (ended.kind !== 'ended') {
+    // The claims could not be read or pruned under the lock: no push is made from a ledger this
+    // pass could not align, and nothing is announced. The next pass repeats.
+    return result;
+  }
 
-  const now = input.now.getTime();
   for (const seat of eligible) {
-    const key = episodeKey(scope, seat);
-    const episode = episodes.get(key);
-    if (episode === undefined) {
-      const opened: Episode = {};
-      episodes.set(key, opened);
-      const outcome = await attempt(input, seat);
-      result.pushed.push(outcome.pushed);
-      if (outcome.pushed.ok) {
-        opened.wakeAt = now;
+    const since = sinceOf(report, seat);
+    const standing = idleClaimOf(input.state, seat);
+    if (standing !== undefined) {
+      // An unreadable presence is a hold: no push, no notice, no replacement here.
+      if (!isIdleClaim(standing)) continue;
+      if (standing.idle_since === since) {
+        await followClaim(input, result, seat, standing);
         continue;
       }
-      mergeDelivery(result, announce(input, 'push', seat,
-        `${input.team.project}: ${seat} is idle with takeable work but was not told directly (${outcome.pushed.refused}); nothing was typed for it`,
-        `push${SEP}${seat}${SEP}${sinceOf(report, seat)}`));
+      // A readable claim of an earlier episode falls through to capture, which replaces it.
+    }
+    const captured = captureIdleClaim(input.dir, {
+      session: input.team.session,
+      seat,
+      idle_since: since,
+      at: input.now,
+    });
+    if (captured.kind === 'held') {
+      // Another writer captured between the snapshot and the lock: obey its record.
+      if (isIdleClaim(captured.entry) && captured.entry.idle_since === since) {
+        await followClaim(input, result, seat, captured.entry);
+      }
       continue;
     }
-    if (episode.wakeAt === undefined || episode.settled === true) continue;
-    if (now - episode.wakeAt < PICKUP_GRACE_MS) continue;
-    episode.settled = true;
-    if (claimedSince(input, seat, episode.wakeAt)) continue;
-    mergeDelivery(result, announce(input, 'stalled', seat,
-      `${input.team.project}: ${seat} accepted a work wake a minute ago and is still idle with no observed claim; it will not be woken again in this idle episode`,
-      `stalled${SEP}${seat}${SEP}${episode.wakeAt}`));
+    // Stale (the persisted clock moved), busy, or unreadable: no push this pass.
+    if (captured.kind !== 'captured') continue;
+    const outcome = await attempt(input, seat);
+    result.pushed.push(outcome.pushed);
+    const settled = settleIdleClaim(input.dir, {
+      session: input.team.session,
+      seat,
+      idle_since: since,
+      claim_id: captured.claim.claim_id,
+      at: input.now,
+      outcome: outcome.pushed.ok ? 'accepted' : 'refused',
+    });
+    if (settled.kind === 'busy' || settled.kind === 'failed') {
+      pendingSettles.set(captured.claim.claim_id, {
+        session: input.team.session,
+        seat,
+        idle_since: since,
+        claim_id: captured.claim.claim_id,
+        outcome: outcome.pushed.ok ? 'accepted' : 'refused',
+        at: input.now.toISOString(),
+        ...(outcome.pushed.ok ? {} : { refused: outcome.pushed.refused }),
+      });
+      continue;
+    }
+    if (outcome.pushed.ok) continue;
+    replayNotice(input, result, 'push', seat, refusalText(input, seat, outcome.pushed.refused),
+      pushBinding(seat, since));
   }
   return result;
 }
 
-/** Drops every episode in this scope the current reading no longer counts. A seat that left
- *  eligibility cancels its pending pickup check with it. */
-function endEpisodes(scope: string, current: ReadonlySet<string>): void {
-  for (const key of [...episodes.keys()]) {
-    if (key.startsWith(`${scope}${SEP}`) && !current.has(key)) episodes.delete(key);
+/**
+ * Follows one seat's durable claim of this episode. The claim is the authority: nothing here
+ * pushes. A `pending` claim with a settle this process still owes is finished with the answer
+ * the route already gave; with no such settle it is a capture whose outcome is unknown, held
+ * silently until the grace, then announced once. An `inflight` claim is checked at the grace for
+ * claim evidence and closed out with its one notice when there is none. `refused` and `done`
+ * replay the notice the claim still owes, under the same deterministic mailbox ids, so a stop
+ * between the write and the publication loses nothing.
+ */
+async function followClaim(
+  input: IdleDispatchInput,
+  result: IdleDispatchResult,
+  seat: string,
+  claim: IdleClaim,
+): Promise<void> {
+  const session = input.team.session;
+  const now = input.now.getTime();
+  if (claim.state === 'pending') {
+    const owed = pendingSettles.get(claim.claim_id);
+    if (owed !== undefined) {
+      const settled = settleIdleClaim(input.dir, {
+        session,
+        seat,
+        idle_since: claim.idle_since,
+        claim_id: claim.claim_id,
+        at: new Date(owed.at),
+        outcome: owed.outcome,
+      });
+      if (settled.kind === 'busy' || settled.kind === 'failed') return;
+      pendingSettles.delete(claim.claim_id);
+      if (settled.kind !== 'settled') return;
+      if (settled.claim.state === 'refused' && owed.refused !== undefined) {
+        replayNotice(input, result, 'push', seat, refusalText(input, seat, owed.refused),
+          pushBinding(seat, claim.idle_since));
+      }
+      return;
+    }
+    // A stop between the capture and the settle: the attempt may or may not have been made, so
+    // the claim is held and never retried. Past the grace, say exactly that once.
+    if (now - Date.parse(claim.claimed_at) < PICKUP_GRACE_MS) return;
+    const settled = settleIdleClaim(input.dir, {
+      session,
+      seat,
+      idle_since: claim.idle_since,
+      claim_id: claim.claim_id,
+      at: input.now,
+      outcome: 'unknown',
+    });
+    if (settled.kind !== 'settled') return;
+    replayNotice(input, result, 'unknown', seat,
+      `${input.team.project}: ${seat}'s direct work request of ${claim.claimed_at} has no recorded outcome; the attempt is held and will not be retried in this idle episode`,
+      unknownBinding(seat, claim));
+    return;
+  }
+  if (claim.state === 'inflight') {
+    const wakeAt = claim.wake_at === undefined ? Number.NaN : Date.parse(claim.wake_at);
+    if (!Number.isFinite(wakeAt) || now - wakeAt < PICKUP_GRACE_MS) return;
+    const claimed = claimedSince(input, seat, wakeAt);
+    const settled = settleIdleClaim(input.dir, {
+      session,
+      seat,
+      idle_since: claim.idle_since,
+      claim_id: claim.claim_id,
+      at: input.now,
+      outcome: 'pickup',
+      claimed,
+    });
+    if (settled.kind !== 'settled') return;
+    if (claimed || settled.claim.notice !== 'stalled') return;
+    replayNotice(input, result, 'stalled', seat, stalledText(input, seat),
+      `stalled${SEP}${seat}${SEP}${claim.wake_at ?? claim.claimed_at}`);
+    return;
+  }
+  if (claim.state === 'refused') {
+    if (claim.notice !== 'refused') return;
+    replayNotice(input, result, 'push', seat,
+      `${input.team.project}: ${seat} is idle with takeable work and its direct work request was refused earlier in this idle episode; nothing was typed for it`,
+      pushBinding(seat, claim.idle_since));
+    return;
+  }
+  // done: the pickup check is over; only the notice it may still owe is replayed.
+  if (claim.notice === 'stalled') {
+    replayNotice(input, result, 'stalled', seat, stalledText(input, seat),
+      `stalled${SEP}${seat}${SEP}${claim.wake_at ?? claim.claimed_at}`);
   }
 }
 
 function sinceOf(report: IdleWorkReport, seat: string): string {
   return report.idle.find((item) => item.seat === seat)?.since ?? 'watch-start';
+}
+
+function pushBinding(seat: string, since: string): string {
+  return `push${SEP}${seat}${SEP}${since}`;
+}
+
+function unknownBinding(seat: string, claim: IdleClaim): string {
+  return `unknown${SEP}${seat}${SEP}${claim.idle_since}${SEP}${claim.claim_id}`;
+}
+
+function refusalText(input: IdleDispatchInput, seat: string, refused: string): string {
+  return `${input.team.project}: ${seat} is idle with takeable work but was not told directly (${refused}); nothing was typed for it`;
+}
+
+function stalledText(input: IdleDispatchInput, seat: string): string {
+  return `${input.team.project}: ${seat} accepted a work wake a minute ago and is still idle with no observed claim; it will not be woken again in this idle episode`;
 }
 
 /**
@@ -274,6 +432,23 @@ async function attempt(
   }
 }
 
+/** Publishes one claim's owed notice unless this process already did. A new process holds no
+ *  key and publishes from the claim's `notice`; the deterministic `once: true` ids keep an
+ *  already-written record from being rewritten. */
+function replayNotice(
+  input: IdleDispatchInput,
+  result: IdleDispatchResult,
+  kind: 'push' | 'stalled' | 'unknown',
+  seat: string,
+  text: string,
+  binding: string,
+): void {
+  const key = `${kind}${SEP}${binding}`;
+  if (publishedNotices.has(key)) return;
+  mergeDelivery(result, announce(input, kind, seat, text, binding));
+  publishedNotices.add(key);
+}
+
 function mergeDelivery(result: IdleDispatchResult, delivery: FallbackDelivery): void {
   const prior = result.fallback;
   if (prior === undefined) {
@@ -290,11 +465,12 @@ function mergeDelivery(result: IdleDispatchResult, delivery: FallbackDelivery): 
  * orchestrator (the entity's lead, in the entity's root, as the prompt climb resolves it); when
  * the registry cannot map the main, that target is reported missing rather than replaced with an
  * owner or a guessed seat. Each record's id binds the recipient, the kind, the subject and the
- * episode, and `once: true` keeps a re-run from rewriting the first record.
+ * sentence's subject — the episode (or the claim), so a replay of the same notice is the same
+ * record — and `once: true` keeps a re-run from rewriting the first record.
  */
 function announce(
   input: IdleDispatchInput,
-  kind: 'push' | 'empty' | 'stalled',
+  kind: 'push' | 'empty' | 'stalled' | 'unknown',
   subject: string,
   text: string,
   binding: string,

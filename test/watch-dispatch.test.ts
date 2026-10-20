@@ -19,9 +19,10 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { emptySession, type SessionState } from '../src/state.ts';
+import { emptySession, readState, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { captureIdleClaim, settleIdleClaim } from '../src/watch/claim.ts';
 import {
   dispatchIdleWork, forgetIdleEpisodes,
   type IdleDispatchInput, type WorkPush, type WorkPushRequest,
@@ -106,6 +107,14 @@ let base: string;
 let root: string;
 let entityRoot: string;
 let home: string;
+let defaultState: SessionState;
+// The snapshot most recently written to the state file. The dispatcher reads the session fresh
+// from the file every pass, as the watch does; a test that hands `input()` a different snapshot
+// object reseeds it, and a pass that only moves the clock leaves the file (claims included) as
+// the previous pass wrote it.
+let seeded: SessionState | undefined;
+// Set by `handWritten`: the state file is the test's own, and `input()` must not reseed it.
+let frozen = false;
 
 // The crew's root, the entity's own root and a home with the registry that names both. With
 // `withMain` false the registry names only the crew, so the main orchestrator cannot be mapped.
@@ -114,6 +123,8 @@ function scratch(withMain = true): void {
   root = join(base, 'crew');
   entityRoot = join(base, 'entity');
   home = join(base, 'home');
+  seeded = undefined;
+  frozen = false;
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(join(entityRoot, '.agents'), { recursive: true });
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
@@ -143,25 +154,54 @@ function queue(records: { id: string; title: string }[]): void {
 
 function input(extra: Partial<IdleDispatchInput> = {}): IdleDispatchInput {
   const team = extra.team ?? teamOf(CREW);
-  return {
+  const wanted = extra.state ?? defaultState;
+  if (!frozen && wanted !== seeded) {
+    writeFileSync(
+      join(root, '.agents', 'team.state.json'),
+      `${JSON.stringify({ format: 1, sessions: { [team.session]: wanted } }, null, 2)}\n`,
+    );
+    seeded = wanted;
+  }
+  // The pass snapshot is the file's session, as the watch reads it fresh each pass, so a claim
+  // an earlier pass wrote is in it.
+  const state = readState(join(root, '.agents')).sessions[team.session] ?? emptySession();
+  const built: IdleDispatchInput = {
     root,
+    dir: join(root, '.agents'),
     team,
-    state: stateAt(new Date(NOW - 10 * MIN).toISOString()),
+    state,
     live: live(),
     now: new Date(NOW),
     home,
     body: (seat) => `body for ${seat}`,
     ...extra,
   };
+  // The snapshot and the state directory are the harness's, never a test's: `extra.state` names
+  // the record to seed, not a stale snapshot to dispatch over.
+  built.state = state;
+  built.dir = join(root, '.agents');
+  return built;
 }
 
 function recordsIn(dir: string): string[] {
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith('.json')).sort() : [];
 }
 
+/** Writes one session record to the state file by hand, as another writer or an older build
+ *  could have left it, and keeps `input()` from reseeding over it. */
+function handWritten(session: unknown): void {
+  writeFileSync(
+    join(root, '.agents', 'team.state.json'),
+    `${JSON.stringify({ format: 1, sessions: { crew: session } }, null, 2)}\n`,
+  );
+  seeded = undefined;
+  frozen = true;
+}
+
 beforeEach(() => {
   forgetIdleEpisodes();
   scratch(true);
+  defaultState = stateAt(new Date(NOW - 10 * MIN).toISOString());
 });
 
 afterEach(() => {
@@ -520,6 +560,148 @@ describe('a failed pickup', () => {
     expect(late.fallback).toBeUndefined();
     // Only the refusal's own record is there.
     expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+  });
+});
+
+describe('a durable episode claim', () => {
+  test('a watch restart never pushes the same episode twice', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    const first = await dispatchIdleWork(input({ push, state: one }));
+    expect(first.pushed).toHaveLength(1);
+    // The seam a watch restart passes through: every in-process memory is gone, the state file
+    // is not, and the persisted last_active names the same episode.
+    forgetIdleEpisodes();
+    const second = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 10_000) }));
+    expect(second.pushed).toEqual([]);
+    expect(calls).toBe(1);
+    // Past the pickup grace the episode is followed, never re-attempted.
+    const late = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 61_000) }));
+    expect(late.pushed).toEqual([]);
+    expect(calls).toBe(1);
+    expect(late.fallback?.written).toHaveLength(2); // the failed-pickup notice, once
+  });
+
+  test('a refusal survives a restart: the episode stays spent and its notice is replayed, not lost', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: false, refused: 'the pane holds a dialog' };
+    };
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    await dispatchIdleWork(input({ push, state: one }));
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+
+    forgetIdleEpisodes();
+    const second = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + MIN) }));
+    expect(second.pushed).toEqual([]);
+    expect(calls).toBe(1);
+    // The claim still owes the notice: the replay names the same `once: true` record.
+    expect(second.fallback?.written).toHaveLength(2);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+  });
+
+  test('a capture with no recorded outcome is held, never retried, and says so once after the grace', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    const since = one.seats['worker-1']?.last_active ?? '';
+    const first = input({ state: one }); // seeds the state file the claim is written to
+    const captured = captureIdleClaim(first.dir, {
+      session: 'crew', seat: 'worker-1', idle_since: since, at: new Date(NOW - 2 * MIN),
+    });
+    expect(captured.kind).toBe('captured');
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+
+    const held = await dispatchIdleWork(input({ push, state: one }));
+    expect(held.pushed).toEqual([]);
+    expect(calls).toBe(0);
+    expect(held.fallback?.written).toHaveLength(2);
+    const lead = recordsIn(join(root, '.agents', 'messages', 'crew-lead'));
+    expect(lead).toHaveLength(1);
+    const record = JSON.parse(readFileSync(join(root, '.agents', 'messages', 'crew-lead', lead[0]!), 'utf8')) as {
+      payload: { body: string };
+    };
+    expect(record.payload.body).toContain('no recorded outcome');
+    expect(record.payload.body).not.toContain('accepted');
+
+    // A later pass in this process does not repeat it; a restart replays the same record.
+    expect((await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + MIN) }))).fallback).toBeUndefined();
+    forgetIdleEpisodes();
+    const restarted = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 2 * MIN) }));
+    expect(restarted.pushed).toEqual([]);
+    expect(restarted.fallback?.written).toHaveLength(2);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+    expect(calls).toBe(0);
+    // Still pending, with its one notice: held, never retried.
+    expect(readState(first.dir).sessions.crew?.idle_claims?.['worker-1']).toMatchObject({
+      state: 'pending', notice: 'unknown',
+    });
+  });
+
+  test('a refusal settled before its publication is published by the next pass, once', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    const since = one.seats['worker-1']?.last_active ?? '';
+    const first = input({ state: one }); // seeds the state file the claim is written to
+    const captured = captureIdleClaim(first.dir, { session: 'crew', seat: 'worker-1', idle_since: since, at: new Date(NOW) });
+    if (captured.kind !== 'captured') throw new Error(`expected a capture, got ${captured.kind}`);
+    // A stop between the settle and the announcement: the claim holds the intent, and no record
+    // was left yet.
+    settleIdleClaim(first.dir, {
+      session: 'crew', seat: 'worker-1', idle_since: since, claim_id: captured.claim.claim_id,
+      at: new Date(NOW), outcome: 'refused',
+    });
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+    const published = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 1_000) }));
+    expect(published.pushed).toEqual([]);
+    expect(calls).toBe(0);
+    expect(published.fallback?.written).toHaveLength(2);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+  });
+
+  test('a malformed claim is a hold, not an absence, until the episode ends', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const stamp = new Date(NOW - 10 * MIN).toISOString();
+    handWritten({
+      seats: {
+        'worker-1': { stage: 'ready', last_active: stamp },
+        'worker-2': { stage: 'ready', last_active: stamp },
+      },
+      worktrees: {},
+      idle_claims: { 'worker-1': { state: 'pending' } },
+    });
+    const calls: string[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request.seat);
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+    const first = await dispatchIdleWork(input({ push }));
+    expect(calls).toEqual(['worker-2']);
+    expect(first.pushed.map((one) => one.seat)).toEqual(['worker-2']);
+
+    // The seat starts a turn: the episode ends and releases the malformed presence. Idle again
+    // is a new episode, and it is attempted.
+    await dispatchIdleWork(input({ push, now: new Date(NOW + 30_000), live: live({ 'worker-1': { status: 'working', screen: busy } }) }));
+    const again = await dispatchIdleWork(input({ push, now: new Date(NOW + MIN) }));
+    expect(again.pushed.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(calls.sort()).toEqual(['worker-1', 'worker-2']);
+    expect(readState(join(root, '.agents')).sessions.crew?.idle_claims?.['worker-1']).toBeDefined();
   });
 });
 
