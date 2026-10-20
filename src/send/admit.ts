@@ -10,11 +10,10 @@
 // project's own rules. Those rules are decided by the project record and by the `leads`
 // capability a seat holds, never by a role's name, which is each team's own word in any language.
 // A pair whose teams share no project keeps the team rules below unchanged: nothing here ever
-// crosses projects. Across teams, two reaches stand: the entity's own leads — a lead writes to a
-// lead of its entity, and the entity's coordinator to every team lead of that entity — and any
-// seat of one team to any seat of another team of the same entity, both read from the two team
-// records' `entity`, never from a role's word, and both refused across entities. And a record
-// confers no right: registration, a lifecycle, a signing role —
+// crosses projects. The one cross-team reach is the entity's own leads — a lead writes to a lead
+// of its entity, and the entity's coordinator to every team lead of that entity — read from the
+// two team records' `entity` and the `leads` capability, never from a role's word, and refused
+// across entities. And a record confers no right: registration, a lifecycle, a signing role —
 // none of it admits anything by itself; every verdict is made from the pair's own relationships
 // and capabilities, and a send with a record on each side but no rule for the pair is refused
 // exactly as a pair the registry never knew.
@@ -108,11 +107,10 @@ export type DeclaredSender = SendSeat & { declared: true };
  *  the sender has no record yet. */
 export type SendSide = Agent | SendSeat | DeclaredSender;
 
-/** The two rules that admit two ordinary seats to each other: any seat of one team to any seat of
- *  the same team, and any seat of one team to a seat of another team of the same entity. Named
- *  once, so a caller, a refusal and the docs read alike. */
-export const SAME_TEAM_RULE = 'a seat to another seat of its own team';
-export const ENTITY_RULE = 'a seat to a seat of another team in its entity';
+/** The declared same-team seat-to-seat rule: any roster-declared seat of a team writes to any
+ *  roster-declared seat of that same team, asked after every specific rule, grant, and reply so
+ *  all earlier verdict labels remain unchanged. */
+export const DECLARED_SEAT_RULE = 'a seat to a declared seat of its own team';
 
 /** The rules, in the order they are asked. Named once, so a refusal, a caller that has no
  *  identity to judge by, and the docs all read alike. */
@@ -123,9 +121,8 @@ export const RULE_SUMMARY = [
   'an operator to another operator of its own team',
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
-  SAME_TEAM_RULE,
-  ENTITY_RULE,
   'an owner-signed grant naming send',
+  DECLARED_SEAT_RULE,
 ].join('; ');
 
 /**
@@ -251,32 +248,33 @@ export function admitSend(
   if (callerTeam !== undefined && targetTeam === callerTeam && seatOf(target) === targetOrchestrator) {
     return { ok: true, rule: "a seat to its own team's orchestrator" };
   }
-  // Any seat writes to any other seat of its own team: the whole team talks inside itself, whatever
-  // each seat's place in the file's chain. The pair never leaves the team; another team's seat is
-  // reached across teams only by the entity rule below.
-  if (callerTeam !== undefined && targetTeam === callerTeam) {
-    return { ok: true, rule: SAME_TEAM_RULE };
-  }
-  // Any seat writes to a seat of another team of its own entity: the entity is the boundary. Both
-  // records must name the same non-null entity, so a pair of teams that name none, or name
-  // different ones, stays refused however the two seats are named. The asker's own chain may
-  // close the crossing through the same `seats_cross_teams` word the lead reach reads; with no
-  // word it stands.
-  if (
-    callerTeam !== undefined && targetTeam !== undefined && callerTeamId !== targetTeamId
-    && sameEntity(callerTeam, targetTeam) && seatsAcrossEntities(context?.crossTeams ?? {})
-  ) {
-    return { ok: true, rule: ENTITY_RULE };
-  }
   if (grant !== undefined) return { ok: true, rule: `an owner-signed grant naming send (${grant.name})` };
-  // Asked last: a reply to a record on an open thread, when every rule above leaves the pair
-  // unadmitted. The caller has already verified the record and the thread.
+  // Asked last before the declared same-team rule: a reply to a record on an open thread, when
+  // every rule above leaves the pair unadmitted. The caller has already verified the record and
+  // the thread.
   if (context?.reply === 'open-thread') return { ok: true, rule: REPLY_RULE };
+  // Any declared seat writes to any declared seat of its own team: the whole team coordinates
+  // inside itself without relaying through the orchestrator, while a seat off the roster and
+  // every cross-team pair stay refused unless an earlier rule, project setting, grant, or open
+  // thread admitted them.
+  if (
+    callerTeam !== undefined && targetTeam === callerTeam
+    && declaredInRoster(caller, callerTeam)
+    && declaredInRoster(target, targetTeam)
+  ) {
+    return { ok: true, rule: DECLARED_SEAT_RULE };
+  }
 
   return {
     ok: false,
     why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${summaryFor(context)})`,
   };
+}
+
+/** Whether `side` sits in a seat that `team`'s roster declares. */
+function declaredInRoster(side: SendSide, team: AdmitTeam): boolean {
+  const seat = seatOf(side);
+  return team.roster.some((entry) => entry.seat === seat);
 }
 
 /** The rules a refusal names, in the order they were asked: every rule above, and the reply rule
@@ -412,13 +410,6 @@ function operatorSeat(team: AdmitTeam | undefined): string | null {
   return team?.operator ?? null;
 }
 
-/** Whether two team records name the same entity: non-null and equal on both. A team that names
- *  none is no entity's, and two that name different ones never meet. */
-function sameEntity(callerTeam: AdmitTeam, targetTeam: AdmitTeam): boolean {
-  const entity = callerTeam.entity;
-  return entity !== null && entity !== undefined && targetTeam.entity === entity;
-}
-
 /** The role word a side's own line carries in its team's roster: a side a command already placed
  *  carries its role as it stands; a registry record is named by its agent id first, and by its
  *  seat when the roster holds no line for the id, which is the file's own seat behind the store's.
@@ -455,26 +446,25 @@ function leadsMayWrite(
   if (callerTeamId === targetTeamId) return true;
   const entity = callerTeam.entity;
   if (entity === null || entity === undefined || entity !== targetTeam.entity) return false;
-  return seatsAcrossEntities(context?.crossTeams ?? {});
+  return leadsAcrossTeams(context?.crossTeams ?? {});
 }
 
 /**
- * The reach across teams of one entity, over the asker's own chain: open unless a level closes
- * it. It is the same `seats_cross_teams` word the project setting reads, with this reach's own
- * default — the entity's teams are one conversation, and a lead pair of one entity is what
- * carries work between a team and the team above it — so it stands until the seat's own chain
- * says otherwise. Closing is legal at every level; the project may open it again, as the setting
- * itself allows.
+ * The leadership reach at the entity's edge, over the asker's own chain: open unless a level
+ * closes it. It is the same `seats_cross_teams` word the project setting reads, with this reach's
+ * own default — a lead pair of one entity is what carries work between a team and the team above
+ * it, so it stands until the seat's own chain says otherwise. Closing is legal at every level; the
+ * project may open it again, as the setting itself allows.
  */
-const SEATS_ACROSS_ENTITIES: SettingSpec = {
+const LEADS_ACROSS_TEAMS: SettingSpec = {
   name: 'seats_cross_teams',
   policy: 'seats-cross-teams',
   fallback: true,
   looseningLevels: ['project'],
 };
 
-function seatsAcrossEntities(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
-  return resolveSetting(SEATS_ACROSS_ENTITIES, declarationsOf(declared)).value;
+function leadsAcrossTeams(declared: Partial<Record<SettingLevel, boolean | undefined>>): boolean {
+  return resolveSetting(LEADS_ACROSS_TEAMS, declarationsOf(declared)).value;
 }
 
 /** The entity's assistant, with the team it sits in: the seat holding the `assistant` capability

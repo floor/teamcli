@@ -18,7 +18,7 @@ import { EVENT_THRESHOLDS } from '../src/policy/events.ts';
 import { writePolicySet } from '../src/policy/index.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
-import { REPLY_RULE, SAME_TEAM_RULE, ENTITY_RULE } from '../src/send/admit.ts';
+import { REPLY_RULE } from '../src/send/admit.ts';
 import { readHistory } from '../src/send/history.ts';
 import { signedCloseOf, signedReceiptOf, verifyClose, verifyReceipt } from '../src/send/record.ts';
 import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
@@ -174,7 +174,7 @@ describe('a reply is a record on the thread it answers', () => {
     });
   });
 
-  test('a reply between two seats of one team is admitted by its own team rule', async () => {
+  test('a reply between two seats no earlier rule pairs is admitted by the reply rule', async () => {
     place('helper', 'w2:p1');
     sentTo('helper', SENT, { from: 'worker' });
     const result = await run([SENT, 'answered'], { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' }, { newId: () => REPLY });
@@ -184,10 +184,10 @@ describe('a reply is a record on the thread it answers', () => {
     expect(record.payload).toMatchObject({
       from: 'helper',
       to: 'worker',
-      rule: SAME_TEAM_RULE,
+      rule: REPLY_RULE,
       thread: SENT,
       in_reply_to: SENT,
-      body: `from the file's seat helper (no registry record yet) — admitted by: ${SAME_TEAM_RULE}\n\nanswered`,
+      body: `from the file's seat helper (no registry record yet) — admitted by: ${REPLY_RULE}\n\nanswered`,
     });
   });
 
@@ -215,7 +215,7 @@ describe('a reply is a record on the thread it answers', () => {
     expect(record.payload).toMatchObject({
       from: 'helper',
       to: 'worker',
-      rule: SAME_TEAM_RULE,
+      rule: REPLY_RULE,
       thread: SENT,
       in_reply_to: SENT,
     });
@@ -543,7 +543,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
       to_id: inboxId,
       root: floorRoot,
       session: 'floor',
-      rule: ENTITY_RULE,
+      rule: REPLY_RULE,
       from: 'lead',
       thread: SENT,
       in_reply_to: SENT,

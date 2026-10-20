@@ -293,31 +293,6 @@ describe('team send: the typed trigger', () => {
   });
 });
 
-describe('team send: a seat to a seat of its own team', () => {
-  test('a worker seat reaches another worker, and the header names the team rule', async () => {
-    const { root, dir, sockets } = world();
-    registerSeat('helper', 'implementer', 'w2:p1');
-    record(dir, 'helper', 'w2:p1');
-    // `native` is the file's reviewer, live on its own pane: the record the send writes is the
-    // one place the admitting rule is named, and the pair is one the team's seat rule admits.
-    const host = fake(sockets, {
-      agents: () => [{ name: 'lead', pane: 'w1:p1' }, { name: 'native', pane: 'w9:p1' }],
-      native: scripted(['idle', 'working']),
-    });
-    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
-
-    const code = await runSend(['native', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.err).toBe('');
-    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
-    const drops = join(dir, 'send-drops', 'acme', 'native');
-    expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
-      'from helper — admitted by: a seat to another seat of its own team\n\nhello',
-    );
-  });
-});
-
 describe('team send: refused', () => {
   test('an unknown seat names the file s seats and sends nothing', async () => {
     const { root, sockets } = world();
@@ -331,6 +306,27 @@ describe('team send: refused', () => {
     expect(io.err).toContain('ghost: it is not a declared seat');
     expect(io.err).toContain('lead, helper, native');
     expect(host.frames).toEqual([]);
+  });
+
+  test('a worker seat reaches another declared seat of its own team, and the header names the rule', async () => {
+    const { root, dir, sockets } = world();
+    registerSeat('helper', 'implementer', 'w2:p1');
+    record(dir, 'helper', 'w2:p1');
+    const host = fake(sockets, {
+      agents: () => [{ name: 'lead', pane: 'w1:p1' }, { name: 'native', pane: 'w9:p1' }],
+      native: scripted(['idle', 'working']),
+    });
+    const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
+
+    const code = await runSend(['native', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    const drops = join(dir, 'send-drops', 'acme', 'native');
+    expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
+      'from helper — admitted by: a seat to a declared seat of its own team\n\nhello',
+    );
   });
 
   test('a caller with neither an agent record nor a seat in the file is refused, and the refusal names the command that records it', async () => {

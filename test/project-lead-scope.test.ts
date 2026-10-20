@@ -4,8 +4,7 @@
 // seat its `coordinator:` names, the seat its `operator:` names, or the owner. `up` and `grant`
 // are the owner's alone. So the lead of one team of a project is refused on another team of the
 // same project, by its own name, and the one thing that holds is admission: `team send` admits
-// the project lead to a lead of its teams by the project rule, and a plain seat of another team
-// of its entity by the entity's seat rule. Every sentence here is a
+// the project lead to a lead of its teams, and to nobody else. Every sentence here is a
 // command's own, from runs this test makes against the real registries the launch writes.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -24,7 +23,7 @@ import { readAgents, type Agent } from '../src/registry/agents.ts';
 import { readProjects } from '../src/registry/projects.ts';
 import { readTeams, teamIdOf } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
-import { admitSend, ENTITY_RULE, type AdmitContext } from '../src/send/admit.ts';
+import { admitSend, type AdmitContext } from '../src/send/admit.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { gitEnv, testIo } from './helpers.ts';
@@ -313,16 +312,15 @@ describe('the project lead changes nothing outside its own team', () => {
 describe('the project lead reaches the leads of its teams — by admission alone', () => {
   const context = (): AdmitContext => ({ projects: readProjects(home), crossTeams: {} });
 
-  test('admission admits the project lead to a lead by the project rule, and to a plain seat by the entity rule', () => {
+  test('admission admits the project lead to a lead of its project, by its own rule', () => {
     const records = readTeams(home);
     expect(admitSend(agentOf('lead', alphaRoot), agentOf('chief', bravoRoot), records, undefined, context())).toEqual({
       ok: true,
       rule: 'the project lead and the leads of its teams',
     });
-    // The plain seat is no project pair: the project rules never name it. Both teams are one
-    // entity's, so the entity's seat rule admits it, in its own name.
     const plain = admitSend(agentOf('lead', alphaRoot), agentOf('helper', bravoRoot), records, undefined, context());
-    expect(plain).toEqual({ ok: true, rule: ENTITY_RULE });
+    expect(plain.ok).toBe(false);
+    expect((plain as { why: string }).why).toContain(`may not send to helper@${teamIdOf(bravoRoot)}: no rule admits it`);
   });
 
   test('team send admits it to that lead: a dry run, exit 0', async () => {
@@ -334,11 +332,18 @@ describe('the project lead reaches the leads of its teams — by admission alone
     expect(code).toBe(0);
   });
 
-  test('and the same command reaches a plain seat of that team by the entity rule', async () => {
+  test('and the same command refuses it a plain seat of that team', async () => {
     const io = leadIo(alphaRoot);
     const code = await runSend(['helper@bravo', 'the brief', '--dry-run'], io, sendHost());
-    expect(io.err).toBe('');
-    expect(io.out).toContain('helper: dry-run:');
-    expect(code).toBe(0);
+    expect(io.err).toBe(
+      `team send: refused: lead@${teamIdOf(alphaRoot)} may not send to helper@${teamIdOf(bravoRoot)}: no rule admits it (` +
+        'the project lead and the leads of its teams; team leads within one project to each other; ' +
+        'seats crossing teams within one project, where the project allows it; the owner; ' +
+        "an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; " +
+        "an operator to another operator of its own team; " +
+        "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send; " +
+        "a seat to a declared seat of its own team)\n",
+    );
+    expect(code).toBe(1);
   });
 });
