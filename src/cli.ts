@@ -94,6 +94,12 @@ The team is declared in <project>/.agents/team.yaml.
 Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error, 2 when no command or an unknown command is given.
 `;
 
+// The hidden presence hook is written into a seat's settings file at install time, so no person
+// types it. `--help` is the one way to read its words, and it ends through the help site every
+// command uses.
+const PRESENCE_HOOK_USAGE = `Usage: team presence-hook --dir <path> --session <name> --seat <name> --binding <binding> --event <event> [--notification permission_prompt]
+`;
+
 export { version };
 
 /** `team --about`'s text: version, licence, docs link, and the `what 0.5.0 must not pretend` block. */
@@ -114,6 +120,13 @@ export function helpText(): string {
   const names = Object.keys(commands);
   const usage = USAGE.replace('{commands}', names.length ? names.map((n) => `  ${n}`).join('\n') : '  (none in this build)');
   return `${description()}\n\n${usage}`;
+}
+
+/** The one help end: print a command's usage and stop. A table command and the hidden presence
+ *  hook both reach it, so the help exit stays one site with one row. */
+function printHelp(io: Io, usage: string): number {
+  io.stdout(usage);
+  return 0; // exit: team.command-help
 }
 
 /** What the process entry point does when a command throws: one line on stderr, exit code 1. */
@@ -161,6 +174,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // command reads no stdin; the notification command also exact-filters the CLI's payload. It
   // prints nothing. It is not a command in the help text.
   if (name === 'presence-hook') {
+    if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, PRESENCE_HOOK_USAGE);
     const { default: run } = await import('./daemon/presence/hook.ts');
     return run(rest);
   }
@@ -181,10 +195,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
   const command = await load();
   // The one path for every command's `--help`/`-h`: it prints the command's usage and stops,
   // before any option parsing, file reading, caller check or herdr call in the command itself.
-  if (rest.includes('--help') || rest.includes('-h')) {
-    io.stdout(command.USAGE);
-    return 0; // exit: team.command-help
-  }
+  if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, command.USAGE);
   return command.default(rest, io);
 }
 
