@@ -9,20 +9,22 @@
 // saying `pending` until the drain is truthfully quiesced.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { startMachineDaemon, type StartMachineDaemonInput } from '../src/daemon/host.ts';
 import { daemonHealth, probeDaemonHealth } from '../src/daemon/health.ts';
 import { daemonLockPath, daemonSocketPath } from '../src/daemon/paths.ts';
 import { readDaemonState } from '../src/daemon/state.ts';
 import type { PresenceActivityResult } from '../src/daemon/presence/activity.ts';
+import { createPresenceActivity } from '../src/daemon/presence/activity.ts';
 import {
   PRESENCE_HEALTH_GRACE_MS, type PresenceSource, type PresenceSourceRuntime,
   type PresenceSourceStatus,
 } from '../src/daemon/presence/health.ts';
-import type { PresenceIngestResult, PresenceIngester } from '../src/daemon/presence/ingest.ts';
+import { createPresenceIngester, type PresenceIngestResult, type PresenceIngester } from '../src/daemon/presence/ingest.ts';
 import type { PresencePublishResult } from '../src/daemon/presence/publish.ts';
+import { presencePaths, stagePresenceRecord } from '../src/daemon/presence/spool.ts';
 import { STATE_FILE } from '../src/state.ts';
 
 const CREW = `format: 1
@@ -534,17 +536,79 @@ describe('the per-seat runtime sources', () => {
     };
   }
 
+  // The exact staged identity both the canonical projection and its applied fence name. A
+  // source is only qualified once its own `stagedEventId` equals this and the fence matches.
+  const EVENT_ID = '2026-10-20T00:00:00.000Z-aaaaaaaa';
+  const seatIds = new Map<string, string>();
+
+  /** Writes the canonical position a reconciled runtime seat needs: `current.json` and the
+   *  state record's binding plus applied fence, naming the same staged id and sequence. Each
+   *  seat gets its own `seat_...` id, because a repeated seat id is dropped by the state door. */
+  function writeCanonical(
+    seat: string,
+    input: { binding: string; id?: string; seq?: number; state?: string },
+  ): void {
+    const id = input.id ?? EVENT_ID;
+    const seq = input.seq ?? 1;
+    let seatId = seatIds.get(seat);
+    if (seatId === undefined) {
+      seatId = `seat_${String(seatIds.size + 1).padStart(12, '0')}`;
+      seatIds.set(seat, seatId);
+    }
+    type LooseSession = { seats?: Record<string, Record<string, unknown>>; worktrees?: Record<string, unknown> };
+    let file: { format?: number; sessions?: Record<string, LooseSession> } = {};
+    try {
+      file = JSON.parse(readFileSync(join(world.root, '.agents', STATE_FILE), 'utf8'));
+    } catch {
+      // A fresh scratch world has no state file yet; the canonical record is the first one.
+    }
+    file.format ??= 1;
+    file.sessions ??= {};
+    const session = file.sessions.crew ??= {};
+    session.seats ??= {};
+    session.worktrees ??= {};
+    session.seats[seat] = {
+      ...(session.seats[seat] ?? {}),
+      id: seatId,
+      stage: 'ready',
+      presence_binding: input.binding,
+      presence_applied: {
+        seat_id: seatId,
+        binding: input.binding,
+        seq,
+        applied_at: '2026-10-20T00:00:00.000Z',
+      },
+    };
+    writeFileSync(join(world.root, '.agents', STATE_FILE), JSON.stringify(file));
+    const dir = join(world.root, '.agents', 'presence', 'crew', seat);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'current.json'), JSON.stringify({
+      v: 1,
+      seq,
+      id,
+      state: input.state ?? 'idle',
+      source: 'runtime-event',
+      event: 'turn-end',
+      binding: input.binding,
+      since: '2026-10-20T00:00:00.000Z',
+      observedAt: '2026-10-20T00:00:00.000Z',
+    }));
+  }
+
   function started(
     seat: string,
     reading: () => PresenceSourceStatus,
     close: () => Promise<{ quiesced: true }> = async () => ({ quiesced: true }),
   ): PresenceSource {
-    return { seat, step: async () => {}, status: reading, close };
+    // A started source that has reached its baseline has staged one record; the scenes that
+    // need a different identity override it in the reading.
+    return { seat, step: async () => {}, status: () => ({ stagedEventId: EVENT_ID, ...reading() }), close };
   }
 
   test('a current-incarnation source serves one seat while a refused expected attachment stays pending', async () => {
     const clock = new Date('2026-10-20T00:00:00.000Z');
     writeSeatBindings({ 'worker-1': BINDING, 'crew-op': 'prs_ffffffffffff' });
+    writeCanonical('worker-1', { binding: BINDING });
     const daemon = await start({
       presenceHosting: true,
       presenceEveryMs: 10,
@@ -559,15 +623,24 @@ describe('the per-seat runtime sources', () => {
       ],
       presenceUnproven: () => [{ seat: 'crew-op', why: 'the managed thread is archived' }],
     });
-    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats?.[0]?.healthy === true);
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats
+      ?.find((seat) => seat.seat === 'worker-1')?.healthy === true);
     const presence = daemon.health().roots?.[0]?.presence;
     // The route's own answer is still the ingest answer, and the refused seat never inherits it.
+    // The list is complete: the never-launched hook seat is explicitly pending, not omitted.
     expect(presence).toMatchObject({ session: 'crew', state: 'serving', healthy: true, why: null });
     expect(presence?.seats).toEqual([
-      { seat: 'worker-1', state: 'serving', healthy: true, binding: BINDING, why: null },
       {
-        seat: 'crew-op', state: 'pending', healthy: false, binding: 'prs_ffffffffffff',
-        why: 'the managed thread is archived',
+        seat: 'crew-lead', state: 'pending', healthy: false, source: 'hook', binding: null,
+        appliedEventId: null, why: 'the seat records no presence binding',
+      },
+      {
+        seat: 'crew-op', state: 'pending', healthy: false, source: 'runtime',
+        binding: 'prs_ffffffffffff', appliedEventId: null, why: 'the managed thread is archived',
+      },
+      {
+        seat: 'worker-1', state: 'serving', healthy: true, source: 'runtime', binding: BINDING,
+        appliedEventId: EVENT_ID, why: null,
       },
     ]);
     await daemon.close();
@@ -576,6 +649,7 @@ describe('the per-seat runtime sources', () => {
   test('a predecessor binding never serves a seat, and a quiet current channel serves with old evidence', async () => {
     const clock = new Date('2026-10-20T00:00:00.000Z');
     writeSeatBindings({ 'worker-1': BINDING, 'crew-op': 'prs_ffffffffffff' });
+    writeCanonical('crew-op', { binding: 'prs_ffffffffffff' });
     const old = new Date(clock.getTime() - 8 * 60 * 60_000).toISOString();
     const daemon = await start({
       presenceHosting: true,
@@ -594,16 +668,133 @@ describe('the per-seat runtime sources', () => {
         })),
       ],
     });
-    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats?.[1]?.healthy === true);
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats
+      ?.find((seat) => seat.seat === 'crew-op')?.healthy === true);
     expect(daemon.health().roots?.[0]?.presence?.seats).toEqual([
       {
-        seat: 'worker-1', state: 'pending', healthy: false, binding: BINDING,
-        why: 'the runtime channel belongs to another incarnation',
+        seat: 'crew-lead', state: 'pending', healthy: false, source: 'hook', binding: null,
+        appliedEventId: null, why: 'the seat records no presence binding',
       },
       {
-        seat: 'crew-op', state: 'serving', healthy: true, binding: 'prs_ffffffffffff', why: null,
+        seat: 'crew-op', state: 'serving', healthy: true, source: 'runtime',
+        binding: 'prs_ffffffffffff', appliedEventId: EVENT_ID, why: null,
+      },
+      {
+        seat: 'worker-1', state: 'pending', healthy: false, source: 'runtime', binding: BINDING,
+        appliedEventId: null, why: 'the runtime channel belongs to another incarnation',
       },
     ]);
+    await daemon.close();
+  }, 15_000);
+
+  test('a staged working holds against the old idle until ingest and activity apply it, then serves', async () => {
+    // The real spool, the real ingester and the real activity reconciler, with one gate: after the
+    // second event is staged the ingester's next step waits, so the hold between "the source has
+    // staged" and "the canonical position applied it" is observable instead of a wall-clock race.
+    const clock = new Date('2026-10-20T00:00:00.000Z');
+    const stateDir = join(world.root, '.agents');
+    const seatId = 'seat_0123456789ab';
+    const OLD = '2026-10-20T00:00:00.000Z-aaaaaaaa';
+    const NEW = '2026-10-20T00:00:00.000Z-bbbbbbbb';
+    writeFileSync(join(stateDir, STATE_FILE), JSON.stringify({
+      format: 1,
+      sessions: {
+        crew: {
+          seats: { 'worker-1': { id: seatId, stage: 'ready', presence_binding: BINDING } },
+          worktrees: {},
+        },
+      },
+    }));
+    const real = createPresenceIngester({ stateDir, session: 'crew', now: () => clock });
+    let holdIngest = false;
+    let releaseIngest!: () => void;
+    const released = new Promise<void>((resolve) => { releaseIngest = resolve; });
+    const gated: PresenceIngester = {
+      step: async () => {
+        if (holdIngest) await released;
+        return real.step();
+      },
+      close: () => real.close(),
+      isClosed: () => real.isClosed(),
+    };
+    let toStage: string | null = OLD;
+    let staged: string | null = null;
+    let holdAfterStage = false;
+    let pumps = 0;
+    const source: PresenceSource = {
+      seat: 'worker-1',
+      step: async () => {
+        pumps += 1;
+        const next = toStage;
+        if (next === null) return;
+        const stagedRecord = stagePresenceRecord(stateDir, {
+          session: 'crew',
+          seat: 'worker-1',
+          binding: BINDING,
+          source: 'runtime-event',
+          event: next === NEW ? 'turn-start' : 'turn-end',
+          ts: '2026-10-20T00:00:00.000Z',
+          id: next,
+        });
+        if (stagedRecord.kind !== 'staged') throw new Error(`the event was not staged: ${stagedRecord.why}`);
+        toStage = null;
+        staged = next;
+        if (holdAfterStage) holdIngest = true;
+      },
+      // The evidence instant is fixed: after the clock jumps eight hours it is old evidence, and
+      // the seat must still serve, because event age is not a liveness fact.
+      status: (): PresenceSourceStatus => ({
+        seat: 'worker-1', binding: BINDING, threadId: 'thread-1', channel: 'connected',
+        stream: 'initialized', baseline: 'read', evidenceAt: '2026-10-20T00:00:00.000Z',
+        stagedEventId: staged, why: null,
+      }),
+      close: async () => ({ quiesced: true }),
+    };
+    const seatOf = () => daemon.health().roots?.[0]?.presence?.seats
+      ?.find((seat) => seat.seat === 'worker-1');
+    const currentOf = (): Record<string, unknown> => JSON.parse(
+      readFileSync(presencePaths(stateDir, 'crew', 'worker-1')!.current, 'utf8'),
+    ) as Record<string, unknown>;
+    const daemon = await start({
+      presenceHosting: true,
+      presenceEveryMs: 10,
+      now: () => clock,
+      presenceIngest: () => gated,
+      presenceActivity: () => createPresenceActivity({ stateDir, session: 'crew', seats: ['worker-1'] }),
+      presenceSubscriptions: (): PresenceSource[] => [source],
+    });
+    // The old idle event goes through the real pipeline and is proven applied in both places.
+    await waitUntil(() => seatOf()?.healthy === true && seatOf()?.appliedEventId === OLD);
+    expect(currentOf()).toMatchObject({ id: OLD, state: 'idle', seq: 1 });
+    // Now stage a working event while that exact idle projection and fence stand, and hold the
+    // next ingest so the un-applied window can be read rather than guessed at.
+    holdAfterStage = true;
+    toStage = NEW;
+    await waitUntil(() => seatOf()?.state === 'pending' && seatOf()?.why !== null);
+    expect(seatOf()).toMatchObject({
+      state: 'pending', healthy: false, source: 'runtime', binding: BINDING,
+      appliedEventId: null,
+    });
+    // The route's own answer is untouched: only the seat that is ahead of its projection holds.
+    expect(daemon.health().roots?.[0]?.presence).toMatchObject({ state: 'serving', healthy: true });
+    // The canonical position has not moved: the working event is staged, not applied.
+    expect(currentOf()).toMatchObject({ id: OLD, state: 'idle', seq: 1 });
+    // Release the real ingester: it projects the staged event and the activity reconciler applies
+    // the fence, and only then does the seat serve again, naming the new identity.
+    releaseIngest();
+    await waitUntil(() => seatOf()?.healthy === true && seatOf()?.appliedEventId === NEW);
+    expect(currentOf()).toMatchObject({ id: NEW, state: 'working', seq: 2 });
+    const applied = (JSON.parse(readFileSync(join(stateDir, STATE_FILE), 'utf8')) as {
+      sessions: { crew: { seats: Record<string, { presence_applied?: Record<string, unknown> }> } };
+    }).sessions.crew.seats['worker-1']?.presence_applied;
+    expect(applied).toMatchObject({ seat_id: seatId, binding: BINDING, seq: 2 });
+    // Eight hours later, with no new event, the seat still serves: there is no event-age expiry.
+    const before = pumps;
+    clock.setTime(clock.getTime() + 8 * 60 * 60_000);
+    await waitUntil(() => pumps >= before + 3);
+    expect(seatOf()).toMatchObject({
+      state: 'serving', healthy: true, source: 'runtime', appliedEventId: NEW,
+    });
     await daemon.close();
   }, 15_000);
 
@@ -679,7 +870,23 @@ describe('the per-seat runtime sources', () => {
       session: 'crew', state: 'pending', healthy: false,
       why: 'the runtime subscriptions were not built: the target resolver failed',
     });
-    expect(daemon.health().roots?.[0]?.presence?.seats).toBeUndefined();
+    // Every declared seat is listed as `unknown`: a failed classification must never let a
+    // reader infer that a missing source means the seat is a hook seat.
+    const unresolved = 'the runtime subscriptions were not built: the target resolver failed';
+    expect(daemon.health().roots?.[0]?.presence?.seats).toEqual([
+      {
+        seat: 'crew-lead', state: 'pending', healthy: false, source: 'unknown', binding: null,
+        appliedEventId: null, why: unresolved,
+      },
+      {
+        seat: 'crew-op', state: 'pending', healthy: false, source: 'unknown', binding: null,
+        appliedEventId: null, why: unresolved,
+      },
+      {
+        seat: 'worker-1', state: 'pending', healthy: false, source: 'unknown', binding: BINDING,
+        appliedEventId: null, why: unresolved,
+      },
+    ]);
     await daemon.close();
     expect(existsSync(daemonLockPath(world.home))).toBe(false);
   }, 15_000);
@@ -704,14 +911,25 @@ describe('the per-seat runtime sources', () => {
       }],
     });
     await waitUntil(
-      () => named.health().roots?.[0]?.presence?.seats?.[0]?.why === 'the runtime source cannot be closed',
+      () => named.health().roots?.[0]?.presence?.seats
+        ?.find((seat) => seat.seat === 'worker-1')?.why === 'the runtime source cannot be closed',
     );
     const namedPresence = named.health().roots?.[0]?.presence;
     expect(namedPresence).toMatchObject({ state: 'serving', healthy: true });
-    expect(namedPresence?.seats).toEqual([{
-      seat: 'worker-1', state: 'pending', healthy: false, binding: BINDING,
-      why: 'the runtime source cannot be closed',
-    }]);
+    expect(namedPresence?.seats).toEqual([
+      {
+        seat: 'crew-lead', state: 'pending', healthy: false, source: 'hook', binding: null,
+        appliedEventId: null, why: 'the seat records no presence binding',
+      },
+      {
+        seat: 'crew-op', state: 'pending', healthy: false, source: 'hook', binding: null,
+        appliedEventId: null, why: 'the seat records no presence binding',
+      },
+      {
+        seat: 'worker-1', state: 'pending', healthy: false, source: 'runtime', binding: BINDING,
+        appliedEventId: null, why: 'the runtime source cannot be closed',
+      },
+    ]);
     await named.close();
 
     const unnamed = await start({
@@ -733,6 +951,7 @@ describe('the per-seat runtime sources', () => {
   test('a hung source pump holds only its own seat, never a sibling or the route', async () => {
     const clock = new Date('2026-10-20T00:00:00.000Z');
     writeSeatBindings({ 'worker-1': BINDING, 'crew-op': 'prs_ffffffffffff' });
+    writeCanonical('crew-op', { binding: 'prs_ffffffffffff' });
     let release: (() => void) | null = null;
     let activitySteps = 0;
     let closedHung = false;
@@ -767,13 +986,14 @@ describe('the per-seat runtime sources', () => {
         })),
       ],
     });
-    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats?.[1]?.healthy === true);
+    await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats
+      ?.find((seat) => seat.seat === 'crew-op')?.healthy === true);
     const presence = daemon.health().roots?.[0]?.presence;
     // The route and the sibling are measured while the first source's step is still pending.
     expect(presence).toMatchObject({ state: 'serving', healthy: true });
-    expect(presence?.seats?.[0]).toEqual({
-      seat: 'worker-1', state: 'pending', healthy: false, binding: null,
-      why: 'the runtime channel has not been sampled yet',
+    expect(presence?.seats?.find((seat) => seat.seat === 'worker-1')).toEqual({
+      seat: 'worker-1', state: 'pending', healthy: false, source: 'runtime', binding: null,
+      appliedEventId: null, why: 'the runtime channel has not been sampled yet',
     });
     expect(activitySteps).toBeGreaterThan(0);
     expect(closedHung).toBe(false);

@@ -24,9 +24,21 @@ export type DaemonRootSeatPresenceHealth = {
   seat: string;
   state: 'serving' | 'pending';
   healthy: boolean;
+  /**
+   * What this seat's route expects, stated rather than inferred: `runtime` is a managed native
+   * channel whose health needs an applied-event proof, `hook` is the route's own hook channel
+   * qualified by the fresh ingest answer, and `unknown` means source classification itself
+   * failed — a reader must never read a missing list entry or a missing source as `hook`.
+   */
+  source: 'runtime' | 'hook' | 'unknown';
   /** The seat's current managed binding at the sampled instant, so a reader can name the
    *  incarnation this answer fences; null when no sample or no valid binding was read. */
   binding: string | null;
+  /** For a serving `runtime` seat, the exact staged event identity proven applied in both the
+   *  canonical projection and the applied fence; a pending seat may carry the last-known
+   *  canonical event id for diagnosis, or null — but never as proof. A reader compares this to
+   *  the canonical event it is about to enforce, never to a receipt instant. */
+  appliedEventId: string | null;
   why: string | null;
 };
 
@@ -45,7 +57,10 @@ export type DaemonRootPresenceHealth = {
   healthy: boolean;
   checkedAt: string;
   why: string | null;
-  /** One entry per managed seat whose runtime channel this daemon is fencing. */
+  /** One entry for every declared seat of the route, each with its own explicit source class.
+   *  The list is complete whenever it is present: a reader never infers a missing entry's
+   *  classification, and a mixed route's hook seat qualifies on fresh ingest while an expected
+   *  native seat still holds. */
   seats?: DaemonRootSeatPresenceHealth[];
 };
 

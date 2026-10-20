@@ -10,8 +10,8 @@ import type { WatchSources } from '../src/commands/watch.ts';
 import { hostedWatchSources } from '../src/daemon/watch-run.ts';
 import {
   PRESENCE_HEALTH_GRACE_MS, adoptPresenceSource, createPresenceChannelHealth, presenceStepHealth,
-  unprovenSource,
-  type PresenceSourceStatus,
+  reconcilePresenceProof, reconciledProofHolds, unprovenSource,
+  type PresenceCanonicalPosition, type PresenceReconciledProof, type PresenceSourceStatus,
 } from '../src/daemon/presence/health.ts';
 import { presenceId } from '../src/daemon/presence/contract.ts';
 import { createPresenceIngester } from '../src/daemon/presence/ingest.ts';
@@ -250,6 +250,139 @@ describe('the per-seat runtime answer', () => {
       why: 'the managed thread could not be resolved',
     });
     expect(await source.close()).toEqual({ quiesced: true });
+  });
+});
+
+// The reconciliation race: ingest runs first and the activity reconciler after, so a source can
+// already have staged an event while the canonical projection still carries the older word. A
+// proof exists only when the newest staged identity is the projection's and the applied fence
+// names the same seat record, incarnation and sequence. The proof is then re-checked against a
+// fresh source reading at every use, so a newer stage holds at once.
+describe('reconciling a staged runtime event', () => {
+  const SEAT = 'worker-1';
+  const BINDING = 'prs_0123456789ab';
+  const SEAT_ID = 'seat_0123456789ab';
+  const EVENT = '2026-10-20T00:00:00.000Z-aaaaaaaa';
+  const OLD = '2026-10-19T23:00:00.000Z-bbbbbbbb';
+  const reading = (over: Partial<PresenceSourceStatus> = {}): PresenceSourceStatus => ({
+    seat: SEAT, binding: BINDING, threadId: 'thread-1', channel: 'connected',
+    stream: 'initialized', baseline: 'read', evidenceAt: START.toISOString(),
+    stagedEventId: EVENT, why: null, ...over,
+  });
+  const canonical = (over: Partial<PresenceCanonicalPosition> = {}): PresenceCanonicalPosition => ({
+    id: EVENT, binding: BINDING, seq: 7, seatId: SEAT_ID,
+    fence: { seat_id: SEAT_ID, binding: BINDING, seq: 7 }, ...over,
+  });
+  const proof = (over: Partial<PresenceReconciledProof> = {}): PresenceReconciledProof => ({
+    id: EVENT, binding: BINDING, epoch: 'epoch-a', ...over,
+  });
+  const reconcile = (
+    source: PresenceSourceStatus,
+    position: PresenceCanonicalPosition | null,
+    canonicalWhy: string | null = null,
+    currentBinding: string | null = BINDING,
+  ) => reconcilePresenceProof({ source, canonical: position, canonicalWhy, currentBinding, at: START });
+
+  test('exactly one staged identity applied in the projection and the fence is a proof', () => {
+    expect(reconcile(reading(), canonical())).toEqual({
+      ok: true, proof: { id: EVENT, binding: BINDING },
+    });
+  });
+
+  test('an old projection, the same identity staged after it, holds and never serves', () => {
+    expect(reconcile(reading(), canonical({ id: OLD }))).toEqual({
+      ok: false, why: 'the canonical projection has not applied the runtime event',
+    });
+  });
+
+  test('a source that staged nothing, or a seat with no projection, names what is missing', () => {
+    expect(reconcile(reading({ stagedEventId: null }), canonical())).toEqual({
+      ok: false, why: 'the runtime source has staged no event yet',
+    });
+    expect(reconcile(reading(), null, 'the seat has no canonical presence projection yet')).toEqual({
+      ok: false, why: 'the seat has no canonical presence projection yet',
+    });
+  });
+
+  test('the projection must belong to the current incarnation before its word is trusted', () => {
+    expect(reconcile(reading(), canonical(), null, 'prs_ffffffffffff')).toEqual({
+      ok: false, why: 'the canonical projection belongs to another incarnation',
+    });
+    expect(reconcile(reading(), canonical(), null, null)).toEqual({
+      ok: false, why: 'the seat records no current presence binding',
+    });
+  });
+
+  test('a half-applied position is refused: the projection alone is not the fence', () => {
+    expect(reconcile(reading(), canonical({ fence: null }))).toEqual({
+      ok: false, why: 'the seat records no applied presence fence',
+    });
+    expect(reconcile(reading(), canonical({
+      fence: { seat_id: 'seat_ffffffffffff', binding: BINDING, seq: 7 },
+    }))).toEqual({ ok: false, why: 'the applied fence names another seat record' });
+    expect(reconcile(reading(), canonical({
+      fence: { seat_id: SEAT_ID, binding: 'prs_ffffffffffff', seq: 7 },
+    }))).toEqual({ ok: false, why: 'the applied fence belongs to another incarnation' });
+    expect(reconcile(reading(), canonical({
+      fence: { seat_id: SEAT_ID, binding: BINDING, seq: 6 },
+    }))).toEqual({ ok: false, why: 'the applied fence has not reached the canonical projection' });
+  });
+
+  test('a channel that is not continuous cannot prove application, even with the identity', () => {
+    expect(reconcile(reading({ channel: 'unknown', why: 'no measured delivery yet' }), canonical())).toEqual({
+      ok: false, why: 'no measured delivery yet',
+    });
+  });
+
+  test('a cached proof is re-checked against the fresh reading, not against its own age', () => {
+    // A quiet duplicate live state keeps the same staged identity and therefore qualifies, with
+    // no event-age window: eight hours later the same reading still proves application.
+    expect(reconciledProofHolds({
+      proof: proof(), source: reading(), currentBinding: BINDING, epoch: 'epoch-a', at: after(8 * 60 * 60_000),
+    })).toEqual({ qualified: true, why: null });
+    expect(reconciledProofHolds({
+      proof: undefined, source: reading(), currentBinding: BINDING, epoch: 'epoch-a', at: START,
+    })).toEqual({ qualified: false, why: 'the runtime event has not been reconciled' });
+  });
+
+  test('a newer stage invalidates the proof immediately, before the next pass could reconcile it', () => {
+    expect(reconciledProofHolds({
+      proof: proof(), source: reading({ stagedEventId: '2026-10-20T00:01:00.000Z-cccccccc' }),
+      currentBinding: BINDING, epoch: 'epoch-a', at: after(60_000),
+    })).toEqual({
+      qualified: false,
+      why: 'the runtime staged an event the canonical projection has not applied',
+    });
+  });
+
+  test('epoch, incarnation and continuity are fences on the cached proof too', () => {
+    const holds = (over: Partial<{
+      proof: PresenceReconciledProof; source: PresenceSourceStatus;
+      currentBinding: string | null; epoch: string;
+    }> = {}) => reconciledProofHolds({
+      proof: proof(), source: reading(), currentBinding: BINDING, epoch: 'epoch-a', at: START, ...over,
+    });
+    expect(holds({ epoch: 'epoch-b' })).toEqual({
+      qualified: false, why: 'the reconciled proof is from another daemon epoch',
+    });
+    expect(holds({ currentBinding: null })).toEqual({
+      qualified: false, why: 'the runtime channel belongs to another incarnation',
+    });
+    expect(holds({ source: reading({ channel: 'stopped', why: 'the socket closed' }) })).toEqual({
+      qualified: false, why: 'the socket closed',
+    });
+    expect(holds({ source: reading({ stagedEventId: null }) })).toEqual({
+      qualified: false, why: 'the runtime source has staged no event yet',
+    });
+  });
+});
+
+describe('the unresolved route reason', () => {
+  test('is null while classification succeeded and names the failure once it did not', () => {
+    const health = createPresenceChannelHealth(PRESENCE_HEALTH_GRACE_MS, 'epoch-a');
+    expect(health.unresolvedWhy()).toBeNull();
+    health.unresolved('the runtime subscriptions were not built: the resolver failed');
+    expect(health.unresolvedWhy()).toBe('the runtime subscriptions were not built: the resolver failed');
   });
 });
 

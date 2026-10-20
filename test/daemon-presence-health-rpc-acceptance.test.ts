@@ -203,10 +203,11 @@ describe('the existing health answer carries fresh per-route presence', () => {
     expect(earlyRoot.presence!.why!.length).toBeGreaterThan(0);
     expect(Number.isFinite(Date.parse(earlyRoot.presence!.checkedAt))).toBe(true);
 
-    // Bounded: the answer adds a root name and one fixed-shape record, nothing per-seat, no
-    // spool or log payload, no second call to obtain it.
+    // Bounded: the answer adds a root name and one fixed-shape record, plus one entry per
+    // declared seat — never a spool or log payload, and no second call to obtain it.
     expect(Object.keys(earlyRoot).sort()).toEqual(['presence', 'root']);
-    expect(Object.keys(earlyRoot.presence!).sort()).toEqual(['checkedAt', 'healthy', 'session', 'state', 'why']);
+    expect(Object.keys(earlyRoot.presence!).sort()).toEqual(['checkedAt', 'healthy', 'seats', 'session', 'state', 'why']);
+    expect(earlyRoot.presence!.seats!.map((seat) => seat.seat).sort()).toEqual(['lead', 'writer']);
 
     // A probe is a read: with the heartbeat far away, the state record is byte-identical after
     // two probes. Nothing about this answer is persisted.

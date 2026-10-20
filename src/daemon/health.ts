@@ -21,7 +21,7 @@ import {
   type DaemonState,
   type DaemonStuckRequest,
 } from './state.ts';
-import { isPresenceBinding } from './presence/contract.ts';
+import { PRESENCE_ID, isPresenceBinding } from './presence/contract.ts';
 
 export type DaemonProbe =
   | { state: 'answered'; at: string }
@@ -212,10 +212,13 @@ function freshPresenceOf(raw: unknown): DaemonRootPresenceHealth | null {
 const INVALID_SEATS = Symbol('invalid seats');
 
 /**
- * The fresh per-seat answers, or `undefined` when the route carries none. An empty list is not
- * the promised shape (the daemon omits the field for a hook-only route), and a seat may not be
- * repeated. A serving seat must carry a valid binding, because that is the incarnation a reader
- * fences; a pending seat may have none yet.
+ * The fresh per-seat answers, or `undefined` when the route carries none. The list is either
+ * absent or complete: an empty list, a repeated seat, a missing source class or an unknown class
+ * that claims to serve all make the record unreadable whole. A serving seat must carry a valid
+ * binding, because that is the incarnation a reader fences; a serving runtime seat must also
+ * carry the exact applied event id, so a reader can compare it with the canonical event it
+ * is about to enforce. A pending seat may have no binding, and its event id is at most a
+ * last-known diagnostic one — never proof.
  */
 function freshSeatsOf(
   raw: unknown,
@@ -232,18 +235,31 @@ function freshSeatsOf(
     if (entry.state !== 'serving' && entry.state !== 'pending') return INVALID_SEATS;
     if (typeof entry.healthy !== 'boolean') return INVALID_SEATS;
     if ((entry.state === 'serving') !== entry.healthy) return INVALID_SEATS;
+    if (entry.source !== 'runtime' && entry.source !== 'hook' && entry.source !== 'unknown') {
+      return INVALID_SEATS;
+    }
     if (!(entry.binding === null || isPresenceBinding(entry.binding))) return INVALID_SEATS;
+    if (!(entry.appliedEventId === null
+      || (typeof entry.appliedEventId === 'string' && PRESENCE_ID.test(entry.appliedEventId)))) {
+      return INVALID_SEATS;
+    }
     if (!(entry.why === null || typeof entry.why === 'string')) return INVALID_SEATS;
     if (entry.state === 'pending' && (typeof entry.why !== 'string' || entry.why === '')) {
       return INVALID_SEATS;
     }
     if (entry.state === 'serving' && entry.binding === null) return INVALID_SEATS;
+    if (entry.state === 'serving' && entry.source === 'unknown') return INVALID_SEATS;
+    if (entry.state === 'serving' && entry.source === 'runtime' && entry.appliedEventId === null) {
+      return INVALID_SEATS;
+    }
     seen.add(entry.seat);
     seats.push({
       seat: entry.seat,
       state: entry.state,
       healthy: entry.healthy,
+      source: entry.source,
       binding: entry.binding as string | null,
+      appliedEventId: entry.appliedEventId as string | null,
       why: entry.why as string | null,
     });
   }

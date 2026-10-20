@@ -35,8 +35,16 @@ export type PresenceSourceStatus = {
   stream: 'uninitialized' | 'initialized' | 'lost';
   baseline: 'pending' | 'read' | 'failed';
   evidenceAt: string | null;
+  /** The spool identity (`<record stem>`) of the newest record the source successfully staged,
+   *  or null before the first stage. This is the durable event identity the host reconciles
+   *  against its canonical projection and applied fence: a receipt instant proves delivery, not
+   *  application, so no seat is qualified on `evidenceAt` alone. A duplicate live notification
+   *  keeps the same id; a failed stage never advances it. */
+  stagedEventId?: string | null;
   /** Display detail when the source has one; never a verdict and never persisted. */
   why?: string | null;
+  /** The producer's own spelling for the same display detail as `why`. */
+  reason?: string | null;
 };
 
 /** The read-only runtime source a route owns for one seat. `step` is the bounded stream pump
@@ -151,16 +159,16 @@ export function sourceContinuity(
   at: Date,
 ): { continuous: boolean; why: string | null } {
   if (source.channel === 'gone') {
-    return { continuous: false, why: source.why ?? 'the runtime reports the session ended' };
+    return { continuous: false, why: source.why ?? source.reason ?? 'the runtime reports the session ended' };
   }
   if (source.channel !== 'connected') {
-    return { continuous: false, why: source.why ?? `the runtime channel is ${source.channel}` };
+    return { continuous: false, why: source.why ?? source.reason ?? `the runtime channel is ${source.channel}` };
   }
   if (source.stream !== 'initialized') {
-    return { continuous: false, why: source.why ?? 'the runtime stream is not initialized' };
+    return { continuous: false, why: source.why ?? source.reason ?? 'the runtime stream is not initialized' };
   }
   if (source.baseline !== 'read') {
-    return { continuous: false, why: source.why ?? 'the bound thread baseline is not read' };
+    return { continuous: false, why: source.why ?? source.reason ?? 'the bound thread baseline is not read' };
   }
   if (currentBinding === null || source.binding !== currentBinding) {
     return { continuous: false, why: 'the runtime channel belongs to another incarnation' };
@@ -172,6 +180,116 @@ export function sourceContinuity(
     return { continuous: false, why: 'the runtime channel evidence is in the future' };
   }
   return { continuous: true, why: null };
+}
+
+/** The exact canonical position a staged runtime record must have reached: the applied
+ *  projection (`current.json`) and the activity reconciler's applied fence on the same seat
+ *  record. Either alone can be observed between the two writes, so both are required. */
+export type PresenceCanonicalPosition = {
+  id: string;
+  binding: string;
+  seq: number;
+  seatId: string;
+  fence: { seat_id: string; binding: string; seq: number } | null;
+};
+
+/** A proof that one staged event identity was seen applied at the canonical position. It is not
+ *  evidence by itself: every reader re-checks it against a fresh source reading, so a newer
+ *  stage makes it stale at once rather than at the next sample. `epoch` fences it to the daemon
+ *  process that reconciled it. */
+export type PresenceReconciledProof = {
+  id: string;
+  binding: string;
+  epoch: string;
+};
+
+function stagedIdOf(source: PresenceSourceStatus): string | null {
+  return typeof source.stagedEventId === 'string' && source.stagedEventId !== ''
+    ? source.stagedEventId
+    : null;
+}
+
+/**
+ * Reconciles one source's newest staged identity against the canonical projection and the
+ * applied fence after an activity step. Application is the only proof: a connected channel with
+ * a receipt instant says the event reached the spool, not that the projection moved, and the
+ * host must not enforce the projection's older word while the source is already ahead.
+ */
+export function reconcilePresenceProof(input: {
+  source: PresenceSourceStatus;
+  canonical: PresenceCanonicalPosition | null;
+  /** Why the canonical position is absent, when it is. */
+  canonicalWhy: string | null;
+  currentBinding: string | null;
+  at: Date;
+}): { ok: true; proof: { id: string; binding: string } } | { ok: false; why: string } {
+  const staged = stagedIdOf(input.source);
+  if (staged === null) return { ok: false, why: 'the runtime source has staged no event yet' };
+  if (input.canonical === null) {
+    return { ok: false, why: input.canonicalWhy ?? 'the seat has no canonical presence projection yet' };
+  }
+  if (input.currentBinding === null) {
+    return { ok: false, why: 'the seat records no current presence binding' };
+  }
+  if (input.canonical.binding !== input.currentBinding) {
+    return { ok: false, why: 'the canonical projection belongs to another incarnation' };
+  }
+  const continuity = sourceContinuity(input.source, input.currentBinding, input.at);
+  if (!continuity.continuous) {
+    return { ok: false, why: continuity.why ?? 'the runtime channel is not serving' };
+  }
+  if (input.canonical.id !== staged) {
+    return { ok: false, why: 'the canonical projection has not applied the runtime event' };
+  }
+  const fence = input.canonical.fence;
+  if (fence === null) return { ok: false, why: 'the seat records no applied presence fence' };
+  if (fence.seat_id !== input.canonical.seatId) {
+    return { ok: false, why: 'the applied fence names another seat record' };
+  }
+  if (fence.binding !== input.canonical.binding) {
+    return { ok: false, why: 'the applied fence belongs to another incarnation' };
+  }
+  if (fence.seq !== input.canonical.seq) {
+    return { ok: false, why: 'the applied fence has not reached the canonical projection' };
+  }
+  return { ok: true, proof: { id: staged, binding: input.canonical.binding } };
+}
+
+/**
+ * Whether a cached reconciliation still holds right now. The source reading is re-read by the
+ * caller at the instant of use, so an event staged after the last pass is refused immediately:
+ * the identity must be exactly the proven one, the incarnation must still be the current one,
+ * and the channel must still be continuous. A quiet duplicate state keeps its identity and
+ * therefore stays qualified; no wall-clock age is consulted.
+ */
+export function reconciledProofHolds(input: {
+  proof: PresenceReconciledProof | undefined;
+  source: PresenceSourceStatus;
+  currentBinding: string | null;
+  epoch: string;
+  at: Date;
+}): { qualified: boolean; why: string | null } {
+  if (input.proof === undefined) {
+    return { qualified: false, why: 'the runtime event has not been reconciled' };
+  }
+  if (input.proof.epoch !== input.epoch) {
+    return { qualified: false, why: 'the reconciled proof is from another daemon epoch' };
+  }
+  const staged = stagedIdOf(input.source);
+  if (staged === null) {
+    return { qualified: false, why: 'the runtime source has staged no event yet' };
+  }
+  if (staged !== input.proof.id) {
+    return { qualified: false, why: 'the runtime staged an event the canonical projection has not applied' };
+  }
+  if (input.currentBinding === null || input.currentBinding !== input.proof.binding) {
+    return { qualified: false, why: 'the runtime channel belongs to another incarnation' };
+  }
+  const continuity = sourceContinuity(input.source, input.currentBinding, input.at);
+  if (!continuity.continuous) {
+    return { qualified: false, why: continuity.why ?? 'the runtime channel is not serving' };
+  }
+  return { qualified: true, why: null };
 }
 
 /**
@@ -219,6 +337,9 @@ export type PresenceChannelHealth = {
    *  No route-level or seat-level answer may claim health while this stands. It is sticky for
    *  the process: classification happens at start, and a later read cannot repair it. */
   unresolved(why: string): void;
+  /** The sticky classification failure, or null when every declared seat was classified. A
+   *  reader uses it to say `unknown` rather than inferring a missing source means a hook seat. */
+  unresolvedWhy(): string | null;
   /** The current managed binding captured with this seat's last sample, for a reader's own fence;
    *  null before the first sample or when the seat record named no valid binding. */
   seatBinding(seat: string): string | null;
@@ -237,20 +358,20 @@ export function createPresenceChannelHealth(
   let lastOkAt: number | null = null;
   let lastStepOk = false;
   let lastWhy: string | null = null;
-  let unresolvedWhy: string | null = null;
+  let unresolvedState: string | null = null;
   const seats = new Map<
     string,
     { epoch: string; continuous: boolean; why: string | null; atMs: number; binding: string | null }
   >();
   const expected = new Set<string>();
   const healthy = (at: Date): boolean => {
-    if (unresolvedWhy !== null) return false;
+    if (unresolvedState !== null) return false;
     if (!lastStepOk || lastOkAt === null) return false;
     const age = at.getTime() - lastOkAt;
     return age >= 0 && age <= graceMs;
   };
   const reason = (at: Date): string | null => {
-    if (unresolvedWhy !== null) return unresolvedWhy;
+    if (unresolvedState !== null) return unresolvedState;
     if (healthy(at)) return null;
     if (!lastStepOk) return lastWhy ?? 'the presence channel did not answer healthy';
     return 'no presence step finished inside the liveness window';
@@ -278,7 +399,10 @@ export function createPresenceChannelHealth(
     },
     unresolved(why) {
       // The first failure is the root cause a reader needs; later ones cannot classify better.
-      if (unresolvedWhy === null) unresolvedWhy = why;
+      if (unresolvedState === null) unresolvedState = why;
+    },
+    unresolvedWhy() {
+      return unresolvedState;
     },
     seatBinding(seat) {
       return seats.get(seat)?.binding ?? null;

@@ -27,7 +27,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine } from '../launch/plain.ts';
-import { pidAlive, readState } from '../state.ts';
+import { isSeatId, pidAlive, readState } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRootHealthSnapshot } from './protocol.ts';
 import { probeDaemonHealth } from './health.ts';
@@ -40,11 +40,14 @@ import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
 import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
-import { isPresenceBinding } from './presence/contract.ts';
+import { isPresenceBinding, readPresenceReading } from './presence/contract.ts';
+import { presencePaths } from './presence/spool.ts';
+import { codexPresenceFor, codexPresenceTarget } from './presence/codex-source.ts';
 import {
   PRESENCE_HEALTH_GRACE_MS, adoptPresenceSource, createPresenceChannelHealth, presenceStepHealth,
-  unprovenSource, type PresenceChannelHealth, type PresenceSource, type PresenceSourceRuntime,
-  type PresenceSourceStatus,
+  reconcilePresenceProof, reconciledProofHolds, unprovenSource, type PresenceCanonicalPosition,
+  type PresenceChannelHealth, type PresenceReconciledProof, type PresenceSource,
+  type PresenceSourceRuntime, type PresenceSourceStatus,
 } from './presence/health.ts';
 import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../watch/authority.ts';
 import { sendWatchDirect } from '../watch/direct-send.ts';
@@ -128,9 +131,12 @@ export type StartMachineDaemonInput = {
   presencePublish?: (route: HostedRoute, stateDir: string) => PresencePublisherStep;
   /**
    * Builds one canonical route's subscribed per-seat read-only runtime sources. The default is
-   * none: a seat with no source keeps the route's own hook answer, correct only for a seat that
-   * genuinely has no managed native channel (the target resolver's `skip`). A resolution or start
-   * failure is not a skip: it belongs in `presenceUnproven`, so the seat is explicitly unhealthy.
+   * the production wiring: for every declared seat it resolves an explicit Codex target under the
+   * signed `codex-daemon` policy and the endpoint the machine recorded, starts a source only for a
+   * resolved target, and registers every seat whose expected attachment could not be resolved or
+   * started as an explicit unproven source. It never discovers or guesses an endpoint, and a
+   * non-Codex seat is a skip. An injected builder replaces that wiring wholly. A resolution or
+   * start failure is not a skip: it becomes unproven, so the seat is explicitly unhealthy.
    * A producer may name the seat on the source or only on its status reading, and `state` /
    * `cancel` are accepted as aliases; the host adopts the first reading at registration. The
    * wiring resolves targets under the existing policy; the host only fences, samples and closes
@@ -138,6 +144,13 @@ export type StartMachineDaemonInput = {
    * holds every seat rather than letting an expected native attachment inherit hook health.
    */
   presenceSubscriptions?: (route: HostedRoute, stateDir: string) => PresenceSourceRuntime[];
+  /**
+   * The explicit Codex app-server endpoint for one seat, when the machine's launch recorded one.
+   * The production wiring never discovers or guesses an endpoint: an absent answer leaves the
+   * target resolver's answer `unproven`, so the seat is held instead of attached to a socket the
+   * machine was not told about. Ignored when `presenceSubscriptions` is injected.
+   */
+  presenceCodexEndpoint?: (route: HostedRoute, stateDir: string, seat: string) => string | null | undefined;
   /**
    * Seats this route expected to carry a managed native channel but whose target resolution or
    * start did not succeed, with the truthful why. Each becomes an explicit unproven source, so a
@@ -342,6 +355,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     sourceRuns: (Promise<void> | null)[];
     /** This route's fixed liveness, answered per seat to its hosted watch's dispatcher. */
     health: PresenceChannelHealth;
+    /** The last proof, per seat, that the source's staged event identity reached both the
+     *  canonical projection and the applied fence. A reader re-checks it against a fresh source
+     *  reading, so a later stage holds at once rather than at the next pass. */
+    proofs: Map<string, PresenceReconciledProof>;
+    /** Why the last reconciliation for a seat did not prove application, for display. */
+    proofMiss: Map<string, string>;
   }[] = [];
   const presenceRuns = new Map<string, Promise<void>>();
   const presenceLogged = new Set<string>();
@@ -381,21 +400,22 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         : closed
           ? 'the daemon is closing'
           : presence.health.reason(at) ?? 'the presence channel is not current';
-      // The route's answer stays the ingest answer. Each managed seat carries its own, so one
-      // seat's unproven runtime channel never marks a sibling or the route pending.
-      const seats = presence.sources.map((source) => {
-        const seatHealthy = !closed && presence.health.seatHealthy(source.seat, at);
-        const seatWhy = seatHealthy
-          ? null
-          : closed
-            ? 'the daemon is closing'
-            : presence.health.seatReason(source.seat, at) ?? 'the runtime channel is not serving';
+      // The route's answer stays the ingest answer. Every declared seat carries its own explicit
+      // classification, so a mixed route's hook seat qualifies on fresh ingest while an expected
+      // native seat holds, and one seat's unproven channel never marks a sibling pending.
+      const seats = route.seats.map((seat) => {
+        // Sampled and reconciled at this reading's own instant: an event staged since the last
+        // pass holds the seat now, not after the next pump.
+        const verdict = seatVerdict(presence, seat, at);
+        const serving = verdict.why === null;
         return {
-          seat: source.seat,
-          state: seatHealthy ? 'serving' as const : 'pending' as const,
-          healthy: seatHealthy,
-          binding: presence.health.seatBinding(source.seat),
-          why: seatWhy,
+          seat,
+          state: serving ? 'serving' as const : 'pending' as const,
+          healthy: serving,
+          source: verdict.source,
+          binding: verdict.binding,
+          appliedEventId: verdict.appliedEventId,
+          why: verdict.why,
         };
       });
       return {
@@ -573,8 +593,57 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         health.seatExpected(source.seat);
         sources.push(source);
       };
+      /** The production wiring: resolve each declared seat's explicit Codex target under the
+       *  signed `codex-daemon` policy, and start a source only for a resolved target. A `skip`
+       *  is a seat with no managed native channel, whose route hook answer is its own; an
+       *  `unproven` target is an expected attachment that could not be made, never a skip. No
+       *  endpoint is guessed: without one the resolver itself answers `unproven`. */
+      const productionSources = (): {
+        runtimes: PresenceSourceRuntime[];
+        unproven: Array<{ seat: string; why: string }>;
+      } => {
+        const runtimes: PresenceSourceRuntime[] = [];
+        const unproven: Array<{ seat: string; why: string }> = [];
+        for (const seat of loaded.team.seats) {
+          const read = codexPresenceTarget({
+            enabled: true,
+            home,
+            stateDir,
+            root: canonical,
+            herdrSession: loaded.team.session,
+            session: loaded.team.session,
+            seat: { name: seat.name, cli: seat.cli },
+            endpoint: input.presenceCodexEndpoint?.(route, stateDir, seat.name) ?? null,
+            now: now(),
+          });
+          if (read.kind === 'skip') continue;
+          if (read.kind === 'unproven') {
+            unproven.push({ seat: seat.name, why: read.why });
+            continue;
+          }
+          // The target resolver only returns a target under an `on` policy, so the start gate
+          // is already verified; a start refusal is still an explicit unproven attachment.
+          const started = codexPresenceFor({
+            target: read.target,
+            policy: 'on',
+            feature: true,
+            now,
+          });
+          if (started.kind === 'subscribed') runtimes.push(started.source);
+          else unproven.push({ seat: seat.name, why: started.why });
+        }
+        return { runtimes, unproven };
+      };
+      let unresolvedTargets: Array<{ seat: string; why: string }> = [];
       try {
-        for (const runtime of input.presenceSubscriptions?.(route, stateDir) ?? []) {
+        const runtimes = input.presenceSubscriptions === undefined
+          ? (() => {
+              const built = productionSources();
+              unresolvedTargets = built.unproven;
+              return built.runtimes;
+            })()
+          : input.presenceSubscriptions(route, stateDir);
+        for (const runtime of runtimes) {
           const adopted = adoptPresenceSource(runtime, now());
           if ('source' in adopted) {
             register(adopted.source);
@@ -594,7 +663,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         appendDaemonLog(home, `presence ${route.root}: ${why}`, now());
       }
       try {
-        for (const failed of input.presenceUnproven?.(route, stateDir) ?? []) {
+        for (const failed of [...unresolvedTargets, ...(input.presenceUnproven?.(route, stateDir) ?? [])]) {
           register(unprovenSource(failed.seat, failed.why));
         }
       } catch (error) {
@@ -620,6 +689,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         sources,
         sourceRuns: sources.map(() => null),
         health,
+        proofs: new Map(),
+        proofMiss: new Map(),
       });
     }
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
@@ -696,6 +767,162 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     appendDaemonLog(home, `root ${rootArg}: send ${status.send}, bus ${status.bus}`, now());
   }
 
+  /** The seat's current managed binding, read at the moment of use. A missing seat record, an
+   *  absent binding or an unreadable team state means no continuity may be granted: the source's
+   *  own binding is then fenced against nothing. */
+  const currentBindingOf = (stateDir: string, session: string, seat: string): string | null => {
+    try {
+      const record = readState(stateDir).sessions[session]?.seats?.[seat];
+      return record !== undefined && isPresenceBinding(record.presence_binding)
+        ? record.presence_binding
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** The exact canonical position for one seat: the applied projection (`current.json`) and the
+   *  activity reconciler's applied fence, read together from the same state door. Both must name
+   *  the same applied line; a projection the ingester wrote but activity has not fenced yet is
+   *  deliberately not enough. */
+  const canonicalSeatOf = (
+    stateDir: string,
+    session: string,
+    seat: string,
+  ): { canonical: PresenceCanonicalPosition | null; why: string | null } => {
+    let record;
+    try {
+      record = readState(stateDir).sessions[session]?.seats?.[seat];
+    } catch {
+      return { canonical: null, why: 'the team state could not be read' };
+    }
+    if (record === undefined) return { canonical: null, why: 'the seat has no state record' };
+    if (!isSeatId(record.id)) return { canonical: null, why: 'the seat record names no seat id' };
+    if (!isPresenceBinding(record.presence_binding)) {
+      return { canonical: null, why: 'the seat records no valid presence binding' };
+    }
+    const fence = record.presence_applied;
+    if (fence === undefined) return { canonical: null, why: 'the seat records no applied presence fence' };
+    if (fence.seat_id !== record.id || !isPresenceBinding(fence.binding)
+      || !Number.isInteger(fence.seq) || fence.seq < 1) {
+      return { canonical: null, why: 'the applied presence fence is not readable' };
+    }
+    const paths = presencePaths(stateDir, session, seat);
+    if (paths === null) return { canonical: null, why: 'the seat cannot name a presence folder' };
+    let text: string;
+    try {
+      text = readFileSync(paths.current, 'utf8');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return {
+        canonical: null,
+        why: code === 'ENOENT'
+          ? 'the seat has no canonical presence projection yet'
+          : 'the canonical presence projection could not be read',
+      };
+    }
+    const read = readPresenceReading(text);
+    if (read.kind !== 'ok') return { canonical: null, why: read.why };
+    return {
+      canonical: {
+        id: read.reading.id,
+        binding: read.reading.binding,
+        seq: read.reading.seq,
+        seatId: record.id,
+        fence: { seat_id: fence.seat_id, binding: fence.binding, seq: fence.seq },
+      },
+      why: null,
+    };
+  };
+
+  /** The exact per-seat runtime answer a fresh health snapshot and a hosted watch's dispatcher
+   *  both use. A seat with a source is qualified only while its cached reconciled proof still
+   *  matches a fresh source reading and the current binding, so an event staged after the last
+   *  pass holds the seat immediately. */
+  const seatQualification = (
+    one: (typeof presenceWork)[number],
+    seat: string,
+    at: Date,
+  ): string | null => {
+    if (closed) return 'the daemon is closing';
+    if (!one.health.seatHealthy(seat, at)) {
+      return one.health.seatReason(seat, at) ?? 'the runtime channel is not serving';
+    }
+    const source = one.sources.find((candidate) => candidate.seat === seat);
+    if (source === undefined) return null;
+    let reading: PresenceSourceStatus;
+    try {
+      reading = source.status(at);
+    } catch (error) {
+      return `the runtime source status failed: ${messageOf(error)}`;
+    }
+    const verdict = reconciledProofHolds({
+      proof: one.proofs.get(seat),
+      source: reading,
+      currentBinding: currentBindingOf(one.stateDir, one.route.session, seat),
+      epoch: since,
+      at,
+    });
+    if (verdict.qualified) return null;
+    if (!one.proofs.has(seat)) {
+      return one.proofMiss.get(seat) ?? verdict.why ?? 'the runtime event has not been reconciled';
+    }
+    return verdict.why ?? 'the runtime channel is not serving';
+  };
+
+  /** The complete per-seat answer: an explicit source class, the current binding and, for a
+   *  serving runtime seat, the reconciled staged identity. A seat with no source can be called a
+   *  hook seat only when classification succeeded; a route whose source factory failed answers
+   *  `unknown` for every seat, so a missing expected native attachment is never inferred away. */
+  const seatVerdict = (
+    one: (typeof presenceWork)[number],
+    seat: string,
+    at: Date,
+  ): {
+    source: 'runtime' | 'hook' | 'unknown';
+    binding: string | null;
+    appliedEventId: string | null;
+    why: string | null;
+  } => {
+    const source = one.sources.find((candidate) => candidate.seat === seat);
+    const unresolved = one.health.unresolvedWhy();
+    const kind = unresolved !== null ? 'unknown' as const : source === undefined ? 'hook' as const : 'runtime' as const;
+    // A runtime seat's binding is the one its sample was fenced on (never a newer state read
+    // standing in for an answer that was never sampled); a hook seat has no sample, so its
+    // current state binding is the only incarnation to show.
+    const binding = source === undefined
+      ? currentBindingOf(one.stateDir, one.route.session, seat)
+      : one.health.seatBinding(seat);
+    if (closed) return { source: kind, binding, appliedEventId: null, why: 'the daemon is closing' };
+    if (source === undefined) {
+      if (unresolved !== null) return { source: kind, binding, appliedEventId: null, why: unresolved };
+      if (binding === null) {
+        return {
+          source: kind, binding: null, appliedEventId: null,
+          why: 'the seat records no presence binding',
+        };
+      }
+      const why = one.health.healthy(at)
+        ? null
+        : one.health.reason(at) ?? 'the presence channel is not current';
+      return { source: kind, binding, appliedEventId: null, why };
+    }
+    const why = seatQualification(one, seat, at);
+    return {
+      source: kind,
+      binding,
+      appliedEventId: why === null ? one.proofs.get(seat)?.id ?? null : null,
+      why,
+    };
+  };
+
+  /** The watch dispatcher's boolean: only a null verdict qualifies. */
+  const seatQualified = (
+    one: (typeof presenceWork)[number],
+    seat: string,
+    at: Date,
+  ): boolean => seatVerdict(one, seat, at).why === null;
+
   // One watch per hosted route, on the daemon's existing heartbeat. The run starts at once and
   // performs its first pass; no second timer exists, and a pass that hangs holds nothing the
   // heartbeat needs. A root that failed to load, or that duplicates a checkout already hosted,
@@ -724,7 +951,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
                 // no source keeps the route's fresh ingest answer, an expected native seat needs
                 // its own current sample, and a missing or false answer holds the projection.
                 presenceChannelHealthy: (seat: string) =>
-                  !closed && presence.health.seatHealthy(seat, now()),
+                  seatQualified(presence, seat, now()),
               }),
           // The shared verifier judges the captured identity against the record under its own
           // lock immediately before every effect; a lifecycle report is never a substitute.
@@ -762,20 +989,6 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     if (presenceLogged.size >= 64) return;
     presenceLogged.add(key);
     appendDaemonLog(home, `presence ${route.root}: ${text}`, now());
-  };
-
-  /** The seat's current managed binding, read at the moment of use. A missing seat record, an
-   *  absent binding or an unreadable team state means no continuity may be granted: the source's
-   *  own binding is then fenced against nothing. */
-  const currentBindingOf = (stateDir: string, session: string, seat: string): string | null => {
-    try {
-      const record = readState(stateDir).sessions[session]?.seats?.[seat];
-      return record !== undefined && isPresenceBinding(record.presence_binding)
-        ? record.presence_binding
-        : null;
-    } catch {
-      return null;
-    }
   };
 
   /** One failed reading for a source that could not be sampled: never healthy, and never the
@@ -852,9 +1065,55 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     });
   };
 
+  /** Reconciles each source's newest staged identity against the canonical projection and the
+   *  applied fence, after this pass's activity step. The resulting proof is cached per seat; a
+   *  reader re-checks it against a fresh source reading, so an event staged after this instant
+   *  holds the seat immediately rather than at the next pass. */
+  const reconcileSeats = (one: (typeof presenceWork)[number]): void => {
+    const at = now();
+    for (const source of one.sources) {
+      if (closed) return;
+      let reading: PresenceSourceStatus;
+      try {
+        reading = source.status(at);
+      } catch (error) {
+        one.proofs.delete(source.seat);
+        one.proofMiss.set(source.seat, `the runtime source status failed: ${messageOf(error)}`);
+        continue;
+      }
+      if (reading.seat !== source.seat) {
+        one.proofs.delete(source.seat);
+        one.proofMiss.set(source.seat, 'the runtime source answered for another seat');
+        continue;
+      }
+      const canonical = canonicalSeatOf(one.stateDir, one.route.session, source.seat);
+      const verdict = reconcilePresenceProof({
+        source: reading,
+        canonical: canonical.canonical,
+        canonicalWhy: canonical.why,
+        currentBinding: currentBindingOf(one.stateDir, one.route.session, source.seat),
+        at,
+      });
+      if (verdict.ok) {
+        one.proofs.set(source.seat, {
+          id: verdict.proof.id,
+          binding: verdict.proof.binding,
+          epoch: since,
+        });
+        one.proofMiss.delete(source.seat);
+      } else {
+        one.proofs.delete(source.seat);
+        one.proofMiss.set(source.seat, verdict.why);
+        logPresenceOnce(one.route, `${source.seat}: ${verdict.why}`);
+      }
+    }
+  };
+
   /**
-   * One presence pass for one route: the ingester's bounded step, the activity reconciler over
-   * what it appended, then the publisher that copies applied current-binding transitions to the
+   * One presence pass for one route: the ingester's bounded step, then each source's own
+   * independent sample, the activity reconciler over what the step appended, the per-seat
+   * reconciliation that proves a source's staged identity reached both the projection and the
+   * applied fence, and the publisher that copies applied current-binding transitions to the
    * route's bus event log. Its log reads are asynchronous and bounded; its state write is the
    * same synchronous read-modify-write under the zero-wait lock every state writer uses. A slow
    * or broken spool therefore holds only its own route, and the beat that starts it never awaits
@@ -897,6 +1156,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       } catch (error) {
         logPresenceOnce(one.route, `the activity step failed: ${error instanceof Error ? error.message : String(error)}`);
       }
+      // Only after the activity step may a source's staged identity be proven applied: the
+      // ingester wrote the projection and the activity reconciler fenced it in this pass.
+      reconcileSeats(one);
       try {
         // Publication is a separate concern from the native channel's health: a bus append that
         // fails is reported and retried by a later pass, and never marks presence unhealthy.

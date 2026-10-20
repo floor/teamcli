@@ -12,7 +12,7 @@ import {
   parseDaemonRequest,
   type DaemonHealthSnapshot,
 } from '../src/daemon/protocol.ts';
-import { writeDaemonState, type DaemonState } from '../src/daemon/state.ts';
+import { writeDaemonState, type DaemonRootSeatPresenceHealth, type DaemonState } from '../src/daemon/state.ts';
 
 const NOW = (): Date => new Date('2026-10-20T12:00:00.000Z');
 
@@ -220,10 +220,13 @@ describe('the reading carries fresh presence by canonical root', () => {
     const withSeats = {
       ...serving,
       seats: [
-        { seat: 'worker-1', state: 'serving' as const, healthy: true, binding: 'prs_0123456789ab', why: null },
         {
-          seat: 'crew-op', state: 'pending' as const, healthy: false, binding: null,
-          why: 'the runtime channel has not been sampled yet',
+          seat: 'worker-1', state: 'serving' as const, healthy: true, source: 'runtime' as const,
+          binding: 'prs_0123456789ab', appliedEventId: '2026-10-20T11:59:59.000Z-aaaaaaaa', why: null,
+        },
+        {
+          seat: 'crew-op', state: 'pending' as const, healthy: false, source: 'hook' as const,
+          binding: null, appliedEventId: null, why: 'the seat records no presence binding',
         },
       ],
     };
@@ -232,18 +235,41 @@ describe('the reading carries fresh presence by canonical root', () => {
     expect(health.roots[0]?.presence).toEqual(withSeats);
   });
 
+  test('a pending seat may carry a last-known event id for diagnosis, never as proof', async () => {
+    const home = scratchHome();
+    writeDaemonState(home, stateWithRoots(home, [ROOT]));
+    const diagnostic = {
+      ...serving,
+      seats: [{
+        seat: 'worker-1', state: 'pending' as const, healthy: false, source: 'runtime' as const,
+        binding: 'prs_0123456789ab', appliedEventId: '2026-10-20T11:59:59.000Z-aaaaaaaa',
+        why: 'the runtime staged an event the canonical projection has not applied',
+      }],
+    };
+    await serve(home, true, { ...snapshot, roots: [{ root: ROOT, presence: diagnostic }] });
+    const health = await daemonHealth(home, { now: NOW });
+    expect(health.roots[0]?.presence).toEqual(diagnostic);
+  });
+
   test('a malformed seat list drops the whole record instead of serving part of it', async () => {
     const home = scratchHome();
-    const roots = ['/tmp/a', '/tmp/b', '/tmp/c', '/tmp/d', '/tmp/e'];
+    const roots = ['/tmp/a', '/tmp/b', '/tmp/c', '/tmp/d', '/tmp/e', '/tmp/f', '/tmp/g', '/tmp/h'];
     writeDaemonState(home, stateWithRoots(home, roots));
+    const BINDING = 'prs_0123456789ab';
+    const EVENT = '2026-10-20T11:59:59.000Z-aaaaaaaa';
     const good = {
-      seat: 'worker-1', state: 'pending' as const, healthy: false, binding: null, why: 'not sampled',
+      seat: 'worker-1', state: 'pending' as const, healthy: false,
+      source: 'runtime' as const, binding: null, appliedEventId: null, why: 'not sampled',
     };
+    const servingSeat = {
+      ...good, state: 'serving' as const, healthy: true, binding: BINDING, appliedEventId: EVENT,
+    };
+    const { source: _omitted, ...withoutSource } = servingSeat;
     await serve(home, true, {
       ...snapshot,
       roots: [
         // A serving seat without a binding names no incarnation to fence.
-        { root: '/tmp/a', presence: { ...serving, seats: [{ ...good, state: 'serving', healthy: true }] } },
+        { root: '/tmp/a', presence: { ...serving, seats: [{ ...servingSeat, binding: null }] } },
         // A pending seat must say what it is waiting for.
         { root: '/tmp/b', presence: { ...serving, seats: [{ ...good, why: '' }] } },
         // A binding is either the managed shape or absent.
@@ -251,6 +277,12 @@ describe('the reading carries fresh presence by canonical root', () => {
         // A seat may not be repeated, and an empty list is not the promised shape.
         { root: '/tmp/d', presence: { ...serving, seats: [] } },
         { root: '/tmp/e', presence: { ...serving, seats: [{ ...good }, { ...good }] } },
+        // A source that could not be classified can hold, never serve.
+        { root: '/tmp/f', presence: { ...serving, seats: [{ ...servingSeat, source: 'unknown' }] } },
+        // A serving runtime seat must prove the exact event it reconciled.
+        { root: '/tmp/g', presence: { ...serving, seats: [{ ...servingSeat, appliedEventId: null }] } },
+        // The source class is stated, never inferred from a missing key.
+        { root: '/tmp/h', presence: { ...serving, seats: [withoutSource as unknown as DaemonRootSeatPresenceHealth] } },
       ],
     });
     const health = await daemonHealth(home, { now: NOW });
