@@ -1071,6 +1071,30 @@ describe('native presence before any dispatch', () => {
     expect(JSON.stringify(claim)).not.toContain(nativeSince);
   });
 
+  test('one untrusted reading holds the whole pass even with another seat provably idle', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    handWritten(presenceSessionAt(stamp));
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'typed (unconfirmed)' };
+    };
+    const before = readFileSync(statePath(), 'utf8');
+    const result = await dispatchIdleWork(input({
+      presence: new Map<string, PresenceRead>([
+        ['worker-1', { kind: 'native', reading: presenceReading() }],
+        ['worker-2', { kind: 'invalid', why: 'the projection is unreadable' }],
+      ]),
+      presenceChannelHealthy: true,
+      push,
+    }));
+    // worker-1 is provably idle and the queue holds t1, but the pass cannot vouch for worker-2.
+    expect(result.pushed).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(0);
+  });
+
   test('a projection on disk with no health answer is default-closed', async () => {
     handWritten(presenceSessionAt(stamp));
     queue([{ id: 't1', title: 'First' }]);
