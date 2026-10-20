@@ -182,13 +182,18 @@ route](route.md) answers the address and the rule beside it.
 `<target>` names whom to reach: a seat of the caller's own team, or one of the registry forms
 under `Addressing` below. The message
 is every remaining word, joined with single spaces; `--file` reads the whole body from a file
-instead (and then takes no message words). A seat that has both a message and `--file` is a
-usage error. `--brief <path>` is the same read for a draft brief: the whole file becomes the
+instead (and then takes no message words), and `--file -` reads it from standard input. A seat
+that has both a message and `--file` is a usage error. A command-bearing or multiline body —
+code, a log, a brief — is safest from a file or a pipe: the shell can rewrite an inline
+message, while a single-quoted argument is passed through unchanged. `--brief <path>` is the
+same read for a draft brief (`--brief -` reads standard input too): the whole file becomes the
 body, and it takes neither message words nor `--file` beside it — either pairing is a usage
 error. A body, inline or read, that is nothing but a path to a `.md` file under a `briefs/`
 folder is a pointer, not a brief: the send warns on stderr, naming the pointer and asking for
 the brief itself — with `--brief <file>` or its text in the body — and still sends exactly what
-it was given. A prose body that merely mentions such a path draws no warning. `--brief` reads
+it was given. A prose body that merely mentions such a path draws no warning. A multiline body
+that looks like terminal output — two or more lines starting with a check mark or a bracketed
+number — is warned about on stderr and sent unchanged. `--brief` reads
 the receiving team's `brief-transport` before it writes anything: `file` and `message` both send
 the whole body as an ordinary send, while `memory` refuses the send (exit `send.brief-memory`,
 1) — no drop, no state or history line, no fallback — because no runtime in this build proves

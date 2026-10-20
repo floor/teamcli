@@ -188,11 +188,17 @@ busy) (<leg>, <n> ms; id <id>)\`, exit 0, with the id the delivery keeps, never 
 of a read. A compose seat has no queued leg — nothing on the watch's side walks its
 screens — so its held lock stays a refusal, and its line says the send was not queued
 and to run it again when the seat is free.
---file reads the body from a file instead of the one <message> argument. --brief
-reads a whole draft brief into the body, exactly as --file does, and is the form
-to use when the message is a brief: a body that is only a path to a brief file
-(a lone path naming a briefs/….md file) is warned about on stderr, on either
-form, because a reader cannot open a file it was not given.
+--file reads the body from a file instead of the one <message> argument; --file -
+reads it from standard input, and --brief - does the same. A command-bearing or
+multiline body — code, a log, a brief — is safest from a file or a pipe: the
+shell can rewrite an inline message, while a single-quoted argument is passed
+through unchanged. --brief reads a whole draft brief into the body, exactly as
+--file does, and is the form to use when the message is a brief: a body that is
+only a path to a brief file (a lone path naming a briefs/….md file) is warned
+about on stderr, on either form, because a reader cannot open a file it was not
+given. A multiline body that looks like terminal output — two or more lines
+starting with a check mark or a bracketed number — is warned about on stderr and
+sent unchanged, never cut.
 
 A Claude Code seat's native leg is the sender's own cross-session SendMessage, which this
 process cannot make for it. A sender whose own file declares Claude Code gets the handoff
@@ -620,6 +626,24 @@ function briefPointerIn(body: string, cwd: string, home: string): string | null 
   return text;
 }
 
+/** The body a `--file`/`--brief` source names: the file under the caller's folder, or standard
+ *  input for a lone `-`, the spelling `team pr check` uses for its body. A test hands the bytes
+ *  in through `io.stdin`; the process reads its own descriptor 0. */
+function bodyFrom(source: string, io: Io): string {
+  if (source !== '-') return readFileSync(resolve(io.cwd, source), 'utf8');
+  return io.stdin !== undefined ? io.stdin() : readFileSync(0, 'utf8');
+}
+
+/** A line that begins like a terminal's output: a check mark, or a number in brackets. */
+const OUTPUT_LINE = /^\s*(?:[✓✔]|\[\d+\])/;
+
+/** The number of lines of a body that begin like output. Two of them in a multiline body are
+ *  the shape of output pasted whole — a build log, a test run — and the send warns about that
+ *  shape without touching a byte of the body. */
+function outputMarkerLines(body: string): number {
+  return body.split('\n').filter((line) => OUTPUT_LINE.test(line)).length;
+}
+
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
   const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
@@ -814,7 +838,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const source = brief ?? file;
   if (source !== undefined) {
     try {
-      body = readFileSync(resolve(io.cwd, source), 'utf8');
+      body = bodyFrom(source, io);
     } catch {
       return configuration(io, `the message file cannot be read: ${source}`, report);
     }
@@ -829,6 +853,13 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const pointer = briefPointerIn(body, io.cwd, host.home);
   if (pointer !== null) {
     io.stderr(`team send: ${to.seat}: the body only points at a brief (${pointer}); send the brief itself, with --brief <file> or its text in the body\n`);
+  }
+  // A multiline body drawn like terminal output is sent byte for byte: the warning changes
+  // nothing in it and never refuses the send. It names the forms that keep such a body exact:
+  // a file, or a pipe read as standard input.
+  const outputLines = outputMarkerLines(body);
+  if (body.includes('\n') && outputLines >= 2) {
+    io.stderr(`team send: ${to.seat}: the body looks like pasted output (${pluralCount(outputLines, 'line')} start with a check mark or a bracketed number); use --file <path> or --file - (standard input) when a body must arrive exactly as written\n`);
   }
   // The receiver sees the sender before the message: the drop file, the frame and the daemon's
   // own write all carry the same first lines. The headline is the reading team's word on how a

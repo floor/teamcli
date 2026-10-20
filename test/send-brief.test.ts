@@ -245,6 +245,119 @@ describe('a body that only points at a brief is warned about', () => {
   });
 });
 
+// The body a sender pipes in is read whole, exactly as a file's is: standard input is the safe
+// form for a command-bearing or multiline body, and a lone `-` is its spelling on both read
+// forms. The bytes a test hands in stand for what the process reads from its descriptor 0.
+describe('team send reads the body from standard input for a lone -', () => {
+  test('--file - reads the whole body standard input gives it', async () => {
+    const w = world();
+    const on = io(w);
+    on.stdin = () => 'First line.\nSecond line: keep it.\n';
+
+    const code = await runSend([SEAT, '--file', '-'], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(record(w).body).toBe(`${HEADER}\n\nFirst line.\nSecond line: keep it.\n`);
+    expect(on.err).toBe('');
+  });
+
+  test('--brief - reads standard input the same way', async () => {
+    const w = world();
+    const on = io(w);
+    on.stdin = () => 'A whole brief.\n';
+
+    const code = await runSend([SEAT, '--brief', '-'], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(record(w).body).toBe(`${HEADER}\n\nA whole brief.\n`);
+    expect(on.err).toBe('');
+  });
+
+  test('empty standard input is refused as an empty message', async () => {
+    const w = world();
+    const on = io(w);
+    on.stdin = () => '';
+
+    const code = await runSend([SEAT, '--file', '-'], on, fake(w));
+
+    expect(code).toBe(2);
+    expect(on.err).toContain('the message is empty');
+  });
+});
+
+// Output pasted whole keeps its shape: two lines that begin with a check mark or a bracketed
+// number are the mark of a log or a test run, and the send says so on stderr without changing a
+// byte or refusing. Ordinary text — short, or multiline without that shape — draws nothing.
+describe('a multiline body that looks like output is warned about, never changed', () => {
+  test('two check-mark lines on the command line draw the warning and are recorded as written', async () => {
+    const w = world();
+    const on = io(w);
+    const text = 'build finished\n✓ one\n✓ two';
+
+    const code = await runSend([SEAT, text], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(on.err).toContain(`${SEAT}: the body looks like pasted output (2 lines start with a check mark or a bracketed number)`);
+    expect(on.err).toContain('--file <path> or --file -');
+    expect(record(w).body).toBe(`${HEADER}\n\n${text}`);
+  });
+
+  test('two bracketed-number lines draw it too', async () => {
+    const w = world();
+    const on = io(w);
+    const text = '[1] first result\n[2] second result';
+
+    const code = await runSend([SEAT, text], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(on.err).toContain('the body looks like pasted output');
+    expect(record(w).body).toBe(`${HEADER}\n\n${text}`);
+  });
+
+  test('a file body with the same shape is warned about and kept byte for byte', async () => {
+    const w = world();
+    const text = 'run\n✓ a\n✓ b\n';
+    const path = brief(w, 'output.txt', text);
+    const on = io(w);
+
+    const code = await runSend([SEAT, '--file', path], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(on.err).toContain('the body looks like pasted output');
+    expect(record(w).body).toBe(`${HEADER}\n\n${text}`);
+  });
+
+  test('one marker line is ordinary text and stays quiet', async () => {
+    const w = world();
+    const on = io(w);
+
+    const code = await runSend([SEAT, 'status:\n✓ done'], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(on.err).toBe('');
+  });
+
+  test('an ordinary multiline message stays quiet', async () => {
+    const w = world();
+    const on = io(w);
+
+    const code = await runSend([SEAT, 'First line.\nSecond line.'], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(on.err).toBe('');
+  });
+
+  test('a short message stays quiet', async () => {
+    const w = world();
+    const on = io(w);
+
+    const code = await runSend([SEAT, 'on it'], on, fake(w));
+
+    expect(code, on.err).toBe(0);
+    expect(on.err).toBe('');
+  });
+});
+
 // OD50 end to end: under `brief-transport: message` a full brief sent by the ordinary
 // `team send --brief` command travels the seat's own delivery walk, not a special channel. The
 // synthetic runtime boundary is a live inbox listener marker naming this test's pid — no real
