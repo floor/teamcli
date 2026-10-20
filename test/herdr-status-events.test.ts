@@ -31,6 +31,7 @@ import {
   type StatusTarget,
 } from '../src/watch/status-events.ts';
 import { testIo } from './helpers.ts';
+import type { WorkPushRequest } from '../src/watch/dispatch.ts';
 
 const dirs: string[] = [];
 
@@ -1020,14 +1021,15 @@ describe('production watch wiring, assigned-work gate, and screen verification',
     expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(true);
   });
 
-  test('runWatch drains statusEngine nudges and writes a work drop when a worker seat with assigned work is idle past threshold', async () => {
+  test('runWatch routes the idle worker\'s one work request through the dispatcher and drains the status-engine nudge', async () => {
     const { root, home } = makeScratch();
     execSync('git init -q -b main', { cwd: root, stdio: 'ignore' });
     const file = join(root, '.agents', 'team.yaml');
     writeFileSync(file, TEAM_YAML);
     const team = parseTeam();
 
-    // Give worker-1 an active lease so `hasAssignedWorkForSeat` is true.
+    // Give worker-1 an active lease so `hasAssignedWorkForSeat` is true, and a persisted stamp
+    // past the idle window: the status engine's legacy nudge is due here.
     const leasesDir = join(root, '.agents', 'leases');
     mkdirSync(leasesDir, { recursive: true });
     let clock = Date.parse('2026-10-19T06:00:00Z');
@@ -1035,6 +1037,18 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       join(leasesDir, 'TASK-1.json'),
       JSON.stringify({ id: 'TASK-1', seat: 'worker-1', until: new Date(clock + 7_200_000).toISOString() }),
     );
+    // The dispatcher owns every automatic work request: its reading needs takeable queue work and
+    // the canonical idle clock the watch folds, not the legacy nudge's word.
+    writeFileSync(join(root, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
+    writeFileSync(join(root, '.agents', 'team.state.json'), `${JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-dev': {
+          seats: { 'worker-1': { stage: 'ready', last_active: new Date(clock - 600_000).toISOString() } },
+          worktrees: {},
+        },
+      },
+    })}\n`);
 
     const statusSource: StatusSource = {
       async waitStatus() {
@@ -1048,6 +1062,7 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       { 'crew-lead': 'idle', 'worker-1': 'idle' },
       { 'crew-lead': 'idle', 'worker-1': 'idle' },
     ];
+    const pushed: WorkPushRequest[] = [];
     const sources: WatchSources = {
       live: () => {
         const current = scenes[Math.min(passIdx, scenes.length - 1)]!;
@@ -1065,7 +1080,8 @@ describe('production watch wiring, assigned-work gate, and screen verification',
             { id: 'w1', label: 'crew-lead' },
             { id: 'w2', label: 'worker-1' },
           ],
-          screens: { 'w1:p1': '', 'w2:p1': '' },
+          // The dispatcher's labelled fallback reads the pane screen, not herdr's word alone.
+          screens: { 'w1:p1': IDLE_SCREEN, 'w2:p1': IDLE_SCREEN },
         };
       },
       machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
@@ -1090,14 +1106,22 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       pid: 4242,
       home,
       statusSource,
+      pushWork: async (request) => {
+        pushed.push(request);
+        return { ok: true, outcome: 'delivered' };
+      },
     };
 
     const io = testIo(root, { kind: 'owner' });
     expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
 
+    // The status engine's nudge is drained, not typed: the dispatcher's direct route is the one
+    // automatic work request, made exactly once for the idle worker.
+    expect(pushed.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(pushed[0]!.pane).toBe('w2:p1');
     const dropDir = join(root, '.agents', 'send-drops', 'acme-dev', 'worker-1');
     const drops = existsSync(dropDir) ? readdirSync(dropDir).filter((n) => n.startsWith('work-')) : [];
-    expect(drops).toHaveLength(1);
+    expect(drops).toEqual([]);
   });
 
   test('shouldReadScreenForStatus and reconcileStatusWithScreen verify Antigravity/Gemini/Cursor/Jules without overriding reliable CLIs, and OWNER_PROMPT_KINDS has no hyphenated rate-limit', async () => {
