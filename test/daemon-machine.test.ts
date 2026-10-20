@@ -11,7 +11,7 @@ import { mintPresenceBinding } from '../src/daemon/presence/contract.ts';
 import { stagePresenceRecord } from '../src/daemon/presence/spool.ts';
 import type { HostedRoute } from '../src/daemon/routes.ts';
 import { STATE_FILE } from '../src/state.ts';
-import { daemonSocketPath as sendSocketPath } from '../src/send/daemon.ts';
+import { daemonSocketPath as sendSocketPath, startSendDaemon } from '../src/send/daemon.ts';
 import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceRunResult } from '../src/daemon/service.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
@@ -612,6 +612,64 @@ describe('team daemon status, install, uninstall and run', () => {
       await run.catch(() => {});
     }
     expect(io.out).toContain('team daemon: stopped');
+  }, 20_000);
+
+  test('the hosted send server gets the route presence folder and the fresh per-seat proof only with --presence', async () => {
+    const { root, home } = scratch();
+    const dir = join(root, '.agents');
+    const binding = mintPresenceBinding();
+    writeFileSync(join(dir, STATE_FILE), `${JSON.stringify({
+      format: 1,
+      sessions: {
+        acme: {
+          seats: { clerk: { id: 'seat_0123456789ab', stage: 'ready', presence_binding: binding } },
+          worktrees: {},
+        },
+      },
+    })}\n`);
+    const sends: Array<Parameters<typeof startSendDaemon>[0]> = [];
+    const sendStart = async (input: Parameters<typeof startSendDaemon>[0]) => {
+      sends.push(input);
+      return { kind: 'already-running' as const, socketPath: join(home, 'no-send.sock'), pid: null };
+    };
+    const off = await startMachineDaemon({ home, roots: [root], startedBy: 'manual', version: 'test', sendStart });
+    expect(off.kind).toBe('serving');
+    if (off.kind !== 'serving') return;
+    await off.daemon.close();
+    // Off by absence: a start without presence hosting passes neither field, so the send server
+    // keeps its pre-opt-in input.
+    expect(sends[0]?.presenceStateDir).toBeUndefined();
+    expect(sends[0]?.presenceChannelHealthy).toBeUndefined();
+
+    const on = await startMachineDaemon({
+      home, roots: [root], startedBy: 'manual', version: 'test', sendStart,
+      presenceHosting: true, presenceEveryMs: 10,
+    });
+    expect(on.kind).toBe('serving');
+    if (on.kind !== 'serving') return;
+    try {
+      // The team file's own folder, never a home-derived guess; the answer is the same per-seat
+      // verdict the hosted watch's dispatcher reads, taken at the caller's own instant.
+      expect(sends[1]?.presenceStateDir).toBe(dir);
+      const healthy = sends[1]?.presenceChannelHealthy;
+      expect(healthy).toBeDefined();
+      expect(healthy?.('clerk')).toBe(false);
+      const staged = stagePresenceRecord(dir, {
+        session: 'acme',
+        seat: 'clerk',
+        binding,
+        source: 'runtime-hook',
+        event: 'turn-end',
+        ts: new Date().toISOString(),
+      });
+      expect(staged.kind).toBe('staged');
+      await waitFor(() => healthy?.('clerk') === true, 8_000);
+      expect(healthy?.('clerk')).toBe(true);
+      // A seat outside the route never inherits the route's answer.
+      expect(healthy?.('op-1')).toBe(false);
+    } finally {
+      await on.daemon.close();
+    }
   }, 20_000);
 
   test('run starts one daemon, prints its line, and stops cleanly', async () => {

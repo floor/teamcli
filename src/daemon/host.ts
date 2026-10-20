@@ -103,6 +103,9 @@ export type StartMachineDaemonInput = {
   features?: DaemonFeatures;
   /** Injected for a test that must not touch the real pane/herdr sources. */
   sendHost?: DaemonHost;
+  /** Starts one root's per-project send server. The default starts the real server; a test
+   *  injects its own to read the start input without binding a socket. */
+  sendStart?: typeof startSendDaemon;
   /**
    * Whether each hosted route carries a watch on the daemon's heartbeat. Off by default: the
    * quiet foundation lands before any activation, and a daemon started only to host endpoints
@@ -364,6 +367,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   }[] = [];
   const presenceRuns = new Map<string, Promise<void>>();
   const presenceLogged = new Set<string>();
+  // The hosted send server may take a delivery while this start is still wiring the presence
+  // answers. Until the verdict helper below exists the per-seat answer is false, which holds
+  // typing instead of reading a helper that is not initialised yet.
+  let seatReady = false;
   let heartbeatAt = since;
   let closed = false;
 
@@ -694,9 +701,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       });
     }
     const sendHost: DaemonHost = input.sendHost ?? { ...realDaemonHost, home };
+    // The route's presence work holds the same per-seat verdict the hosted watch consults: the
+    // send server's last mile only types when this answer is true. Without presence hosting no
+    // work entry exists, so the send start keeps its pre-opt-in input exactly.
+    const presence = presenceWork.find((one) => one.route.root === canonical);
     let send: Awaited<ReturnType<typeof startSendDaemon>>;
     try {
-      send = await startSendDaemon({ root: canonical, dir: canonical, team: loaded.team, host: sendHost });
+      send = await (input.sendStart ?? startSendDaemon)({
+        root: canonical, dir: canonical, team: loaded.team, host: sendHost,
+        ...(presence === undefined ? {} : {
+          presenceStateDir: presence.stateDir,
+          presenceChannelHealthy: (seat: string) => seatReady && seatQualified(presence, seat, now()),
+        }),
+      });
     } catch (error) {
       status.why = `the send server could not start: ${error instanceof Error ? error.message : 'unknown error'}`;
       roots.push(status);
@@ -922,6 +939,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     seat: string,
     at: Date,
   ): boolean => seatVerdict(one, seat, at).why === null;
+  // From here the per-seat answer a hosted send server may ask is the real one.
+  seatReady = true;
 
   // One watch per hosted route, on the daemon's existing heartbeat. The run starts at once and
   // performs its first pass; no second timer exists, and a pass that hangs holds nothing the

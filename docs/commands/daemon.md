@@ -49,7 +49,8 @@ flag alone; there is no second policy key for it. A seat whose native attachment
 cannot be proven is answered as unproven for that seat, never silently as its route's hook seat.
 A Codex seat attaches only to the explicit endpoint its own state record carries, and only while
 that record's binding is the seat's current presence binding; a missing, malformed or
-earlier-incarnation record stays unproven.
+earlier-incarnation record stays unproven. The hosted send server asks the same per-seat answer
+before typing in the last mile, so a seat that is not proven current is held, not typed into.
 
 `install` writes the user service unit and registers it with the system service manager. It
 prints `team daemon: installed for <n> checkout(s); the system service manager starts it at login
