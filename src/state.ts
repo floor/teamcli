@@ -7,6 +7,7 @@ import { validLockName } from './lock/name.ts';
 import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
+import { isWatchEpoch } from './watch/epoch.ts';
 
 // What a team keeps: the live session's seats, worktrees and watch, and the project's last
 // readings, which outlive every session (§ 4.4). It lives beside the team file and is written by
@@ -272,9 +273,11 @@ export type SessionState = {
    * The watch: the pane and workspace it runs in, the process once a pass has recorded one, and
    * the last heartbeat. `pid` is absent from the moment `up` — or an owner's own run — starts the
    * watch until that pane's first pass records its process; `pane` is absent only on a record an
-   * older detached watch left.
+   * older detached watch left. `epoch` is the host's authority fence (`watch_` and 32 lowercase
+   * hex); its absence marks a pane watch record, and a value this build cannot read is dropped at
+   * the read door.
    */
-  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string };
+  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string };
   /**
    * The team file this session was launched from. A lead in the lobby resolves it from a pane
    * the state records, and from no other path. Absent on a session started before it was written.
@@ -515,6 +518,17 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
   for (const session of Object.values(state.sessions)) {
     session.seats ??= {};
     session.worktrees ??= {};
+    // The watch record enters from the file like every other value: a record whose heartbeat is
+    // not text is not a watch, and an epoch this build does not write is dropped rather than
+    // trusted as a fence. A pane watch record without an epoch stays one.
+    if (session.watch !== undefined) {
+      if (typeof session.watch !== 'object' || session.watch === null || Array.isArray(session.watch)
+        || typeof session.watch.heartbeat !== 'string') {
+        delete session.watch;
+      } else if (session.watch.epoch !== undefined && !isWatchEpoch(session.watch.epoch)) {
+        delete session.watch.epoch;
+      }
+    }
     // A stored classification is validated here, at the one door a value from outside the program
     // enters through: one of the closed list, or `unknown` for anything else. Every later reader —
     // the log line a waiting seat writes, the status row and its `difference:` line, the prompt a

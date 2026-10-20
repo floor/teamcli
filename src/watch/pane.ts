@@ -1,5 +1,6 @@
 import { paneProcesses, workspaceList, workspacePanes } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
+import { isWatchEpoch } from './epoch.ts';
 
 export type WatchPlace = { pane: string; workspace: string };
 
@@ -75,7 +76,8 @@ export function placedWatch(
 }
 
 /** The heartbeat. A place found this pass is recorded. `'keep'` leaves a pane this same pid
- *  already recorded, and writes none for a watch that has not seen itself in one. */
+ *  already recorded, and writes none for a watch that has not seen itself in one. A record this
+ *  same pid held keeps its authority epoch: a heartbeat never erases the fence. */
 export function beatWatch(
   dir: string,
   session: string,
@@ -94,9 +96,11 @@ export function beatWatch(
         ? { pane: prior.pane, ...(prior.workspace ? { workspace: prior.workspace } : {}) }
         : undefined)
       : place;
+    const keptEpoch = prior?.pid === pid && isWatchEpoch(prior.epoch) ? prior.epoch : undefined;
     record.watch = {
       pid,
       heartbeat,
+      ...(keptEpoch !== undefined ? { epoch: keptEpoch } : {}),
       ...(kept?.pane ? { pane: kept.pane } : {}),
       ...(kept?.workspace ? { workspace: kept.workspace } : {}),
     };
