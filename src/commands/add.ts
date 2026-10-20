@@ -41,7 +41,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
 import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
-import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -1013,6 +1013,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and launches with the file's own line.
+    // The binding the seat holds before this run's install: a minted successor belongs to the
+    // launch only if the plan runs the seat's line, and a refusal before that puts this back.
+    const priorBinding = readState(dir).sessions[session]?.seats[planSeat.name]?.presence_binding;
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
     const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true }], { project: prepared.team.project, root, home: sources.home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
@@ -1021,7 +1024,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, briefEpochs: currentBriefEpochs(dir, session), watchLabel: watchLabel(prepared.team.project), home: sources.home, ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }) });
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
-    const outcome = { swallowed: false, unknown: false };
+    const outcome = { swallowed: false, unknown: false, launched: false };
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
       caller: who, owner: caller.kind === 'owner', devMode: devModeMark(dev, devFolded), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
@@ -1037,6 +1040,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       },
     });
     const report = await executePlan(plan, session, host);
+    // A binding is minted for a launch this run is about to type. A refusal that leaves the
+    // seat before its line runs never gave the new settings file to a process, so the seat
+    // keeps the incarnation it had: the rotation is undone, and a seat the install itself
+    // created goes with it. The run's own records of the seat stand otherwise.
+    if (!outcome.launched) restorePresenceBinding(dir, session, planSeat.name, priorBinding);
     const afterwards = readState(dir).sessions[session]?.seats[built.name];
     const launched = !report.held && !report.dropped.includes(built.name) && afterwards?.stage === 'ready';
     // A lead stopped for a swap runs again: the swap's record goes, and the log says who closed it.
@@ -1345,7 +1353,7 @@ function hostOf(input: {
   records: Progress;
   /** What the writer swallowed: the one record whose line the command replaces with its own
    *  sentence, and whether the screen named the way out. Read after the run for `--json`. */
-  outcome: { swallowed: boolean; unknown: boolean };
+  outcome: { swallowed: boolean; unknown: boolean; launched: boolean };
   doctor: DoctorSources;
   confirmLobby(): LobbyRefusal | null;
 }): Host {
@@ -1540,6 +1548,9 @@ function hostOf(input: {
     // takes one; a registry that cannot be written is a note in the run's log.
     sessionStarted(name, started) {
       if (name !== seat.name) return;
+      // The plan ran this seat's launch line: the settings file it names is in a process now,
+      // so the binding its hooks carry is the seat's incarnation from here on.
+      input.outcome.launched = true;
       const began = beginSession({
         home: input.home,
         root: input.root,

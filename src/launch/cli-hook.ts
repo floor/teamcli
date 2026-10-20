@@ -405,6 +405,37 @@ function recordPresenceBinding(dir: string, session: string, seat: string): stri
   }
 }
 
+/** Puts back the binding a seat held before an install minted a successor for a launch the run
+ *  never typed. No process loaded the new settings file, so the incarnation it named never
+ *  existed: the seat keeps the record its previous process was started with. Only the field the
+ *  install writes is touched. A seat the install itself created is taken back out when nothing
+ *  else was written to it; a seat the run recorded otherwise keeps that record, minus the
+ *  binding no process carries. A state that cannot be written is left as it is. */
+export function restorePresenceBinding(
+  dir: string,
+  session: string,
+  seat: string,
+  prior: string | undefined,
+): void {
+  try {
+    updateState(dir, (state) => {
+      const seats = state.sessions[session]?.seats;
+      const current = seats?.[seat];
+      if (seats === undefined || current === undefined || current.presence_binding === prior) return;
+      if (prior !== undefined) {
+        current.presence_binding = prior;
+        return;
+      }
+      delete current.presence_binding;
+      // Exactly the install's own entry, and nothing the run wrote beside it: the seat had no
+      // state at all before this run, and the refusal leaves none.
+      if (current.stage === 'launched' && Object.keys(current).length === 1) delete seats[seat];
+    });
+  } catch {
+    // Unreadable or unwritable state: nothing is guessed in its place.
+  }
+}
+
 /** Installs one settings file per planned seat. Returns the settings path of every seat whose
  *  file landed; a seat that failed is absent, and its launch goes without the flag. A claude-code
  *  seat's file also carries the PreToolUse command guard when the caller hands the context the

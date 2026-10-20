@@ -244,6 +244,21 @@ describe('team add', () => {
     expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
   });
 
+  test('a launched seat keeps the binding its hook file names', async () => {
+    // The seat holds no state before the run: the binding it ends with is the one this launch
+    // minted, and its settings file names that same incarnation. A run that did type the line
+    // keeps its successor; only a refusal before it takes the rotation back.
+    expect(readState(join(project, '.agents')).sessions.acme?.seats.worker).toBeUndefined();
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker'], io, sources(made))).toBe(0);
+    const binding = readState(join(project, '.agents')).sessions.acme?.seats.worker?.presence_binding;
+    expect(binding).toMatch(/^prs_[0-9a-f]{12}$/);
+    const settings = readFileSync(join(project, '.agents', 'hooks', 'acme', 'worker.json'), 'utf8');
+    expect(settings).toContain(`--binding ${binding} --event turn-start`);
+    expect(settings).toContain(`--binding ${binding} --event turn-end`);
+  });
+
   test('adds a declared copy of a seat and starts it under the new name', async () => {
     const before = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
     const record = readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8');
