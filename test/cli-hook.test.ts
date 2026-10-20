@@ -28,6 +28,7 @@ import {
   cliHookSettingsPath, cliHookStatePath, dropReadRunner, installCliHooks, plannedCliHooks, readCliHook, resetCliHookState,
 } from '../src/launch/cli-hook.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
+import type { PresenceSeatsRead } from '../src/labels/presence.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import { launchCommand } from '../src/profiles/profile.ts';
 import { emptySession, type SessionState } from '../src/state.ts';
@@ -709,6 +710,7 @@ describe('a registry row reads the state file', () => {
     session?: string;
     binding?: string;
     channelHealthy?: boolean;
+    presenceSeats?: PresenceSeatsRead;
     screen?: 'idle' | 'permission';
   }): SeatRegistryRow {
     const team = {
@@ -750,6 +752,7 @@ describe('a registry row reads the state file', () => {
       ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
       ...(options.session !== undefined ? { session: options.session } : {}),
       ...(options.channelHealthy !== undefined ? { presenceChannelHealthy: options.channelHealthy } : {}),
+      ...(options.presenceSeats !== undefined ? { presenceSeats: options.presenceSeats } : {}),
     });
     return rows[0]!;
   }
@@ -759,15 +762,16 @@ describe('a registry row reads the state file', () => {
     writeFileSync(join(dir, 'seat-state', session, 'worker.json'), text);
   }
 
-  function writePresence(binding: string, state: 'working' | 'idle'): void {
+  function writePresence(binding: string, state: 'working' | 'idle'): string {
     const paths = presencePaths(dir, SESSION, 'worker');
     if (paths === null) throw new Error('the scene names no presence folder');
     mkdirSync(paths.root, { recursive: true });
     const since = ago(5);
+    const id = `${since}-ab12cd34`;
     writeFileSync(paths.current, JSON.stringify({
       v: 1,
       seq: 1,
-      id: `${since}-ab12cd34`,
+      id,
       state,
       source: 'runtime-hook',
       event: state === 'working' ? 'turn-start' : 'turn-end',
@@ -775,17 +779,40 @@ describe('a registry row reads the state file', () => {
       since,
       observedAt: since,
     }));
+    return id;
+  }
+
+  /** The fresh per-seat answer for one serving runtime seat, naming the applied transition it
+   *  vouches for. */
+  function runtimeSeats(binding: string, appliedEventId: string): PresenceSeatsRead {
+    return {
+      kind: 'listed',
+      seats: new Map([['worker', { healthy: true, source: 'runtime', binding, appliedEventId }]]),
+    };
   }
 
   test('a presence projection under the recorded binding answers; a predecessor’s is invalid', () => {
     const binding = 'prs_0123456789ab';
-    writePresence(binding, 'working');
-    expect(row({ stateDir: dir, session: SESSION, binding, channelHealthy: true }))
+    const applied = writePresence(binding, 'working');
+    // The fresh answer lists the seat as serving this binding and vouches for exactly this
+    // projection's transition: only then is the row live.
+    expect(row({ stateDir: dir, session: SESSION, binding, channelHealthy: true, presenceSeats: runtimeSeats(binding, applied) }))
       .toMatchObject({
         state: 'working',
         state_source: 'presence',
         blind: false,
         presence: { state: 'working', source: 'runtime-hook', event: 'turn-start', live: true },
+      });
+    // The same qualified seat names another applied transition: the projection is this
+    // incarnation's, but not the transition the answer proved applied. Last known, never live.
+    expect(row({
+      stateDir: dir, session: SESSION, binding, channelHealthy: true,
+      presenceSeats: runtimeSeats(binding, `${ago(4)}-ffffffff`),
+    }))
+      .toMatchObject({
+        state: 'working',
+        state_source: 'presence',
+        presence: { state: 'working', source: 'runtime-hook', event: 'turn-start', live: false },
       });
     // No fresh channel health yet: the same projection is the runtime's last known word, still
     // answering the row, marked not live. The screen and herdr never replace it.
@@ -793,14 +820,21 @@ describe('a registry row reads the state file', () => {
       .toMatchObject({ state: 'working', state_source: 'presence', presence: { live: false } });
     // A projection a relaunch recorded since is another incarnation's. It is an existing
     // projection, never genuine absence: the row is unknown from presence, and neither the
-    // screen nor herdr answers in its place.
-    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true }))
+    // screen nor herdr answers in its place. A qualified answer for the recorded binding does
+    // not change that: the fence is checked before any applied transition.
+    expect(row({
+      stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true,
+      presenceSeats: runtimeSeats('prs_ba9876543210', applied),
+    }))
       .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
     // The state records no binding at all: there is no fence to open, so the same answer.
     expect(row({ stateDir: dir, session: SESSION }))
       .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
     // An idle prompt or a permission dialog does not answer in an invalid projection's place.
-    expect(row({ stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true, screen: 'idle' }))
+    expect(row({
+      stateDir: dir, session: SESSION, binding: 'prs_ba9876543210', channelHealthy: true,
+      presenceSeats: runtimeSeats('prs_ba9876543210', applied), screen: 'idle',
+    }))
       .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
     expect(row({ stateDir: dir, session: SESSION, screen: 'permission' }))
       .toMatchObject({ state: 'unknown', state_source: 'presence', presence_unreadable: true });
