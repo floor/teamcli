@@ -56,6 +56,8 @@ import { dirname, join, relative } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { entitiesPath } from '../src/entities.ts';
 import { resolveLobby } from '../src/lobby/gate.ts';
+import { writeListener } from '../src/mcp/inbox.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { deliverCodexNativeRoute } from '../src/send/push-adapters/codex-relay.ts';
@@ -88,9 +90,11 @@ afterEach(() => {
   live = null;
 });
 
-/** One team, one Codex seat bound to `THREAD_ID`, and a delivery order that names the native leg
- *  first with the drop leg behind it — the receiving seat's own chain, read from its file. */
-function makeScene(): Scene {
+/** One team, one Codex seat bound to `THREAD_ID`, and, unless `order` is `null`, a delivery
+ *  order that names the native leg first with the drop leg behind it — the receiving seat's own
+ *  chain, read from its file. `order: null` leaves every level silent, which is the implied
+ *  default's own case. */
+function makeScene(order: string | null = 'delivery_order: [native, drop]\n'): Scene {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'codex-send-acceptance-')));
   live = base;
   const root = join(base, 'acme');
@@ -139,8 +143,7 @@ seats:
     model: Test
     version: "1"
     launch: codex -m gpt-6-sol
-delivery_order: [native, drop]
-`,
+${order ?? ''}`,
   );
   writeFileSync(
     join(dir, 'team.state.json'),
@@ -1014,5 +1017,114 @@ describe('the ordinary send native leg (Codex)', () => {
       scene,
       'no trusted runtime session is recorded for this seat (seat state could not be read)',
     );
+  });
+});
+
+/** The implied walk: no level declares an order, so the receiving Codex seat's own
+ *  `codex-daemon` policy — `on` unless a signed chain says otherwise — decides whether its
+ *  runtime queue is walked first. A live inbox listener stands behind it in every scene, so a
+ *  native attempt that must not happen would show as an inbox delivery, never a typed one. */
+describe('the implied native-first default for a Codex receiver', () => {
+  function liveInbox(scene: Scene): void {
+    mkdirSync(scene.dropDir, { recursive: true });
+    writeListener(scene.dropDir, {
+      v: 1,
+      seat: SEAT,
+      session: SESSION,
+      root: scene.root,
+      cli: 'codex',
+      pid: process.pid,
+      ts: NOW.toISOString(),
+    });
+  }
+
+  async function acceptingServer(scene: Scene): Promise<AppServer> {
+    return startAppServer(
+      join(scene.codexHome, 'app-server-control', 'app-server-control.sock'),
+      (threadId) => ({ id: threadId, status: { type: 'idle' }, canAcceptDirectInput: true }),
+    );
+  }
+
+  test('the signed default is on: the queue takes the bound thread before a live inbox', async () => {
+    const scene = makeScene(null);
+    liveInbox(scene);
+    const server = await acceptingServer(scene);
+
+    const { code, out, err, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(err).toBe('');
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms)\n`);
+    expect(calls).toEqual([
+      ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+    expect(server.requests).toEqual([
+      { method: 'initialize' },
+      { method: 'thread/read', threadId: THREAD_ID },
+    ]);
+    const entry = lastEntry(scene);
+    expect(entry).toEqual(expect.objectContaining({ via: 'native', outcome: 'sent (unconfirmed)' }));
+    expect(entry.failed).toBeUndefined();
+  });
+
+  test('a signed off at the team level adds no native attempt: the live inbox takes it', async () => {
+    const scene = makeScene(null);
+    const wrote = writePolicySet(
+      scene.home,
+      { level: 'team', target: scene.root, teamRoot: scene.root, name: 'codex-daemon', value: 'off' },
+      { now: NOW },
+    );
+    expect(wrote.ok).toBe(true);
+    liveInbox(scene);
+    const server = await acceptingServer(scene);
+
+    const { code, out, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
+    expect(calls).toEqual([]);
+    expect(server.requests).toEqual([]);
+    const entry = lastEntry(scene);
+    expect(entry).toEqual(expect.objectContaining({ via: 'mcp-inbox' }));
+    expect(entry.failed).toBeUndefined();
+  });
+
+  test('a declared order that leaves native out is walked as written', async () => {
+    const scene = makeScene('delivery_order: [drop]\n');
+    const server = await acceptingServer(scene);
+
+    const { code, out, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms)\n`);
+    expect(calls).toEqual([]);
+    expect(server.requests).toEqual([]);
+    expect(lastEntry(scene).via).toBe('drop');
+  });
+
+  test('a declared order that places native behind the inbox is not preempted', async () => {
+    const scene = makeScene('delivery_order: [mcp-inbox, native]\n');
+    liveInbox(scene);
+    const server = await acceptingServer(scene);
+
+    const { code, out, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
+    expect(calls).toEqual([]);
+    expect(server.requests).toEqual([]);
+    expect(lastEntry(scene).via).toBe('mcp-inbox');
+  });
+
+  test('the dry run names the native queue first and writes nothing', async () => {
+    const scene = makeScene(null);
+    const io = testIo(scene.root, { kind: 'owner' });
+
+    const code = await runSend([SEAT, 'hello', '--dry-run'], io, hostFor(scene));
+
+    expect(code).toBe(0);
+    expect(io.out).toBe(`team acme, session "${SESSION}"\n${SEAT}: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n`);
+    expect(existsSync(join(scene.dropDir, MESSAGE_ID))).toBe(false);
+    expect(queueCalls(scene.queueLog)).toEqual([]);
   });
 });
