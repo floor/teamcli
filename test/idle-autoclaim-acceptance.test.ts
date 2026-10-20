@@ -84,6 +84,29 @@ seats:
     launch: team-deepseek
 `;
 
+// The same approved file with two more workers: every extra seat is one more idle claimant for
+// the same three queued items. A single seat cannot take three of them through the real receiver:
+// its second `team next` renews the lease it already holds, by the picker's own rule.
+const TEAM3 = `${TEAM}  - role: implementer
+    name: deepseek-beta
+    label: deepseek-beta
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: team-deepseek
+  - role: implementer
+    name: deepseek-gamma
+    label: deepseek-gamma
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: team-deepseek
+`;
+
 const QUEUE = `- id: t1
   title: first queued slice
 - id: t2
@@ -111,6 +134,14 @@ const BINDING = 'prs_0123456789ab';
 // persisted clock and the native clock have cleared the threshold by T0.
 const NATIVE_SINCE = new Date(START - 10 * MINUTE).toISOString();
 
+/** One worker of the multi-seat world: its own workspace, pane and managed identity. */
+type WorldSeat = { seat: string; pane: string; workspace: string; seatId: string; binding: string };
+const WORKERS: WorldSeat[] = [
+  { seat: SEAT, pane: PANE, workspace: 'first', seatId: SEAT_ID, binding: BINDING },
+  { seat: 'deepseek-beta', pane: 'second:pane', workspace: 'second', seatId: 'seat_0123456789ac', binding: 'prs_0123456789ac' },
+  { seat: 'deepseek-gamma', pane: 'third:pane', workspace: 'third', seatId: 'seat_0123456789ad', binding: 'prs_0123456789ad' },
+];
+
 // The dispatch contract is the production one now (`src/watch/dispatch.ts`): the seam the watch
 // pushes through, and the two shapes it exchanges. The result's `outcome` is the transport's own
 // word, required and kept verbatim; a push result is never read or claim proof.
@@ -128,6 +159,18 @@ function scene(workerStatus: string): Live {
     agents,
     workspaces: agents.map((one) => ({ id: one.workspace, label: one.name ?? '' })),
     screens: { 'lead:pane': IDLE, [PANE]: IDLE },
+  };
+}
+
+/** Three idle workers and their lead. Every worker's screen shows a turn, so the terminal path
+ *  can never call one of them quiet: only the native projection can make them idle. */
+function scene3(): Live {
+  const agents = [agent('lead', 'lead', 'working'), ...WORKERS.map((worker) => agent(worker.seat, worker.workspace, 'idle'))];
+  return {
+    running: true,
+    agents,
+    workspaces: agents.map((one) => ({ id: one.workspace, label: one.name ?? '' })),
+    screens: { 'lead:pane': IDLE, ...Object.fromEntries(WORKERS.map((worker) => [worker.pane, BUSY])) },
   };
 }
 
@@ -179,8 +222,8 @@ function leases(): Array<{ id: string; seat: string; pane: string; acquiredAt: s
     .map((name) => ({ id: name.slice(0, -'.json'.length), ...JSON.parse(readFileSync(join(dir, name), 'utf8')) }));
 }
 
-function workerDropDir(): string {
-  return join(root, '.agents', 'send-drops', SESSION, SEAT);
+function workerDropDir(seat: string = SEAT): string {
+  return join(root, '.agents', 'send-drops', SESSION, seat);
 }
 
 function dropNames(): string[] {
@@ -188,10 +231,10 @@ function dropNames(): string[] {
   return existsSync(dir) ? readdirSync(dir) : [];
 }
 
-/** The signed message records the worker's inbox holds, each verified against the home's
+/** The signed message records one worker's inbox holds, each verified against the home's
  *  message key: a message that does not verify is not a durable signed copy. */
-function workerInbox(): SignedRecord[] {
-  const dir = workerDropDir();
+function workerInbox(seat: string = SEAT): SignedRecord[] {
+  const dir = workerDropDir(seat);
   if (!existsSync(dir)) return [];
   const key = messageKeyState(home);
   if (key.kind !== 'key') return [];
@@ -200,11 +243,32 @@ function workerInbox(): SignedRecord[] {
     if (name.startsWith('.')) continue;
     const read = readRecord(join(dir, name));
     if (!read.ok || read.record === null) continue;
-    if (read.record.payload.to !== SEAT) continue;
+    if (read.record.payload.to !== seat) continue;
     if (!verifyRecord(read.record, key.key)) continue;
     records.push(read.record);
   }
   return records;
+}
+
+/** The lead's runtime mailbox: the signed records the dispatcher's announcements land in. */
+function leadMail(): {
+  names: () => string[];
+  payload: (name: string) => { to?: string; body?: string; at?: string };
+  bytes: (name: string) => string;
+} {
+  const dir = join(root, '.agents', 'messages', 'lead');
+  return {
+    names: () => (existsSync(dir)
+      ? readdirSync(dir).filter((name) => name.endsWith('.json') && !name.endsWith('.read.json')).sort()
+      : []),
+    payload: (name) => {
+      const parsed = JSON.parse(readFileSync(join(dir, name), 'utf8')) as {
+        payload?: { to?: string; body?: string; at?: string };
+      };
+      return parsed.payload ?? {};
+    },
+    bytes: (name) => readFileSync(join(dir, name), 'utf8'),
+  };
 }
 
 /** The worker's runtime, standing in for the client that handles what lands in its inbox: the
@@ -214,7 +278,11 @@ function workerInbox(): SignedRecord[] {
  *  calls the pump. The receipt, not a set kept here, is what makes a redelivered id run nothing:
  *  the second read is `already-served` and no body is served. This is the receiving side, never a
  *  seam in the watch and never an impersonated worker. */
-function workerRuntime(): { pump: () => Promise<void>; claims: string[]; wake: () => void } {
+function workerRuntime(target: { seat: string; pane: string } = { seat: SEAT, pane: PANE }): {
+  pump: () => Promise<void>;
+  claims: string[];
+  wake: () => void;
+} {
   const claims: string[] = [];
   let woken = 0;
   const wake = () => {
@@ -223,11 +291,15 @@ function workerRuntime(): { pump: () => Promise<void>; claims: string[]; wake: (
   const pump = async () => {
     if (woken === 0) return;
     woken = 0;
-    for (const record of workerInbox()) {
-      const read = readMessage({ dropDir: workerDropDir(), root, seat: SEAT, session: SESSION }, record.payload.id, home);
+    for (const record of workerInbox(target.seat)) {
+      const read = readMessage(
+        { dropDir: workerDropDir(target.seat), root, seat: target.seat, session: SESSION },
+        record.payload.id,
+        home,
+      );
       // Already served, refused or superseded: the gate decides, and nothing runs.
       if (!read.ok) continue;
-      const io = testIo(root, { kind: 'seat', name: SEAT, pane: PANE, session: SESSION });
+      const io = testIo(root, { kind: 'seat', name: target.seat, pane: target.pane, session: SESSION });
       await runNext([], io, { home, now: () => clock });
       claims.push(io.out.trim());
     }
@@ -238,9 +310,9 @@ function workerRuntime(): { pump: () => Promise<void>; claims: string[]; wake: (
 /** The worker's session accepts cross-session frames and exposes a socket for its pane: the direct
  *  route a push is allowed to take. The declaration file is backdated so the socket is newer than
  *  it, as a session launched after its accept declaration would be. */
-function directRoute(): void {
-  const settings = cliHookSettingsPath(join(root, '.agents'), SESSION, SEAT);
-  if (settings === null) throw new Error(`${SEAT}: no settings path for the fixture`);
+function directRoute(target: string = SEAT): void {
+  const settings = cliHookSettingsPath(join(root, '.agents'), SESSION, target);
+  if (settings === null) throw new Error(`${target}: no settings path for the fixture`);
   mkdirSync(dirname(settings), { recursive: true });
   writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
   const past = new Date(Date.now() - 60_000);
@@ -254,7 +326,7 @@ function directRoute(): void {
  *  delivered ending is a success; every held, timeout, unreachable and refused ending is a
  *  refusal. The direct walk never includes the typed or native legs, and never counts a stored
  *  drop or mcp-inbox copy as a wake. */
-function pushViaSend(options: { direct: boolean; onDeliver?: () => void }): {
+function pushViaSend(options: { direct: boolean; onDeliver?: (seat: string) => void }): {
   push: WorkPush;
   pushed: WorkPushRequest[];
   frames: string[];
@@ -274,7 +346,7 @@ function pushViaSend(options: { direct: boolean; onDeliver?: () => void }): {
       frames.push(frame);
       // The transport's own delivery is the wake the receiving runtime reacts to: the signed
       // copy waiting in the folder is not one.
-      options.onDeliver?.();
+      options.onDeliver?.(seat);
       return { ok: true };
     },
     native: {
@@ -318,6 +390,10 @@ function watchSources(options: {
   pushWork?: WorkPush;
   screen?: string;
   presenceChannelHealthy?: () => boolean;
+  /** A world with more than the one worker: the whole herdr read the pass sees. */
+  live?: () => Live;
+  /** The approved file text the standing answers with, when it is not the single-worker one. */
+  teamText?: string;
 }): { sources: WatchSources; typed: string[]; paneRuns: string[] } {
   const typed: string[] = [];
   const paneRuns: string[] = [];
@@ -333,9 +409,9 @@ function watchSources(options: {
     },
   };
   const sources: WatchSources = {
-    live: () => scene(options.workerStatus),
+    live: () => options.live?.() ?? scene(options.workerStatus),
     machine: () => fine,
-    standing: () => verifiedOf(teamOf(TEAM), TEAM, root),
+    standing: () => verifiedOf(teamOf(options.teamText ?? TEAM), options.teamText ?? TEAM, root),
     readChecks: () => [],
     screen: () => options.screen ?? IDLE,
     status: () => options.workerStatus,
@@ -373,27 +449,34 @@ function watchSources(options: {
   return { sources, typed, paneRuns };
 }
 
-/** Writes this world's one native projection through the real ingester and then records the
- *  canonical fence the daemon's reconciler would apply for it: the exact seat id, incarnation,
- *  sequence and ingest instant. The seat's persisted idle clock is the one `beforeEach` wrote. */
-async function nativeReading(event: 'turn-end' | 'turn-start'): Promise<void> {
+/** Writes one native projection through the real ingester and then records the canonical fence
+ *  the daemon's reconciler would apply for it: the exact seat id, incarnation, sequence and
+ *  ingest instant. The seat's persisted idle clock is the one the scene wrote. */
+async function nativeReading(
+  event: 'turn-end' | 'turn-start',
+  options: { ts?: string; nonce?: string; seat?: string; seatId?: string; binding?: string } = {},
+): Promise<void> {
   const dir = join(root, '.agents');
+  const target = options.seat ?? SEAT;
+  const seatId = options.seatId ?? SEAT_ID;
+  const binding = options.binding ?? BINDING;
   // The managed incarnation first: the ingester qualifies the staged line against it, and the
   // consumer later requires the projection's binding to equal it exactly.
   updateState(dir, (state) => {
-    const seat = (state.sessions[SESSION] ??= emptySession()).seats[SEAT]!;
-    seat.id = SEAT_ID;
-    seat.presence_binding = BINDING;
+    const seat = (state.sessions[SESSION] ??= emptySession()).seats[target]!;
+    seat.id = seatId;
+    seat.presence_binding = binding;
   });
-  const id = presenceId(NATIVE_SINCE, 'a1b2c3d4');
+  const ts = options.ts ?? NATIVE_SINCE;
+  const id = presenceId(ts, options.nonce ?? 'a1b2c3d4');
   if (id === null) throw new Error('the scene instant is not a presence instant');
   const staged = stagePresenceRecord(dir, {
     session: SESSION,
-    seat: SEAT,
-    binding: BINDING,
+    seat: target,
+    binding,
     source: 'runtime-hook',
     event,
-    ts: NATIVE_SINCE,
+    ts,
     id,
   });
   if (staged.kind !== 'staged') throw new Error(staged.why);
@@ -401,12 +484,12 @@ async function nativeReading(event: 'turn-end' | 'turn-start'): Promise<void> {
   const step = await ingester.step();
   if (step.errors.length > 0) throw new Error(`the ingester refused its own projection: ${JSON.stringify(step.errors)}`);
   await ingester.close();
-  const current = await readPresenceCurrent(dir, SESSION, SEAT);
+  const current = await readPresenceCurrent(dir, SESSION, target);
   if (current.kind !== 'ok') throw new Error(`the projection is ${current.kind}`);
   updateState(dir, (state) => {
-    state.sessions[SESSION]!.seats[SEAT]!.presence_applied = {
-      seat_id: SEAT_ID,
-      binding: BINDING,
+    state.sessions[SESSION]!.seats[target]!.presence_applied = {
+      seat_id: seatId,
+      binding,
       seq: current.value.seq,
       applied_at: current.value.observedAt,
     };
@@ -872,5 +955,123 @@ describe('the hosted watch pickup under the native proof', () => {
     expect(workerInbox()).toEqual([]);
     expect(runtime.claims).toEqual([]);
     expect(leases()).toEqual([]);
+  });
+});
+
+// A worker that picks up every wake is woken again only after it has left and re-entered its
+// idle stretch. The scene models that honestly: the turn the worker starts after each claim ends
+// the episode, five virtual minutes pass, and the next pass reads a fresh native idle. Three
+// queued items therefore take three episodes and one signed request each. Once all three are
+// leased the source is empty, and the idle-and-empty stretch is announced exactly once.
+describe('the pickup across three items, and the empty stretch after them', () => {
+  test('three idle workers each claim one item, then their empty source is announced once', async () => {
+    // The three-worker world: one more idle claimant per extra seat, the same three items. A
+    // single seat cannot take three through the real receiver: its own second `team next`
+    // renews the lease it already holds, by the picker's rule.
+    writeFileSync(file, TEAM3);
+    updateState(join(root, '.agents'), (state) => {
+      const session = (state.sessions[SESSION] ??= emptySession());
+      for (const worker of WORKERS) {
+        session.seats[worker.seat] = { stage: 'ready', pane: worker.pane, last_active: new Date(IDLE_SINCE).toISOString() };
+      }
+    });
+    // Every worker's own runtime projects a proven native idle; its screen shows a turn, so the
+    // terminal path cannot be what makes it eligible.
+    for (const worker of WORKERS) {
+      await nativeReading('turn-end', { seat: worker.seat, seatId: worker.seatId, binding: worker.binding });
+      directRoute(worker.seat);
+    }
+    const io = testIo(root, { kind: 'owner' });
+    const runtimes = WORKERS.map((worker) => workerRuntime({ seat: worker.seat, pane: worker.pane }));
+    const runtimeOf = new Map(WORKERS.map((worker, index) => [worker.seat, runtimes[index]!]));
+    const sent = pushViaSend({ direct: true, onDeliver: (seat) => runtimeOf.get(seat)?.wake() });
+    const mail = leadMail();
+    // The empty notice must be written once and never rewritten by the later empty passes.
+    const snapshots: string[] = [];
+    const snapshot = (): string => mail.names().map((name) => `${name}\n${mail.bytes(name)}`).join('\n');
+    const { sources, typed, paneRuns } = watchSources({
+      workerStatus: 'idle',
+      screen: BUSY,
+      presenceChannelHealthy: () => true,
+      teamText: TEAM3,
+      live: scene3,
+      passes: 5,
+      onPass: async () => {
+        for (const runtime of runtimes) await runtime.pump();
+        const now = snapshot();
+        if (now !== '') snapshots.push(now);
+      },
+      pushWork: sent.push,
+    });
+    const code = await runWatch(['--file', file], io, sources);
+    expect(code).toBe(0);
+    // Every wake was a signed message through the direct leg: nothing was typed or run.
+    expect(typed).toEqual([]);
+    expect(paneRuns).toEqual([]);
+    expect(sent.pushed.map((request) => request.seat)).toEqual(WORKERS.map((worker) => worker.seat));
+    expect(sent.frames).toHaveLength(3);
+    expect(sent.typed).toEqual([]);
+    // Each worker's own runtime read its signed request through the gate and claimed one item.
+    const claimed = runtimes.map((runtime) => {
+      expect(runtime.claims).toHaveLength(1);
+      return /claimed (t\d)/.exec(runtime.claims[0] ?? '')?.[1];
+    });
+    expect(claimed).toEqual(['t1', 't2', 't3']);
+    for (const worker of WORKERS) {
+      expect(workerInbox(worker.seat)).toHaveLength(1);
+      expect(workerInbox(worker.seat)[0]?.payload.to).toBe(worker.seat);
+    }
+    const held = leases().map((lease) => [lease.id, lease.seat, lease.pane]).sort();
+    expect(held).toEqual(WORKERS.map((worker, index) => [`t${index + 1}`, worker.seat, worker.pane]).sort());
+    // With every item leased by an idle worker the source is empty; the whole stretch is one
+    // signed notice in the lead's mailbox naming all three seats, and no later pass rewrites it.
+    const names = mail.names();
+    expect(names).toHaveLength(1);
+    expect(names[0]).toContain('evt-work-empty-lead-idle-');
+    expect(mail.payload(names[0]!)).toMatchObject({
+      to: 'lead',
+      body: 'acme: 3 idle, nothing queued (deepseek-acme, deepseek-beta, deepseek-gamma)',
+    });
+    expect(snapshots.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(snapshots).size).toBe(1);
+  });
+});
+
+// An accepted wake the worker never picks up: the runtime takes nothing (no lease, no activity
+// stamp), so the first pass a minute after the wake must publish one stalled notice to the lead
+// and never wake or announce the seat again in that episode.
+describe('an accepted wake whose pickup fails', () => {
+  test('one stalled notice at the grace, in the lead mailbox, and no second push', async () => {
+    await nativeReading('turn-end');
+    directRoute();
+    const io = testIo(root, { kind: 'owner' });
+    const runtime = workerRuntime();
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
+    const mail = leadMail();
+    // No pump and no delivery wake: the worker's runtime stands still after the message lands.
+    const { sources, typed } = watchSources({
+      workerStatus: 'idle',
+      screen: BUSY,
+      presenceChannelHealthy: () => true,
+      passes: 9,
+      pushWork: sent.push,
+    });
+    const code = await runWatch(['--file', file], io, sources);
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
+    expect(sent.pushed).toHaveLength(1);
+    expect(sent.frames).toHaveLength(1);
+    expect(runtime.claims).toEqual([]);
+    expect(leases()).toEqual([]);
+    const names = mail.names();
+    expect(names).toHaveLength(1);
+    expect(names[0]).toContain('evt-work-stalled-lead-');
+    expect(mail.payload(names[0]!)).toMatchObject({
+      to: 'lead',
+      // The first pass a minute after the wake is where the grace closes: pass seven, at the
+      // verified file's ten-second pass clock.
+      at: new Date(START + 60_000).toISOString(),
+      body: 'acme: deepseek-acme accepted a work wake a minute ago and is still idle with no observed claim; it will not be woken again in this idle episode',
+    });
   });
 });
