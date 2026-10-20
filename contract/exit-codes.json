@@ -3819,6 +3819,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.queued",
+      "meaning": "the receiver was busy, so the signed copy is stored and nothing was typed; the message is delivered when the seat's lock clears, and the id on the line is the one the delivery keeps",
+      "trigger": "team send lead hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.record-dry-run",
       "meaning": "a recorded native delivery was resolved and nothing was written",
       "trigger": "team send --record builder-2 --channel native --ms 812 --dry-run"

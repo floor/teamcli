@@ -2131,7 +2131,7 @@ function finishDaemonSend(
       openText(io, report);
       io.stdout(`${summary}\n`);
     }
-    return 0;
+    return 0; // exit: send.queued
   }
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
   if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
