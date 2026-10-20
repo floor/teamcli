@@ -196,6 +196,35 @@ describe('human', () => {
   });
 });
 
+// `inbound` is a seat's own word on cross-session socket frames: the TeamCLI side of the decision
+// a send reads beside the launch's own `crossSessionInbound` declaration. Omitted, the seat
+// carries no field and its digest is the one it had; writing one is an edit the owner re-approves.
+describe('inbound', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted key reads no field, and each word is read as written', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect('inbound' in (checked.team.seats[0] as object)).toBe(false);
+    for (const word of ['accept', 'hold', 'refuse'] as const) {
+      const written = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    inbound: ${word}\n`));
+      if (!written.ok) throw new Error(`the inbound: ${word} fixture does not validate`);
+      expect(written.team.seats[0]?.inbound).toBe(word);
+    }
+  });
+
+  test('a word outside the three is refused under the seat', () => {
+    // A word is a word: quoting one is not refused, the way a flag's quoted `"true"` is.
+    for (const value of ['yes', 'always']) {
+      const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    inbound: ${value}\n`));
+      expect(checked.ok).toBe(false);
+      if (!checked.ok) {
+        expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": inbound must be one of: accept, hold, refuse']);
+      }
+    }
+  });
+});
+
 // `liveness` is a seat's own word on the three liveness windows: each a positive number of
 // seconds, under the same inheritance the watch's reports read. Omitted, the seat carries no
 // field and its digest is the one it had; writing one is an edit the owner re-approves.

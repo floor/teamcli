@@ -6,6 +6,7 @@ export type Problem = { line: number; message: string; unreadable?: true };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
+import type { CrossSessionInbound } from '../launch/declaration.ts';
 import type { DeliveryLeg, LivenessThresholds, SenderNameMode } from '../settings/inherit.ts';
 import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
@@ -126,6 +127,16 @@ export type Seat = {
    * Absent otherwise, so a file that marks none keeps every digest it had.
    */
   human?: true;
+  /**
+   * The seat's own word on cross-session socket frames, when the file writes one: `accept`
+   * makes the seat eligible for the socket leg, `hold` and `refuse` never do. Absent means
+   * not eligible. The team file's word is the TeamCLI side of the decision, and a send dials
+   * only a seat whose launch itself declares `crossSessionInbound: accept` beside it; either
+   * word alone is not enough. A field of the built seat like every other, so it is part of
+   * the seat's digest and omitted when the file omits the key — every file that writes none
+   * keeps the digest it had.
+   */
+  inbound?: CrossSessionInbound;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
   /**

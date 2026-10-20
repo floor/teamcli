@@ -302,10 +302,11 @@ export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-i
  * (`src/policy/types.ts`). The `headless-resume` leg is not in the fallback and no implied default
  * adds it: a level that wants it names it, and a declared word may add it
  * (`src/policy/types.ts`); until the receiving seat's runtime carries one, the walk records the
- * leg as unavailable rather than typing into the seat for it. The `socket` leg is not in this fallback either: `team send` walks it
- * first only when the receiver itself declares `crossSessionInbound: accept` and no level of the
- * chain names an order — the one implied default that adds it (`src/commands/send.ts`). A
- * declared word may place `socket` anywhere or leave it out. The chain is the receiving seat's
+ * leg as unavailable rather than typing into the seat for it. The `socket` leg is not in this
+ * fallback either: `team send` walks it first only when the receiver's own team file declares
+ * `inbound: accept`, its launch declares `crossSessionInbound: accept` beside it, and no level
+ * of the chain names an order — the one implied default that adds it (`src/commands/send.ts`).
+ * A declared word may place `socket` anywhere or leave it out. The chain is the receiving seat's
  * own — entity, project, team, seat — because the order says how that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {

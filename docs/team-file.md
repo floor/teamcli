@@ -403,6 +403,16 @@ waits in the drop file. `team send --wait` to such a seat writes the record on t
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a file that marks no seat keeps every digest
 it had.
 
+`inbound` is optional on a seat: its own word on cross-session socket frames. `accept` makes the
+seat eligible for a send's `socket` leg; `hold` and `refuse` never do, and an omitted key is not
+eligible either. The word is the TeamCLI side of the decision: a send dials only a seat whose
+file says `accept` and whose own launch declares `crossSessionInbound: accept` — either word
+alone is not enough. A frame the receiver's box holds at its dialog is recorded once as
+`held (socket)`, and the walk falls through to the next route with the same message id; the
+socket is not dialed again until the declaration the hold sat under is re-confirmed, by its
+settings file being rewritten. The key is part of the seat's digest, and a file that writes none
+keeps every digest it had; a word other than the three is refused under the seat.
+
 `liveness` is optional on a seat: its own word on the three liveness windows —
 `idle_lead_seconds`, `idle_owner_seconds` and `blind_after_seconds`, each a positive number of
 seconds — and it applies to that seat alone. A seat tightens the windows in force and never
@@ -436,7 +446,9 @@ delivery_order: [typed]
   the six is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume`; a
   repeated one is `delivery_order names "<word>" twice`.
 - The six legs: `socket` is this build's own frame on the receiving Claude session's
-  cross-session socket, a signed copy written first; `native` is the sender's own
+  cross-session socket, a signed copy written first, dialed only for a seat whose file says
+  `inbound: accept` and whose launch itself declares `crossSessionInbound: accept`; `native` is
+  the sender's own
   cross-session SendMessage, recorded by the sender with `--confirm`;
   `mcp-inbox` is the seat's own MCP inbox, which takes the send only while a server serves it —
   a live `.inbox-listener` marker names the seat, session and root, and a walk with none records

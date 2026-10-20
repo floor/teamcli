@@ -13,6 +13,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { replyLine } from '../src/send/frame.ts';
+import { readHistory } from '../src/send/history.ts';
 import { declaredInboundOf } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -26,9 +27,9 @@ afterEach(() => {
 /** The receiving seat's declaration at the launch's own settings path, and the socket its pane
  *  exposes. With `fresh`, the declaration's file predates the socket: the session was started
  *  after the launcher declared the policy. */
-function declare(made: World, policy: string | null, fresh = true): string {
-  const path = cliHookSettingsPath(made.dir, 'acme', 'lead');
-  if (path === null) throw new Error('the fixture declares no settings path for lead');
+function declareSeat(made: World, seat: string, policy: string | null, fresh = true): string {
+  const path = cliHookSettingsPath(made.dir, 'acme', seat);
+  if (path === null) throw new Error(`the fixture declares no settings path for ${seat}`);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({ crossSessionInbound: policy }));
   const socket = join(made.sockets, '222.sock');
@@ -36,6 +37,10 @@ function declare(made: World, policy: string | null, fresh = true): string {
   const settingsAt = fresh ? Date.now() - 60_000 : Date.now() + 60_000;
   utimesSync(path, new Date(settingsAt), new Date(settingsAt));
   return path;
+}
+
+function declare(made: World, policy: string | null, fresh = true): string {
+  return declareSeat(made, 'lead', policy, fresh);
 }
 
 /** The team file with an entity, and the entity's own lobby in its trust list: a team that names
@@ -523,4 +528,95 @@ test('a signed team order shadows the file’s word, and its socket dials for an
 
   expect(code).toBe(0);
   expect(frames.length).toBe(1);
+});
+
+test('a receiver whose team file declares no inbound word is not dialed, though its launch declares accept', async () => {
+  // Both words are needed: the team file is TeamCLI's authorization for the socket, and a seat
+  // its owner has not marked `inbound: accept` is never dialed, whatever its launch declares.
+  const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer' }]);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declareSeat(made, 'plain', 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { agents: () => [{ name: 'plain', pane: 'w2:p1' }], native: pane });
+
+  const code = await runSend(['plain', 'hello'], owner(made.root), host);
+
+  expect(code).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(pane.typed.length).toBe(1);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries.at(-1)?.failed).toEqual([
+    "socket: the receiving seat's team file does not declare inbound accept",
+  ]);
+});
+
+test('a held frame is marked once, and the socket stays out until the declaration is re-confirmed', async () => {
+  // The receiver's box holds the frame at its dialog. The walk records `held (socket)` once, in
+  // the history and in a mark under the receiving team's state folder, and falls through to the
+  // typed route with the same record and message id. The next send does not dial again: the
+  // declaration the hold sat under has not moved. Rewriting it re-confirms the word, and the
+  // socket is dialed again.
+  const made = world(['socket', 'typed']);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  const settings = declare(made, 'accept');
+  const rule = '─'.repeat(30);
+  const emptyBox = `${rule}\n❯ \n${rule}`;
+  const heldDialog = `Held message from another session\n${rule}\n❯ \n${rule}`;
+  let frameLanded = false;
+  let dialogShown = false;
+  const pane = scripted(['idle', 'working', 'idle', 'working', 'idle']);
+  pane.paneText = () => {
+    if (frameLanded && !dialogShown) {
+      dialogShown = true;
+      return heldDialog;
+    }
+    return emptyBox;
+  };
+  const dials: string[] = [];
+  const host = fake(made, {
+    native: pane,
+    deliver: async (_path: string, frame: string) => {
+      dials.push(frame);
+      frameLanded = true;
+      return { ok: true };
+    },
+  });
+
+  // First send: one dial, held once, the typed route takes it.
+  expect(await runSend(['lead', 'hello'], owner(made.root), host)).toBe(0);
+  expect(dials).toHaveLength(1);
+  expect(pane.typed).toHaveLength(1);
+  const markPath = join(made.dir, 'send-held', 'acme', 'lead.json');
+  const mark = JSON.parse(readFileSync(markPath, 'utf8')) as { at: string; declaredAt: number | null; source: string | null };
+  expect(mark.source).toBe(settings);
+  expect(typeof mark.declaredAt).toBe('number');
+  expect(Number.isNaN(Date.parse(mark.at))).toBe(false);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries.at(-1)?.outcome).toBe('sent (unconfirmed)');
+  expect(history.entries.at(-1)?.failed?.[0]).toContain('Held message from another session');
+
+  // Second send under the same declaration: the socket is not dialed, and the walk says why.
+  expect(await runSend(['lead', 'again'], owner(made.root), host)).toBe(0);
+  expect(dials).toHaveLength(1);
+  expect(pane.typed).toHaveLength(2);
+  const second = readHistory('acme', made.root, made.home);
+  expect(second.ok).toBe(true);
+  if (!second.ok) return;
+  expect(second.entries.at(-1)?.failed?.[0]).toContain('held at its box');
+
+  // The declaration is re-confirmed: the file is rewritten at a new time and the restarted host
+  // exposes a fresh socket. The socket is dialed again, and this frame is taken.
+  const reworded = new Date();
+  writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+  utimesSync(settings, reworded, reworded);
+  writeFileSync(join(made.sockets, '222.sock'), '');
+  expect(await runSend(['lead', 'third'], owner(made.root), host)).toBe(0);
+  expect(dials).toHaveLength(2);
+  expect(pane.typed).toHaveLength(2);
 });

@@ -59,6 +59,7 @@ seats:
     model: Test
     version: "1"
     launch: ${launches.lead ?? 'claude'}
+    inbound: accept
   - role: implementer
     name: helper
     cli: claude-code
@@ -66,6 +67,7 @@ seats:
     model: Test
     version: "1"
     launch: ${launches.helper ?? 'claude'}
+    inbound: accept
   - role: reviewer
     name: native
     cli: codex

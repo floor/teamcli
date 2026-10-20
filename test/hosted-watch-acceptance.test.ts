@@ -75,6 +75,7 @@ seats:
     version: "V4.1"
     display: DeepSeek V4.1 Flash
     launch: team-deepseek
+    inbound: accept
 `;
 
 const QUEUE = `- id: t1

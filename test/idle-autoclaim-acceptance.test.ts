@@ -82,6 +82,7 @@ seats:
     version: "V4.1"
     display: DeepSeek V4.1 Flash
     launch: team-deepseek
+    inbound: accept
 `;
 
 // The same approved file with two more workers: every extra seat is one more idle claimant for
@@ -96,6 +97,7 @@ const TEAM3 = `${TEAM}  - role: implementer
     version: "V4.1"
     display: DeepSeek V4.1 Flash
     launch: team-deepseek
+    inbound: accept
   - role: implementer
     name: deepseek-gamma
     label: deepseek-gamma
@@ -105,6 +107,7 @@ const TEAM3 = `${TEAM}  - role: implementer
     version: "V4.1"
     display: DeepSeek V4.1 Flash
     launch: team-deepseek
+    inbound: accept
 `;
 
 const QUEUE = `- id: t1

@@ -10,12 +10,14 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { connect } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { acquireSeatLock, seatLockPath } from '../src/launch/seat-lock.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -1148,6 +1150,39 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(hist.entries.map((e) => ({ to: e.to, outcome: e.outcome, via: e.via }))).toEqual([
       { to: 'lead', outcome: 'timeout', via: 'typed' },
     ]);
+  });
+
+  test('a waited send needs the team file’s own inbound accept beside the launch word', async () => {
+    // Both words are required: the launch declares accept here, and the team file does not, so the
+    // daemon refuses before it opens anything and nothing is dialed.
+    const w = setupWorld();
+    const settings = cliHookSettingsPath(w.dir, 'acme', 'lead');
+    if (settings === null) throw new Error('the fixture declares no settings path for lead');
+    mkdirSync(dirname(settings), { recursive: true });
+    writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(settings, past, past);
+    writeFileSync(join(w.sockets, '222.sock'), '');
+    const host = makeHost(w);
+    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
+    if (started.kind !== 'serving') throw new Error(started.kind);
+    handles.push(started.handle);
+
+    const asked = await requestDaemon(started.handle.socketPath, {
+      v: 1,
+      op: 'send',
+      from: 'owner',
+      to: 'lead',
+      body: 'no team word',
+      wait: true,
+      timeout_s: 1,
+    });
+    const refused = asked && 'outcome' in asked ? asked : null;
+    expect(refused?.outcome).toBe('refused');
+    expect(refused && 'detail' in refused ? refused.detail : '').toContain(
+      "the receiving seat's team file does not declare inbound accept",
+    );
+    expect(host.frames).toEqual([]);
   });
 
   test('the daemon refuses a stopped seat for a caller that reaches it directly, and starts no worker', async () => {

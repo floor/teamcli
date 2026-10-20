@@ -1,11 +1,14 @@
 // The receiving seat's own declaration that it accepts cross-session socket frames.
 //
-// A Claude Code session surfaces a frame from another session only when its own top-level
-// setting `crossSessionInbound` is `accept`; `hold`, `refuse` and unset either hold the frame
-// at a dialog or drop it, and a held frame blocks the receiving seat's box until a person lets
-// it through. A sender that dials on its own guess would do that to a seat that never agreed,
-// so the walk reads the EFFECTIVE settings the session was launched with and dials on `accept`
-// alone. Nothing under an owner CLI home is ever opened.
+// Two words decide a dial, and both are needed. The receiving team file an owner approved must
+// say `inbound: accept` on the seat — TeamCLI's own authorization, read by `src/commands/send.ts`
+// and the daemon — and the session must itself declare `crossSessionInbound: accept`; either
+// word alone is not enough. A Claude Code session surfaces a frame from another session only when
+// its own top-level setting `crossSessionInbound` is `accept`; `hold`, `refuse` and unset either
+// hold the frame at a dialog or drop it, and a held frame blocks the receiving seat's box until a
+// person lets it through. A sender that dials on its own guess would do that to a seat that never
+// agreed, so the walk reads the EFFECTIVE settings the session was launched with and dials on
+// `accept` alone. Nothing under an owner CLI home is ever opened.
 //
 // Effective precedence, matching the argv the CLI actually receives:
 //   - `launchCommand` appends this build's generated per-seat settings file at the END of the
@@ -22,11 +25,13 @@
 // that file changed was launched without the setting in force, and the socket it exposes is
 // older than the declaration. `inboundIsLive` compares the two so a not-yet-restarted seat is
 // skipped rather than sent a frame its session would hold.
-import { lstatSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { cliHookSettingsPath, setsSettings } from '../launch/cli-hook.ts';
 import {
   inboundPolicyOf, launchWords, readDeclarationText, wrapperInboundOf, type CrossSessionInbound,
 } from '../launch/declaration.ts';
+import { writeAtomic } from '../state.ts';
 
 export { inboundPolicyOf, launchWords, type CrossSessionInbound };
 
@@ -119,4 +124,88 @@ export function inboundSkipReason(policy: CrossSessionInbound | null): string {
   if (policy === 'hold') return 'the receiving Claude session declares crossSessionInbound hold, which would hold the frame at its box';
   if (policy === 'refuse') return 'the receiving Claude session declares crossSessionInbound refuse';
   return 'the receiving Claude session does not declare crossSessionInbound accept';
+}
+
+/**
+ * Whether a receiver is eligible for the socket leg at all. Two words are required together:
+ * the receiving team file an owner approved says `inbound: accept`, and the launch's effective
+ * settings declare `crossSessionInbound: accept`. Either alone is not enough — the team file is
+ * TeamCLI's own authorization, the launch word is what the receiving CLI needs to take the frame.
+ */
+export function socketEligible(
+  teamWord: CrossSessionInbound | undefined,
+  declaration: InboundDeclaration,
+): boolean {
+  return teamWord === 'accept' && declaration.policy === 'accept';
+}
+
+/** The line a walk records instead of dialing, by both words: the team file's first, then the
+ *  launch's own declaration. */
+export function socketSkipReason(
+  teamWord: CrossSessionInbound | undefined,
+  policy: CrossSessionInbound | null,
+): string {
+  if (teamWord === 'hold' || teamWord === 'refuse') {
+    return `the receiving seat's team file declares inbound ${teamWord}`;
+  }
+  if (teamWord !== 'accept') return "the receiving seat's team file does not declare inbound accept";
+  return inboundSkipReason(policy);
+}
+
+/** The mark a held frame leaves: when the box held it, and the declaration in force then. */
+export type HeldSocket = Readonly<{ at: string; declaredAt: number | null; source: string | null }>;
+
+/**
+ * Where a held frame is remembered: the receiving team's state folder, beside the drop queue and
+ * never inside it, so the seat's reader (`team messages`, an inbox server) never sees the mark as
+ * a message.
+ */
+export function heldSocketPath(dir: string, session: string, seat: string): string {
+  return join(dir, 'send-held', session, `${seat}.json`);
+}
+
+/** The mark a previous hold left, or null. Another user's file, a link, an oversized file and
+ *  anything that does not parse are no mark: the safest reading is to dial as before. */
+export function readHeldSocket(path: string): HeldSocket | null {
+  try {
+    const held = lstatSync(path);
+    if (!held.isFile() || held.size > 4096) return null;
+    if (process.getuid !== undefined && held.uid !== process.getuid()) return null;
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<HeldSocket> | null;
+    if (parsed === null || typeof parsed !== 'object') return null;
+    if (typeof parsed.at !== 'string' || Number.isNaN(Date.parse(parsed.at))) return null;
+    if (parsed.declaredAt !== null && typeof parsed.declaredAt !== 'number') return null;
+    if (parsed.source !== null && typeof parsed.source !== 'string') return null;
+    return { at: parsed.at, declaredAt: parsed.declaredAt ?? null, source: parsed.source ?? null };
+  } catch {
+    return null;
+  }
+}
+
+/** Record that the seat's box held a frame from the socket, with the declaration in force. A
+ *  marker that cannot be written never fails the send: the hold has already happened, and the
+ *  walk's own line says so. */
+export function recordHeldSocket(path: string, declaration: InboundDeclaration, now: Date): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const mark = { at: now.toISOString(), declaredAt: declaration.declaredAt, source: declaration.source };
+    writeAtomic(path, `${JSON.stringify(mark, null, 2)}\n`);
+    chmodSync(path, 0o600);
+  } catch {
+    // See above: the marker is a retry guard, never the record of the message.
+  }
+}
+
+/**
+ * Why the socket must not be dialed again, or null. A hold stands until the declaration it was
+ * held under is re-confirmed: the same file rewritten, or another settings file read, both carry
+ * a value that differs from the mark. A declaration that has not moved is not re-confirmed, and
+ * the retry waits.
+ */
+export function socketHeldReason(held: HeldSocket | null, declaration: InboundDeclaration): string | null {
+  if (held === null) return null;
+  const reconfirmed = declaration.declaredAt !== null
+    && (declaration.source !== held.source || declaration.declaredAt !== held.declaredAt);
+  if (reconfirmed) return null;
+  return 'its last socket frame was held at its box, and its declaration has not been re-confirmed since; restart its CLI host so it accepts';
 }

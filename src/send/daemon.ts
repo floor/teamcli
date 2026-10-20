@@ -47,7 +47,10 @@ import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
 import { frameFor, frameReplyFor } from './frame.ts';
-import { declaredInboundOf, inboundIsLive, inboundSkipReason } from './inbound.ts';
+import {
+  declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketEligible, socketHeldReason,
+  socketSkipReason,
+} from './inbound.ts';
 
 /** Maximum queued sends waiting per seat before new sends report queue full (`held`). */
 export const MAX_QUEUE_DEPTH = 32;
@@ -1299,10 +1302,10 @@ async function executeSocketSend(
   // is one this build does not write, and a caller asking for one anyway — an older CLI — is
   // refused here rather than dialed. Nothing is written, nothing is locked, and no history
   // line is appended: the daemon did not touch the seat.
-  // A waited send rides the socket, so it is served only for a receiving Claude session that
-  // itself declares `crossSessionInbound: "accept"`: a frame any other receiver would hold at
-  // its box is never dialed. The sender this caller may be is not the question — the receiver's
-  // own declaration is.
+  // A waited send rides the socket, so it is served only for a receiver whose team file declares
+  // `inbound: accept` AND whose own launch declares `crossSessionInbound: accept`: either word
+  // alone is not enough, and a frame any other receiver would hold at its box is never dialed.
+  // A receiver whose box held a frame keeps the socket out until its declaration is re-confirmed.
   const receiver = team.seats.find((seat) => seat.name === seatName);
   const inbound = declaredInboundOf({
     dir,
@@ -1311,8 +1314,8 @@ async function executeSocketSend(
     seat: seatName,
     ...(receiver?.launch !== undefined ? { launch: receiver.launch } : {}),
   });
-  if (!SOCKET_SEND || inbound.policy !== 'accept') {
-    const why = SOCKET_SEND ? inboundSkipReason(inbound.policy) : 'this build does not carry it';
+  if (!SOCKET_SEND || !socketEligible(receiver?.inbound, inbound)) {
+    const why = SOCKET_SEND ? socketSkipReason(receiver?.inbound, inbound.policy) : 'this build does not carry it';
     return {
       v: 1,
       ok: false,
@@ -1320,6 +1323,17 @@ async function executeSocketSend(
       seat: seatName,
       outcome: 'refused',
       detail: `${seatName}: --wait needs the native leg (team route + your own SendMessage), and ${why}; nothing was sent`,
+    };
+  }
+  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(dir, team.session, seatName)), inbound);
+  if (heldStanding !== null) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: ${heldStanding}; nothing was sent`,
     };
   }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.

@@ -47,6 +47,17 @@ seat's, and the registry project's record for the project the team sits in ([the
 file](../team-file.md#delivery_order)). A team file that writes a word with no leg, an unknown
 leg, or a leg twice is refused when the file is read.
 
+A receiving Claude session's `socket` leg is the one implied default outside a declared word:
+with no level of its chain declaring an order, a seat whose team file says `inbound: accept` and
+whose own launch declares `crossSessionInbound: accept` is walked `socket` first, then the
+default order. Either word alone is not enough: a seat whose file writes `hold`, `refuse` or
+nothing is never dialed, whatever its launch declares. A frame the receiver's box holds at its
+dialog ends `held (socket)`: the signed record is already on disk, the walk falls through to the
+next route with the same message id, and that seat's socket is not dialed again until the
+declaration the hold sat under is re-confirmed, by its settings file being rewritten. The
+hold's mark lives under the receiving team's state folder, outside the seat's drop folder, so
+its reader never sees it as a message.
+
 The `mcp-inbox` leg writes the message whole into the seat's own inbox —
 `<root>/.agents/send-drops/<session>/<seat>`, the same 0600 record the typed leg would leave —
 and types nothing. It takes the send only when a server is serving that inbox: a marker
