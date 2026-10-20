@@ -50,7 +50,10 @@ import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { frameFor, frameReplyFor } from '../send/frame.ts';
-import { declaredInboundOf, inboundIsLive, inboundSkipReason, type InboundDeclaration } from '../send/inbound.ts';
+import {
+  declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, recordHeldSocket,
+  socketEligible, socketHeldReason, socketSkipReason, type InboundDeclaration,
+} from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
 import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
@@ -841,11 +844,12 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     now: host.now(),
   });
   const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
-  // A receiving Claude session that itself declares `crossSessionInbound: "accept"` takes the
-  // frame first: the socket is the fastest channel and the owner asked for it ahead of the rest
-  // of the order. Every other receiver keeps the order its files declare — hold, refuse and
-  // unset are never dialed, since a held frame would block the seat's box — and another CLI has
-  // no cross-session socket at all.
+  // A receiving seat whose team file declares `inbound: accept` and whose own launch declares
+  // `crossSessionInbound: "accept"` takes the frame first: the socket is the fastest channel and
+  // the owner asked for it ahead of the rest of the order. Every other receiver keeps the order
+  // its files declare — a team file that says nothing, and hold, refuse and unset in the launch,
+  // are never dialed, since a held frame would block the seat's box — and another CLI has no
+  // cross-session socket at all.
   const inbound = declaredInboundOf({
     dir: to.dir,
     root: to.root,
@@ -853,13 +857,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     seat: to.seat,
     ...(declared?.launch !== undefined ? { launch: declared.launch } : {}),
   });
-  // The one implied default that names the socket: a receiving Claude session that itself
-  // declares accept, with no level of its chain declaring an order, walks socket first. A word
-  // the chain declares — team, seat, project — is walked as written: it may place `socket`
-  // anywhere or leave it out, and this build never force-prepends it.
+  // The one implied default that names the socket: a receiving Claude session whose team file
+  // declares `inbound: accept` AND whose own launch declares `crossSessionInbound: accept`, with
+  // no level of its chain declaring an order, walks socket first. Either word alone is not
+  // enough: the team file is TeamCLI's authorization, the launch word is what the receiving CLI
+  // needs to take the frame. A word the chain declares — team, seat, project — is walked as
+  // written: it may place `socket` anywhere or leave it out, and this build never force-prepends
+  // it. A seat whose box held a frame keeps the socket out until its declaration is re-confirmed.
+  const socketWord = declared?.inbound;
+  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(to.dir, to.session, to.seat)), inbound);
+  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
   const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
-  const ordered: readonly DeliveryLeg[] =
-    !declaredOrder && to.cli === 'claude-code' && inbound.policy === 'accept' ? ['socket', ...order] : order;
+  const ordered: readonly DeliveryLeg[] = !declaredOrder && to.cli === 'claude-code' && socketNow
+    ? ['socket', ...order]
+    : order;
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
   // order names is kept out, and each one's human reason is recorded on the history line, so a
@@ -889,7 +900,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const record = recordOf(msgId, to, body, from, admission, host.now().toISOString());
   const callerRoot = { root, session: team.session };
   if (dry) {
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, SOCKET_SEND && inbound.policy === 'accept')}; nothing was written`, report);
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}; nothing was written`, report);
   }
   // A direct-only caller hands in the pane and CLI its own pass saw for this seat: the send is
   // bound to them, never re-aimed at a pane the caller did not read. A seat the session no longer
@@ -1044,9 +1055,17 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: 'this build does not carry the cross-session socket' }));
         continue;
       }
-      if (inbound.policy !== 'accept') {
-        failures.push(`socket: ${inboundSkipReason(inbound.policy)}`);
-        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: inboundSkipReason(inbound.policy) }));
+      if (!socketEligible(socketWord, inbound)) {
+        const why = socketSkipReason(socketWord, inbound.policy);
+        failures.push(`socket: ${why}`);
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: why }));
+        continue;
+      }
+      // A frame the box held once is not dialed again until the declaration is re-confirmed: the
+      // hold was the receiver's answer, and a retry on the same word would hold a second frame.
+      if (heldStanding !== null) {
+        failures.push(`socket: ${heldStanding}`);
+        note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: heldStanding }));
         continue;
       }
       // The dial is the route attempt: the signed record is staged before the frame reaches the
@@ -1071,6 +1090,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return delivered(io, to.seat, report, 'socket');
       }
       if (attempt.kind === 'held') {
+        recordHeldSocket(heldSocketPath(to.dir, to.session, to.seat), inbound, host.now());
         const remaining = liveRoutesAfter(walk, at, to.cli);
         note(walkAttempt('socket', 'held', remaining, host.now(), startedAt, { reason: attempt.reason }));
         // A held frame is not a delivery, and a live route behind it may still take the send:
@@ -2038,6 +2058,13 @@ function noteDaemonOutcome(note: WalkNote | null, res: DaemonSendResponse, at: D
     note(walkAttempt('typed', 'delivered', false, at, startedAt));
     return;
   }
+  // The daemon took the send into the seat's FIFO queue and will deliver it when the seat is
+  // free: the typed route has carried it, and no leg behind it is tried. The delivery's own
+  // receipt is the daemon's history line when it lands.
+  if (res.outcome === 'queued') {
+    note(walkAttempt('typed', 'delivered', false, at, startedAt));
+    return;
+  }
   const outcome: AttemptOutcome =
     res.outcome === 'held' || res.outcome === 'timeout' || res.outcome === 'unreachable' || res.outcome === 'refused'
       ? res.outcome
@@ -2068,6 +2095,21 @@ function finishDaemonSend(
     return sentUnconfirmed(io, seatName, report, ms, 'typed', notes.length === 0 ? undefined : notes.join('; '));
   }
   if (res.outcome === 'answered') return answered(io, seatName, { reply: res.reply, msg_id: res.reply_id }, report);
+  if (res.outcome === 'queued') {
+    // The receiver was busy when the send reached the daemon: the signed copy is stored and the
+    // message holds one place in that seat's FIFO, so the sender is answered now instead of
+    // waiting for the turn. The delivery receipt is the daemon's history line when the seat
+    // frees; the send id is the same one on both.
+    const ms = host.now().getTime() - startedAt;
+    const summary = `${seatName}: queued (receiver busy) (typed, ${String(ms)} ms; id ${res.id})`;
+    if (report.json) {
+      writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: 'typed' });
+    } else {
+      openText(io, report);
+      io.stdout(`${summary}\n`);
+    }
+    return 0;
+  }
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
   if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
   if (res.outcome === 'unreachable') return unreachable(io, dir, who, seatName, res.detail, host, report);
@@ -3802,7 +3844,15 @@ function configuration(io: Io, message: string, report: Report): number {
 /** The one action document's own fields: the frame is `writeAction`'s. `summary` is the closing
  *  line the plain run prints last, so the two faces say the same thing once. */
 type ActionFields = {
-  status: 'delivered' | 'delivered (read)' | 'sent (unconfirmed)' | 'answered' | 'recorded' | 'native' | 'dry-run';
+  status:
+    | 'delivered'
+    | 'delivered (read)'
+    | 'sent (unconfirmed)'
+    | 'queued (receiver busy)'
+    | 'answered'
+    | 'recorded'
+    | 'native'
+    | 'dry-run';
   summary: string;
   dryRun?: boolean;
   /** The leg that carried the send: `socket`, `typed`, `drop`, `mcp-inbox`, `headless-resume`, or `native` for a

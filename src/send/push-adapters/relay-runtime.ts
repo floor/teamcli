@@ -56,8 +56,12 @@ import type { FallbackNote } from '../fallback-events.ts';
 import type { FallbackWalk, WalkAttempt } from '../fallback-walk.ts';
 import {
   declaredInboundOf,
+  heldSocketPath,
   inboundIsLive,
   inboundSkipReason,
+  preciseSocketSkipReason,
+  readHeldSocket,
+  socketHeldReason,
   type CrossSessionInbound,
   type InboundDeclaration,
 } from '../inbound.ts';
@@ -307,6 +311,10 @@ export type RuntimeRelaySocketTarget = {
   session?: string;
   seat?: string;
   launch?: string;
+  /** Optional receiving team-file `inbound` word (`accept | hold | refuse`). */
+  teamInbound?: CrossSessionInbound;
+  /** When `true`, requires `teamInbound === 'accept'` in addition to launch-effective `crossSessionInbound: 'accept'`. */
+  requireTeamInbound?: boolean;
 };
 
 export type RuntimeRelayNativeTarget = {
@@ -360,6 +368,10 @@ export type RuntimeRelayMessage = {
 export type RuntimeRelayProbeOptions = {
   /** Explicit `crossSessionInbound` override or declaration for `route: 'socket'`. */
   crossSessionInbound?: CrossSessionInbound | null | InboundDeclaration;
+  /** Explicit receiving team-file `inbound` word (`accept | hold | refuse`) for `route: 'socket'`. */
+  teamInbound?: CrossSessionInbound;
+  /** When `true`, requires `teamInbound === 'accept'` in addition to launch-effective `crossSessionInbound: 'accept'`. */
+  requireTeamInbound?: boolean;
   /** When `true`, `probeRuntimeRelayRoute` checks `existsSync(target.socket)` on `route: 'socket'`. */
   requireSocketFile?: boolean;
   /** Message ID for pointer construction on `native` / `headless-resume` probes. */
@@ -446,6 +458,36 @@ function resolveSocketInboundProbe(
     });
   }
 
+  const teamInbound = options.teamInbound ?? target.teamInbound;
+  const checkTeamInbound =
+    options.requireTeamInbound === true
+    || target.requireTeamInbound === true
+    || teamInbound !== undefined;
+
+  if (checkTeamInbound) {
+    if (teamInbound === 'hold') {
+      return {
+        status: 'would-hold',
+        route: 'socket',
+        reason: "the receiving seat's team file declares inbound hold",
+      };
+    }
+    if (teamInbound === 'refuse') {
+      return {
+        status: 'refused',
+        route: 'socket',
+        reason: "the receiving seat's team file declares inbound refuse",
+      };
+    }
+    if (teamInbound !== 'accept') {
+      return {
+        status: 'unavailable',
+        route: 'socket',
+        reason: "the receiving seat's team file does not declare inbound accept",
+      };
+    }
+  }
+
   if (declaration !== null) {
     if (declaration.policy === 'hold') {
       return {
@@ -465,7 +507,31 @@ function resolveSocketInboundProbe(
       return {
         status: 'unavailable',
         route: 'socket',
-        reason: inboundSkipReason(null),
+        reason: preciseSocketSkipReason('accept', declaration),
+      };
+    }
+    if (
+      target.dir !== undefined
+      && target.session !== undefined
+      && target.seat !== undefined
+    ) {
+      const heldReason = socketHeldReason(
+        readHeldSocket(heldSocketPath(target.dir, target.session, target.seat)),
+        declaration,
+      );
+      if (heldReason !== null) {
+        return {
+          status: 'would-hold',
+          route: 'socket',
+          reason: heldReason,
+        };
+      }
+    }
+    if (target.socket.trim() === '') {
+      return {
+        status: 'unavailable',
+        route: 'socket',
+        reason: 'no cross-session socket was found for the receiving seat',
       };
     }
     if (!inboundIsLive(declaration, target.socket)) {
@@ -476,6 +542,14 @@ function resolveSocketInboundProbe(
           'the receiving Claude session socket predates its crossSessionInbound accept declaration and would hold the frame',
       };
     }
+  }
+
+  if (target.socket.trim() === '') {
+    return {
+      status: 'unavailable',
+      route: 'socket',
+      reason: 'no cross-session socket was found for the receiving seat',
+    };
   }
 
   if (options.requireSocketFile === true && !existsSync(target.socket)) {
