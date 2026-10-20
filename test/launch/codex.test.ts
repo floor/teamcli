@@ -143,6 +143,32 @@ describe('Codex launch and captured screens', () => {
     expect(readScreen('codex', latest('exit-typed')).kind).toBe('unsent');
     expect(readScreen('codex', latest('exit')).kind).toBe('unknown');
   });
+  test('a ready screen drawn with » is the same composer as one drawn with ›', () => {
+    // Two Codex distributions draw the same ready screen with a different prompt glyph: the
+    // captured `›` and the vlist build's `»` (GPT-6.1-Sol ultra). Before the prompt accepted
+    // both, the `»` screen read unknown and `up` skipped the seat's rules. The empty box and
+    // the typed box read exactly as the `›` capture does; a running turn, a dialog and the
+    // exit menu keep their classification, so the wider prompt opens no other screen.
+    const latest = (name: string) => readFileSync(new URL(`../fixtures/codex/0.161.0/${name}.txt`, import.meta.url), 'utf8');
+    const vlist = (screen: string) => screen.replace(/^›/gm, '»');
+    const empty = vlist(latest('idle-hint'));
+    expect(empty).not.toBe(latest('idle-hint'));
+    expect(readScreen('codex', empty).kind).toBe('idle');
+    expect(classifyComposer('codex', empty.split('\n')).kind).toBe('idle');
+    const typed = vlist(latest('unsent'));
+    expect(typed).not.toBe(latest('unsent'));
+    expect(readScreen('codex', typed).kind).toBe('unsent');
+    expect(classifyComposer('codex', typed.split('\n')).kind).toBe('unsent');
+    // The working turn's sent-message echo now carries `»` too; it is still the turn, and its
+    // composer is read the way the `›` capture reads it.
+    expect(readScreen('codex', vlist(latest('working'))).kind).toBe('working');
+    expect(classifyComposer('codex', vlist(latest('working')).split('\n')).kind).toBe('idle');
+    // A dialog whose choice row is `»` is not a composer: the trust and permission stages keep
+    // their own `›` rows, and an unread dialog reads unknown — never idle or unsent.
+    expect(readScreen('codex', vlist(latest('trust'))).kind).toBe('unknown');
+    expect(readScreen('codex', vlist(latest('permission'))).kind).toBe('unknown');
+    expect(classifyComposer('codex', vlist(latest('permission')).split('\n')).kind).toBe('unknown');
+  });
   test('a dialog above the status row and its chrome row is still the dialog', () => {
     // Constructed from the captures: permission.txt's dialog with idle-hint.txt's last two
     // lines (the status row and its chrome row) under it. Read before the mode changed:
@@ -292,6 +318,31 @@ describe('Codex rules delivery', () => {
     const d = delivery();
     expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(true);
     expect(d.calls).toEqual(['Rules.', 'Enter']);
+  });
+  test('a ready box drawn with » takes the line and the Enter', async () => {
+    // The vlist build's prompt glyph: the capture with `»` in place of `›`. The start, the
+    // paste's read-back and the re-read before Enter all read the same composer, so the rules
+    // are typed once and sent once, exactly as on the `›` screen.
+    const d = delivery();
+    const vlist = (screen: string) => screen.replace(/^›/gm, '»');
+    d.showText(vlist(fixture('idle')));
+    d.io.type = (text) => {
+      d.calls.push(text);
+      d.showText(vlist(fixture('idle')).replace('» Ask Codex to do anything', `» ${text}`));
+      return true;
+    };
+    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(true);
+    expect(d.calls).toEqual(['Rules.', 'Enter']);
+  });
+  test('a »-headed dialog is waited out and never typed into', async () => {
+    // A dialog drawn with `»` rows matches none of the dialog stages, so it reads unknown and
+    // `deliverRules` waits the deadline out and refuses: the wider prompt does not make a
+    // dialog a ready box, and nothing is typed into it.
+    const d = delivery();
+    d.showText(fixture('permission-pinned').replace(/^›/gm, '»'));
+    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
+    expect(d.calls).toEqual([]);
+    expect(d.refusals.at(-1)?.stop).toBe('screen');
   });
   test('the captured multi-line box is not the text any more: typed, not sent', async () => {
     // The real capture, with the message as team once composed it. A row break may stand for at

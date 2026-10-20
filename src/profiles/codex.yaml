@@ -183,8 +183,10 @@ screen:
     # there, content on the rows below at the second, and exit-typed.txt keeps the old
     # transcript and menu rows above it — and a prompt glyph on a content row is never the
     # input row. The read scans up from the status line and anchors this pattern to the
-    # captured column.
-    prompt: '^›(?:\s|$)'
+    # captured column. A vlist build draws the same ready screen with `»` in place of `›`
+    # (GPT-6.1-Sol ultra); the two glyphs are the one prompt, and a row carrying either at
+    # that column is the input row.
+    prompt: '^[›»](?:\s|$)'
     # No captured Codex frame draws its box without a status row, so there is nothing the
     # fallback may call idle or unsent. An empty list is a declared one: a screen with no
     # status row stays unknown.
