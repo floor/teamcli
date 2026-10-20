@@ -39,6 +39,7 @@ import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
 import { createPresenceActivity, type PresenceActivityStep } from './presence/activity.ts';
+import { createPresencePublisher, type PresencePublisherStep } from './presence/publish.ts';
 import {
   createPresenceChannelHealth, presenceStepHealth, type PresenceChannelHealth,
 } from './presence/health.ts';
@@ -108,10 +109,10 @@ export type StartMachineDaemonInput = {
    *  own run and clock and, only with a verified admitted sender, `open` effects. */
   hostedWatch?: (route: HostedRoute, log: (text: string) => void) => HostedWatchBuild;
   /**
-   * Whether each hosted route also runs the presence ingester and the activity reconciler on the
-   * daemon's own 250 ms pass. Off by default: the integration lands closed, and a daemon started
-   * only to host endpoints ingests nothing. Internal, like `watchHosting`; not a setting and not
-   * printed.
+   * Whether each hosted route also runs the presence ingester, the activity reconciler and the
+   * publisher that copies applied transitions to the bus event log on the daemon's own 250 ms
+   * pass. Off by default: the integration lands closed, and a daemon started only to host
+   * endpoints ingests nothing. Internal, like `watchHosting`; not a setting and not printed.
    */
   presenceHosting?: boolean;
   /** Builds one canonical route's ingester. The default builds the real module; a test injects
@@ -119,6 +120,9 @@ export type StartMachineDaemonInput = {
   presenceIngest?: (route: HostedRoute, stateDir: string) => PresenceIngester;
   /** Builds one route's activity reconciler step. The default walks the transition reader. */
   presenceActivity?: (route: HostedRoute, stateDir: string) => PresenceActivityStep;
+  /** Builds one route's presence publisher step. The default appends through the bus event log;
+   *  a test injects its own to observe what is published and when. */
+  presencePublish?: (route: HostedRoute, stateDir: string) => PresencePublisherStep;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
 };
@@ -302,11 +306,12 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   // Filled once the roots loop has resolved every route; a status entry gains its `watch`
   // record on each state write, and only entries that actually got a host ever have one.
   const hostedWatches: { status: MachineRootStatus; watch: HostedWatch }[] = [];
-  /** The presence pair per accepted route, and this process's one in-flight run per route. */
+  /** The presence work per accepted route, and this process's one in-flight run per route. */
   const presenceWork: {
     route: HostedRoute;
     ingester: PresenceIngester;
     activity: PresenceActivityStep;
+    publisher: PresencePublisherStep;
     /** This route's fixed liveness, answered to its hosted watch's dispatcher. */
     health: PresenceChannelHealth;
   }[] = [];
@@ -517,6 +522,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           ?? createPresenceIngester({ stateDir, session: loaded.team.session }),
         activity: input.presenceActivity?.(route, stateDir)
           ?? createPresenceActivity({ stateDir, session: loaded.team.session }),
+        publisher: input.presencePublish?.(route, stateDir)
+          ?? createPresencePublisher({
+            stateDir,
+            session: loaded.team.session,
+            project: loaded.team.project,
+            root: canonical,
+            home,
+          }),
         health: createPresenceChannelHealth(),
       });
     }
@@ -657,8 +670,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   };
 
   /**
-   * One presence pass for one route: the ingester's bounded step, then the activity reconciler
-   * over what it appended. Its log reads are asynchronous and bounded; its state write is the
+   * One presence pass for one route: the ingester's bounded step, the activity reconciler over
+   * what it appended, then the publisher that copies applied current-binding transitions to the
+   * route's bus event log. Its log reads are asynchronous and bounded; its state write is the
    * same synchronous read-modify-write under the zero-wait lock every state writer uses. A slow
    * or broken spool therefore holds only its own route, and the beat that starts it never awaits
    * it.
@@ -693,6 +707,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         if (typeof bad === 'string') logPresenceOnce(one.route, bad);
       } catch (error) {
         logPresenceOnce(one.route, `the activity step failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        // Publication is a separate concern from the native channel's health: a bus append that
+        // fails is reported and retried by a later pass, and never marks presence unhealthy.
+        const published = await one.publisher(now());
+        if (published.failed !== null) logPresenceOnce(one.route, `the publish step failed: ${published.failed}`);
+        const failed = published.seats.find((seat) => seat.failure !== null)
+          ?? published.seats.find((seat) => seat.bad !== null);
+        if (failed !== undefined) {
+          logPresenceOnce(one.route, `the publish step failed: ${failed.failure ?? failed.bad ?? ''}`);
+        }
+      } catch (error) {
+        logPresenceOnce(one.route, `the publish step failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     })().finally(() => {
       if (presenceRuns.get(one.route.root) === run) presenceRuns.delete(one.route.root);

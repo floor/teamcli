@@ -19,6 +19,7 @@ import { readDaemonState } from '../src/daemon/state.ts';
 import type { PresenceActivityResult } from '../src/daemon/presence/activity.ts';
 import { PRESENCE_HEALTH_GRACE_MS } from '../src/daemon/presence/health.ts';
 import type { PresenceIngestResult, PresenceIngester } from '../src/daemon/presence/ingest.ts';
+import type { PresencePublishResult } from '../src/daemon/presence/publish.ts';
 
 const CREW = `format: 1
 project: acme-web
@@ -61,6 +62,10 @@ function ingest(over: Partial<PresenceIngestResult> = {}): PresenceIngestResult 
 }
 
 function activityResult(): PresenceActivityResult {
+  return { seats: [], failed: null };
+}
+
+function publishResult(): PresencePublishResult {
   return { seats: [], failed: null };
 }
 
@@ -136,6 +141,7 @@ describe('the presence pass', () => {
     const daemon = await start({
       presenceIngest: () => { built += 1; return ingester; },
       presenceActivity: () => async () => { built += 1; return activityResult(); },
+      presencePublish: () => async () => { built += 1; return publishResult(); },
     });
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(built).toBe(0);
@@ -147,6 +153,7 @@ describe('the presence pass', () => {
     const unreadable = join(world.base, 'unreadable');
     mkdirSync(unreadable, { recursive: true });
     const built: Array<{ root: string; stateDir: string }> = [];
+    const published: Array<{ root: string; stateDir: string }> = [];
     let steps = 0;
     const ingester: PresenceIngester = {
       step: async () => { steps += 1; return emptyIngest(); },
@@ -159,9 +166,14 @@ describe('the presence pass', () => {
       presenceEveryMs: 10,
       presenceIngest: (route, stateDir) => { built.push({ root: route.root, stateDir }); return ingester; },
       presenceActivity: () => async () => activityResult(),
+      presencePublish: (route, stateDir) => {
+        published.push({ root: route.root, stateDir });
+        return async () => publishResult();
+      },
     });
     await waitUntil(() => steps >= 2);
     expect(built).toEqual([{ root: world.root, stateDir: join(world.root, '.agents') }]);
+    expect(published).toEqual([{ root: world.root, stateDir: join(world.root, '.agents') }]);
     await daemon.close();
   }, 15_000);
 
