@@ -258,7 +258,7 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
     }
     if (outcome.pushed.ok) continue;
     replayNotice(input, result, captured.claim.claim_id, 'push', seat,
-      refusalText(input, seat, outcome.pushed.refused), pushBinding(seat, since));
+      refusalText(input, seat, outcome.pushed.refused), pushBinding(seat, captured.claim));
   }
   return result;
 }
@@ -296,7 +296,7 @@ async function followClaim(
       if (settled.kind !== 'settled') return;
       if (settled.claim.state === 'refused' && owed.refused !== undefined) {
         replayNotice(input, result, claim.claim_id, 'push', seat,
-          refusalText(input, seat, owed.refused), pushBinding(seat, claim.idle_since));
+          refusalText(input, seat, owed.refused), pushBinding(seat, claim));
       }
       return;
     }
@@ -333,20 +333,20 @@ async function followClaim(
     if (settled.kind !== 'settled') return;
     if (claimed || settled.claim.notice !== 'stalled') return;
     replayNotice(input, result, claim.claim_id, 'stalled', seat, stalledText(input, seat),
-      `stalled${SEP}${seat}${SEP}${claim.wake_at ?? claim.claimed_at}`);
+      stalledBinding(seat, claim));
     return;
   }
   if (claim.state === 'refused') {
     if (claim.notice !== 'refused') return;
     replayNotice(input, result, claim.claim_id, 'push', seat,
       `${input.team.project}: ${seat} is idle with takeable work and its direct work request was refused earlier in this idle episode; nothing was typed for it`,
-      pushBinding(seat, claim.idle_since));
+      pushBinding(seat, claim));
     return;
   }
   // done: the pickup check is over; only the notice it may still owe is replayed.
   if (claim.notice === 'stalled') {
     replayNotice(input, result, claim.claim_id, 'stalled', seat, stalledText(input, seat),
-      `stalled${SEP}${seat}${SEP}${claim.wake_at ?? claim.claimed_at}`);
+      stalledBinding(seat, claim));
   }
 }
 
@@ -354,8 +354,12 @@ function sinceOf(report: IdleWorkReport, seat: string): string {
   return report.idle.find((item) => item.seat === seat)?.since ?? 'watch-start';
 }
 
-function pushBinding(seat: string, since: string): string {
-  return `push${SEP}${seat}${SEP}${since}`;
+function pushBinding(seat: string, claim: IdleClaim): string {
+  return `push${SEP}${seat}${SEP}${claim.idle_since}${SEP}${claim.claim_id}`;
+}
+
+function stalledBinding(seat: string, claim: IdleClaim): string {
+  return `stalled${SEP}${seat}${SEP}${claim.idle_since}${SEP}${claim.claim_id}${SEP}${claim.wake_at ?? claim.claimed_at}`;
 }
 
 function unknownBinding(seat: string, claim: IdleClaim): string {
@@ -436,7 +440,10 @@ async function attempt(
 
 /** Publishes one claim's owed notice unless this process already did. A new process holds no
  *  key and publishes from the claim's `notice`; the deterministic `once: true` ids keep an
- *  already-written record from being rewritten. */
+ *  already-written record from being rewritten. A publication with a failed or unmapped target
+ *  stays owed, so the next pass of this process retries it: the targets already written are
+ *  found by their ids and a target that could not be written can recover. The work itself is
+ *  never pushed again. */
 function replayNotice(
   input: IdleDispatchInput,
   result: IdleDispatchResult,
@@ -447,8 +454,9 @@ function replayNotice(
   binding: string,
 ): void {
   if (publishedNotices.has(claim_id)) return;
-  mergeDelivery(result, announce(input, kind, seat, text, binding));
-  publishedNotices.add(claim_id);
+  const delivery = announce(input, kind, seat, text, binding);
+  mergeDelivery(result, delivery);
+  if (delivery.failed.length === 0 && delivery.missing.length === 0) publishedNotices.add(claim_id);
 }
 
 function mergeDelivery(result: IdleDispatchResult, delivery: FallbackDelivery): void {

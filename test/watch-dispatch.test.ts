@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { plantRecord } from '../src/commands/messages.ts';
+import { listUnacked, plantRecord, receiptFile } from '../src/commands/messages.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -21,6 +21,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
+import { messageKeyOf, RECEIPT_DOMAIN, signDomain } from '../src/store/keys.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { captureIdleClaim, settleIdleClaim } from '../src/watch/claim.ts';
 import {
@@ -282,13 +283,14 @@ describe('one attempt per eligible idle episode', () => {
     expect(second.fallback).toBeUndefined();
     expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
 
-    // The seat works: the episode ends. Idle again: a new attempt, and the stable id keeps the
-    // first fallback record from being written a second time.
+    // The seat works: the episode ends. Idle again at the same persisted stamp: a new claim and
+    // a new attempt, and its refusal is its own record — the first claim's record is neither
+    // rewritten nor reused, so a reader that consumed it cannot suppress this one.
     await dispatchIdleWork(input({ push, state: one, live: live({ 'worker-1': { status: 'working', screen: busy } }) }));
     const again = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 2 * MIN) }));
     expect(again.pushed).toHaveLength(1);
     expect(calls).toHaveLength(2);
-    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+    expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(2);
   });
 
   test('a throwing route is a refusal, not a crash, and still spends the episode', async () => {
@@ -704,7 +706,7 @@ describe('a durable episode claim', () => {
     expect(readState(join(root, '.agents')).sessions.crew?.idle_claims?.['worker-1']).toBeDefined();
   });
 
-  test('a second claim of the same stamp publishes its own refusal, not the first claim\'s silence', async () => {
+  test('a second claim of the same stamp publishes a notice a reader can still read', async () => {
     queue([{ id: 't1', title: 'First' }]);
     let calls = 0;
     const push: WorkPush = async () => {
@@ -714,10 +716,36 @@ describe('a durable episode claim', () => {
     const both = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1', 'worker-2']);
     const leadDir = join(root, '.agents', 'messages', 'crew-lead');
     const mainDir = join(entityRoot, '.agents', 'messages', 'head-lead');
+    // The receipt sits in the same folder, beside its record; the record count is what matters.
+    const recordsOnly = (dir: string): string[] => recordsIn(dir).filter((name) => !name.endsWith('.read.json'));
     const first = await dispatchIdleWork(input({ push, state: both }));
     expect(first.pushed.map((one) => one.seat)).toEqual(['worker-1', 'worker-2']);
-    expect(recordsIn(leadDir)).toHaveLength(2);
-    expect(recordsIn(mainDir)).toHaveLength(2);
+    expect(recordsOnly(leadDir)).toHaveLength(2);
+    expect(recordsOnly(mainDir)).toHaveLength(2);
+
+    // The lead consumes worker-1's notice through the real read gate: a signed read receipt
+    // beside the record, exactly as the inbox writes one. From now on that id is served forever,
+    // file or no file.
+    const recordOf = (dir: string, needle: string): { id: string; path: string } => {
+      for (const name of recordsOnly(dir)) {
+        const path = join(dir, name);
+        const record = JSON.parse(readFileSync(path, 'utf8')) as { payload: { id: string; body: string } };
+        if (record.payload.body.includes(needle)) return { id: record.payload.id, path };
+      }
+      throw new Error(`no record naming ${needle}`);
+    };
+    const consumed = recordOf(leadDir, 'worker-1 is idle');
+    const receipt = {
+      kind: 'receipt', id: consumed.id, to: 'crew-lead', root, session: 'crew',
+      at: new Date(NOW + MIN).toISOString(),
+    };
+    writeFileSync(
+      receiptFile(root, 'crew-lead', consumed.id),
+      `${JSON.stringify({ payload: receipt, signature: signDomain(RECEIPT_DOMAIN, receipt, messageKeyOf(home)) }, null, 2)}\n`,
+    );
+    const unacked = (): string[] => listUnacked(root, 'crew', home).map((one) => one.id);
+    expect(unacked()).not.toContain(consumed.id);
+    expect(existsSync(consumed.path)).toBe(true); // consumed, not deleted
 
     // The queue file goes away: a missing source reads as no takeable work (an existing but
     // empty file is not a task list), and with no takeable work the contract ends every claim.
@@ -727,29 +755,65 @@ describe('a durable episode claim', () => {
     expect(calls).toBe(2);
     expect(readState(join(root, '.agents')).sessions.crew?.idle_claims).toBeUndefined();
 
-    // The lead and the main consumed the first refusal records; only the empty-source notice,
-    // sent by the drain, is left in each mailbox.
-    const consumed = (dir: string): void => {
-      for (const name of recordsIn(dir)) {
-        const full = join(dir, name);
-        const record = JSON.parse(readFileSync(full, 'utf8')) as { payload: { body: string } };
-        if (record.payload.body.includes('is idle')) rmSync(full, { force: true });
-      }
-    };
-    consumed(leadDir);
-    consumed(mainDir);
-    expect(recordsIn(leadDir)).toHaveLength(1);
-    expect(recordsIn(mainDir)).toHaveLength(1);
-
     // Work returns while both seats are still idle at the same persisted stamps: two new claims,
-    // and their refusals are their own notices, under the same deterministic ids.
+    // and worker-1's refusal is a NEW record, readable even though its old id is served and its
+    // receipt is still in place. Nothing cleared the receipt; the id itself changed.
     queue([{ id: 't1', title: 'First' }]);
     const again = await dispatchIdleWork(input({ push, state: both, now: new Date(NOW + 2 * MIN) }));
     expect(again.pushed.map((one) => one.seat)).toEqual(['worker-1', 'worker-2']);
     expect(calls).toBe(4);
     expect(again.fallback?.written).toHaveLength(4); // two seats, lead and main
-    expect(recordsIn(leadDir)).toHaveLength(3);
-    expect(recordsIn(mainDir)).toHaveLength(3);
+    expect(recordsOnly(leadDir)).toHaveLength(5); // two refusals, the empty notice, two new refusals
+    expect(recordsOnly(mainDir)).toHaveLength(5);
+    let fresh: string | undefined;
+    for (const name of recordsOnly(leadDir)) {
+      const record = JSON.parse(readFileSync(join(leadDir, name), 'utf8')) as { payload: { id: string; body: string } };
+      if (record.payload.body.includes('worker-1 is idle') && record.payload.id !== consumed.id) fresh = record.payload.id;
+    }
+    expect(fresh).toBeDefined();
+    expect(fresh).not.toBe(consumed.id);
+    expect(unacked()).toContain(fresh!);
+    expect(existsSync(receiptFile(root, 'crew-lead', consumed.id))).toBe(true);
+  });
+
+  test('a notice a target could not be written to is retried in the same process, and the work is not', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    let calls = 0;
+    const push: WorkPush = async () => {
+      calls += 1;
+      return { ok: false, refused: 'the pane holds a dialog' };
+    };
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    const leadDir = join(root, '.agents', 'messages', 'crew-lead');
+    const mainDir = join(entityRoot, '.agents', 'messages', 'head-lead');
+    // The lead's mailbox cannot be written: a file stands where its folder should be.
+    writeFileSync(join(root, '.agents', 'messages'), 'held');
+    const first = await dispatchIdleWork(input({ push, state: one }));
+    expect(first.pushed).toHaveLength(1);
+    expect(calls).toBe(1);
+    expect(first.fallback?.failed).toHaveLength(1);
+    expect(first.fallback?.written).toHaveLength(1); // the main record
+    expect(recordsIn(leadDir)).toHaveLength(0);
+    expect(recordsIn(mainDir)).toHaveLength(1);
+
+    // The claim still owes the lead its notice, so the same process tries again.
+    const retry = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 1_000) }));
+    expect(retry.pushed).toEqual([]);
+    expect(calls).toBe(1);
+    expect(retry.fallback?.failed).toHaveLength(1);
+
+    // The folder is writable again: the retry reaches the lead; the main is the same record.
+    rmSync(join(root, '.agents', 'messages'));
+    const recovered = await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 2_000) }));
+    expect(recovered.pushed).toEqual([]);
+    expect(calls).toBe(1);
+    expect(recovered.fallback?.failed).toEqual([]);
+    expect(recovered.fallback?.written).toHaveLength(2);
+    expect(recordsIn(leadDir)).toHaveLength(1);
+    expect(recordsIn(mainDir)).toHaveLength(1);
+
+    // Published at last: a further pass is silent.
+    expect((await dispatchIdleWork(input({ push, state: one, now: new Date(NOW + 3_000) }))).fallback).toBeUndefined();
   });
 });
 
