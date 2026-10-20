@@ -32,6 +32,7 @@ export type HistoryOutcome =
   | 'delivered (read)'
   | 'sent (unconfirmed)'
   | 'held'
+  | 'queued (receiver busy)'
   | 'not-submitted'
   | 'unreachable'
   | 'answered'

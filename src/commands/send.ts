@@ -175,11 +175,19 @@ outcome in one — {format, dry_run, status, action_summary, project, session, s
 channel, ids, thread?, reply?, plan?, delivery?} — and --list prints its own: {format, project,
 session, seats, summary}. \`delivery\` is the resolved walk's legs in order: a real send's
 entry is attempted (its transport was reached, with the reason when the transport did not
-take the send), skipped (a rule kept it out, with the reason), refused (a rule ended the
-walk, with the reason) or not-reached (the walk ended before it); a dry run lists
-candidate or skipped with \`eligible\` and the reason. A run that exits 1 or 2 writes the
-structured error document instead — {error: {id, message, repair}} — and stderr stays
-empty; a send that resolved its walk carries the same \`delivery\` list there too.
+take the send), queued (another command holds the seat's lock, so the leg left the record
+and its marker for the delivery that follows), skipped (a rule kept it out, with the
+reason), refused (a rule ended the walk, with the reason) or not-reached (the walk ended
+before it); a dry run lists candidate or skipped with \`eligible\` and the reason. A run
+that exits 1 or 2 writes the structured error document instead — {error: {id, message,
+repair}} — and stderr stays empty; a send that resolved its walk carries the same
+\`delivery\` list there too. When another command holds the seat's lock, the reachable
+legs queue the send instead of refusing: the signed record and its marker are written
+without that lock, nothing is typed, and the run answers \`<seat>: queued (receiver
+busy) (<leg>, <n> ms; id <id>)\`, exit 0, with the id the delivery keeps, never a claim
+of a read. A compose seat has no queued leg — nothing on the watch's side walks its
+screens — so its held lock stays a refusal, and its line says the send was not queued
+and to run it again when the seat is free.
 --file reads the body from a file instead of the one <message> argument. --brief
 reads a whole draft brief into the body, exactly as --file does, and is the form
 to use when the message is a brief: a body that is only a path to a brief file
@@ -365,7 +373,7 @@ export const MAX_WAIT_S = 86_400;
  *  transport; `skipped` means a rule kept it out before anything was written; `refused` means
  *  the leg ended the walk; `not-reached` means a leg before it ended the walk first. A dry run
  *  walks nothing, so its entries are `candidate` or `skipped`, with `eligible` saying which. */
-type LegState = 'attempted' | 'skipped' | 'refused' | 'not-reached' | 'candidate';
+type LegState = 'attempted' | 'queued' | 'skipped' | 'refused' | 'not-reached' | 'candidate';
 
 /** One ordered entry of a send's delivery report. The leg's own name is here, so the reason
  *  never repeats it: a reader joins the two. */
@@ -377,6 +385,16 @@ type LegReport = {
   /** Why the leg was skipped or refused, or why an attempt did not take the send. */
   reason?: string;
 };
+
+/** The entry the walk left for one leg, whatever state it already holds: a leg the walk marked
+ *  `attempted` before its transport answered ends as a queue or a refusal, and the report says
+ *  which. A run with no resolved walk (a brief's own delivery) has no list to mark. */
+function setLegState(report: Report, leg: DeliveryLeg, state: LegState, reason?: string): void {
+  const entry = report.delivery?.find((one) => one.leg === leg && one.state !== 'not-reached');
+  if (entry === undefined) return;
+  entry.state = state;
+  if (reason !== undefined) entry.reason = reason;
+}
 
 /** What the run reports besides its streams: the caller chose the document, the seat it
  *  names, the id of the frame it composed (null until one is built), and the team and session
@@ -2200,15 +2218,8 @@ function finishDaemonSend(
     // message holds one place in that seat's FIFO, so the sender is answered now instead of
     // waiting for the turn. The delivery receipt is the daemon's history line when the seat
     // frees; the send id is the same one on both.
-    const ms = host.now().getTime() - startedAt;
-    const summary = `${seatName}: queued (receiver busy) (typed, ${String(ms)} ms; id ${res.id})`;
-    if (report.json) {
-      writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: 'typed' });
-    } else {
-      openText(io, report);
-      io.stdout(`${summary}\n`);
-    }
-    return 0; // exit: send.queued
+    setLegState(report, 'typed', 'queued');
+    return queuedBusy(io, dir, who, seatName, 'typed', res.id, null, host, report, startedAt);
   }
   if (res.outcome === 'timeout') return timedOut(io, seatName, timeoutS, report);
   if (res.outcome === 'held') return held(io, dir, who, seatName, res.detail, host, report);
@@ -2221,6 +2232,44 @@ function finishDaemonSend(
     return notSubmitted(io, dir, who, seatName, result, where, host, report);
   }
   return refuse(io, dir, who, res.detail, host, report);
+}
+
+/**
+ * The daemon queue's own word, answered by a direct leg: the seat's lock is another command's,
+ * so this run types nothing and the signed record it stored is delivered when the seat is free —
+ * by the watch's typed retry, the seat's own inbox client, or its drop watcher, which is the leg
+ * the record's marker names. An acceptance, never a delivery: no receipt is claimed, and the id
+ * on the line is the one the delivery keeps. Exit 0, always — the same word and exit the
+ * daemon's queue answers with.
+ */
+function queuedBusy(
+  io: Io,
+  dir: string,
+  who: string,
+  seatName: string,
+  leg: 'typed' | 'mcp-inbox' | 'drop',
+  msgId: string,
+  /** The pid holding the seat's lock, when this process met it; null for the daemon's own
+   *  queue, which keeps the message itself and writes its own log line. */
+  held: number | null,
+  host: SendHost,
+  report: Report,
+  startedAt: number,
+): number {
+  report.sent = msgId;
+  if (held !== null) {
+    const why = `another command holds the seat (pid ${String(held)})`;
+    logLine(dir, 'send', who, `${seatName}: queued (receiver busy) (${leg}; ${why}; id ${msgId})`, host.now());
+  }
+  const ms = host.now().getTime() - startedAt;
+  const summary = `${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`;
+  if (report.json) {
+    writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: leg });
+  } else {
+    openText(io, report);
+    io.stdout(`${summary}\n`);
+  }
+  return 0; // exit: send.queued
 }
 
 type ThreadReply = { reply: string; msg_id: string };
@@ -2450,8 +2499,62 @@ async function deliverDropped(
   const body = payload.body;
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
-    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+    // Another command holds the seat, and a held seat is a queue, not a refusal. The drop is a
+    // file, not a keystroke: the record and the marker are written without that lock — the id
+    // names the file, the seal is idempotent and the relay publishes each name once — and the
+    // seat's watcher reads it when the seat is free. An acceptance, never a delivery.
+    setLegState(report, 'drop', 'queued');
+    try {
+      sealDropTree(dir, session, seatName);
+    } catch {
+      setLegState(report, 'drop', 'refused', 'the record could not be written');
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
+    }
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
+    if (!queuedWrite.ok) {
+      setLegState(report, 'drop', 'refused', `the record could not be written (${queuedWrite.reason})`);
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
+    }
+    const queuedAttempt = await relayDeliver(
+      { route: 'durable-copy', copy: { dir: dropDir, name: msgId } },
+      { id: msgId, record: queuedWrite.record },
+      { now: host.now },
+    );
+    if (queuedAttempt.outcome === 'refused') {
+      setLegState(report, 'drop', 'refused', queuedAttempt.reason);
+      note(walkAttempt('drop', 'refused', false, host.now(), startedAt, { reason: queuedAttempt.reason }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedAttempt.reason}); nothing was sent`, host, report);
+    }
+    note(walkAttempt('drop', 'held', false, host.now(), startedAt, { reason: 'the record is stored; no seat was woken' }));
+    if (!human) {
+      // The marker is the watcher's receipt record, as on every drop send: it is never typed,
+      // and its receipt promotes the send once the seat reads the file.
+      markPending(dropDir, {
+        ts: host.now().toISOString(),
+        from,
+        to: seatName,
+        ...(sentAs === null ? {} : sentAs),
+        body,
+        id: msgId,
+        leg: 'drop',
+      });
+    }
+    appendHistory(project, root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      ...(sentAs === null ? {} : sentAs),
+      ...historySender(report),
+      body,
+      id: msgId,
+      thread: payload.thread,
+      outcome: 'queued (receiver busy)',
+      ms: host.now().getTime() - startedAt,
+      ...failed,
+    });
+    return queuedBusy(io, dir, who, seatName, 'drop', msgId, lock.held, host, report, startedAt);
   }
   try {
     try {
@@ -2563,8 +2666,35 @@ async function deliverNative(
   const body = payload.body;
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
-    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+    // The seat's lock is another command's, so no keystroke is typed here. The signed record is
+    // the message, and a marker beside it with no leg is the watch's typed-retry record: written
+    // without that lock — the id names the file, and the relay publishes each name once — they
+    // make the send durable now, and the watch types the same trigger once the seat is free.
+    setLegState(report, 'typed', 'queued');
+    try {
+      sealDropTree(dir, session, seatName);
+    } catch {
+      setLegState(report, 'typed', 'refused', 'the record could not be written');
+      walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was typed`, host, report);
+    }
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
+    if (!queuedWrite.ok) {
+      setLegState(report, 'typed', 'refused', `the record could not be written (${queuedWrite.reason})`);
+      walkNote?.(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was typed`, host, report);
+    }
+    const queuedEntry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
+    markPending(dropDir, queuedEntry);
+    walkNote?.(walkAttempt('typed', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (pid ${String(lock.held)}); queued for the watch` }));
+    appendHistory(project, root, host.home, {
+      ...queuedEntry,
+      ...historySender(report),
+      outcome: 'queued (receiver busy)',
+      ms: host.now().getTime() - startedAt,
+      ...failed,
+    });
+    return queuedBusy(io, dir, who, seatName, 'typed', msgId, lock.held, host, report, startedAt);
   }
   let taken = false;
   // An unsent draft the delivery moved out of the box and put back: its one-line word rides
@@ -2718,8 +2848,36 @@ async function deliverInbox(
   const body = payload.body;
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
-    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+    // The seat's lock is another command's, so nothing reaches its inbox server here. The record
+    // and its inbox marker are written without that lock — the id names the file, the seal is
+    // idempotent and the relay publishes each name once — and the seat's own server reads the
+    // record when the seat is free; a marker past the inbox window is the watch's typed retry.
+    // An acceptance, never a delivery.
+    setLegState(report, 'mcp-inbox', 'queued');
+    try {
+      sealDropTree(dir, session, seatName);
+    } catch {
+      setLegState(report, 'mcp-inbox', 'refused', 'the record could not be written');
+      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: 'the record could not be written' }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written; nothing was sent`, host, report);
+    }
+    const queuedWrite = await writeSendRecord(dropDir, payload, host.home, host.now);
+    if (!queuedWrite.ok) {
+      setLegState(report, 'mcp-inbox', 'refused', `the record could not be written (${queuedWrite.reason})`);
+      note(walkAttempt('mcp-inbox', 'refused', false, host.now(), startedAt, { reason: `the record could not be written (${queuedWrite.reason})` }));
+      return refuse(io, dir, who, `${seatName}: the record could not be written (${queuedWrite.reason}); nothing was sent`, host, report);
+    }
+    const queuedEntry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
+    markPending(dropDir, { ...queuedEntry, leg: 'mcp-inbox' });
+    note(walkAttempt('mcp-inbox', 'delivered', false, host.now(), startedAt, { reason: `another command holds the seat (pid ${String(lock.held)}); queued for the seat's inbox and the watch` }));
+    appendHistory(project, root, host.home, {
+      ...queuedEntry,
+      ...historySender(report),
+      outcome: 'queued (receiver busy)',
+      ms: host.now().getTime() - startedAt,
+      ...failed,
+    });
+    return queuedBusy(io, dir, who, seatName, 'mcp-inbox', msgId, lock.held, host, report, startedAt);
   }
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
   try {
@@ -2803,8 +2961,12 @@ async function deliverComposeSeat(
   }
   const lock = acquireSeatLock(dir, session, seatName);
   if (!('release' in lock)) {
-    note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `another command holds it (pid ${String(lock.held)})` }));
-    return refuse(io, dir, who, `${seatName}: another command holds it (pid ${String(lock.held)}); nothing was sent`, host, report);
+    // A compose seat is typed on its CLI's own screens, and nothing on the watch's side walks
+    // those screens: there is no queued leg to leave the record for, so the send is refused and
+    // says so — and says that the way forward is another send once the seat is free.
+    const why = `another command holds it (pid ${String(lock.held)}); nothing was sent and a compose send is not queued; run it again when the seat is free`;
+    note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: why }));
+    return refuse(io, dir, who, `${seatName}: ${why}`, host, report);
   }
   const entry = { ts: host.now().toISOString(), from, to: seatName, ...(sentAs === null ? {} : sentAs), body, id: msgId, thread: payload.thread };
   try {

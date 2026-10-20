@@ -193,8 +193,10 @@ team send --list [--json]
 - `--json` prints one document: `{format, dry_run, status, action_summary, project, session, seat,
   channel, ids, delivery?, reply?, plan?}`; `--list` prints its own: `{format, project, session, seats,
   summary}`. A run that exits 1 or 2 writes the structured error. `delivery` is the resolved walk's
-  legs in order, each `attempted`, `skipped`, `refused` or `not-reached`, with the reason a leg was
-  kept out; a dry run lists `candidate` or `skipped` with `eligible` instead.
+  legs in order, each `attempted`, `queued` (another command holds the seat's lock, so the leg left
+  the record and its marker for the delivery that follows), `skipped`, `refused` or `not-reached`,
+  with the reason a leg was kept out; a dry run lists `candidate` or `skipped` with `eligible`
+  instead.
 - `--dry-run` resolves the seat and shows what would be sent, and sends nothing: no record, no
   socket dial, no type, no log line.
 - `--list` shows the seats a message could reach; it sends nothing and needs no caller check.

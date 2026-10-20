@@ -202,7 +202,7 @@ const DELIVERY_LEGS_SCHEMA_FRAGMENT: JsonSchema = {
     required: ['leg', 'state'],
     properties: {
       leg: { type: 'string', enum: [...DELIVERY_LEGS] },
-      state: { type: 'string', enum: ['attempted', 'skipped', 'refused', 'not-reached', 'candidate'] },
+      state: { type: 'string', enum: ['attempted', 'queued', 'skipped', 'refused', 'not-reached', 'candidate'] },
       eligible: { type: 'boolean' },
       reason: { type: 'string', minLength: 1 },
     },
@@ -1934,7 +1934,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         schema: schemaTagFragment('team.send', 1),
         format: { type: 'integer', const: 1 },
         dry_run: { type: 'boolean' },
-        status: { type: 'string', enum: ['delivered', 'delivered (read)', 'sent (unconfirmed)', 'answered', 'recorded', 'native', 'dry-run'] },
+        status: { type: 'string', enum: ['delivered', 'delivered (read)', 'sent (unconfirmed)', 'queued (receiver busy)', 'answered', 'recorded', 'native', 'dry-run'] },
         action_summary: { type: 'string', minLength: 1 },
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },

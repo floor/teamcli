@@ -402,7 +402,7 @@ describe('team send: refused', () => {
     expect(host.frames).toEqual([]);
   });
 
-  test('a lock another command holds refuses the send', async () => {
+  test('a lock another command holds queues the send instead of refusing it', async () => {
     const { root, dir, sockets } = world();
     writeFileSync(join(sockets, '222.sock'), '');
     mkdirSync(join(dir, 'seat-locks', 'acme'), { recursive: true });
@@ -412,8 +412,19 @@ describe('team send: refused', () => {
 
     const code = await runSend(['lead', 'hello'], io, host);
 
-    expect(code).toBe(1);
-    expect(io.err).toContain(`another command holds it (pid ${String(process.pid)})`);
+    // A held seat is a queue: the typed leg's record and marker are written without that lock,
+    // nothing is dialed or typed, and the run answers with the id the delivery keeps.
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toMatch(/lead: queued \(receiver busy\) \(typed, \d+ ms; id [0-9a-f-]+\)\n$/);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    const names = readdirSync(drops);
+    // The record's own name is the bare id; the marker and the walk's own sidecars carry a
+    // suffix, and the sidecar is not a second drop.
+    const id = names.find((name) => /^[0-9a-f-]{36}$/.test(name));
+    expect(id).toBeDefined();
+    expect(names).toContain(`${id}.pending`);
+    expect(recordBody(join(drops, id as string))).toBe('from the owner — admitted by: the owner\n\nhello');
     expect(host.frames).toEqual([]);
   });
 });
@@ -1059,7 +1070,7 @@ describe('team send: native drop', () => {
     expect(again.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
   });
 
-  test('two sends to one seat do not interleave triggers', async () => {
+  test('two sends to one seat do not interleave triggers: the second is queued, not typed', async () => {
     const { root, sockets } = world();
     let release: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -1085,8 +1096,12 @@ describe('team send: native drop', () => {
     const first = runSend(['native', 'one'], owner(root), host);
     const started = Date.now();
     while (typed.length === 0 && Date.now() - started < 1000) await new Promise((resolve) => setTimeout(resolve, 5));
-    const second = await runSend(['native', 'two'], owner(root), host);
-    expect(second).toBe(1);
+    const secondIo = owner(root);
+    const second = await runSend(['native', 'two'], secondIo, host);
+    // The first send owns the seat's lock, so the second types nothing: it stores its record and
+    // marker for the watch and answers with its own id.
+    expect(second).toBe(0);
+    expect(secondIo.out).toMatch(/native: queued \(receiver busy\) \(typed, \d+ ms; id [0-9a-f-]+\)\n$/);
     release();
     expect(await first).toBe(0);
     expect(typed.length).toBe(1);

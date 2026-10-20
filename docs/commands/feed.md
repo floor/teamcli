@@ -8,7 +8,7 @@ timeline with the verified `presence.changed` records in the same state folder's
 log. It reads: it writes nothing, and following the logs never grows either of them.
 
 Each completed `team send` run (`delivered`, `delivered (read)`, `sent (unconfirmed)`,
-`answered`, `held`, `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
+`answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
 line to `messages.jsonl`:
 
     {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
