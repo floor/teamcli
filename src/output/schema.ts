@@ -1872,6 +1872,29 @@ export const REPLY_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team ack` (`schema/ack.schema.json`): the one written
+ *  outcome, a signed read receipt marked for the message's addressee. `written` is false when
+ *  another reader's valid receipt already served the id, which is still a read. */
+export const ACK_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.ack',
+  fileName: 'ack.schema.json',
+  title: 'team ack --json output',
+  required: ['format', 'status', 'action_summary', 'project', 'session', 'record', 'to', 'thread', 'written', 'at'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    status: { type: 'string', enum: ['read'] },
+    action_summary: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    record: { type: 'string', minLength: 1 },
+    // The record's addressee, whose folder holds the receipt.
+    to: { type: 'string', minLength: 1 },
+    thread: { type: 'string', minLength: 1 },
+    written: { type: 'boolean' },
+    at: { type: 'string', minLength: 1 },
+  },
+};
+
 /** Published `--json` output schema for `team route` (`schema/route.schema.json`): the action
  *  surface, then the answered address. `session` is the caller's team session; the recipient's
  *  session travels as `recipient_session`. */
@@ -2684,6 +2707,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
   REPLY_OUTPUT_SCHEMA,
+  ACK_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
   MCP_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,

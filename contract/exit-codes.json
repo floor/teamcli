@@ -3,6 +3,34 @@
   "rows": [
     {
       "code": 0,
+      "command": "ack",
+      "id": "ack.read",
+      "meaning": "the message was marked read, or another reader had already marked it read or answered it",
+      "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "ack",
+      "id": "ack.refused",
+      "meaning": "the message can't be marked read, or the call is not the record's addressee",
+      "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 2,
+      "command": "ack",
+      "id": "ack.configuration",
+      "meaning": "the team file can't be read",
+      "trigger": "team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 2,
+      "command": "ack",
+      "id": "ack.usage",
+      "meaning": "the invocation can't be read",
+      "trigger": "team ack"
+    },
+    {
+      "code": 0,
       "command": "add",
       "id": "add.dry-run",
       "meaning": "a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch)",

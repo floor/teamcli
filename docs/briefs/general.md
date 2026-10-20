@@ -20,6 +20,10 @@ team send lead@<your-team> "done: <what>, <where>"     # or: "blocked: <why>, <w
 asks, and nothing more. Answer in its thread with `team reply <id> "<answer>"`. If anything is
 unclear, ask your lead before you start.
 
+**Mark a message read when you have seen it.** `team reply` marks it read as it answers. For a
+message that needs no answer, `team ack <id>` marks it read without printing the body. Either
+receipt stops the unread reminder for that message; acknowledge only what you have actually read.
+
 **While you work:**
 - One task at a time.
 - Stay inside what your rights allow: your folder, your branch, your files.

@@ -358,14 +358,17 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(Object.keys(entry).sort()).toEqual(['body', 'from', 'from_team', 'id', 'ms', 'note', 'outcome', 'thread', 'to', 'ts', 'via']);
   });
 
-  test('a codex seat walks the default order: the inbox is skipped, the typed trigger takes it', async () => {
+  test('a codex seat walks the implied native-first order: no bound thread, the inbox is skipped, the typed trigger takes it', async () => {
     const w = world();
     const host = walker(w);
     const io = owner(w.root);
 
     expect(await runSend(['native', 'hello'], io, host)).toBe(0);
 
-    expect(lastEntry(w.root, w.home).failed).toEqual([MCP_SKIP]);
+    // The implied default names the seat's runtime queue first while its `codex-daemon` policy
+    // is on; this fixture records no thread for the seat, so the route stands down and the rest
+    // of the default order follows it.
+    expect(lastEntry(w.root, w.home).failed).toEqual(['native: no trusted runtime session is recorded for this seat (no agent record for this seat)', MCP_SKIP]);
     expect(lastEntry(w.root, w.home).via).toBe('typed');
     expect(host.typed.map((one) => one.pane)).toEqual(['pane-native']);
     expect(existsSync(dropped(w.root, 'native'))).toBe(true);
@@ -1168,7 +1171,7 @@ describe('a waited send walks the delivery order and waits on the thread', () =>
     const code = await runSend(['native', 'hello', '--wait', '--dry-run'], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: dry-run: codex via its native runtime queue, falling back to the seat\'s own MCP inbox, then a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
     expect(io.err).toBe('');
     expect(host.typed).toEqual([]);
     expect(existsSync(dropDir(w.root, 'native'))).toBe(false);

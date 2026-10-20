@@ -27,6 +27,34 @@ Usage:
 | --- | --- | --- |
 | `command` | no | no |
 
+## `ack`
+
+Hidden: no
+
+Usage:
+
+    team ack <id> [--json]
+
+### Who may run it
+
+`owner-or-own-team` — marking a message read is the record's addressee on its own pane, or the owner: the signed receipt is the same gate team messages writes, and it never reaches another seat's folder
+
+A run with no terminal is refused: only the owner or a seat of this team runs this, from a terminal outside herdr or its own pane
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
 ## `add`
 
 Hidden: no
