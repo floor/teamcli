@@ -807,8 +807,11 @@ export function withLock<T>(dir: string, work: () => T, options: { waitMs?: numb
       }
       // A dead holder, or a lock file too young to hold its pid yet. A file just created holds
       // no pid until its writer writes one — it reads as 0, not as a number that names a
-      // process — so anything that is not a positive integer is young, not stale.
-      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {        if (waitMs === 0) throw new LockBusyError(path, null);
+      // process — so anything that is not a positive integer is young, not stale. Past the
+      // one-second window a pid-less lock is stale by this age heuristic alone; that is not
+      // proof its writer is dead, and no takeover pretends otherwise.
+      if (!(Number.isInteger(holder) && holder > 0) && Date.now() - statSync(path).mtimeMs < 1000) {
+        if (waitMs === 0) throw new LockBusyError(path, null);
         pause(20);
         continue;
       }
