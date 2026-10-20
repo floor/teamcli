@@ -88,6 +88,9 @@ export function beatWatch(
   updateState(dir, (state) => {
     const record = (state.sessions[session] ??= emptySession());
     const prior = record.watch;
+    // A record another holder fenced with a well-formed epoch is not this pane's to overwrite:
+    // an old pane beat must not erase a successor's authority. This pid's own epoch is kept below.
+    if (prior && isWatchEpoch(prior.epoch) && prior.pid !== pid) return;
     // `'keep'` preserves the pane this same pid recorded — or, on the first pass, the pane the
     // hand-over recorded with no pid yet: herdr not naming the watch's own pane must not erase
     // where the watch is known to run.

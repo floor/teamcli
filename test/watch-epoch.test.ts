@@ -109,6 +109,13 @@ describe('the state record and the heartbeat', () => {
 
     seed({ pid: process.pid + 1, heartbeat: iso(T0), epoch });
     beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep');
-    expect(current()).toEqual({ pid: process.pid, heartbeat: iso(T0 + 5_000) });
+    expect(current()).toEqual({ pid: process.pid + 1, heartbeat: iso(T0), epoch });
+  });
+
+  test('a pane beat leaves a pid-less mid-handoff epoch untouched', () => {
+    const epoch = mintWatchEpoch();
+    seed({ heartbeat: iso(T0), epoch });
+    beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep');
+    expect(current()).toEqual({ heartbeat: iso(T0), epoch });
   });
 });
