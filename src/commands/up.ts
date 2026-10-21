@@ -330,8 +330,9 @@ function driftWay(owner: boolean, name: string): string {
 
 // A ready seat whose process is still the one team launched. `skip` is today's ready line.
 // `hold` is a drift this run will not close (a running turn). `cycle` closes without input
-// and launches the file's line. A lead is never cycled. A screen that names no model is
-// never cycled: unread is not a difference.
+// and launches the file's line. `refuse` is a drift this run must not close even at a free
+// prompt: a lead seat, or the seat this run is inside. A screen that names no model is never
+// cycled: unread is not a difference.
 function modelDrift(
   team: TeamFile,
   seat: Seat,
@@ -342,8 +343,9 @@ function modelDrift(
   owner: boolean,
   expected: { model: string; version: string } = seat,
   restored = false,
-): { kind: 'skip' } | { kind: 'hold'; detail: string } | { kind: 'cycle'; way: string } {
-  if (isLeadSeat(team, seat.name)) return { kind: 'skip' };
+  /** The seat this run is running inside, when it is one: its pane is never closed here. */
+  callerSeat: string | null = null,
+): { kind: 'skip' } | { kind: 'hold'; detail: string } | { kind: 'cycle'; way: string } | { kind: 'refuse'; detail: string } {
   if (!recorded.launched || !recorded.pane || !recorded.workspace || !seat.version) return { kind: 'skip' };
   if (!restored && seatProcessVerdict(recorded.launched, processes[seat.name] ?? null) !== 'same') return { kind: 'skip' };
   const listed = agents.find((agent) => agent.pane === recorded.pane);
@@ -359,6 +361,16 @@ function modelDrift(
   const way = driftWay(owner, seat.name);
   // Herdr's word and the screen: either one saying the seat is mid-turn keeps the pane.
   if (listed.status === 'working' || kind === 'working') return { kind: 'hold', detail: `its model drifted; left as it is (${way})` };
+  // A difference proven on a seat this run must never close. Its own seat first: closing the
+  // pane this command is running inside would kill the run. A lead next: its repair is the
+  // whole team's, in the file's own words. Both are refused, not skipped, so the sweep reports
+  // them and exits 1 without touching the pane.
+  if (callerSeat !== null && seat.name === callerSeat) {
+    return { kind: 'refuse', detail: 'its model drifted; this run is inside its pane and cannot close itself (run team up from outside this pane)' };
+  }
+  if (isLeadSeat(team, seat.name)) {
+    return { kind: 'refuse', detail: `its model drifted; lead seat is not cycled in place (${relaunchRepair(team, seat.name, 'plain')})` };
+  }
   // Idle or done, including a box that holds unsent text. A dialog is not closed from here,
   // and neither is a screen this version does not classify.
   if ((listed.status === 'idle' || listed.status === 'done') && (kind === 'idle' || kind === 'unsent')) {
@@ -434,6 +446,8 @@ function seatPlan(
   owner = true,
   /** Dev-mode mount: a message seat's rules come from the live file, with no approval in force. */
   liveRules = false,
+  /** The seat this run is running inside, when it is one: its drift is refused, never closed. */
+  callerSeat: string | null = null,
 ): UpSeat {
   const binding = recorded
     ? recordedSeatSession({ home, root, herdrSession: session, seat, state: recorded })
@@ -546,7 +560,7 @@ function seatPlan(
     const next = launchedIdentity(processes[seat.name] ?? null);
     if (next) {
       const drift = registry
-        ? modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry, true)
+        ? modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry, true, callerSeat)
         : { kind: 'skip' as const };
       if (drift.kind === 'cycle') {
         // A proven conversation this seat's own launch line cannot carry stops the repair before
@@ -602,7 +616,10 @@ function seatPlan(
   const onPane = recorded.pane ? known.some((agent) => agent.pane === recorded.pane) : false;
   if (recorded.stage === 'ready') {
     if (named || onPane) {
-      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry ?? seat);
+      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry ?? seat, false, callerSeat);
+      // A drift this run must not close at all — its own seat or a lead — keeps the ready
+      // record, closes nothing, and is reported with the way the file itself gives.
+      if (drift.kind === 'refuse') return { ...planned, stage: 'ready', driftRefused: drift.detail };
       // The pane's own agent names the conversation the records bind: a relaunch may resume it,
       // even where the state copy names no id. A pane naming another session proves nothing.
       const provenSession = continuitySession !== null
@@ -1268,6 +1285,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       // reading: anyone but a seat.
       delegated === null && caller.kind !== 'seat',
       true,
+      // The seat this run is inside: a proven drift on it is refused where the plan is built,
+      // before any close can reach the pane that holds this process.
+      caller.kind === 'seat' ? caller.name : null,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.

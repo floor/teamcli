@@ -6599,7 +6599,7 @@ describe('team up, a ready seat whose model drifted', () => {
     expect(ran.out).not.toContain('workspace close w92');
   });
 
-  test('a lead whose model drifted keeps today\'s line', async () => {
+  test('a lead whose model drifted is refused, never cycled in place', async () => {
     const sonnet = `${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  main · Sonnet 4.5\n`;
     readyState();
     await approve();
@@ -6618,7 +6618,12 @@ describe('team up, a ready seat whose model drifted', () => {
       sources({ sessionState: () => 'running', agents: () => [lead(), codex()], doctor: doctor() }, made),
     );
     expect(code).toBe(0);
-    expect(io.out).toContain('skip claude-coordinator-acme: already ready; left as it is');
+    // A proven difference on a lead is refused with the whole-team repair, not skipped: the
+    // plan stays ready, nothing is closed, and a real run exits 1 on this same line.
+    expect(io.out).toContain(
+      'skip claude-coordinator-acme: its model drifted; lead seat is not cycled in place (team down, then team up (to restart the whole team))',
+    );
+    expect(io.out).not.toContain('claude-coordinator-acme: already ready');
     expect(io.out).not.toContain('workspace close w91');
     expect(io.out).not.toContain('workspace close w92');
   });
@@ -6662,6 +6667,36 @@ describe('team up, a ready seat whose model drifted', () => {
     );
     expect(code).toBe(0);
     expect(io.out).toContain('skip codex-acme: its model drifted; left as it is (run this again once herdr reports the seat idle or done)');
+    expect(io.out).not.toContain('workspace close w92');
+  });
+
+  test('a seat whose own model drifted is refused, never closed under itself', async () => {
+    readyState();
+    writeFileSync(
+      join(root, '.agents/team.yaml'),
+      `${makeExample(base, root, driftYaml())}\ndelegates:\n  - pane: main/w1:p1\n    commands: [up]\n`,
+    );
+    await approve();
+    const made = world();
+    made.session = 'running';
+    made.launch.processInfo = (_session, pane) =>
+      pane === 'w92:p1' ? { shell: 410, foreground: [410, 411] } : { shell: 420, foreground: [420, 421] };
+    made.launch.paneText = (_session, pane) => (pane === 'w92:p1' ? terra() : IDLE);
+    const io = testIo(root, { kind: 'seat', name: 'codex-acme', pane: 'w92:p1', session: 'acme-web' });
+    const code = await runUp(
+      ['--dry-run', ...FILE],
+      io,
+      sources({
+        sessionState: () => 'running',
+        agents: () => [lead(), codex()],
+        doctor: doctor(),
+        delegateGate: () => ({ kind: 'passed', pane: 'main/w1:p1' }),
+      }, made),
+    );
+    expect(code).toBe(0);
+    expect(io.out).toContain(
+      'skip codex-acme: its model drifted; this run is inside its pane and cannot close itself (run team up from outside this pane)',
+    );
     expect(io.out).not.toContain('workspace close w92');
   });
 

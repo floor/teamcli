@@ -259,6 +259,12 @@ export interface UpSeat {
    *  working, or its screen shows a running turn. The record stays ready. */
   driftHold?: string;
   /**
+   * A drifted seat this run must not close even at a free prompt: a lead seat, or the seat this
+   * run is inside. The record stays ready, nothing is closed, and the run exits 1 with this
+   * reason.
+   */
+  driftRefused?: string;
+  /**
    * The pane's pids differ and its agent session is the one stored at launch. Nothing is
    * closed. `launched` is the process in the pane now; the record stores it.
    */
@@ -544,6 +550,23 @@ export function upPlan(input: UpInput): Step[] {
             seat: seat.name,
             record: { kind: 'ready' },
             detail: `  ${seat.resumeHold}\n`,
+            held: true,
+          },
+        });
+        continue;
+      }
+      // A drift this run must not close at all — a lead seat, or the seat it runs inside — keeps
+      // the ready record and closes nothing; the run exits 1 with the reason the file itself
+      // gives (the lead's whole-team repair, or the outside-the-pane run).
+      if (seat.driftRefused) {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.driftRefused}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'ready' },
+            detail: `  ${seat.driftRefused}\n`,
             held: true,
           },
         });
