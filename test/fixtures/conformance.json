@@ -1940,6 +1940,34 @@
       "provenance": "constructed"
     },
     {
+      "file": "muse/1.4.11/idle.txt",
+      "cli": "muse",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/working-synthetic.txt",
+      "cli": "muse",
+      "classify": "working",
+      "composer": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/unsent-synthetic.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/ambiguous-synthetic.txt",
+      "cli": "muse",
+      "classify": "unknown",
+      "composer": "unknown",
+      "provenance": "constructed"
+    },
+    {
       "file": "claude-code/2.1.302/exit.txt",
       "cli": "claude-code",
       "classify": "unknown",

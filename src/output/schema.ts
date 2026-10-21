@@ -2684,6 +2684,52 @@ export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team workflow` (`schema/workflow.schema.json`). */
+export const WORKFLOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.workflow',
+  fileName: 'workflow.schema.json',
+  title: 'team workflow --json output',
+  required: ['format', 'ok', 'path', 'definition', 'findings', 'summary'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    ok: { type: 'boolean' },
+    path: { type: 'string', minLength: 1 },
+    definition: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['workflow', 'schemaVersion', 'digest'],
+      properties: {
+        workflow: { type: 'string', minLength: 1 },
+        schemaVersion: { type: 'integer', const: 1 },
+        digest: { type: 'string', minLength: 1 },
+      },
+    },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['code', 'level', 'line', 'message'],
+        properties: {
+          code: { type: 'string', minLength: 1 },
+          level: { type: 'string', enum: ['refusal', 'note'] },
+          line: { type: 'integer', minimum: 0 },
+          message: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    summary: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['refusals', 'notes'],
+      properties: {
+        refusals: { type: 'integer', minimum: 0 },
+        notes: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Registry of published command output schemas under `schema/`. */
 export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   ERROR_OUTPUT_SCHEMA,
@@ -2743,6 +2789,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   SETTINGS_CHANGE_OUTPUT_SCHEMA,
   CONFIG_KEYS_OUTPUT_SCHEMA,
   SEAT_OUTPUT_SCHEMA,
+  WORKFLOW_OUTPUT_SCHEMA,
 ];
 
 

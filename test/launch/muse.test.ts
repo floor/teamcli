@@ -19,11 +19,12 @@ import {
   resolveModelOverride,
   withLaunchOverrides,
 } from '../../src/profiles/profile.ts';
-import { boxHoldsText } from '../../src/launch/deliver.ts';
+import { boxHoldsText, deliverRules, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
 import { classifyComposer, readScreen } from '../../src/watch/screen.ts';
 import { runningModel } from '../../src/status/statusline.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/muse/1.4.9/${name}.txt`, import.meta.url), 'utf8');
+const fixture1411 = (name: string) => readFileSync(new URL(`../fixtures/muse/1.4.11/${name}.txt`, import.meta.url), 'utf8');
 
 const muse = profileFor('muse');
 if (!muse) throw new Error('muse has no profile');
@@ -98,6 +99,23 @@ describe('muse launch and captured screens', () => {
     const text = fixture(file);
     expect(readScreen('muse', text).kind).toBe(kind);
     expect(classifyComposer('muse', text.split('\n')).kind).toBe(composer);
+  });
+
+  test.each([
+    ['idle', 'idle', 'idle'],
+    ['working-synthetic', 'working', 'idle'],
+    ['unsent-synthetic', 'unsent', 'unsent'],
+    ['ambiguous-synthetic', 'unknown', 'unknown'],
+  ] as const)('1.4.11 %s reads %s, its composer %s', (file, kind, composer) => {
+    const text = fixture1411(file);
+    expect(readScreen('muse', text).kind).toBe(kind);
+    expect(classifyComposer('muse', text.split('\n')).kind).toBe(composer);
+  });
+
+  test('the 1.4.11 ready footer names Wonder Full, and the tested range carries it', () => {
+    expect(muse.tested).toEqual({ from: '1.4.9', to: '1.4.11' });
+    expect(runningModel('muse', fixture1411('idle'))).toEqual({ model: 'Muse Wonder Full', version: '1.0' });
+    expect(boxHoldsText('muse', 'anything', fixture1411('idle'))).toBe(false);
   });
 
   test('status_model reads the model off the footer row, and nothing off a screen without one', () => {
@@ -226,5 +244,75 @@ describe('the plan launches muse and delivers its rules as the first message', (
       cli: 'muse',
       line: 'Read /home/owner/.config/team/demo/rules/muse.md',
     });
+  });
+});
+
+// The rules delivery on the 1.4.11 ready frame. herdr 0.7.1 lists a muse pane with no agent type
+// and `agent_status: "unknown"` while Muse sits at its ready box, so the seat's own screen is the
+// reading: this capture is the positive, and the derived rows are the negatives.
+const LINE = 'Read rules/implementer.md (sha256 5e1d0a).';
+
+/** The ready frame with `text` typed into its input row, as Muse draws a draft. */
+const typed = (text: string) => fixture1411('idle').replace('\n❯\n', `\n❯ ${text}\n`);
+
+function scene() {
+  let raw = fixture1411('idle');
+  let status: string | null = 'unknown';
+  let clock = 0;
+  const calls: string[] = [];
+  const refusals: Refusal[] = [];
+  const io: Delivery = {
+    screen: () => raw,
+    status: () => status,
+    report: (why) => { refusals.push(why); },
+    file: () => true, // these scenes prove the reading, not the file
+    type(text) { calls.push(text); raw = typed(text); return true; },
+    enter() {
+      calls.push('Enter');
+      raw = fixture1411('working-synthetic');
+      return true;
+    },
+    foreground: () => ['muse-bin-1.4.11'],
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
+  };
+  return {
+    io, calls, refusals,
+    show: (name: string) => { raw = fixture1411(name); },
+    setStatus: (value: string | null) => { status = value; },
+  };
+}
+
+describe('the rules delivery on the 1.4.11 ready box, with herdr unable to report the seat', () => {
+  test.each(['unknown', null] as const)('herdr reading %s: the ready box carries the rules and its working screen confirms them', async (word) => {
+    const d = scene();
+    d.setStatus(word);
+    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(true);
+    expect(d.calls).toEqual([LINE, 'Enter']);
+    expect(d.refusals).toEqual([]);
+  });
+
+  test('a working screen is refused and nothing is typed into it', async () => {
+    const d = scene();
+    d.show('working-synthetic');
+    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(false);
+    expect(d.calls).toEqual([]);
+    expect(d.refusals).toMatchObject([{ stop: 'working', typed: false, sent: false }]);
+  });
+
+  test('an idle-looking screen with no box is not the ready box: refused, nothing typed', async () => {
+    const d = scene();
+    d.show('ambiguous-synthetic');
+    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(false);
+    expect(d.calls).toEqual([]);
+    expect(d.refusals).toMatchObject([{ stop: 'screen', typed: false, sent: false, kind: 'unknown' }]);
+  });
+
+  test("a status herdr can give is still its word: `blocked` waits and refuses", async () => {
+    const d = scene();
+    d.setStatus('blocked');
+    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(false);
+    expect(d.calls).toEqual([]);
+    expect(d.refusals).toMatchObject([{ stop: 'screen', typed: false, sent: false, kind: 'idle' }]);
   });
 });

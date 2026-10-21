@@ -425,18 +425,18 @@
     },
     "muse": {
       "idle": {
-        "real": 4,
+        "real": 5,
         "constructed": 2,
         "undocumented": 0
       },
       "working": {
         "real": 1,
-        "constructed": 0,
+        "constructed": 1,
         "undocumented": 0
       },
       "unsent": {
         "real": 1,
-        "constructed": 0,
+        "constructed": 1,
         "undocumented": 0
       },
       "permission": {
@@ -476,7 +476,7 @@
       },
       "unknown": {
         "real": 0,
-        "constructed": 0,
+        "constructed": 1,
         "undocumented": 0
       }
     }
@@ -2159,6 +2159,30 @@
       "cli": "jules",
       "kind": "working",
       "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/ambiguous-synthetic.txt",
+      "cli": "muse",
+      "kind": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/idle.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/unsent-synthetic.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/working-synthetic.txt",
+      "cli": "muse",
+      "kind": "working",
+      "provenance": "constructed"
     },
     {
       "file": "muse/1.4.9/idle-footer.txt",

@@ -455,6 +455,7 @@ Usage:
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
     team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon uninstall [--json]
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -468,6 +469,33 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `fault-watch`
+
+Hidden: no
+
+Usage:
+
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner's dev-mode admission for a placed lead; it starts, stops and kills no process
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--root` | yes | no | no |
+| `--route` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
@@ -2619,6 +2647,55 @@ A run with no terminal is refused: only the owner or a placed seat runs this, fr
 ### Positionals
 
 None.
+
+## `workflow`
+
+Hidden: no
+
+Usage:
+
+    team workflow check <path> [--json]
+
+### Who may run it
+
+`any-caller` — the workflow subcommand group: checking a workflow definition needs no session and no seat
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `check`
+
+Hidden: no
+
+Usage:
+
+    team workflow check <path> [--json]
+
+#### Who may run it
+
+`any-caller` — checks a workflow definition and its transition graph: read-only, so any seat, CI or the owner may run it
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | no | no |
 
 ## `worktree`
 

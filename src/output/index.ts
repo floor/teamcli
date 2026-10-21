@@ -104,6 +104,7 @@ export {
   SUMMARY_SCHEMA_FRAGMENT,
   UNLOCK_OUTPUT_SCHEMA,
   USAGE_OUTPUT_SCHEMA,
+  WORKFLOW_OUTPUT_SCHEMA,
   type ActionSchemaSpec,
   type CommandSchemaSpec,
 } from './schema.ts';

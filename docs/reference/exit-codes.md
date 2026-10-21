@@ -161,17 +161,28 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
 | `daemon.already-running` | `daemon` | 0 | a machine daemon is already answering; nothing second was started | `team daemon run` |
 | `daemon.dry-run` | `daemon` | 0 | the install plan was printed and nothing was written | `team daemon install --dry-run` |
+| `daemon.fault-dry-run` | `daemon` | 0 | the fault plan was printed and no request was written | `team daemon fault-watch --root <folder> --route <id> --dry-run` |
+| `daemon.faulted` | `daemon` | 0 | the one named route's hosted run ended as a counted fault and restarts on the next heartbeat | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.installed` | `daemon` | 0 | the user service unit was written and registered, and the system service manager starts the daemon | `team daemon install` |
 | `daemon.status` | `daemon` | 0 | the one-line health reading was printed: running, not running or unknown | `team daemon status` |
 | `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
 | `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
 | `daemon.entry-missing` | `daemon` | 1 | the CLI entry cannot be found, so the service unit cannot be written | `team daemon install` |
+| `daemon.fault-daemon` | `daemon` | 1 | the machine daemon is not running, so there is no hosted watch to fault | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.fault-not-reached` | `daemon` | 1 | the daemon did not fault the watch: it answered not reached, or the wait ended first; nothing was killed | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.fault-pending` | `daemon` | 1 | a fault request is already waiting for the daemon, so no second request was written | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.fault-refused` | `daemon` | 1 | the daemon refused the fault request: another home, daemon run or route, a non-private request, or no hosted run to fault | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.fault-route` | `daemon` | 1 | the route id does not name this checkout's own canonical route | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.fault-watch` | `daemon` | 1 | the daemon record carries no hosted watch for this checkout's route | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.fault-watch-state` | `daemon` | 1 | the route's hosted watch was not started as required, is standing down, or has stopped | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.install-failed` | `daemon` | 1 | the system service manager refused to write or start the unit | `team daemon install` |
 | `daemon.not-owner` | `daemon` | 1 | the caller may not install or remove the machine daemon | `team daemon install` |
 | `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
 | `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system service manager starts it | `team daemon run` |
 | `daemon.service-unavailable` | `daemon` | 1 | no system service manager adapter is available on this platform yet | `team daemon install` |
 | `daemon.uninstall-failed` | `daemon` | 1 | the system service manager refused to stop or remove the unit | `team daemon uninstall` |
+| `daemon.fault-root` | `daemon` | 2 | a checkout named on fault-watch cannot be read, so no request was written | `team daemon fault-watch --root <folder> --route <id>` |
+| `daemon.fault-usage` | `daemon` | 2 | the invocation cannot be read, or the route id is not one a hosted watch records | `team daemon fault-watch --route nope` |
 | `daemon.no-root` | `daemon` | 2 | no checkout was named and the current folder has no readable team file | `team daemon install` |
 | `daemon.run-root` | `daemon` | 2 | a checkout named on run cannot be read, so nothing was started | `team daemon run` |
 | `daemon.usage` | `daemon` | 2 | the invocation cannot be read | `team daemon watch` |
@@ -698,6 +709,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |
 | `watch.not-a-repo` | `watch` | 2 | not inside a git repository | `team watch` |
+| `workflow.check.passed` | `workflow` | 0 | the workflow passed validation | `team workflow check workflow.yaml` |
+| `workflow.check.refused` | `workflow` | 1 | at least one finding is a refusal | `team workflow check workflow.yaml` |
+| `workflow.check.file` | `workflow` | 2 | the workflow file can't be read | `team workflow check missing.yaml` |
+| `workflow.check.file-invalid` | `workflow` | 2 | the workflow file can't be parsed as a YAML mapping | `team workflow check workflow.yaml` |
+| `workflow.check.invocation` | `workflow` | 2 | the invocation can't be read | `team workflow check` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
 | `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |

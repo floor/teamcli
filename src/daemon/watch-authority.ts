@@ -28,11 +28,15 @@
 import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WatchSources } from '../commands/watch.ts';
+import type { PaneProcesses } from '../herdr.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
-import { readState } from '../state.ts';
+import { pidAlive, readState } from '../state.ts';
 import { createWatchHost, type WatchHostReport } from '../watch/authority-lifecycle.ts';
 import type { WorkPush } from '../watch/dispatch.ts';
+import type { WatchAuthorityHolder } from '../watch/epoch-store.ts';
+import { clearWatchHandover, readWatchHandover, writeWatchHandover } from '../watch/handover.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
+import { watchIdentity } from '../watch/pane.ts';
 import type { HostedWatchBuild } from './host.ts';
 import type { HostedRoute } from './routes.ts';
 import type { HostedEffects } from './watch.ts';
@@ -80,6 +84,11 @@ export type HostedWatchAuthorityInput = {
   now?: () => Date;
   alive?: (pid: number) => boolean;
   base?: WatchSources;
+  /** Reads the processes in one pane of this route's session, for proving that a recorded pane
+   *  watch is the process in the pane its own record names (`watchIdentity`). Absent, or a pane
+   *  this reader cannot read, is `unproven`: the holder is left to the ordinary stand-by and is
+   *  never asked to hand over. No process is signalled by this transfer in any case. */
+  processInfo?: (pane: string) => PaneProcesses | null;
   /**
    * The owning daemon's fresh per-seat liveness for this route's presence channels, keyed by
    * declared seat name. Absent (presence hosting off, or a test without one) means not known, so
@@ -124,6 +133,41 @@ function bindingRefusal(stateDir: string, session: string, teamFile: string): st
   return undefined;
 }
 
+/** What the standing holder is, when the session's record is a pane watch: a watch proven to be
+ *  the process in its own recorded pane, or a pid that has just gone (the next beat acquires). */
+type PaneHolder =
+  | { kind: 'pane'; pid: number; heartbeat: string }
+  | { kind: 'gone' };
+
+/** The session's pane watch record when it is exactly the standing holder and its identity is
+ *  proven: the state reader marks a pane watch record by the absence of an epoch
+ *  (`src/state.ts`), and `watchIdentity` adds that the recorded pid is the process the record's
+ *  own pane lists. An epoch record, a pid-less record, an unreadable pane and another process in
+ *  the pane are all `undefined` and left to the ordinary stand-by: an unproven holder is never
+ *  asked to hand over, and nothing is signalled in any case. A pid proven gone is the store's own
+ *  dead-pid give-way racing this read, so the caller retries on the fixed beat. */
+function paneHolderWatch(
+  stateDir: string,
+  session: string,
+  holder: WatchAuthorityHolder,
+  options: { alive(pid: number): boolean; processInfo(pane: string): PaneProcesses | null },
+): PaneHolder | undefined {
+  if (holder.pid === undefined || !Number.isInteger(holder.pid) || holder.pid <= 0) return undefined;
+  let record: { pid?: number; heartbeat: string; pane?: string; epoch?: string } | undefined;
+  try {
+    record = readState(stateDir).sessions[session]?.watch;
+  } catch {
+    return undefined;
+  }
+  if (!record || record.epoch !== undefined) return undefined;
+  const pid = record.pid;
+  if (pid === undefined || pid !== holder.pid) return undefined;
+  const identity = watchIdentity({ pid, ...(record.pane === undefined ? {} : { pane: record.pane }) }, options);
+  if (identity.kind === 'gone') return { kind: 'gone' };
+  if (identity.kind === 'unproven') return undefined;
+  return { kind: 'pane', pid, heartbeat: record.heartbeat };
+}
+
 function reportText(report: WatchHostReport): string {
   switch (report.phase) {
     case 'standby':
@@ -154,13 +198,18 @@ async function runAuthoritativeHost(
   setPulse: (pulse: ((at: Date) => boolean) | undefined) => void,
   setEffects: (effects: HostedEffects) => void,
 ): Promise<number> {
-  const host = createWatchHost(stateDir, input.route.session, {
-    now: input.now ?? (() => new Date()),
-    ...(input.alive === undefined ? {} : { alive: input.alive }),
-  });
+  const clock = input.now ?? (() => new Date());
+  const alive = input.alive ?? pidAlive;
+  const processInfo = input.processInfo
+    ?? ((pane: string) => input.base?.processes?.(pane, input.route.session) ?? null);
+  const host = createWatchHost(stateDir, input.route.session, { now: clock, alive });
   const loss = new AbortController();
   let lost = false;
   let epoch: string | undefined;
+  // A live pane watch holds the route: the transfer's state. `beat` is the pane record's own
+  // last heartbeat, and a change means that watch completed another pass after being asked.
+  let handover: { requestedAt: string; beat: string; passes: number } | undefined;
+  let wroteHandover = false;
 
   const fail = (why: string): void => {
     if (lost) return;
@@ -268,9 +317,14 @@ async function runAuthoritativeHost(
 
   setPulse(pulse);
   try {
-    // Acquire before the first pass. Only lock contention is retried, on the existing fixed tick;
-    // the route's binding is re-read before every attempt so a record cleared or repointed while
-    // this host waited stands the watch down instead of acquiring on a stale claim.
+    // A request left by a daemon that is not this process was never answered: this run either
+    // writes its own or stands by. Leaving it would keep asking for a transfer nobody wants.
+    const leftover = readWatchHandover(stateDir);
+    if (leftover.kind === 'request' && leftover.request.pid !== process.pid) clearWatchHandover(stateDir);
+    // Acquire before the first pass. Lock contention is retried on the existing fixed tick, and
+    // so is a live pane watch once it has been asked to hand over; the route's binding is re-read
+    // before every attempt so a record cleared or repointed while this host waited stands the
+    // watch down instead of acquiring on a stale claim.
     for (;;) {
       const changed = bindingLoss();
       if (changed !== undefined) {
@@ -280,11 +334,70 @@ async function runAuthoritativeHost(
       const report = host.start();
       if (report.phase === 'authoritative') {
         epoch = report.epoch;
+        if (wroteHandover) {
+          clearWatchHandover(stateDir);
+          wroteHandover = false;
+        }
         break;
       }
       if (report.phase === 'standby' && report.why === 'busy') {
         if (!(await loop.wait(HOSTED_AUTHORITY_TICK_MS))) return 0;
         continue;
+      }
+      if (report.phase === 'standby' && report.why === 'held') {
+        // A live pane watch is the standing holder: ask it to leave through its own loop and
+        // keep the fixed beat until it does. Two of its own completed passes while the request
+        // stands mean it is not going to leave — an older watch that never reads the request, or
+        // a record whose pid now names another process — and the host stands by honestly rather
+        // than waiting forever. Nothing is signalled either way. Every other holder (an
+        // authority epoch, a pid-less record, an unreadable one) stands exactly as before and is
+        // never asked: an unreadable holder is not permission for a transfer.
+        const pane = paneHolderWatch(stateDir, input.route.session, report.holder, { alive, processInfo });
+        if (pane !== undefined && pane.kind === 'gone') {
+          // The pid the store still named has gone between its own check and this read: the next
+          // beat's acquire finds only a dead pid and takes the record.
+          if (!(await loop.wait(HOSTED_AUTHORITY_TICK_MS))) return 0;
+          continue;
+        }
+        if (pane !== undefined && pane.kind === 'pane') {
+          const at = clock();
+          if (handover === undefined) {
+            handover = { requestedAt: at.toISOString(), beat: pane.heartbeat, passes: 0 };
+          } else if (pane.heartbeat !== handover.beat) {
+            handover.beat = pane.heartbeat;
+            handover.passes += 1;
+          }
+          if (handover.passes >= 2) {
+            clearWatchHandover(stateDir);
+            wroteHandover = false;
+            input.log(
+              `root ${input.route.root}: the pane watch did not hand over after ${String(handover.passes)} passes; standing by`,
+            );
+            loop.standby(`a pane watch holds the session "${input.route.session}" and did not hand over`);
+            return 0;
+          }
+          try {
+            writeWatchHandover(stateDir, {
+              root: input.route.root,
+              session: input.route.session,
+              pid: process.pid,
+              now: at,
+              requestedAt: handover.requestedAt,
+            });
+            if (!wroteHandover) {
+              wroteHandover = true;
+              input.log(`root ${input.route.root}: a live pane watch holds the session; asked it to hand over`);
+            }
+          } catch (error) {
+            loop.standby(`the hand-over request could not be written (${textOf(error)})`);
+            return 0;
+          }
+          if (!(await loop.wait(HOSTED_AUTHORITY_TICK_MS))) {
+            clearWatchHandover(stateDir);
+            return 0;
+          }
+          continue;
+        }
       }
       if (report.phase === 'standby') {
         loop.standby(
@@ -361,6 +474,9 @@ async function runAuthoritativeHost(
   } finally {
     setPulse(undefined);
     setEffects('blocked');
+    // A request this run wrote is withdrawn with it: an ended run is no longer asking, and a
+    // request left behind could stand a live pane watch down for a transfer nobody makes.
+    if (wroteHandover) clearWatchHandover(stateDir);
     const stopped = host.stop();
     if (stopped.phase === 'releasing') {
       // Honest cleanup: busy or unreadable is not released, and the record does not age out

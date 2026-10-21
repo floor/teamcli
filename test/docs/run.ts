@@ -59,6 +59,7 @@ import { runLock } from '../../src/commands/lock.ts';
 import { runUnlock } from '../../src/commands/unlock.ts';
 import { runTempo } from '../../src/commands/tempo.ts';
 import { runWatch } from '../../src/commands/watch.ts';
+import { runWorkflow } from '../../src/commands/workflow.ts';
 import { runWorktree } from '../../src/commands/worktree.ts';
 import type { Caller } from '../../src/caller.ts';
 import type { TeamFile } from '../../src/file/types.ts';
@@ -469,6 +470,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runUsage(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'watch':
       return runWatch(rest, io, world.watchSources());
+    case 'workflow':
+      return runWorkflow(rest, io);
     case 'worktree':
       return runWorktree(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     default:

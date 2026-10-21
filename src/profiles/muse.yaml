@@ -1,8 +1,9 @@
-# Muse Code's screen, captured from muse 1.4.9 (herdr 0.7.1). The composer is a box between two
-# rules: an opening rule that carries a label (`── Voice input (⌥ + v to start) ───…`), the input
-# row `❯ text` under it, an unlabelled closing rule of the same width, and one footer row below
-# (`  muse-wonder-1.0 · high · …/muse-ws · Auto-review`). `muse` draws on the alternate screen, so
-# the captures are `pane read --source visible`.
+# Muse Code's screen, captured from muse 1.4.9 and 1.4.11 (herdr 0.7.1). The composer is a box
+# between two rules: an opening rule that carries a label (`── Voice input (⌥ + v to start) ───…`),
+# the input row `❯ text` under it, an unlabelled closing rule of the same width, and one footer
+# row below (`  muse-wonder-1.0 · high · …/muse-ws · Auto-review` in 1.4.9;
+# `  muse-wonder-full-1.0 · high · …/project · YOLO` in 1.4.11). `muse` draws on the alternate
+# screen, so the captures are `pane read --source visible`.
 format: 1
 cli: muse
 binary: muse
@@ -16,7 +17,7 @@ process_names:
 # From a run: `muse --version` printed `Muse Code 1.4.9 (1.4.9-R6297.1)`.
 tested:
   from: '1.4.9'
-  to: '1.4.9'
+  to: '1.4.11'
 # From a run: `muse --help` lists `--yolo` as disabling approval and the macOS sandbox and trusting
 # the workspace. Without it the sandbox treats `.agents/` as protected metadata, and a write to
 # `.agents/team.log` stops at an approval prompt (permission.txt, `touch .agents/test.txt`).
@@ -24,6 +25,12 @@ unattended:
   - --yolo
 # No flag appends to the system prompt, so the rules are the first message.
 rules: first-message
+# herdr 0.7.1 reports a muse pane as no agent, or `unknown`, while the CLI runs: `agent list`
+# carried the 1.4.11 pane with no `agent` type and `agent_status: "unknown"` while Muse sat at
+# its ready box. The profile's own screen reading is the seat's state there: a recognised idle
+# box counts as free, the rules delivery types on that reading, and a recognised working screen
+# is the acknowledgement of a submission herdr cannot report.
+herdr_status: unreliable
 login:
   # Muse Code 1.4.9 has no non-interactive login check: `muse auth` only stores an API key
   # (`muse auth set --api-key-stdin`), and `muse auth status` prints "expected `auth set`".

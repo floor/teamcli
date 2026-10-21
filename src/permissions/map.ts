@@ -181,6 +181,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'registering the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
     },
+    'daemon:fault-watch': {
+      kind: 'owner-only',
+      why: 'the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner\'s dev-mode admission for a placed lead; it starts, stops and kills no process',
+    },
     'daemon:uninstall': {
       kind: 'owner-only',
       why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
@@ -459,6 +463,14 @@ function buildGates(): Record<string, Gate> {
     'worktree:remove': {
       kind: 'team-change',
       why: 'the owner, the orchestrator\'s seat or the operator\'s seat removes a worktree; --session and --file are the owner\'s',
+    },
+    workflow: {
+      kind: 'any-caller',
+      why: 'the workflow subcommand group: checking a workflow definition needs no session and no seat',
+    },
+    'workflow:check': {
+      kind: 'any-caller',
+      why: 'checks a workflow definition and its transition graph: read-only, so any seat, CI or the owner may run it',
     },
   };
   for (const word of READ_SURFACES) {
