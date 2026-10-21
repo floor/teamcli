@@ -49,7 +49,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
-import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
@@ -1662,6 +1662,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       stderrLine(`team up: ${said}\n`);
       logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
     }
+    // The binding each planned seat holds before this install mints its successor. A seat whose
+    // line never runs keeps it; one this install creates goes back out without a record.
+    const beforeInstall = readState(dir).sessions[session]?.seats ?? {};
+    const priorBindings = new Map(launchedSeats.map((name) => [name, beforeInstall[name]?.presence_binding]));
     // The settings files land before the plan types a line, so every launch carries its flag. A
     // seat whose file did not land is said once, in the log, and its launch is the plain line.
     const installed = installCliHooks(dir, session, hookSeats(launchedSeats), { project: team.project, root, home: sources.home });
@@ -1679,6 +1683,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // Every launch uses the limits declared in the live file, with or without a stored approval.
     const ceilings = ceilingsOf(team);
     const running: Running[] = [];
+    // The planned seats whose launch line the pane actually ran (`sessionStarted`).
+    const startedSeats = new Set<string>();
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
       for (const agent of agents) {
@@ -1878,6 +1884,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       sessionStarted(name, started) {
         const seat = team.seats.find((item) => item.name === name);
         if (!seat) return;
+        startedSeats.add(name);
         const began = beginSession({
           home: sources.home,
           root,
@@ -2046,6 +2053,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       states: recorded?.seats ?? {},
     });
     const report = await executePlan(plan, session, host, { concurrency, continuityIds });
+    // A fresh install minted a binding for every seat this run planned to launch. A seat whose
+    // line never ran — refused before it, or its step left out — never loaded the settings file
+    // that names the successor, so it keeps the binding it held. The same rule `add` and `reload`
+    // apply follows here; a seat the install itself created goes back out with no record.
+    for (const name of launchedSeats) {
+      if (!startedSeats.has(name)) restorePresenceBinding(dir, session, name, priorBindings.get(name));
+    }
     // The reach projection, after the plan's effects and outside the lobby's identity rechecks
     // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
     // the bridge and the seat-shuttle daemon read them. A skip — no lobby, a lobby not 0700,

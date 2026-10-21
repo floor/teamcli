@@ -1129,6 +1129,47 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual(['lead']);
   });
 
+  test('a refused up keeps the state entry a seat already had, the binding and every field with it', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    // The seat was recorded by an earlier run and holds the binding that run launched it with.
+    // This run plans its launch afresh and is refused by the lobby before the line runs: the
+    // record it already had is the record it keeps, field for field.
+    updateState(dir, (st) => {
+      st.sessions['acme'] = {
+        seats: {
+          worker: { stage: 'launched', presence_binding: 'prs_aaaaaaaaaaaa', watcher: 'hook' },
+        },
+        worktrees: {},
+      };
+    });
+
+    const made = world();
+    const run = await runUpCmd([], made, { fs: plantClaudeAt(2) });
+    expect(run.code).toBe(1);
+    expect(made.typed).toEqual([]);
+    const after = readState(dir).sessions['acme']?.seats.worker;
+    expect(after).toEqual({ stage: 'launched', presence_binding: 'prs_aaaaaaaaaaaa', watcher: 'hook' });
+    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {}).sort()).toEqual(['lead', 'worker']);
+  });
+
+  test('a launched up keeps the binding its install minted for the seat, named in its settings file', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(0);
+    const after = readState(dir).sessions['acme']?.seats.worker;
+    expect(after?.presence_binding).toMatch(/^prs_[0-9a-f]{12}$/);
+    // The settings file the launch line carries names the binding the state records: the
+    // successor the install minted is the one the launched process runs with.
+    const settings = made.runs
+      .map((command) => /--settings ([^ ]+)/.exec(command)?.[1])
+      .filter((path): path is string => path !== undefined);
+    expect(settings.length).toBeGreaterThan(0);
+    expect(settings.some((path) => readFileSync(path, 'utf8').includes(after!.presence_binding!))).toBe(true);
+  });
+
   // Each shipped startup-read path, and the CLIs whose field matches it at any depth, in ship order.
   const plants: readonly [string, string][] = [
     ['CLAUDE.md', 'claude-code, cursor and grok'],
