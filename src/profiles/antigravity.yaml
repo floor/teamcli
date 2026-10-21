@@ -165,6 +165,26 @@ screen:
         anchor: 'You have unsent comments\. Ready to send\?'
         patterns:
           - '^>\s*$'
+  rate_limit:
+    # A usage wall reported from the field (2026-10-21): the pane read `Individual quota
+    # reached`, with a reset span under it (`Resets in 47h31m`). No capture of the frame
+    # exists, so the placement is not invented: `at_composer` reads the block directly above
+    # the box as one block, every row of it matching the rule. The reported frame is the two
+    # rows below (sentence, then reset) over the box's blank margin, and a screen that names
+    # no reset is the one-row form; the second rule reads that one without requiring a reset.
+    # A sentence quoted inside a turn, with later text between it and the box, is not the
+    # wall. A frame that draws the notice elsewhere stays unread — the known limitation until
+    # a sanitized capture arrives. The reset is printed as the screen words it; a screen
+    # naming none is an explicit unknown, never an invented time.
+    - all:
+        - '\bIndividual quota reached\b'
+        - '\bResets in\s+[^│|]+'
+      live: true
+      at_composer: true
+    - all:
+        - '\bIndividual quota reached\b'
+      live: true
+      at_composer: true
   working:
     - any:
         # Generation indicator

@@ -572,7 +572,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
           name: 'worker-4',
           running: true,
           working: false,
-          screen: { kind: 'rate limit', reset: '5pm' },
+          screen: { kind: 'rate limit', reset: { kind: 'at', value: '5pm' } },
         }),
         ctx,
       ),

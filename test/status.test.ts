@@ -952,7 +952,7 @@ describe('team status', () => {
     // A file seat whose cli is Claude Code: the pool is its vendor, as the counting rules resolve it.
     live = { ...built(), screens: { ...built().screens, 'w3:p1': limitScreen } };
     const stopped = await status();
-    expect(stopped.out).toMatch(/deepseek-acme\s+done \(rate limit on deepseek, resets at 11:00\)/);
+    expect(stopped.out).toMatch(/deepseek-acme\s+quota out on deepseek, resets at 11:00/);
     // A temporary seat's row names the pool of the seat it is like.
     const tmp = agent('deepseek-acme-tmp-1', 'w5', 'done');
     live = { ...built(), agents: [...built().agents, tmp], screens: { ...built().screens, 'w5:p1': limitScreen } };
@@ -962,7 +962,7 @@ describe('team status', () => {
       };
     });
     const temp = await status();
-    expect(temp.out).toMatch(/deepseek-acme-tmp-1\s+done \(rate limit on deepseek, resets at 11:00\), temporary/);
+    expect(temp.out).toMatch(/deepseek-acme-tmp-1\s+quota out on deepseek, resets at 11:00, temporary/);
   });
 
   test('a permission prompt is the lead\'s difference, a trust prompt the owner\'s', async () => {

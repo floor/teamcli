@@ -138,14 +138,16 @@ function accountOf(seat: Seat | undefined): string | null {
   return account === '' ? null : account;
 }
 
-/** The mark a quiet seat's screen earns for a usage limit: the CLI's own limit screen, named for
- *  the pool the seat spends and the reset time the screen gives, when it gives one. Null for
- *  every other screen. */
-function limitMark(seat: Seat | undefined, screen: Screen): string | null {
+/** The word a quiet seat's screen earns for a usage limit: `quota out`, named for the pool the
+ *  seat spends and carrying the reset exactly as the screen words it — `at` for a clock, `in`
+ *  for a span — or an explicit "no reset time named" when it names none. Null for every other
+ *  screen. The row shows this word instead of the host's: a wall is not a bare done. */
+function quotaOutText(seat: Seat | undefined, screen: Screen): string | null {
   if (screen.kind !== 'rate limit') return null;
   const account = accountOf(seat);
   const on = account === null ? '' : ` on ${account}`;
-  return screen.reset === null ? ` (rate limit${on})` : ` (rate limit${on}, resets at ${screen.reset})`;
+  if (screen.reset === null) return `quota out${on}, no reset time named`;
+  return `quota out${on}, resets ${screen.reset.kind} ${screen.reset.value}`;
 }
 
 /**
@@ -313,9 +315,11 @@ export function compare(
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
-      const limit = quiet ? limitMark(seat, screen) : null;
-      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : limit ?? '';
-      const stateText = `${word}${mark}${seat.parked ? ', parked' : ''}`;
+      const quotaOut = quiet ? quotaOutText(seat, screen) : null;
+      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : '';
+      const stateText = quotaOut !== null
+        ? `${quotaOut}${seat.parked ? ', parked' : ''}`
+        : `${word}${mark}${seat.parked ? ', parked' : ''}`;
       rows.push({
         name: seat.name,
         ...idField,
@@ -531,11 +535,11 @@ export function compare(
       const quiet = tempWord === 'idle' || tempWord === 'done';
       const unread = quiet && tempScreen.kind === 'unknown';
       // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
-      const limit = quiet ? limitMark(likeSeat, tempScreen) : null;
+      const quotaOut = quiet ? quotaOutText(likeSeat, tempScreen) : null;
       rows.push({
         name,
         ...idField,
-        state: `${tempWord}${unread ? ' (screen not recognised)' : limit ?? ''}, temporary`,
+        state: `${quotaOut ?? `${tempWord}${unread ? ' (screen not recognised)' : ''}`}, temporary`,
         model: tempModel,
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),

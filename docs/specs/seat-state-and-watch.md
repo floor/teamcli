@@ -53,6 +53,7 @@ and both are marked as such.
 | `idle` | the seat is at a prompt with nothing behind it |
 | `done` | the process the launch recorded is no longer in its pane |
 | `blocked` | the screen is neither mid-turn nor at a prompt: a dialog, a question, an error, or a composer holding unsent text |
+| `quota out` | the screen is the CLI's usage wall: nothing can be typed until it lifts |
 | `held` | a hold stands over the team |
 | `unreachable` | herdr cannot reach the seat |
 | `unknown` | no source was certain |
@@ -73,7 +74,8 @@ The reading answers the first source that is certain, in this order:
 2. herdr unable to reach the seat — `unreachable`;
 3. the launched process no longer in its pane — `done` (`process`);
 4. a screen that is a dialog, a question, an error, or a composer holding unsent text —
-   `blocked`, whatever any clock says;
+   `blocked`, whatever any clock says; the CLI's usage wall reads its own word, `quota out`, with
+   the pool the seat spends and the reset the screen words;
 5. the CLI's own signal through the hooks the launch installed — `working` at turn start,
    `idle` at turn end, with the instant it wrote; a `working` hook older than the working window
    keeps its word only where the screen is absent or unknown;
@@ -197,8 +199,8 @@ the pass.
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a captured vendor notice, such as an update screen |
 | `<seat> shows a provider error: connection lost, and no capture names a retry` | a provider's connection error; told to the operator and the owner, once, while the seat is not working |
-| `<seat> is at a rate limit on <account>: usage limit, resets at <time>` | a usage-limit screen that names its reset |
-| `<seat> is at a rate limit on <account>: usage limit, and the screen names no reset time` | the same, without a reset |
+| `<seat> is out of quota on <account>: usage limit, resets at <time>` | a usage-limit screen that names its reset, as the screen words it — a clock after `at`, a span after `in` |
+| `<seat> is out of quota on <account>: usage limit, and the screen names no reset time` | the same, without a reset |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is none of idle, done, working, blocked, and the screen cannot be read |
 | `<seat> holds text in its input box that was never sent` | unsent text past `watch.unsent_after` |
@@ -418,8 +420,10 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    messaged MUST read `working` while its prompt shows. *Source:* `src/labels/state.ts`.
    *Proof:* `test/labels-traces.test.ts`.
 3. **A dialog, a question, an error or unsent text reads `blocked`, whatever any clock says.**
-   *Source:* `src/labels/state.ts`, `src/watch/pass.ts` (`attentionOf`). *Proof:*
-   `test/seat-state.test.ts`.
+   The CLI's usage wall reads `quota out` the same way: it is never a bare done, and the word
+   carries the pool and the reset exactly as the screen words it. *Source:*
+   `src/labels/state.ts`, `src/watch/pass.ts` (`attentionOf`). *Proof:*
+   `test/seat-state.test.ts`, `test/quota-out-state.test.ts`.
 4. **An unknown seat past the blind threshold MUST count as not working and be flagged
    `blind`.** *Source:* `src/labels/state.ts`, `src/settings/inherit.ts`. *Proof:*
    `test/seat-state.test.ts`.
@@ -494,6 +498,7 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
 | `idle` | at a prompt, nothing behind it | 0.5.0 | `src/labels/state.ts` | state word |
 | `done` | the launched process is no longer in its pane | 0.5.0 | `src/labels/state.ts` | state word |
 | `blocked` | the screen is a dialog, question, error or unsent text | 0.5.0 | `src/labels/state.ts` | state word |
+| `quota out` | the screen is the CLI's usage wall | 0.5.5 unreleased | `src/labels/state.ts` | state word |
 | `held` | a hold stands over the team | 0.5.0 | `src/labels/state.ts` | state word |
 | `unreachable` | herdr cannot reach the seat | 0.5.0 | `src/labels/state.ts` | state word |
 | `unknown` | no source was certain | 0.5.0 | `src/labels/state.ts` | state word; blind past the threshold |

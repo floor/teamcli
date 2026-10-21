@@ -2,7 +2,7 @@
 // safety floor live here, never in a profile. A profile is data: it can add a
 // pattern, and it cannot move a stage or turn the floor off.
 import { allDimAfter, hasSgr, stripSgr } from '../ansi.ts';
-import type { Screen } from './screen.ts';
+import type { Reset, Screen } from './screen.ts';
 import type { BlockStep, LinePattern, Rule, ScreenData, Wrap } from './screen-data.ts';
 
 export type { BlockStep, Composer, FallbackRule, LinePattern, Placeholder, PlaceholderStyle, Rule, ScreenData, Stage, Wrap } from './screen-data.ts';
@@ -349,29 +349,36 @@ function kindOfStage(name: StageName): Screen['kind'] {
   return name === 'exit_question' ? 'exit question' : name;
 }
 
-/** The reset time a rate-limit window names, from the phrase the seat printed. Null when the
- *  window matches the limit and does not name a time. Two CLIs' phrases are captured: Claude
- *  Code's `Your limit will reset at 11:00`, and Gemini's `Access resets at 2:10 PM GMT+2.` —
- *  its trailing period is the sentence's, not the time's. A dialog draws the sentence inside a
- *  box, so the time stops at the box's closing border. */
-const RESET_PHRASES = [
-  /Your limit will reset at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/,
-  /Access resets at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/,
+/** The reset time a rate-limit window names, from the phrase the seat printed, with the
+ *  preposition the phrase itself uses. Null when the window matches the limit and does not name
+ *  a time. Three phrases are known: Claude Code's `Your limit will reset at 11:00`, Gemini's
+ *  `Access resets at 2:10 PM GMT+2.` — its trailing period is the sentence's, not the time's —
+ *  and the reported `Resets in 47h31m` form. A dialog draws the sentence inside a box, so the
+ *  time stops at the box's closing border. The value stays the printed text: no instant is
+ *  parsed and no zone is assumed. */
+const RESET_PHRASES: { kind: Reset['kind']; pattern: RegExp }[] = [
+  { kind: 'at', pattern: /Your limit will reset at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/ },
+  { kind: 'at', pattern: /Access resets at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/ },
+  { kind: 'in', pattern: /Resets in\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/ },
+  // Codex's plan messages end `… or try again at 3:05 PM.` / `Try again at Oct 23rd, 2026
+  // 3:05 PM.`; the source formats a local clock, and the value stays that printed text.
+  { kind: 'at', pattern: /\b[Tt]ry again at\s+([^│|]+?)\.?\s*(?:[│|]\s*)?$/ },
 ];
 
-function resetOf(lines: string[]): string | null {
-  for (const line of lines) {
+function resetOf(lines: string[], region?: Set<number>): Reset | null {
+  for (const [at, line] of lines.entries()) {
+    if (region !== undefined && !region.has(at)) continue;
     for (const phrase of RESET_PHRASES) {
-      const found = phrase.exec(line);
-      const time = found?.[1]?.trim();
-      if (time) return time;
+      const found = phrase.pattern.exec(line);
+      const value = found?.[1]?.trim();
+      if (value) return { kind: phrase.kind, value };
     }
   }
   return null;
 }
 
-function asScreen(kind: Screen['kind'], lines: string[]): Screen {
-  if (kind === 'rate limit') return { kind, reset: resetOf(lines) };
+function asScreen(kind: Screen['kind'], lines: string[], region?: Set<number>): Screen {
+  if (kind === 'rate limit') return { kind, reset: resetOf(lines, region) };
   return { kind };
 }
 
@@ -387,6 +394,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     const tick = () => now() - start > budget;
     const plain = plainLines(lines);
     const live = () => liveRegion(data, plain, lines, tick, expectedCwd, home);
+    const edge = (patterns: LinePattern[]) => composerEdgeBlock(data, plain, lines, tick, patterns, expectedCwd, home);
 
     // Rule (a): Every hatch predicate is monotone toward caution: hatch OR data, for working,
     // every dialog (trust, permission, the CLI's own exit question, question, a vendor notice,
@@ -418,9 +426,14 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       }
       if (stage) {
         for (const rule of stage.rules) {
-          const hit = ruleMatches(data, plain, rule, tick, live);
+          const hit = ruleMatches(data, plain, rule, tick, live, edge);
           if (hit === 'stop') return { kind: 'unknown' };
-          if (hit) return asScreen(kind, plain);
+          // An `at_composer` match draws its reset from the same block, so a stale phrase
+          // elsewhere on the pane cannot date a wall it does not belong to.
+          if (hit) {
+            const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
+            return asScreen(kind, plain, block === null ? undefined : new Set(block));
+          }
         }
       }
     }
@@ -461,6 +474,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
     const tick = () => now() - start > budget;
     const plain = plainLines(lines);
     const live = () => liveRegion(data, plain, lines, tick, expectedCwd, home);
+    const edge = (patterns: LinePattern[]) => composerEdgeBlock(data, plain, lines, tick, patterns, expectedCwd, home);
 
     const composerFn = getProfileFn(data.profile, 'composer');
     if (composerFn !== undefined) {
@@ -486,7 +500,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
         }
         if (stage) {
           for (const rule of stage.rules) {
-            const hit = ruleMatches(data, plain, rule, tick, live);
+            const hit = ruleMatches(data, plain, rule, tick, live, edge);
             if (hit === 'stop') return { kind: 'unknown' };
             if (hit) return { kind: 'unknown' };
           }
@@ -519,7 +533,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
 
     if (data.unknown) {
       for (const rule of data.unknown.rules) {
-        const hit = ruleMatches(data, plain, rule, tick, live);
+        const hit = ruleMatches(data, plain, rule, tick, live, edge);
         if (hit === 'stop') return { kind: 'unknown' };
         if (hit) return { kind: 'unknown' };
       }
@@ -529,7 +543,7 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
     for (const stage of [data.provider_error, data.rate_limit]) {
       if (!stage) continue;
       for (const rule of stage.rules) {
-        const hit = ruleMatches(data, plain, rule, tick, live);
+        const hit = ruleMatches(data, plain, rule, tick, live, edge);
         if (hit === 'stop' || hit) return { kind: 'unknown' };
       }
     }
@@ -626,13 +640,65 @@ function liveRegion(
   return region;
 }
 
-function ruleMatches(data: ScreenData, lines: string[], rule: Rule, tick: () => boolean, live?: () => Set<number> | null): boolean | 'stop' {
+/**
+ * The block an `at_composer` rule's patterns are read on: the rows directly above the composer's
+ * frame, read as one contiguous block — the blank margin under it skipped, blanks inside it
+ * allowed — walking up from the last non-blank row while every non-blank row matches at least
+ * one of the rule's patterns, and stopping at the first row that does not (or at the profile's
+ * turn-end row). So a notice drawn in one row, or in two rows as a sentence and its reset, is
+ * the wall; a quoted sentence with any later text between it and the box leaves the adjacent row
+ * non-matching and the block empty. Null when the composer cannot be read: adjacency has nothing
+ * to anchor on then, and the rule reads the whole window as one without the field does.
+ */
+function composerEdgeBlock(
+  data: ScreenData,
+  plain: string[],
+  styled: string[],
+  tick: () => boolean,
+  patterns: LinePattern[],
+  expectedCwd?: string | null,
+  home?: string,
+): number[] | null {
+  if (patterns.length === 0) return null;
+  const hit = compose(data, plain, styled, tick, expectedCwd, home);
+  if (hit.kind === 'stop' || hit.kind === 'unknown') return null;
+  const block: number[] = [];
+  let at = hit.from - 1;
+  while (at >= 0 && !(plain[at] ?? '').trim()) at--;
+  while (at >= 0) {
+    if (tick()) return null;
+    const line = plain[at] ?? '';
+    if (!line.trim()) {
+      at--;
+      continue;
+    }
+    if (data.turnEnd?.test(line)) break;
+    const row = patterns.some((pattern) => matches(data, plain, at, pattern, tick, true) === true);
+    if (!row) break;
+    block.push(at);
+    at--;
+  }
+  return block;
+}
+
+function ruleMatches(data: ScreenData, lines: string[], rule: Rule, tick: () => boolean, live?: () => Set<number> | null, edge?: (patterns: LinePattern[]) => number[] | null): boolean | 'stop' {
   const where = rule.onFooter ? [footerLine(data, lines)] : lines;
   const inWindow = where === lines;
   // A `live` rule's patterns are read on the live region alone, so a sentence the transcript
   // has scrolled past is not the dialog. A region the composer cannot place leaves the whole
   // window, as a rule without the field reads it.
-  const region = rule.live && inWindow ? live?.() ?? null : null;
+  // An `at_composer` rule reads the block directly above the composer's frame — and only when a
+  // composer frame can be read. With no readable frame the adjacency has nothing to anchor on,
+  // and the rule reads the whole window as it did before the field existed: a wall that was
+  // held is still held, never reclassified as a free prompt.
+  let region: Set<number> | null = null;
+  if (rule.atComposer && inWindow) {
+    const patterns = [...(rule.any ?? []), ...(rule.all ?? [])];
+    const block = edge?.(patterns) ?? null;
+    if (block !== null) region = new Set(block);
+  } else if (rule.live && inWindow) {
+    region = live?.() ?? null;
+  }
   if (rule.any) {
     const hit = anyLine(data, where, rule.any, tick, inWindow, region ?? undefined);
     if (hit === 'stop') return 'stop';

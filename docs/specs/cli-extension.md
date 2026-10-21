@@ -31,11 +31,13 @@ words.
   `trust`, `permission`, `exit_question`, `question`, `vendor_notice`, `provider_error`,
   `rate_limit`, `working`, and the composer reads after them all.
 - **dialog rule**: the pattern set a stage reads — `any`/`all` line patterns, a `footer`, a
-  `below_last_rule` anchor, `none_after`, `only_after`, `live`, `without_rule`, or a `block`.
+  `below_last_rule` anchor, `none_after`, `only_after`, `live`, `at_composer`, `without_rule`,
+  or a `block`.
 - **composer**: the pane's input box, read by one of four modes — `box-to-rule`, `status-last`,
   `status-then-one`, `two-rules-footer-below`.
 - **composer region**: the rows the composer's own mode reads — its box, rules and footers, and
-  the newest turn of transcript above them; the only region a `live` rule sees.
+  the newest turn of transcript above them; the only region a `live` rule sees. An
+  `at_composer` rule reads the block of rows directly above the composer instead.
 - **safety floor**: the generic dialog markers the core matches itself, without case, so no
   profile carries them and none can turn them off.
 - **dialect**: the restricted regular-expression language a profile's patterns are written in,
@@ -82,6 +84,7 @@ One rule of a stage (`Rule`, `src/watch/screen-data.ts`):
 | `none_after` | `{ anchor, patterns[] }` | after the last anchor row, no row may match |
 | `only_after` | `{ anchor, patterns[] }` | every non-blank row after the last anchor row matches one of these — the block's own tail, nothing of another dialog's |
 | `live` | `true` | read on the composer region only, so a sentence the window has scrolled past is not the dialog; a window whose composer cannot be read keeps the whole window |
+| `at_composer` | `true` | read on the block of rows directly above the composer only: blanks are skipped, every non-blank row of the block must match the rule, and the block ends at the first row that does not or at the profile's `turn_end`; so a sentence quoted inside a turn that goes on after it is not the dialog, while a window whose composer cannot be read keeps the whole window |
 | `without_rule` | `true` | the window holds no composer rule: the dialog is the pane |
 | `block` | steps | the dialog read as one contiguous block of rows, from the last row matching its first step to the screen's last non-blank line |
 

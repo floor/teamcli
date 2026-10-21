@@ -240,7 +240,7 @@ Every command ends its plain-text reading or action with **one summary line** us
    - All state cells and diagnostic severity labels use `style.styleState(state)` in `src/output/tty.ts`:
      - **Bold** (`\x1b[1m…\x1b[22m`): table column header rows (`renderTable`).
      - **Green** (`\x1b[32m…\x1b[39m`): `'working'`, `'idle'`, `'done'`, `'ok'`, `'working, temporary'`, `'idle, temporary'`, `'done, temporary'`.
-     - **Yellow** (`\x1b[33m…\x1b[39m`): `'warn'`, strings starting with `'waiting'` or `'trust sent'`, strings containing `'(unsent text)'`, `'(rate limit'`, or `'(screen not recognised)'`, and strings ending with `', parked'`.
+     - **Yellow** (`\x1b[33m…\x1b[39m`): `'warn'`, strings starting with `'waiting'` or `'trust sent'`, strings containing `'(unsent text)'`, `'(rate limit'` or `'(screen not recognised)'`, strings starting with `'quota out'`, and strings ending with `', parked'`.
      - **Red** (`\x1b[31m…\x1b[39m`): `'missing'`, `'wrong name'`, `'miss'`, `'MISS'`, strings starting with `'restored, not launched by team'`, and strings containing `'(blind)'`.
      - **Dim** (`\x1b[2m…\x1b[22m`): `'stopped'`, `'-'`, `'--'`.
    - In `renderDifference(diff, style)`, **only** the `difference:` label prefix is coloured red (`style.red('difference:')`); `<what>`, `  repair: <repair>`, and `  who: <who>` remain uncoloured plain text so repair commands can be copied without ANSI codes.
