@@ -324,7 +324,10 @@ describe('the authority under the hosted watch', () => {
       (state.sessions.crew ??= emptySession()).watchdog = { file: other };
     });
     const host = machine(build, clock);
-    await waitUntil(() => host.state().phase === 'stopped');
+    // The run drains on its own before any beat. The host counts that exit as a fault but holds
+    // the restart for a beat that renews authority, which this binding never does.
+    await waitUntil(() => host.state().phase === 'failed');
+    expect(host.state().failures).toBe(1);
     expect(pushes.length).toBe(0);
     expect(logs.some((line) => line.includes('the hosted watch cannot continue'))).toBe(true);
     expect(logs.some((line) => line.includes('watchdog file binding changed'))).toBe(true);
@@ -378,7 +381,10 @@ describe('the authority under the hosted watch', () => {
       },
     });
     const host = machine(build, clock);
-    await waitUntil(() => host.state().phase === 'stopped');
+    // The run drains on its own at the refused effect; the host counts the exit and waits for a
+    // beat that would renew authority before starting anything new.
+    await waitUntil(() => host.state().phase === 'failed');
+    expect(host.state().failures).toBe(1);
     expect(pushes.length).toBe(0);
     expect(logs.some((line) => line.includes('shared watch authority verifier refused'))).toBe(true);
     expect(host.state().effects).toBe('blocked');
