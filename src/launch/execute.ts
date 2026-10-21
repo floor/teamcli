@@ -103,6 +103,9 @@ export type Host = {
   /** Clears the session this run has just stopped. Present on `down` only: `up` never deletes. */
   deleteSession?(session: string): boolean | Promise<boolean>;
   kill(pid: number): boolean;
+  /** Whether a pid still exists, for the exit wait after a stale watch is signalled. Absent: the
+   *  run cannot confirm an exit, and the replacement is held rather than started beside it. */
+  alive?(pid: number): boolean;
   /** Pane ids herdr lists an agent in, or null when the list can't be read. */
   agentPanes(session: string): string[] | null;
   /** The session's agents as herdr lists them now; null when the list can't be read. The repair
@@ -438,6 +441,9 @@ export async function executePlan(
   const logged = new Set<string>();
   let serverFailed = false;
   let watchFailed = false;
+  // A stale watch that was not confirmed gone suppresses the replacement's workspace and pane
+  // command: the run holds instead of leaving two watches on the route.
+  let watchHeld = false;
   let held = false;
   let abort = false;
   // `q` (and Ctrl-C, which is the same): the run stops cleanly after the loop — what this
@@ -911,6 +917,10 @@ export async function executePlan(
         // The record carries the reason in words; the full finding — the start folder it names —
         // follows as the record's detail, on stderr alone.
         final(op.seat, { kind: 'left out', reason: `refused: ${op.why}` }, op.detail ? `  ${op.detail}\n` : '');
+      } else if (op?.do === 'hold') {
+        held = true;
+        host.say(`${op.text}\n`);
+        host.log('watch', op.text);
       } else sayForSeat(unitSeat, `  skip ${step.text}\n`);
       return;
     }
@@ -965,6 +975,10 @@ export async function executePlan(
         break;
       }
       case 'create': {
+        // The replacement watch's workspace is the one create with no seat. A stale watch that
+        // was not confirmed gone leaves none: the next steps say why, and nothing sits in an
+        // empty watch workspace beside a watch that is still there.
+        if (!op.seat && watchHeld) break;
         // Before the allow and lobby checks, and before the workspace: the seat's line is drawn
         // whole, and nothing sits between the lobby's last look and the create it guards.
         if (op.seat) reportProgress(op.seat, 'launching');
@@ -1479,6 +1493,11 @@ export async function executePlan(
         break;
       }
       case 'watch': {
+        if (watchHeld) {
+          host.say('watch: not started; the old watch is not confirmed gone\n');
+          host.log('watch', 'not started; the old watch is not confirmed gone');
+          break;
+        }
         // The file lands before the pane's command can read it. The pane is recorded once the
         // command has started, so a run whose typing failed leaves no watch in the state.
         const here = places.get(op.label);
@@ -1788,9 +1807,27 @@ export async function executePlan(
       }
       case 'kill': {
         if (!host.kill(op.pid)) {
+          watchHeld = true;
           held = true;
           host.say(`watch: pid ${op.pid} did not stop\n`);
-        } else host.say('watch: stopped\n');
+        } else host.say('watch: the stop signal was sent\n');
+        break;
+      }
+      case 'watch-gone': {
+        // A signal is delivery, not an exit: the replacement waits until the pid is gone.
+        if (host.alive === undefined) {
+          watchHeld = true;
+          held = true;
+          host.say(`watch: this run cannot confirm pid ${op.pid} exited; no replacement is started\n`);
+          break;
+        }
+        const gone = await until(op.seconds, 100, host, () => !host.alive!(op.pid));
+        if (gone) host.say('watch: stopped\n');
+        else {
+          watchHeld = true;
+          held = true;
+          host.say(`watch: pid ${op.pid} is still running; no replacement is started\n`);
+        }
         break;
       }
       case 'stop': {
@@ -1835,7 +1872,7 @@ export async function executePlan(
     let end = steps.length;
     while (end > start) {
       const op = steps[end - 1]?.do;
-      if ((op?.do === 'create' && !op.seat) || op?.do === 'watch' || op?.do === 'kill' || op?.do === 'stop') end--;
+      if ((op?.do === 'create' && !op.seat) || op?.do === 'watch' || op?.do === 'kill' || op?.do === 'watch-gone' || op?.do === 'hold' || op?.do === 'stop') end--;
       else break;
     }
 

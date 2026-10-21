@@ -291,11 +291,12 @@ describe('the daemon heartbeat hosting', () => {
     }
   });
 
-  test('one route failing is recorded and the other route keeps cycling', async () => {
+  test('one route failing recovers on its own route and the other route keeps cycling', async () => {
     const second = scratch('other');
     try {
       const another = second.root;
       writeFileSync(join(another, '.agents', 'queue.yaml'), '');
+      let attempts = 0;
       const started = await startMachineDaemon({
         home,
         roots: [root, another],
@@ -304,7 +305,16 @@ describe('the daemon heartbeat hosting', () => {
         heartbeatMs: 20,
         watchHosting: true,
         hostedWatch: (route) => (route.root === root
-          ? { run: async () => { throw new Error('the route read failed'); } }
+          ? {
+            run: async (loop) => {
+              attempts += 1;
+              if (attempts === 1) throw new Error('the route read failed');
+              for (;;) {
+                loop.cycled(new Date());
+                if (!(await loop.wait(0))) return 0;
+              }
+            },
+          }
           : {
             run: async (loop) => {
               for (;;) {
@@ -322,14 +332,20 @@ describe('the daemon heartbeat hosting', () => {
           if (read.kind !== 'ok') return false;
           const bad = read.state.roots.find((entry) => entry.root === root);
           const good = read.state.roots.find((entry) => entry.root === another);
-          return bad?.watch?.phase === 'failed' && (good?.watch?.cycles ?? 0) > 0;
+          // The fault is counted once and the same route cycles again on a later beat.
+          return bad?.watch?.phase === 'running'
+            && bad?.watch?.failures === 1
+            && (bad?.watch?.cycles ?? 0) > 0
+            && (good?.watch?.cycles ?? 0) > 0;
         });
         const read = readDaemonState(home);
         expect(read.kind).toBe('ok');
         if (read.kind === 'ok') {
           const bad = read.state.roots.find((entry) => entry.root === root);
           const good = read.state.roots.find((entry) => entry.root === another);
-          expect(bad?.watch).toMatchObject({ phase: 'failed', failures: 1, why: 'the route read failed' });
+          expect(bad?.watch).toMatchObject({
+            phase: 'running', failures: 1, why: null, lastCycleOutcome: 'pass',
+          });
           expect(good?.watch?.phase).toBe('running');
           expect(good?.watch?.lastCycleAt).not.toBeNull();
         }
