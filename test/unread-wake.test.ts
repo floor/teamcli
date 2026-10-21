@@ -634,6 +634,9 @@ describe('reportUnreadDrops', () => {
     const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
     const reportId = leadReportId(made.dir, UNREAD_A);
     expect(MESSAGE_ID.test(reportId)).toBe(true);
+    // A real UUID, not merely a name the reader's pattern accepts: version 8, RFC variant.
+    expect(reportId.charAt(14)).toBe('8');
+    expect('89ab').toContain(reportId.charAt(19));
     const listing = listDrops(leadDir, messageKeyOf(made.home), {
       to: 'lead', root: realpathSync(made.root), session: 'acme',
     });
