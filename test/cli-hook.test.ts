@@ -117,6 +117,32 @@ describe('what a run plans and what it installs', () => {
     expect(start).not.toContain('/dev/stdin');
   });
 
+  test('an unchanged settings file is not rewritten: its mtime stays the seat\'s declaration', () => {
+    // `up` installs hooks for every seat, launched or not. A running seat's socket can predate
+    // this run; a rewrite of identical bytes would move its `declaredAt` past that socket and
+    // make the live receiver read stale. The file is left exactly as it was.
+    const landed = installCliHooks(dir, SESSION, [seat('worker')]);
+    const path = landed.worker!;
+    utimesSync(path, new Date('2026-10-21T06:46:42Z'), new Date('2026-10-21T06:46:42Z'));
+    const before = statSync(path).mtimeMs;
+    expect(installCliHooks(dir, SESSION, [seat('worker')])).toEqual({ worker: path });
+    expect(statSync(path).mtimeMs).toBe(before);
+  });
+
+  test('a changed declaration is still written over the unchanged file', () => {
+    const landed = installCliHooks(dir, SESSION, [seat('worker')]);
+    const path = landed.worker!;
+    utimesSync(path, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+    const before = statSync(path).mtimeMs;
+    // The launch's wrapper now declares an inbound word the old settings file does not hold:
+    // the file the seat loads must change, and a rewrite is a declaration of its own.
+    const wrapper = join(base, 'launch.sh');
+    writeFileSync(wrapper, '#!/bin/sh\nexec claude --settings \'{"crossSessionInbound":"accept"}\' "$@"\n', { mode: 0o700 });
+    expect(installCliHooks(dir, SESSION, [seat('worker', 'claude-code', wrapper)])).toEqual({ worker: path });
+    expect(statSync(path).mtimeMs).not.toBe(before);
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
+  });
+
   test('a link where a settings file would go is refused and its target left alone', () => {
     mkdirSync(join(dir, 'hooks', SESSION), { recursive: true, mode: 0o700 });
     mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });
