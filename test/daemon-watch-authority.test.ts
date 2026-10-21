@@ -553,10 +553,9 @@ describe('the authority under the hosted watch', () => {
       standby: () => {},
     };
     const running = build.run(loop);
-    await waitUntil(() => record()?.epoch !== undefined);
+    await waitUntil(() => record()?.epoch !== undefined && releaseWait !== undefined);
     const held = record()?.epoch;
     writeFileSync(join(agents, LOCK_FILE), '1\n');
-    await waitUntil(() => releaseWait !== undefined);
     releaseWait?.(false);
     await running;
     expect(logs.some((line) => line.includes('the watch authority release is pending'))).toBe(true);
