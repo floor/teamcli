@@ -246,7 +246,7 @@ describe('parallel launch window boundaries', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 2 });
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['b'], restoreBuckets: [] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: true, dropped: ['b'], restoreBuckets: [] });
     // b got no workspace at all; the same window pass took c in its place, and d entered as soon
     // as one of the two waiting seats settled.
     expect(events).toEqual([
