@@ -18,7 +18,7 @@ herdr 0.7.1 does not report this CLI's agent status: its `agent list` carried th
 `agent` type and `agent_status: "unknown"` while Muse sat at this ready box. `muse.yaml` therefore
 declares `herdr_status: unreliable`, and the rules delivery reads the seat's own screen there.
 
-## Synthetic
+## Constructed (synthetic)
 
 These files are derived from `idle.txt` for the tests; nothing in them was read from a live pane.
 
