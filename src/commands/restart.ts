@@ -527,7 +527,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     : out;
 
   // Inspect the target seat's current pane before any preflight or stop.
-  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart');
+  let continuitySession = input.command === 'restart' ? input.resume : undefined;
+  const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
   if (inspected.kind === 'replaced') return { kind: 'replaced' };
   if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
   if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
@@ -651,13 +652,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
           : freshOwn.why;
         planSeat.launch = declaredLaunch;
         resumed = undefined;
+        continuitySession = undefined;
         const said = `${name}: not resuming its recorded session (${why})`;
         if (json) notes.push(said);
         else out.stderr(`team restart: ${plainText(said)}\n`);
         logLine(dir, 'restart', callerText, said, sources.now());
       }
     }
-    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart');
+    const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
     if (rechecked.kind === 'replaced') return { kind: 'replaced' };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
     if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
@@ -731,7 +733,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         });
         const fresh = sources.agents(session);
         if (fresh === null) return { kind: 'herdr' };
-        const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart');
+        const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
         if (seen.kind === 'replaced') return { kind: 'replaced' };
         if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
         if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
@@ -1133,6 +1135,7 @@ function inspectSeat(
   /** Whether an unsent box may be copied and pasted back. A restart does; a swap leaves the
    *  box to the seat's own work — the queue stands and the swap waits, never typing over it. */
   draftCapture = true,
+  continuitySession?: string,
 ): InspectedSeat {
   const proc = recorded?.launched && recorded.pane && sources.upLaunch.processInfo
     ? sources.upLaunch.processInfo(session, recorded.pane)
@@ -1144,10 +1147,12 @@ function inspectSeat(
   const continuity = replacedSeat(verdict, {
     asked: true,
     namedOnPane: Boolean(listedOnRecorded),
-    recordedSession: recorded?.agent_session,
+    // A restart proves continuity with the registry-bound session it can actually resume. Its
+    // state-file copy alone cannot bless a restored process when that registry binding is absent.
+    recordedSession: draftCapture ? continuitySession : recorded?.agent_session,
     liveSession: listedOnRecorded?.session,
   });
-  if (verdict === 'replaced' || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched)) {
+  if ((verdict === 'replaced' && continuity !== 'restored') || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched)) {
     return { kind: 'replaced' };
   }
 

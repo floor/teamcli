@@ -129,6 +129,7 @@ function makeHarness(
     workerScreen?: 'idle' | 'working' | 'permission' | 'unsent' | 'unknown';
     /** The text the unsent box draws, when `workerScreen` is `unsent`. */
     workerDraft?: string;
+    workerSession?: string;
     /** The relaunched pane never draws the paste: the restore's read-back fails. */
     pasteDrops?: boolean;
     closeFails?: boolean;
@@ -158,6 +159,7 @@ function makeHarness(
         workspace: 'ws-old',
         status: opts.workerStatus ?? (opts.workerScreen === 'working' ? 'working' : 'idle'),
         cwd: fixture.root,
+        ...(opts.workerSession ? { session: opts.workerSession } : {}),
       });
     }
     for (const [pane, slot] of newPanes) {
@@ -900,7 +902,7 @@ describe('team restart <seat>', () => {
 // herdr session. A record that does not agree is never resumed: the restart says why and
 // launches fresh, exactly as it did before the records were read.
 describe('team restart resumes the seat\'s own recorded session', () => {
-  function seeded(opts: { registry?: string; state?: string; cli?: string } = {}) {
+  function seeded(opts: { registry?: string; state?: string; cli?: string; workerSession?: string; launched?: boolean } = {}) {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
@@ -909,6 +911,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
         pane: 'pane-old',
         workspace: 'ws-old',
         id: 'seat_0123456789ab',
+        ...(opts.launched ? { launched: { shell: 100, cli: [200] } } : {}),
         ...(opts.state === undefined ? {} : { agent_session: opts.state }),
       };
     });
@@ -936,7 +939,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
         by: 'team up',
       }).id;
     }
-    return { fixture, run: makeHarness(fixture), agentId };
+    return { fixture, run: makeHarness(fixture, { workerSession: opts.workerSession }), agentId };
   }
 
   test('both records agreeing on one id resume it on the new declaration', async () => {
@@ -951,6 +954,28 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // The relaunch's herdr reading carried no id here: the registry keeps the one it held rather
     // than clearing it, so the next restart can still bind the conversation.
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_keep');
+  });
+
+  test('a host-restored process on the recorded pane can be replaced when its registry session agrees', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_keep', workerSession: 'ses_keep', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.runs.join('\n')).toContain('claude --model claude-opus-5-5 --resume ses_keep');
+    expect(io.err).toBe('');
+  });
+
+  test('a state-file session alone cannot prove a host-restored process when the registry disagrees', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_registry', state: 'ses_state', workerSession: 'ses_state', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(io.err).toContain('has a process in its old pane that is not the signed seat; left as it is');
   });
 
   test('a state naming another session is never resumed, and the run says why', async () => {

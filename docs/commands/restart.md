@@ -118,7 +118,10 @@ agents: all
 ```
 
 A seat mid-turn is not interrupted — its work would be lost — and `restart` says which state it was
-in:
+in. If the pane host restored the process under a new pid, `restart` treats it as the same seat only
+when herdr still names that seat on the recorded pane and the live conversation id matches the
+agent registry's recorded `reach.agent_session`; it then resumes that recorded conversation through
+the seat's launch line. A different or unreadable conversation remains refused:
 
 ```console screens="claude-beacon=working"
 $ team restart claude-beacon ; echo "exit $?"
