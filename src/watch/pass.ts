@@ -12,6 +12,7 @@ import type { PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { boxHoldsText } from '../launch/deliver.ts';
 import { replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { continuitySessionOf } from '../registry/resume.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { herdrUnreliable, profileFor, quotaFor as shippedQuota } from '../profiles/profile.ts';
 import { figuresOf, type QuotaFigure, type QuotaPattern } from '../profiles/quota.ts';
@@ -264,6 +265,10 @@ export type PassInput = {
   processes?: Readonly<Record<string, PaneProcesses | null>>;
   /** Registry signing model/version by seat; null means no current registry record. */
   signing?: ReadonlyMap<string, { model: string; version: string } | null>;
+  /** The continuity each declared seat's records bind, by seat: the registry's session where a
+   *  record exists, the state's own copy where none does, null where a record refuses. A caller
+   *  that read no registry leaves it out, and the state's copy stands. */
+  continuityIds?: ReadonlyMap<string, string | null>;
   /** Screen readings with the approved overrides applied. The shipped profiles, when omitted. */
   readScreen?: (cli: string, screen: string | undefined) => Screen;
   /** The seats this pass must not type at or count idle: their native presence proves a turn, a
@@ -306,6 +311,7 @@ export function pass({
   foreground,
   processes,
   signing,
+  continuityIds,
   readScreen: read = readScreen,
   nativeHeld,
   quotaFor: patternsOf = shippedQuota,
@@ -476,7 +482,7 @@ export function pass({
       continuity: replacedSeat(verdict, {
         asked: true,
         namedOnPane: state.seats[name]?.pane === agent.pane,
-        recordedSession: state.seats[name]?.agent_session,
+        recordedSession: continuitySessionOf(continuityIds, name, state.seats[name]?.agent_session),
         liveSession: agent.session,
       }),
       running: true,

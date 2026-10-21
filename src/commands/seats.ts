@@ -24,6 +24,7 @@ import { readCliHook } from '../launch/cli-hook.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { newestTraceAt, seatTraces } from '../labels/traces.ts';
 import { findAgent } from '../registry/agents.ts';
+import { continuityIdsOf } from '../registry/resume.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { DEFAULT_STATE_THRESHOLDS, type StateThresholds } from '../settings/inherit.ts';
@@ -519,7 +520,14 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
       // exit: seats.herdr
       return 2;
     }
-    const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team));
+    const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
+      home: sources.home,
+      root,
+      herdrSession: session,
+      seats: team.seats,
+      states: state.seats,
+    });
+    const comparison = compare(team, session, state, live, now, watchInForceOf(standing, team), undefined, false, undefined, continuityIds);
     // One fresh daemon health probe per pass: the same answer decides whether this session's
     // presence projections are live. No persisted status word is consulted — an absent
     // verdict leaves every projection last known, never dropped.

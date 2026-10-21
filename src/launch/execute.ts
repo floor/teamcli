@@ -22,6 +22,7 @@ import { recordWhat, cleanRecord, classificationOf, type Classification, type Fi
 import type { LobbyRefusal } from '../lobby/gate.ts';
 import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
+import { continuitySessionOf } from '../registry/resume.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 
@@ -279,6 +280,11 @@ async function until(
 export type ExecuteOptions = {
   /** Maximum number of seats to launch and wait on concurrently. Defaults to 1 (serial). */
   concurrency?: number;
+  /** The continuity each seat's plan read, per seat: the registry's bound session where it
+   *  exists, the state's own copy where no record does, `null` where a record refuses. The close
+   *  path decides a replaced pane the same way the plan did; without a map it reads the state
+   *  copy alone, as it always did. */
+  continuityIds?: ReadonlyMap<string, string | null>;
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
@@ -1520,13 +1526,14 @@ export async function executePlan(
           const agents = host.agentList ? host.agentList(session) : null;
           const listed = agents?.find((agent) => agent.name === op.seat && agent.pane === op.pane);
           const stored = host.seatStates?.(session)?.[op.seat];
+          const recordedSession = continuitySessionOf(options?.continuityIds, op.seat, stored?.agent_session);
           const continuity = replacedSeat(verdict, {
             asked: agents !== null,
             namedOnPane: Boolean(listed),
-            recordedSession: stored?.agent_session,
+            recordedSession,
             liveSession: listed?.session,
           });
-          if (continuity === 'restored' && stored?.agent_session) {
+          if (continuity === 'restored' && recordedSession !== undefined) {
             const identity = launchedIdentity(host.processInfo?.(session, op.pane) ?? null);
             if (identity) {
               host.record(op.seat, {
@@ -1534,7 +1541,7 @@ export async function executePlan(
                 pane: op.pane,
                 workspace: op.workspace,
                 launched: identity,
-                agent_session: stored.agent_session,
+                agent_session: recordedSession,
               });
             }
             dropped.add(op.seat);
