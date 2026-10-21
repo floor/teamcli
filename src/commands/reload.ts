@@ -606,6 +606,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());
     }
+    // The successor binding this install minted for the launch, when it is not the one the seat
+    // already held. The drift close drops the seat's record before the line runs, so this is the
+    // only copy left of the incarnation a process that does run will carry.
+    const installedBinding = readState(dir).sessions[session]?.seats[planned.name]?.presence_binding;
+    const mintedBinding = installedBinding !== undefined && installedBinding !== priorBinding ? installedBinding : undefined;
     const steps = upPlan({
       session,
       root,
@@ -624,6 +629,10 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     resetCliHookState(dir, session, [planned.name]);
     const launch = sources.launch;
     let closed = false;
+    // Whether the pane ran the seat's line: a failure after it (an idle wait that times out, a
+    // name that never lands, rules that are not delivered) leaves a live process holding the
+    // mint, so the successor stands.
+    const outcome = { launched: false };
     const host: Host = {
       agentList: (current) => launch.agents(current),
       workspacePanes: (current, workspace) => launch.workspacePanes?.(current, workspace) ?? null,
@@ -703,8 +712,22 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       running: () => {},
       // The new session's start. The swapped-out record ended as `swap` before the close.
       sessionStarted: (next, started) => {
+        if (next !== seat.name) return;
+        // The pane ran this seat's launch line: the settings file the install wrote is in a
+        // process now, so the successor binding is the seat's from here on, whatever the run
+        // reaches afterwards. The drift close dropped the record the install put it on; it is
+        // written back before the launch's own record, so every later record carries it.
+        outcome.launched = true;
+        if (mintedBinding !== undefined) {
+          updateState(dir, (file) => {
+            const one = (file.sessions[session] ??= emptySession());
+            const current = one.seats[next];
+            if (current === undefined) one.seats[next] = { stage: 'launched', presence_binding: mintedBinding };
+            else current.presence_binding = mintedBinding;
+          });
+        }
         const at = sources.home;
-        if (next !== seat.name || at === undefined) return;
+        if (at === undefined) return;
         const began = beginSession({
           home: at,
           root,
@@ -812,8 +835,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // A binding is minted for a launch this run is about to type. A refusal that leaves the
     // seat before its line runs never gave the new settings file to a process, so the seat
     // keeps the incarnation it had: the rotation is undone, and a seat the install itself
-    // created goes with it. The run's own records of the seat stand otherwise.
-    restorePresenceBinding(dir, session, seat.name, priorBinding);
+    // created goes with it. A launch that did run keeps the successor — written when the pane
+    // ran — even when the run fails before ready; the run's own records stand otherwise.
+    if (!outcome.launched) restorePresenceBinding(dir, session, seat.name, priorBinding);
     if (!closed) {
       refuse(io, json, 'reload', {
         id: 'reload.changed',
