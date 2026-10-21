@@ -60,6 +60,11 @@ dist-tag; if the GitHub release step fails after npm has the version, re-run onl
 jobs, because a full re-run goes back through `npm publish`. The one-time trusted-publisher
 binding and the tag ruleset are described in `.github/workflows/release.yml`.
 
+For a local release candidate — packing a source-stamped tarball and installing it forward into an
+existing prefix before any tag exists — see
+[packing and installing a local release candidate](docs/internal/rc-pack-install.md). That is
+maintainer tooling; publishing still happens only through a tag push.
+
 ## Reporting a weakness
 
 Report a weakness in private, never in a public issue or pull request: see
