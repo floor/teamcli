@@ -1,10 +1,16 @@
 // RC053-EVENT-SEQUENCE-ATOMIC coverage: concurrent appenders must mint distinct, contiguous
 // sequences, and a subscriber cursor must reach every appended event.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { appendEvent, createSequenceTracker, readEvents, readEventsFromCursor } from '../src/bus/log.ts';
+import { dirname, join } from 'node:path';
+import {
+  appendEvent,
+  createSequenceTracker,
+  eventLogPath,
+  readEvents,
+  readEventsFromCursor,
+} from '../src/bus/log.ts';
 
 const dirs: string[] = [];
 
@@ -91,5 +97,69 @@ describe('the event log under concurrent appenders', () => {
     expect(cursor.ok).toBe(true);
     if (!cursor.ok || cursor.kind !== 'events') return;
     expect(cursor.events.map((event) => event.payload.record_id).sort()).toEqual([...ids].sort());
+  }, 30000);
+
+  test('a held event lock returns the documented busy result without touching the log, and release leaves no stale state', async () => {
+    const { root, home } = makeScratch();
+    const seeded = appendEvent('acme', root, home, {
+      ts: new Date().toISOString(),
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'seed-busy',
+    });
+    expect(seeded.ok).toBe(true);
+    if (!seeded.ok) return;
+    expect(seeded.record.payload.seq).toBe(1);
+
+    const path = eventLogPath('acme', root, home);
+    const before = readFileSync(path);
+
+    const holder = Bun.spawn(
+      ['bun', join(import.meta.dir, 'bus-log-lock-hold-run.ts'), dirname(path), '6500'],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+    const reader = holder.stdout.getReader();
+    const decoder = new TextDecoder();
+    let seen = '';
+    while (!seen.includes('\n')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+    expect(seen).toContain('held');
+    reader.releaseLock();
+
+    const started = Date.now();
+    const busy = appendEvent('acme', root, home, {
+      ts: new Date().toISOString(),
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'writer-busy',
+    });
+    const waited = Date.now() - started;
+    expect(busy).toEqual({ ok: false, reason: 'the event log is busy; the record was not written' });
+    expect(waited).toBeGreaterThanOrEqual(4_500);
+    expect(waited).toBeLessThan(8_000);
+    expect(readFileSync(path).equals(before)).toBe(true);
+
+    await holder.exited;
+
+    const after = appendEvent('acme', root, home, {
+      ts: new Date().toISOString(),
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'writer-after',
+    });
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.record.payload.seq).toBe(2);
+
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((event) => [event.payload.record_id, event.payload.seq])).toEqual([
+      ['seed-busy', 1],
+      ['writer-after', 2],
+    ]);
   }, 30000);
 });
