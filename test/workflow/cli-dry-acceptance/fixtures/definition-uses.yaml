@@ -1,0 +1,12 @@
+workflow: dry-cli-uses
+version: 1
+initial: draft
+states:
+  draft: {}
+  work:
+    uses: round
+transitions:
+  - from: draft
+    to: work
+    on: pr-opened
+    role: builder

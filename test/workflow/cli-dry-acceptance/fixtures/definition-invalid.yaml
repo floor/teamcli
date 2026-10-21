@@ -1,0 +1,3 @@
+workflow: dry-cli-invalid
+version: 1
+states: [
