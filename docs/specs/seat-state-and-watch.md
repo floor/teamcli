@@ -372,8 +372,15 @@ for a seat whose idle episode the dispatcher owns that pass. The dispatcher publ
 event kind and invents none.
 
 Hosting: the daemon-hosted watch lifecycle — the same pass driven by the daemon's fixed
-heartbeat tick, with an existing pane watch held as a standby until the transfer is proven — is
-forthcoming. It is not released, and its live activation is not proven.
+heartbeat tick, with an existing pane watch asked to hand over through its own loop and stood by
+honestly when it does not answer — is forthcoming. It is not released, and its live activation
+is not proven. The transfer is cooperative: the daemon writes a request beside the session
+state on its fixed beat, the pane watch reads it at the top of a pass and leaves by deleting
+only its own record, and the daemon acquires on a later beat. Nothing is signalled, a holder
+whose pid cannot be proven to be the process in its own recorded pane is never asked, and a
+pane watch that makes two of its own passes without answering stands the daemon by. When
+hosting is on, a daemon restart rebuilds each accepted route's watch from the recorded binding,
+with no new command.
 
 ## 4. Commands and options
 
