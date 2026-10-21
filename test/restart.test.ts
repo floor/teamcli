@@ -33,6 +33,9 @@ const CODEX_OLD_IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt',
 const CODEX_EXIT_TYPED = readFileSync(new URL('./fixtures/codex/0.161.0/exit-typed.txt', import.meta.url), 'utf8');
 // The same screen naming this scene's recipe: model GPT Sol, version 6.1.
 const CODEX_NEW_IDLE = CODEX_OLD_IDLE.replace('gpt-5.6-terra', 'gpt-6.1-sol').replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
+// Cursor's own idle screen, captured from cursor-agent 2026.10.01: the relaunched pane must draw
+// a prompt this version reads as ready for a cursor seat to have launched.
+const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
 
 const TEAM_YAML = `format: 1
 project: acme
@@ -98,6 +101,27 @@ const CODEX_TEAM_YAML = TEAM_YAML.replace(
     model: GPT Sol
     version: "6.1"
     launch: codex -m gpt-6.1-sol`,
+);
+
+// The same team with a Cursor worker: a CLI with no measured resume form at all, so a recorded
+// conversation has no launch-line way back and the stop is refused unless the caller abandons it.
+const CURSOR_TEAM_YAML = TEAM_YAML.replace(
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`,
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: cursor
+    vendor: cursor
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent --model cursor-model`,
 );
 
 // The live restart reading: the file asks for 0.5 GB free swap — which no longer refuses a
@@ -272,6 +296,14 @@ function makeHarness(
       if (opts.newPaneScreen?.includes('› Ask Codex to do anything')) {
         // The CLI's own composer: the first line replaces the grey placeholder, and Enter sends it.
         slot.text = opts.newPaneScreen.replace('› Ask Codex to do anything', `› ${pasted ? (pasted[1] ?? '') : text}`);
+      } else if (opts.newPaneScreen?.includes('→ Plan, search, build anything')) {
+        // Cursor's composer, from its capture: the first draft row takes the arrow, the rest are
+        // indented under it, exactly as `cursor/2026.10.01/rules-fit-7.txt` draws them.
+        const rows = (pasted ? pasted[1] ?? '' : text).split('\n');
+        slot.text = opts.newPaneScreen.replace(
+          '→ Plan, search, build anything',
+          rows.map((row, at) => (at === 0 ? `→ ${row}` : `    ${row}`)).join('\n'),
+        );
       } else if (pasted) slot.text = claudeBox(pasted[1] ?? '');
       return true;
     },
@@ -947,8 +979,8 @@ describe('team restart <seat>', () => {
 // herdr session. A record that does not agree is never resumed: the restart says why and
 // launches fresh, exactly as it did before the records were read.
 describe('team restart resumes the seat\'s own recorded session', () => {
-  function seeded(opts: { registry?: string; state?: string; cli?: string; declaredCli?: 'claude-code' | 'codex'; workerSession?: string; launched?: boolean } = {}) {
-    const fixture = makeFixture(opts.declaredCli === 'codex' ? CODEX_TEAM_YAML : TEAM_YAML);
+  function seeded(opts: { registry?: string; state?: string; cli?: string; declaredCli?: 'claude-code' | 'codex'; workerSession?: string; launched?: boolean; launch?: string; yaml?: string; model?: string; version?: string; foregroundArgv0?: string; newPaneScreen?: string } = {}) {
+    const fixture = makeFixture(opts.yaml ?? (opts.declaredCli === 'codex' ? CODEX_TEAM_YAML : TEAM_YAML));
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
       session.seats.worker = {
@@ -964,13 +996,15 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     if (opts.registry !== undefined) {
       agentId = registerAgent(fixture.home, {
         name: 'worker',
-        signing: opts.declaredCli === 'codex'
-          ? { model: 'GPT Sol', version: '6.1', role: 'implementer' }
-          : { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+        signing: {
+          model: opts.model ?? (opts.declaredCli === 'codex' ? 'GPT Sol' : 'Claude Opus'),
+          version: opts.version ?? (opts.declaredCli === 'codex' ? '6.1' : '5.5'),
+          role: 'implementer',
+        },
         lab: 'anthropic',
         cli: opts.cli ?? opts.declaredCli ?? 'claude-code',
         launcher: null,
-        launch: opts.declaredCli === 'codex' ? 'codex -m gpt-6.1-sol' : 'claude --model claude-opus-5-5',
+        launch: opts.launch ?? (opts.declaredCli === 'codex' ? 'codex -m gpt-6.1-sol' : 'claude --model claude-opus-5-5'),
         reach: {
           team: teamIdOf(fixture.root),
           seat: 'worker',
@@ -990,6 +1024,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       fixture,
       run: makeHarness(fixture, {
         workerSession: opts.workerSession,
+        ...(opts.foregroundArgv0 === undefined ? {} : { foregroundArgv0: opts.foregroundArgv0 }),
+        ...(opts.newPaneScreen === undefined ? {} : { newPaneScreen: opts.newPaneScreen }),
         ...(opts.declaredCli === 'codex' ? { foregroundArgv0: 'codex', newPaneScreen: CODEX_NEW_IDLE } : {}),
       }),
       agentId,
@@ -1050,6 +1086,114 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol resume ses_codex');
     // Not a flag: the id is a word after `resume`, as `codex resume --help` measures it.
     expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toBe('');
+  });
+
+  test('a recorded launcher that selects another conversation is refused before the stop', async () => {
+    // The registry binds ses_codex, and the recorded launcher itself names ses_other. Running
+    // that line would resume a conversation nothing proved and destroy this one: the stop is
+    // not made, and the fresh start stays the caller's explicit --abandon.
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_other',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.runs.join('\n')).not.toContain('resume ses_other');
+    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (team restart worker --abandon for a fresh start)');
+  });
+
+  test('a recorded launcher that resumes --last is refused before the stop', async () => {
+    // A selection that names no id cannot be told from the bound one. It is not run.
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume --last',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.runs.join('\n')).not.toContain('--last');
+    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (team restart worker --abandon for a fresh start)');
+  });
+
+  test('a CLI with no resume form is refused before the stop, its conversation unresumable', async () => {
+    // Cursor has no measured resume form: a recorded conversation has no launch line to carry it.
+    // Stopping the seat would destroy it, so the stop is not made and --abandon is named.
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      cli: 'cursor',
+      model: 'Grok',
+      version: '4.7',
+      yaml: CURSOR_TEAM_YAML,
+      launch: 'cursor-agent --model cursor-model',
+      launched: true,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.runs).toEqual([]);
+    expect(io.err).toContain('worker: its recorded conversation cannot be resumed (its launch line has no measured resume form); left as it is (team restart worker --abandon for a fresh start)');
+  });
+
+  test('a CLI with no resume form starts fresh once the caller abandons the conversation', async () => {
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      cli: 'cursor',
+      model: 'Grok',
+      version: '4.7',
+      yaml: CURSOR_TEAM_YAML,
+      launch: 'cursor-agent --model cursor-model',
+      foregroundArgv0: 'cursor-agent',
+      newPaneScreen: CURSOR_IDLE,
+      launched: true,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--abandon'], io, run.sources)).toBe(0);
+    // The stop is made and the record's own line runs, with no resume word on it.
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.runs.join('\n')).toContain('cursor-agent --model cursor-model');
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toContain('worker: not resuming its recorded session (its launch line has no measured resume form)');
+  });
+
+  test('a recorded launcher that already names the bound id resumes it unchanged', async () => {
+    // No second resume word: the line's own selection is the one the record binds.
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_codex',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    const runs = run.did.runs.join('\n');
+    expect(runs).toContain('codex -m gpt-6.1-sol resume ses_codex');
+    expect(runs.split('resume ses_codex').length - 1).toBe(1);
     expect(io.err).toBe('');
   });
 

@@ -69,7 +69,7 @@ import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
-import { shellQuote, withResume } from '../profiles/profile.ts';
+import { namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
@@ -356,8 +356,34 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       // The live pane is another conversation: resuming the recorded one would put two live
       // copies of the seat's history beside each other. The restart proceeds fresh.
       noResume('its live agent session is not the recorded one');
-    } else if (withResume(declared.cli, resumeCandidate.launch, resumeCandidate.id) !== null) {
-      resume = resumeCandidate.id;
+    } else {
+      const carried = resumeCarry(declared.cli, resumeCandidate.launch, resumeCandidate.id);
+      if (carried.kind === 'line') {
+        resume = resumeCandidate.id;
+      } else if (namedResumeTarget(declared.cli, resumeCandidate.launch) !== null) {
+        // The recorded launcher names a conversation of its own (another id, or a selection
+        // without one): stopping the seat and running that line would resume something nothing
+        // proved. Nothing is stopped unless the caller abandons the conversation with
+        // `--abandon`; the record's own recipe is then the line the run is left with.
+        if (!abandon) {
+          return notReadyRefused(
+            out,
+            json,
+            `${name}: its recorded launcher does not select the recorded conversation; left as it is (team restart ${name} --abandon for a fresh start)`,
+          );
+        }
+      } else if (!abandon) {
+        // No measured resume form on this CLI: stopping the seat would destroy a conversation
+        // nothing could put back. The fresh start is the caller's explicit choice.
+        return notReadyRefused(
+          out,
+          json,
+          `${name}: its recorded conversation cannot be resumed (${carried.why}); left as it is (team restart ${name} --abandon for a fresh start)`,
+        );
+      } else {
+        // The caller abandons the recorded conversation: there is no form to carry it.
+        noResume(carried.why);
+      }
     }
   }
 
@@ -616,11 +642,19 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // run; the log line itself is written once the seat is down and the launch is going out.
   let resumed: string | undefined;
   if (input.resume !== undefined) {
-    const line = withResume(next.cli, planSeat.launch, input.resume);
-    if (line !== null) {
-      planSeat.launch = line;
+    const carried = resumeCarry(next.cli, planSeat.launch, input.resume);
+    if (carried.kind === 'line') {
+      planSeat.launch = carried.line;
       resumed = input.resume;
+    } else if (namedResumeTarget(next.cli, planSeat.launch) !== null) {
+      // The line this launch would run names a conversation of its own: stopping the seat would
+      // destroy one nothing proved while resuming another. The stop is not made.
+      return {
+        kind: 'not-ready',
+        message: `${name}: its launch line does not select the recorded conversation; left as it is (team restart ${name} --abandon for a fresh start)`,
+      };
     }
+    // A CLI with no measured resume form runs fresh; the caller already said so.
   }
   if (dry) {
     const stopStep = inspected.agent

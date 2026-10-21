@@ -3,7 +3,7 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { launchCommand, shellQuote, supportsSessionResume, withResume } from '../profiles/profile.ts';
+import { launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -273,6 +273,12 @@ export interface UpSeat {
    */
   resume?: string;
   /**
+   * A proven conversation this seat's launch line cannot carry: it names another resume id, or
+   * resumes without naming one, or the CLI has no measured resume form. Nothing is closed and
+   * nothing is launched; the record stays ready and the run exits 1.
+   */
+  resumeHold?: string;
+  /**
    * The pane holds a program this record cannot tie to the launch. Nothing is closed and
    * the stored process is left as it is.
    */
@@ -526,6 +532,23 @@ export function upPlan(input: UpInput): Step[] {
       continue;
     }
     if (seat.stage === 'ready') {
+      // A proven conversation the seat's own launch line cannot carry: the repair stops before
+      // the close, so nothing is destroyed that cannot be put back. The record stays ready and
+      // the run exits 1 with the reason.
+      if (seat.resumeHold) {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.resumeHold}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'ready' },
+            detail: `  ${seat.resumeHold}\n`,
+            held: true,
+          },
+        });
+        continue;
+      }
       // A drifted seat this run will not close keeps the ready record. The detail names the
       // caller's own way; the skip words are that line, not the ordinary "left as it is".
       if (seat.driftHold) {
@@ -673,11 +696,10 @@ export function upPlan(input: UpInput): Step[] {
     // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
     // form cannot carry either; the plan says so on the launch rather than losing it silently.
     const resumeId = seat.registry?.sessionId ?? seat.resume;
-    const recordedLine = resumeId === undefined
-      ? seat.launch
-      : withResume(profile.cli, seat.launch, resumeId) ?? seat.launch;
-    const resumeGap = resumeId !== undefined && !supportsSessionResume(profile.cli)
-      ? 'its recorded conversation cannot be resumed by this CLI\'s launch line'
+    const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
+    const recordedLine = carried?.kind === 'line' ? carried.line : seat.launch;
+    const resumeGap = carried?.kind === 'refuse'
+      ? `its recorded conversation cannot be resumed: ${carried.why}`
       : undefined;
     const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,

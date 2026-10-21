@@ -329,6 +329,59 @@ export function withResume(cli: string, command: string, sessionId: string): str
   return `${command} --resume ${sessionId}`;
 }
 
+/**
+ * The conversation a launch line already names to resume, read from the measured grammar above:
+ * the id after Claude Code's `--resume`/`-r`, or the word after Codex's `resume`. Null when the
+ * line names no resume at all. `''` when it resumes without naming one — `--continue`/`-c`
+ * (Claude Code's most recent), `--last`, `--all` or a bare `resume` (Codex's picker) — which
+ * cannot be told from the id a record binds. A line this version does not read is null: an
+ * unmeasured form is not a resume this tool may reason about.
+ */
+export function namedResumeTarget(cli: string, command: string): string | null {
+  if (cli === 'codex') {
+    const words = command.trim().split(/\s+/);
+    const at = words.indexOf('resume');
+    if (at === -1) return null;
+    const next = words[at + 1];
+    return next === undefined || next.startsWith('-') ? '' : next;
+  }
+  if (cli !== 'claude-code') return null;
+  const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$)/.exec(command);
+  if (named) return named[1] ?? '';
+  if (/(?:^|\s)(?:--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return '';
+  return null;
+}
+
+/** How a launch line carries a proven conversation: the line itself when it already names that
+ *  id, the line with the id appended where the CLI has a measured form and the line names none,
+ *  otherwise the reason it cannot. A line naming another id — or resuming without naming one —
+ *  is never rewritten: the id a file records is the file's to keep, and a relaunch that swapped
+ *  it silently would resume a conversation nothing proved. */
+export function resumeCarry(
+  cli: string,
+  command: string,
+  sessionId: string,
+): { kind: 'line'; line: string } | { kind: 'refuse'; why: string } {
+  const named = namedResumeTarget(cli, command);
+  if (named === sessionId) return { kind: 'line', line: command };
+  if (named !== null) {
+    return {
+      kind: 'refuse',
+      why: named === ''
+        ? 'its launch line resumes without naming the recorded conversation'
+        : 'its launch line resumes a different conversation',
+    };
+  }
+  const line = withResume(cli, command, sessionId);
+  if (line !== null) return { kind: 'line', line };
+  return {
+    kind: 'refuse',
+    why: launchSessionId(command) === undefined
+      ? 'its launch line has no measured resume form'
+      : 'its launch line already sets a new session id',
+  };
+}
+
 /** True when the CLI accepts an effort override flag on its launch line. */
 export function supportsEffortLaunch(cli: string): boolean {
   return cli === 'claude-code' || cli === 'antigravity' || cli === 'grok' || cli === 'codex' || cli === 'muse';
