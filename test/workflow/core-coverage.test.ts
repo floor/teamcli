@@ -250,6 +250,7 @@ type EnvelopeOptions = {
   run?: string;
   definition?: DefinitionId;
   expectedRevision?: number;
+  expectedHead?: WorkflowEnvelope['expectedHead'];
   requestId?: string;
   move?: WorkflowEnvelope['move'];
   target?: string;
@@ -263,6 +264,7 @@ function envelopeOf(options: EnvelopeOptions = {}): WorkflowEnvelope {
     run: options.run ?? RUN,
     definition: options.definition ?? DEF,
     expectedRevision: options.expectedRevision ?? 0,
+    ...(options.expectedHead !== undefined ? { expectedHead: options.expectedHead } : {}),
     requestId: options.requestId ?? 'req-1',
     move: options.move ?? { transition: { from: 'ready', to: 'resting', on: 'time-reached' } },
     target: options.target ?? TARGET,
@@ -495,6 +497,63 @@ describe('identity and request precedence', () => {
       expect(decision.why).toContain('7');
       expectNoPlan(decision);
     }
+  });
+
+  test('a present expected ledger head is refused, after the revision check', () => {
+    const run = readyRun();
+    const decision = refused(
+      decide(
+        inputOf({
+          run,
+          envelope: envelopeOf({
+            expectedHead: { seq: 12, hash: 'abc123' },
+            evidence: ['ev-entry', 'ev-timer'],
+          }),
+        }),
+      ),
+      'core.ledger-head-conflict',
+      run,
+    );
+    expectNoPlan(decision);
+  });
+
+  test('the request id and the revision answer before a present expected head', () => {
+    const head = { seq: 12, hash: 'abc123' };
+    const original = envelopeOf({ expectedHead: head, evidence: ['ev-entry', 'ev-timer'] });
+    const used = readyRun({
+      revision: 3,
+      requests: new Map([['req-1', { payloadDigest: requestDigest(original), step: 4 }]]),
+    });
+    const duplicate = decide(
+      inputOf({
+        run: used,
+        envelope: envelopeOf({
+          expectedRevision: 9,
+          expectedHead: head,
+          evidence: ['ev-entry', 'ev-timer'],
+        }),
+      }),
+    );
+    expect(duplicate.kind).toBe('duplicate');
+    expectNoPlan(duplicate);
+
+    const staleRun = readyRun({ revision: 3 });
+    const stale = refused(
+      decide(
+        inputOf({
+          run: staleRun,
+          envelope: envelopeOf({
+            requestId: 'req-fresh',
+            expectedRevision: 5,
+            expectedHead: head,
+            evidence: ['ev-entry', 'ev-timer'],
+          }),
+        }),
+      ),
+      'core.revision-stale',
+      staleRun,
+    );
+    expectNoPlan(stale);
   });
 });
 
