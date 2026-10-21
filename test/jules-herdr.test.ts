@@ -55,9 +55,12 @@ function ioOf(screen: () => string, keys: string[], over: Partial<ExitIo> = {}):
 }
 
 describe('a profile herdr cannot report is read from its screen', () => {
-  test('jules says so, and every other shipped profile keeps herdr as the word', () => {
+  test('jules and muse say so, and every other shipped profile keeps herdr as the word', () => {
+    // Measured on herdr 0.7.1: neither CLI's pane carries an agent type or a usable agent_status
+    // (jules' unknown and muse's 1.4.11 ready box are the captures each profile documents).
     expect(profileFor('jules')?.herdrStatus).toBe('unreliable');
-    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse']) {
+    expect(profileFor('muse')?.herdrStatus).toBe('unreliable');
+    for (const name of ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini']) {
       expect(profileFor(name)?.herdrStatus).toBe('reliable');
     }
   });
