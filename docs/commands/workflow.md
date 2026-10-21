@@ -53,18 +53,18 @@ Read-only: nothing writes to disk or any ledger, and no herdr session is needed.
 | `check` | at least one finding is a refusal (`workflow.check.refused`) | one `refusal:` or `note:` line per finding (sorted by `line`, then `code`), then `team workflow check: <path>: <n> refusals: refused` | 1 |
 | `check` | bad invocation, unreadable file, or invalid YAML (`workflow.check.invocation`, `workflow.check.file`, `workflow.check.file-invalid`) | `team workflow check: <reason>`, with the usage for a bad invocation | 2 |
 | `run` | the dry run exhausts the script without a stop (`workflow.run-dry`) | `dry run — no record is written`, `run:`, `start:`, each `step <n>:`, and `team workflow run: <path>: script-exhausted (...)` (or the `DryRunJournal` under `--json`) | 0 |
-| `run` | `run` invoked without `--dry` (`workflow.dry-only`) | `team workflow run: live workflow execution requires the Kernel workflow gate (amendment 04); pass --dry --script <path> for a dry run` | 1 |
+| `run` | `run` invoked without `--dry` (`workflow.dry-only`) | `dry run — no record is written` and `team workflow run: live workflow execution requires the Kernel workflow gate (amendment 04); pass --dry --script <path> for a dry run` on stderr | 1 |
 | `run` | the dry run stops on a held or refused decision or reachable `uses:` (`workflow.refused`) | `dry run — no record is written`, steps up to the stop, `stop:`, and `team workflow run: <path>: stopped (...)` (or the `DryRunJournal` under `--json`) | 1 |
-| `run` | malformed `--script` (`workflow.script`) or malformed script `evidence:` block (`workflow.evidence`) | `team workflow run: <script>: <reason>` | 1 |
-| `run` | bad invocation (`workflow.invocation`) or unreadable/invalid workflow or script file (`workflow.file`) | `team workflow run: <reason>`, with the usage for a bad invocation | 2 |
+| `run` | malformed `--script` (`workflow.script`) or malformed script `evidence:` block (`workflow.evidence`) | `dry run — no record is written` and `team workflow run: <script>: <reason>` on stderr | 1 |
+| `run` | bad invocation (`workflow.invocation`) or unreadable/invalid workflow or script file (`workflow.file`) | `dry run — no record is written` and `team workflow run: <reason>` on stderr, with the usage for a bad invocation | 2 |
 | `replay` | the journal replays identically (`workflow.replay`) | `dry run — no record is written` and `team workflow replay: <journal>: ok (...)` (or the `workflow-replay` document with `ok: true` under `--json`) | 0 |
 | `replay` | step divergence (`workflow.replay-mismatch`), bad journal (`workflow.journal`), bad/mismatched definition (`workflow.definition`), or bad/missing evidence (`workflow.evidence`) | `dry run — no record is written` and `team workflow replay: <journal>: [<code>] <why>: refused` (or the `workflow-replay` document with `ok: false` and `reason` under `--json`) | 1 |
-| `replay` | bad invocation (`workflow.invocation`) or unreadable input file (`workflow.file`) | `team workflow replay: <reason>`, with the usage for a bad invocation | 2 |
+| `replay` | bad invocation (`workflow.invocation`) or unreadable input file (`workflow.file`) | `dry run — no record is written` and `team workflow replay: <reason>` on stderr, with the usage for a bad invocation | 2 |
 
 Under `--json`:
 - `check` writes the `team.workflow` check document (`schema/workflow.schema.json`) on exit 0 or 1, and `team.error` on exit 2.
-- `run --dry` writes the bare `DryRunJournal` (`format: 1`, `kind: "workflow-run-dry"`, `authoritative: false`, `notice: "dry run — no record is written"`) on exit 0 (`workflow.run-dry`) and exit 1 (`workflow.refused`), so its stdout can be passed directly to `team workflow replay`; pre-journal refusals (`workflow.dry-only`, `workflow.script`, `workflow.evidence`, `workflow.invocation`, `workflow.file`) write `team.error`.
-- `replay` writes the `team.workflow` replay document (`kind: "workflow-replay"`, `authoritative: false`, `notice: "dry run — no record is written"`, `ok: true | false`) on exit 0 and exit 1, and `team.error` on exit 2.
+- `run --dry` writes the bare `DryRunJournal` (`format: 1`, `kind: "workflow-run-dry"`, `authoritative: false`, `notice: "dry run — no record is written"`) on exit 0 (`workflow.run-dry`) and exit 1 (`workflow.refused`), so its stdout can be passed directly to `team workflow replay`; pre-journal refusals (`workflow.dry-only`, `workflow.script`, `workflow.evidence`, `workflow.invocation`, `workflow.file`) write `team.error` with `notice: "dry run — no record is written"`.
+- `replay` writes the `team.workflow` replay document (`kind: "workflow-replay"`, `authoritative: false`, `notice: "dry run — no record is written"`, `ok: true | false`) on exit 0 and exit 1, and `team.error` with `notice: "dry run — no record is written"` on exit 2.
 
 The three code families stay distinct:
 - **CLI exit ids** (`workflow.check.*`, `workflow.run-dry`, `workflow.dry-only`, `workflow.refused`,

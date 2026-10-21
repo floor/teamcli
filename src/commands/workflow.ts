@@ -21,7 +21,7 @@ import { readArgs, type Args } from '../args.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
-import { hasJsonFlag, pluralCount, refuse, writeJson } from '../output/index.ts';
+import { hasJsonFlag, pluralCount, refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { checkWorkflow } from '../workflow/check.ts';
 import type { RunState } from '../workflow/core-state.ts';
 import {
@@ -266,6 +266,19 @@ export function readEvidenceDocument(
   return { ok: true, evidence: out };
 }
 
+function refuseWorkflowDry(
+  io: Io,
+  json: boolean,
+  command: string,
+  spec: { id: string; message: string; usage?: string },
+): void {
+  if (json) {
+    writeJsonError(io, spec.id, plainText(spec.message), null, 1, undefined, DRY_NOTICE);
+  } else {
+    io.stderr(`${DRY_NOTICE}\nteam ${command}: ${plainText(spec.message)}\n${spec.usage ?? ''}`);
+  }
+}
+
 function failCheckInvocation(io: Io, json: boolean, message: string): number {
   refuse(io, json, 'workflow check', { id: 'workflow.check.invocation', message, repair: null, usage: USAGE });
   // exit: workflow.check.invocation
@@ -273,13 +286,13 @@ function failCheckInvocation(io: Io, json: boolean, message: string): number {
 }
 
 function failWorkflowInvocation(io: Io, json: boolean, command: string, message: string): number {
-  refuse(io, json, command, { id: 'workflow.invocation', message, repair: null, usage: USAGE });
+  refuseWorkflowDry(io, json, command, { id: 'workflow.invocation', message, usage: USAGE });
   // exit: workflow.invocation
   return 2;
 }
 
 function failWorkflowFile(io: Io, json: boolean, command: string, message: string): number {
-  refuse(io, json, command, { id: 'workflow.file', message, repair: null });
+  refuseWorkflowDry(io, json, command, { id: 'workflow.file', message });
   // exit: workflow.file
   return 2;
 }
@@ -374,7 +387,7 @@ function runWorkflowRun(args: Args, io: Io, json: boolean, options: WorkflowComm
   if (!args.flags.has('dry')) {
     const message =
       'live workflow execution requires the Kernel workflow gate (amendment 04); pass --dry --script <path> for a dry run';
-    refuse(io, json, 'workflow run', { id: 'workflow.dry-only', message, repair: null });
+    refuseWorkflowDry(io, json, 'workflow run', { id: 'workflow.dry-only', message });
     // exit: workflow.dry-only
     return 1;
   }
@@ -419,11 +432,11 @@ function runWorkflowRun(args: Args, io: Io, json: boolean, options: WorkflowComm
   if (!scriptRead.ok) {
     const message = `${scriptPath}: ${scriptRead.why}`;
     if (scriptRead.code === 'workflow.script') {
-      refuse(io, json, 'workflow run', { id: 'workflow.script', message, repair: null });
+      refuseWorkflowDry(io, json, 'workflow run', { id: 'workflow.script', message });
       // exit: workflow.script
       return 1;
     }
-    refuse(io, json, 'workflow run', { id: 'workflow.evidence', message, repair: null });
+    refuseWorkflowDry(io, json, 'workflow run', { id: 'workflow.evidence', message });
     return exitWorkflowEvidence();
   }
 

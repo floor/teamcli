@@ -274,7 +274,8 @@ describe('team workflow run and team workflow replay', () => {
     expect(await runWorkflow(['run', 'missing.yaml'], humanIo)).toBe(1);
     expect(humanIo.out).toBe('');
     expect(humanIo.err).toBe(
-      'team workflow run: live workflow execution requires the Kernel workflow gate (amendment 04); pass --dry --script <path> for a dry run\n',
+      'dry run — no record is written\n' +
+        'team workflow run: live workflow execution requires the Kernel workflow gate (amendment 04); pass --dry --script <path> for a dry run\n',
     );
 
     const jsonIo = testIo(dir);
@@ -284,6 +285,7 @@ describe('team workflow run and team workflow replay', () => {
     expect(validateAgainstJsonSchema(errDoc, buildCommandOutputSchema(ERROR_OUTPUT_SCHEMA))).toEqual([]);
     expect(errDoc.error.id).toBe('workflow.dry-only');
     expect(errDoc.error.message).toContain('Kernel workflow gate (amendment 04)');
+    expect(errDoc.notice).toBe('dry run — no record is written');
   });
 
   test('runs a cycle with entry effects deterministically, pipes run --json into replay, and writes zero files', async () => {
@@ -556,10 +558,16 @@ signals:
       ['replay', 'workflow.yaml', 'good-journal.json'],
       ['replay', 'workflow.yaml', 'good-journal.json', '--evidence', 'evidence.json', '--dry'],
     ]) {
+      const plainInv = testIo(dir);
+      expect(await runWorkflow(argv, plainInv)).toBe(2);
+      expect(plainInv.out).toBe('');
+      expect(plainInv.err.startsWith('dry run — no record is written\n')).toBe(true);
+
       const invIo = testIo(dir);
       expect(await runWorkflow([...argv, '--json'], invIo)).toBe(2);
       const errDoc = JSON.parse(invIo.out);
       expect(errDoc.error.id).toBe('workflow.invocation');
+      expect(errDoc.notice).toBe('dry run — no record is written');
     }
   });
 });
