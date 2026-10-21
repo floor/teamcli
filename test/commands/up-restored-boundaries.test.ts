@@ -15,10 +15,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../../src/approve/command.ts';
+import { upFingerprint, OWNER_APPROVAL_ENV } from '../../src/approve/owner-token.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
+import { approvalStanding } from '../../src/store/store.ts';
 import { setHerdrRun, type HerdrAgent, type HerdrWorkspace, type PaneProcesses } from '../../src/herdr.ts';
-import { readState } from '../../src/state.ts';
+import { readState, updateState } from '../../src/state.ts';
 import { findAgent, registerAgent, updateAgent } from '../../src/registry/agents.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import type { Key } from '../../src/launch/terminal.ts';
@@ -58,6 +60,15 @@ async function approve() {
   const io = testIo(root, { kind: 'owner' });
   const code = await runApprove(FILE, io, { ask: async () => '5', waiting: () => 'empty', now: () => NOW, home });
   expect(code).toBe(0);
+}
+
+/** A delegated run with the standing approval: its timeout is reported, never asked. */
+function quietIo() {
+  const standing = approvalStanding(root, home);
+  if (standing.kind !== 'verified') throw new Error('the no-prompt run needs a verified approval');
+  const io = testIo(root, { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w91:p1', session: 'acme-web' });
+  io.env[OWNER_APPROVAL_ENV] = upFingerprint(standing.record.approval.fingerprints, standing.generation);
+  return io;
 }
 
 function agent(name: string, pane: string, status = 'idle', kind = 'claude'): HerdrAgent {
@@ -596,6 +607,120 @@ describe('team up, a restored session: boundaries', () => {
       model: 'DeepSeek Flash',
       version: 'V4.1',
     });
+  });
+
+  // The repair closes the old pane and takes the seat's state entry away; the fresh install had
+  // already put the successor binding into that entry, and its settings file names it. The line
+  // ran, so the state must name the incarnation the launched process loaded — never none.
+  test('a repaired restored seat keeps the binding its fresh install minted once its line runs', async () => {
+    await approve();
+    writeSeats();
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web']!.seats['deepseek-acme']!.presence_binding = 'prs_aaaaaaaaaaaa';
+    });
+    registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => {
+      const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
+      return launched
+        ? [...list().filter((a) => a.name !== 'deepseek-acme'), { ...agent('deepseek-acme', launched.pane), session: 'kept' }]
+        : list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    };
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual(['w93']);
+    const settings = readFileSync(join(root, '.agents/hooks/acme-web/deepseek-acme.json'), 'utf8');
+    const minted = /prs_[0-9a-f]{12}/.exec(settings)?.[0];
+    expect(minted).toBeDefined();
+    expect(minted).not.toBe('prs_aaaaaaaaaaaa');
+    expect(seatsOf()['deepseek-acme']?.presence_binding).toBe(minted);
+    expect(seatsOf()['deepseek-acme']?.stage).toBe('ready');
+  });
+
+  // The repair's line runs and the wait then reaches its deadline without a ready record: the
+  // process still loaded the settings naming the successor, so the seat keeps it — attendance is
+  // the paneRun, never the ready stage.
+  test('a repaired seat whose line runs and then times out keeps the minted binding', async () => {
+    await approve();
+    writeSeats();
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web']!.seats['deepseek-acme']!.presence_binding = 'prs_aaaaaaaaaaaa';
+    });
+    registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => {
+      const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
+      return launched
+        ? [...list().filter((a) => a.name !== 'deepseek-acme'), { ...agent('deepseek-acme', launched.pane), session: 'kept' }]
+        : list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    };
+    made.launch.agents = live;
+    // The new pane never draws the idle prompt: the wait goes to its deadline after the line ran.
+    made.launch.paneText = (_session, pane) => (made.runs.some((run) => run.pane === pane) ? 'startup still drawing\n' : IDLE);
+    // What the state says at every sleep of the readiness wait: the successor must already be
+    // persisted there, while the stage is still launched, not only after the run ends.
+    const duringWait: { stage: string | undefined; binding: string | undefined }[] = [];
+    const rawSleep = made.launch.sleep;
+    made.launch.sleep = async (ms) => {
+      duringWait.push({ stage: seatsOf()['deepseek-acme']?.stage, binding: seatsOf()['deepseek-acme']?.presence_binding });
+      await rawSleep(ms);
+    };
+    const io = quietIo();
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(1);
+    expect(made.closes).toEqual(['w93']);
+    expect(io.out).toContain('deepseek-acme: left out: timeout\n');
+    const settings = readFileSync(join(root, '.agents/hooks/acme-web/deepseek-acme.json'), 'utf8');
+    const minted = /prs_[0-9a-f]{12}/.exec(settings)?.[0];
+    expect(minted).toBeDefined();
+    expect(minted).not.toBe('prs_aaaaaaaaaaaa');
+    expect(seatsOf()['deepseek-acme']?.stage).toBe('launched');
+    expect(seatsOf()['deepseek-acme']?.presence_binding).toBe(minted);
+    expect(duringWait.length).toBeGreaterThan(0);
+    expect(duringWait.every((read) => read.stage === 'launched')).toBe(true);
+    expect(duringWait.every((read) => read.binding === minted)).toBe(true);
+  });
+
+  // The same repair whose workspace is never made: the old pane was closed and its record
+  // dropped, so no process carries the old binding any more, and the line never ran to load the
+  // successor. The record the plan left says `launched` with no binding — not the dead old one.
+  test('a repair whose relaunch never runs leaves the dropped record with no binding', async () => {
+    await approve();
+    writeSeats();
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions['acme-web']!.seats['deepseek-acme']!.presence_binding = 'prs_aaaaaaaaaaaa';
+    });
+    registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    made.launch.agents = live;
+    made.launch.createWorkspace = () => null;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(1);
+    expect(made.closes).toEqual(['w93']);
+    expect(seatsOf()['deepseek-acme']?.stage).toBe('launched');
+    expect(seatsOf()['deepseek-acme']?.presence_binding).toBeUndefined();
   });
 
   // The record's launcher names a conversation of its own. A repair through it would resume
