@@ -7,10 +7,12 @@ import { mkdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 
 import { createConnection } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runAck } from '../../src/commands/ack.ts';
 import { runAdd } from '../../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
 import { runApprove, type Waiting } from '../../src/approve/command.ts';
+import { runBrief } from '../../src/commands/brief.ts';
 import { runBroker } from '../../src/commands/broker.ts';
 import { runBus } from '../../src/commands/bus.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
@@ -32,18 +34,24 @@ import { runRename } from '../../src/commands/rename.ts';
 import { runRestart } from '../../src/commands/restart.ts';
 import { runRelease } from '../../src/commands/release.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
-import { deliverGeneralBrief } from '../../src/launch/general-brief.ts';
+import { deliverBriefForAttribution } from '../../src/launch/general-brief.ts';
 import { signRecord } from '../../src/send/record.ts';
 import { runList } from '../../src/commands/list.ts';
 import { runSeats } from '../../src/commands/seats.ts';
+import { runSeat } from '../../src/commands/seat.ts';
+import { runSettings } from '../../src/commands/settings.ts';
+import { runConfig } from '../../src/commands/config.ts';
 import { runSessions } from '../../src/commands/sessions.ts';
 import { runStatus } from '../../src/commands/status.ts';
+import { runSwap } from '../../src/commands/swap.ts';
 import { runUp } from '../../src/commands/up.ts';
 import { runMessages } from '../../src/commands/messages.ts';
 import { runIssues } from '../../src/commands/issues.ts';
 import { runNext } from '../../src/commands/next.ts';
 import { runPause } from '../../src/commands/pause.ts';
 import { runPlan } from '../../src/commands/plan.ts';
+import { runQueue } from '../../src/commands/queue.ts';
+import { runPolicy } from '../../src/commands/policy.ts';
 import { runProc } from '../../src/commands/proc.ts';
 import { runProjects } from '../../src/commands/projects.ts';
 import { runUsage } from '../../src/commands/usage.ts';
@@ -58,7 +66,7 @@ import { loadTeamFile } from '../../src/file/load.ts';
 import { installKey } from '../../src/store/keys.ts';
 import { storePath } from '../../src/store/store.ts';
 import type { Io } from '../../src/io.ts';
-import { emptySession, updateState } from '../../src/state.ts';
+import { emptySession, readState, updateState } from '../../src/state.ts';
 import { blocksOf, EXIT_SUFFIX, transcript, type Block } from './blocks.ts';
 import { createFixture, type Fixture } from './fixture.ts';
 import { DEFAULT_SPEC, specOf, type ScreenKind, type Spec, type ToolState } from './spec.ts';
@@ -227,16 +235,34 @@ async function setup(page: Page): Promise<void> {
   installKey(fixture.home, JSON.parse(readFileSync(new URL('../fixtures/key.json', import.meta.url), 'utf8')));
 
   // A page that says its seats were launched has their brief too: the launch writes it into every
-  // declared seat's drop folder before it types, and records it in the state.
-  if (page.spec.briefs === 'delivered' && page.team) {
-    deliverGeneralBrief({
+  // declared seat's drop folder before it types, and records the claim in the state. A page that
+  // says the seats also read it has the receipt each CLI seat's turn-start reader leaves, written
+  // through the read path itself.
+  if ((page.spec.briefs === 'delivered' || page.spec.briefs === 'delivered-and-read') && page.team) {
+    deliverBriefForAttribution({
       dir,
       root: fixture.root,
       session: page.session,
-      seats: page.team.seats.map((seat) => seat.name),
       home: fixture.home,
-      at: page.spec.now,
+      now: new Date(page.spec.now),
+      team: page.team,
+      state: readState(dir).sessions[page.session] ?? emptySession(),
+      attributed: page.team.seats.map((seat) => seat.name),
     });
+    if (page.spec.briefs === 'delivered-and-read') {
+      const readIo: Io = {
+        stdout: () => {},
+        stderr: () => {},
+        cwd: fixture.root,
+        env: {},
+        stdinIsTTY: false,
+        caller: { kind: 'owner' },
+      };
+      for (const seat of page.team.seats) {
+        if (seat.human === true) continue;
+        await runDrops(['--read', '--seat', seat.name], readIo, { home: fixture.home });
+      }
+    }
   }
 
   // The session registry a page declares, written into the fixture home's own store before any
@@ -277,6 +303,9 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
   const world = page.world as World;
   const fixture = page.fixture;
   switch (name) {
+    case 'ack':
+      // The page's clock is pinned, so the receipt's `at` is the page's instant.
+      return runAck(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'add':
       return runAdd(rest, io, world.addSources());
     case 'answer':
@@ -287,6 +316,10 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     // credential read — no keychain, no socket, no peer on the page's fixture. The command's own
     // refusals that need a broker source are shown as text on the page instead: their sentences
     // differ by platform, and the docs suite runs on macOS and Linux.
+    case 'brief':
+      // The page's clock is pinned, so a delivery's `at` is the page's instant, and a state the
+      // page seeds with fixed lifetimes prints the ids those lifetimes derive.
+      return runBrief(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'broker':
       return runBroker(rest, io, { home: fixture.home });
     case 'bus':
@@ -342,6 +375,12 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runNext(rest, io, { home: fixture.home, now: () => Date.parse(spec.now) });
     case 'plan':
       return runPlan(rest, io, { home: fixture.home, now: () => Date.parse(spec.now) });
+    case 'queue':
+      return runQueue(rest, io, { home: fixture.home });
+    case 'policy':
+      // The owner's signed declarations live under the fixture's own home; the clock is the
+      // page's, so a declaration's `date` is the page's instant.
+      return runPolicy(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'init':
       // No login is probed in a doc run: the skeleton's seat is claude-code's, deterministically.
       return runInit(rest, io, fixture.home, undefined, { loggedIn: () => false });
@@ -382,10 +421,21 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRelease(rest, io, world.releaseFetch(), world.releaseKeyReader());
     case 'seats':
       return runSeats(rest, io, { ...world.statusSources(), wait: async () => false });
+    case 'seat':
+      return runSeat(rest, io, { ...world.statusSources(), wait: async () => false });
+    case 'settings':
+      return runSettings(rest, io, { home: fixture.home, now: new Date(spec.now) });
+    case 'config':
+      return runConfig(rest, io);
     case 'sessions':
       return runSessions(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'status':
       return runStatus(rest, io, world.statusSources());
+    case 'swap':
+      // The queue's clock is the page's: a queued swap's `queuedAt` and `deadline` are the
+      // page's instant and the wait that follows it. A run reads the world's own herdr, as the
+      // restart example does, never the machine's.
+      return runSwap(rest, io, { home: fixture.home, now: () => new Date(spec.now), sources: world.restartSources() });
     case 'list':
       return runList(rest, io, world.listSources());
     case 'up':

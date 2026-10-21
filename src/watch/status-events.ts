@@ -33,6 +33,7 @@ import {
   type HerdrWaitOutcome,
 } from '../herdr.ts';
 import { leadSeatsOf, recipientsForEvent, type TeamRoutingRoles } from '../bus/kinds.ts';
+import { GENERAL_BRIEF_FROM, GENERAL_BRIEF_SHA256 } from '../launch/general-brief.ts';
 import { appendEvent, eventLogPath, type EventAppendInput, type SignedEventRecord } from '../bus/log.ts';
 import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator } from '../bus/seats.ts';
@@ -40,7 +41,9 @@ import type { BusPublishOutcome } from '../bus/server.ts';
 import { EVENT_THRESHOLDS } from '../policy/events.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { isRead, readRecord, RECEIPT_STATUSES, sameFolder, verifyRecord } from '../send/record.ts';
 import { readState } from '../state.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
 import { notify as defaultNotify } from './notify.ts';
 import { readScreen, screenWord, type Screen, type ScreenOptions } from './screen.ts';
@@ -367,6 +370,11 @@ export type SeatStatusEngineInput = {
   onLog?: (seat: string, message: string) => void;
   /** Optional callback invoked when a worker seat's idle window elapses and a nudge is due. */
   onNudge?: (seatName: string, pane: string) => void;
+  /** The watch's current native hold by seat. A held seat must not publish the legacy,
+   *  screen-derived `seat.idle` event: the canonical `presence.changed` record is the
+   *  authoritative idle source, and this event only speaks where native presence does not
+   *  contradict it. Read afresh when an idle event is due, never cached across passes. */
+  nativeHeld?: () => ReadonlySet<string>;
   /** Optional assigned-work predicate overriding or supplementing disk checks. */
   hasAssignedWork?: (seatName: string, atMs: number) => boolean;
   /** Optional set/list of seats with assigned work in unit tests without disk state. */
@@ -412,7 +420,14 @@ export type SeatStatusEngine = {
 /** Checks whether `seatName` currently has assigned work on disk under `root`:
  *  1. Active lease in `.agents/leases/<id>.json` (`lease.seat === seatName && Date.parse(lease.until) > atMs`)
  *  2. Assigned worktree (`worktrees[task].seat === seatName`) or temporary seat task in `.agents/state.json`
- *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding startup brief, `work-*`, and sidecars)
+ *  3. Unacked message drop in `.agents/send-drops/<session>/<seatName>` (excluding the startup brief — its
+ *     current id and the superseded ids its claim replaced — `work-*`, and sidecars: dot files, the
+ *     `.pending`/`.delivered`/`.closed.json` markers and the signed `<id>.<status>.json` receipts,
+ *     which are metadata beside a delivery and never work of their own; a message this checkout's
+ *     own key proves read or replied, and a launch brief record that same key signed for this
+ *     seat — including a superseded id the state no longer lists — are deliveries the seat has
+ *     taken, never work waiting. An unread, unsigned or unverifiable receipt proves nothing and
+ *     the drop stays work)
  *  4. Open `work.claimed` event for `seatName` in `.agents/events.jsonl` not yet closed by `work.done` or `work.released`. */
 export function seatHasAssignedWorkOnDisk(
   root: string,
@@ -448,10 +463,12 @@ export function seatHasAssignedWorkOnDisk(
 
   // 2. Assigned worktree or temporary task in `state.json`.
   let briefId: string | undefined;
+  let supersededBriefs: ReadonlySet<string> = new Set();
   try {
     const state = readState(agentsDir);
     const sessionState = state.sessions[session];
     briefId = sessionState?.briefs?.[seatName]?.id;
+    supersededBriefs = new Set(sessionState?.briefs?.[seatName]?.superseded ?? []);
     if (sessionState?.seats?.[seatName]?.temporary?.task) return true;
     for (const wt of Object.values(sessionState?.worktrees ?? {})) {
       if (wt.seat === seatName) return true;
@@ -461,6 +478,12 @@ export function seatHasAssignedWorkOnDisk(
   }
 
   // 3. Unacked message drop in `.agents/send-drops/<session>/<seatName>`.
+  //
+  // A receipt or a brief record settles a name only when this checkout's message key proves it; a
+  // home with no usable key proves nothing, so every name left below is still work.
+  const keyState = messageKeyState(options?.home);
+  const key = keyState.kind === 'key' ? keyState.key : undefined;
+  const context = { to: seatName, root, session };
   const dropDir = join(agentsDir, 'send-drops', session, seatName);
   if (existsSync(dropDir)) {
     try {
@@ -471,9 +494,36 @@ export function seatHasAssignedWorkOnDisk(
           || name.endsWith('.pending')
           || name.endsWith('.delivered')
           || name.endsWith('.closed.json')
+          || RECEIPT_STATUSES.some((status) => name.endsWith(`.${status}.json`))
           || (briefId !== undefined && name === briefId)
+          || supersededBriefs.has(name)
         ) {
           continue;
+        }
+        if (key !== undefined) {
+          // The seat took this message: a signed read or reply receipt verifies for its id, this
+          // seat, this checkout and this session. A tampered, foreign-key or other-session
+          // receipt is not a read, and the name stays work.
+          if (isRead(dropDir, name, context, key)) continue;
+          // Every delivery of this build's brief is the launch's, not assigned work: the current
+          // id is skipped above from the claim, and a superseded id the state no longer lists is
+          // recognized from the record itself — same key, same sender, same checkout, same
+          // delivered body. The key is the home's, shared by every checkout it serves, so the
+          // record's root must name this checkout too; another checkout's brief is not work this
+          // seat has taken.
+          const held = readRecord(join(dropDir, name), name);
+          if (
+            held.ok
+            && held.record !== null
+            && held.record.payload.to === seatName
+            && held.record.payload.session === session
+            && sameFolder(held.record.payload.root, root)
+            && held.record.payload.from === GENERAL_BRIEF_FROM
+            && held.record.payload.brief_sha256 === GENERAL_BRIEF_SHA256
+            && verifyRecord(held.record, key)
+          ) {
+            continue;
+          }
         }
         return true;
       }
@@ -947,6 +997,14 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
     // `status === 'idle'`
     delete state.promptSpell;
     state.status = 'idle';
+    // The canonical `presence.changed` record is the authoritative idle source. This legacy,
+    // screen-derived event is suppressed for a seat the watch's native gate holds: a turn, a
+    // person wait, a session end or an unproven projection must not be published as idle. The
+    // stretch is dropped, never carried across the hold, so it cannot fire stale later.
+    if (input.nativeHeld?.().has(seatName) === true) {
+      delete state.idleStretch;
+      return { seat: seatName, status, events, nudgeDue: false };
+    }
     const stretch = (state.idleStretch ??= { since: at, emitted: false, nudged: false });
     const idleWindowMs = idleWindowMsFor(seatName);
     if (
@@ -988,6 +1046,10 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       const seat = team.seats.find((item) => item.name === seatName);
       if (!seat || seat.human === true || seat.stopped === true) continue;
       const isLead = leads.has(seatName);
+      // The legacy idle event never contradicts the native presence store: a held seat's stretch
+      // is dropped here as it is in `step`, and the canonical `presence.changed` record stands.
+      const nativeHeld = input.nativeHeld?.().has(seatName) === true;
+      if (nativeHeld) delete state.idleStretch;
 
       if (
         state.status === 'blocked'
@@ -1019,7 +1081,8 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       }
 
       if (
-        (state.status === 'idle' || state.status === 'done')
+        !nativeHeld
+        && (state.status === 'idle' || state.status === 'done')
         && state.idleStretch !== undefined
         && !state.idleStretch.emitted
         && !isLead

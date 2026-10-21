@@ -10,6 +10,7 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { grantGate } from '../src/grant.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { currentBriefClaim } from '../src/launch/general-brief.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { approvalStanding, storePath } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
@@ -264,7 +265,25 @@ describe('reload preserves work without an approved copy', () => {
       expect(made.created).toEqual([]);
       expect(made.commands).toEqual([]);
       expect(readFileSync(file, 'utf8')).toBe(before);
-      expect(readState(dir)).toEqual(state);
+      // Nothing closed and nothing launched: the seats, the work trees and the watch stand. The
+      // brief is a file fact: a relaunch path delivers it before the close that then refuses, so
+      // the seat's claim is the fresh lifetime the delivery minted, the first id recorded as
+      // superseded. An early refusal — the "already protected" planning pass — delivers nothing.
+      const after = readState(dir);
+      expect(after.sessions.acme?.seats).toEqual(state.sessions.acme?.seats);
+      expect(after.sessions.acme?.worktrees).toEqual(state.sessions.acme?.worktrees);
+      expect(after.sessions.acme?.watch).toEqual(state.sessions.acme?.watch);
+      const held = currentBriefClaim(after.sessions.acme?.briefs?.worker);
+      const was = currentBriefClaim(state.sessions.acme?.briefs?.worker);
+      expect(held).not.toBeNull();
+      expect(was).not.toBeNull();
+      if (late) {
+        expect(held!.id).not.toBe(was!.id);
+        expect(held!.incarnation).not.toBe(was!.incarnation);
+        expect(held!.superseded).toContain(was!.id);
+      } else {
+        expect(held).toEqual(was);
+      }
       if (late) {
         // The close path's refusal is said and logged, the way `up` says a seat it leaves out.
         const record = kind === 'working' || status === 'working'
@@ -278,6 +297,50 @@ describe('reload preserves work without an approved copy', () => {
       noApproval();
     });
   }
+
+  test('a refused reload keeps the presence binding the seat was launched with', async () => {
+    remember('worker', 'low');
+    updateState(dir, (state) => {
+      const seat = state.sessions.acme?.seats.worker;
+      if (seat !== undefined) seat.presence_binding = 'prs_aaaaaaaaaaaa';
+    });
+    const state = readState(dir);
+    const made = world([agent('worker', 'idle')]);
+    // The planning reads see idle; the check before the close sees the working screen.
+    let reads = 0;
+    made.launch.paneText = () => (++reads === 1 ? IDLE : WORKING);
+    const io = testIo(root, OWNER);
+    expect(await runReload(['worker'], io, { launch: made.launch, home, now: () => NOW }), io.err + io.out).toBe(1);
+    expect(made.effects).toEqual([]);
+    expect(readState(dir).sessions.acme?.seats).toEqual(state.sessions.acme?.seats);
+    expect(readState(dir).sessions.acme?.seats.worker?.presence_binding).toBe('prs_aaaaaaaaaaaa');
+    noApproval();
+  });
+
+  test('a reload that launched but never reached its prompt keeps the successor binding', async () => {
+    remember('worker', 'low');
+    updateState(dir, (state) => {
+      const seat = state.sessions.acme?.seats.worker;
+      if (seat !== undefined) seat.presence_binding = 'prs_aaaaaaaaaaaa';
+    });
+    const made = world([agent('worker', 'idle')]);
+    // The planning and pre-close reads see idle; the relaunched pane never shows its prompt.
+    let reads = 0;
+    made.launch.paneText = () => (++reads <= 2 ? IDLE : WORKING);
+    const io = testIo(root, OWNER);
+    expect(await runReload(['worker'], io, { launch: made.launch, home, now: () => NOW }), io.err + io.out).toBe(1);
+    expect(io.err).toContain('the close happened and the new launch did not reach ready');
+    // The line ran and its process is still in the new pane: the record keeps the binding that
+    // process's settings file names, never the closed seat's.
+    const after = readState(dir).sessions.acme?.seats.worker;
+    expect(after?.stage).not.toBe('ready');
+    expect(after?.presence_binding).toMatch(/^prs_[0-9a-f]{12}$/);
+    expect(after?.presence_binding).not.toBe('prs_aaaaaaaaaaaa');
+    const settings = /--settings ([^ ]+)/.exec(made.commands[0] ?? '')?.[1];
+    expect(settings).toBeDefined();
+    expect(readFileSync(settings!, 'utf8')).toContain(after!.presence_binding!);
+    noApproval();
+  });
 });
 
 describe('the granted caller has no additional unasked-close path', () => {

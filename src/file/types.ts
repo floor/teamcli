@@ -6,6 +6,7 @@ export type Problem = { line: number; message: string; unreadable?: true };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
+import type { CrossSessionInbound } from '../launch/declaration.ts';
 import type { DeliveryLeg, LivenessThresholds, SenderNameMode } from '../settings/inherit.ts';
 import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
@@ -126,6 +127,17 @@ export type Seat = {
    * Absent otherwise, so a file that marks none keeps every digest it had.
    */
   human?: true;
+  /**
+   * The seat's own word on cross-session socket frames, when the file writes one: `accept`
+   * authorizes the socket leg, `hold` and `refuse` never let it dial. The launch must always
+   * declare `crossSessionInbound: accept` itself — what the receiving CLI needs to take the
+   * frame. With no `inbound` word, a seat TeamCLI launched (its generated settings file is on
+   * the line) is authorized by that launch alone; a session launched some other way is not
+   * dialed without `accept` here. A field of the built seat like every other, so it is part of
+   * the seat's digest and omitted when the file omits the key — every file that writes none
+   * keeps the digest it had.
+   */
+  inbound?: CrossSessionInbound;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
   /**
@@ -235,6 +247,9 @@ export type TeamFile = {
     teamIdle: number;
     nudgeWait: number;
     unsentAfter: number;
+    /** How long a delivered message may go without the seat's signed read receipt before the
+     *  watch retries it once; the report follows at twice this window. */
+    unreadAfter: number;
     quotaMarks: number[];
     // The checks this file turns off, by name. The four that can't be turned off never appear.
     checks: string[];
@@ -283,6 +298,12 @@ export type TeamFile = {
    * `normal` leaves them as written. Omitted in the file reads as `normal`. An owner section.
    */
   tempo: 'relaxed' | 'normal' | 'urgent';
+  /**
+   * The one seat that may record a green-slice install beside the owner, or null when the file
+   * names none — then only the owner records an install. An owner section: naming or changing
+   * the seat needs a new approval, and an unapproved designation never admits an install.
+   */
+  installer: string | null;
   /**
    * The orchestrator seat's grant, or null when the file has no `grant` section. An owner
    * section: changing it needs a new approval. `approve` in `scope` is an ordinary approval;

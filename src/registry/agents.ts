@@ -30,6 +30,10 @@ export type AgentReach = {
   team: string;
   seat: string;
   session: string;
+  /** The agent session herdr reported for the seat's live CLI — the CLI's own id, read from the
+   *  same `agent list` reading the launch records in the seat state, never derived or invented.
+   *  A launch re-points it beside the pane; a record written before it was kept reads null. */
+  agent_session?: string | null;
   /** The current herdr pane; re-pointed on relaunch. */
   pane: string | null;
   /** A cross-session address if the agent has one, else null. */
@@ -90,6 +94,14 @@ export type Agent = {
   seat_handle?: string | null;
   /** Owner-signed seat-level policy declarations (Kernel amendment 02 §2.12), when present. */
   policies?: Record<string, YamlValue>;
+  /** Owner-signed seat-level settings, one signed entry per key, when present. */
+  settings?: Record<string, YamlValue>;
+  /**
+   * When the team file stopped declaring the seat, this record is retained and marked orphaned:
+   * the bootstrap ruling keeps every signed setting and never deletes the file. Absent on a record
+   * whose seat is still declared (and on records written before the mark existed).
+   */
+  orphaned_at?: string | null;
 };
 
 export type AgentInit = Omit<Agent, 'id' | 'provenance'> & {
@@ -111,6 +123,9 @@ export type AgentPatch = Partial<Omit<Agent, 'id' | 'signing' | 'reach' | 'prove
   signing?: Partial<AgentSigning>;
   reach?: Partial<AgentReach>;
   provenance?: AgentProvenancePatch;
+  /** Entries to set, or to remove with `null`, inside the record's settings map. Applied to the
+   *  record the writer reads under the folder lock, so two writes of different keys both land. */
+  settingsDelta?: Record<string, YamlValue | null>;
 };
 
 export function agentsDir(home: string): string {
@@ -187,7 +202,7 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
     const file = agentFile(home, id);
     const current = readAgentFile(file, id);
     if (!current) throw new Error(`no agent ${id} in ${agentsDir(home)}`);
-    const { signing, reach, provenance, ...rest } = patch;
+    const { signing, reach, provenance, settingsDelta, ...rest } = patch;
     const nextProvenance: AgentProvenance = { ...current.provenance, updated_at: new Date().toISOString() };
     if (provenance?.dev_mode === true) {
       nextProvenance.dev_mode = true;
@@ -211,8 +226,22 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
       reach: { ...current.reach, ...definedOnly(reach ?? {}) },
       provenance: nextProvenance,
     };
+    // `null` takes the orphan mark off the live record: the field is absent again, the way a
+    // record that was never orphaned reads, with its id and signed settings kept.
+    if (rest.orphaned_at === null) delete next.orphaned_at;
+    if (settingsDelta !== undefined) {
+      const settings: Record<string, YamlValue> = { ...(next.settings ?? {}) };
+      for (const [key, entry] of Object.entries(settingsDelta)) {
+        if (entry === null) delete settings[key];
+        else settings[key] = entry;
+      }
+      next.settings = settings;
+    }
     if (next.policies !== undefined && Object.keys(next.policies).length === 0) {
       delete next.policies;
+    }
+    if (next.settings !== undefined && Object.keys(next.settings).length === 0) {
+      delete next.settings;
     }
     const problem = invalid(next);
     if (problem) throw new Error(`cannot update ${id}: ${problem}`);
@@ -227,6 +256,13 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
  *  live address from one a relaunch left behind. */
 export function recordAgentAddress(home: string, id: string, address: string | null): Agent {
   return updateAgent(home, id, { reach: { address } });
+}
+
+/** Records the agent session herdr reported for the seat's live CLI — the id the launch also
+ *  keeps in the seat state — or clears it with null. The caller hands in the measured reading;
+ *  nothing here reads herdr, and nothing here derives an id from a pane, a pid or a name. */
+export function recordAgentSession(home: string, id: string, agentSession: string | null): Agent {
+  return updateAgent(home, id, { reach: { agent_session: agentSession } });
 }
 
 /** The agent that holds a seat of a team. A retired agent no longer holds it; if more than one
@@ -355,7 +391,10 @@ function fromValue(value: YamlValue): Agent | null {
   const launcher = strOrNull(value.launcher);
   const pane = strOrNull(reach.pane);
   const address = strOrNull(reach.address);
+  // Optional: a record written before the id was kept has no field at all, which reads null.
+  const agentSession = strOrNull(reach.agent_session);
   const handle = strOrNull(value.seat_handle);
+  const orphanedAt = strOrNull(value.orphaned_at);
   const id = str(value.id);
   const name = str(value.name);
   const model = text(signing.model);
@@ -377,11 +416,15 @@ function fromValue(value: YamlValue): Agent | null {
     lab === null || cli === null || launch === null || team === null || seat === null ||
     session === null || registeredBy === null || registeredAt === null || updatedAt === null ||
     mcp === null || skills === null || launcher === undefined || pane === undefined ||
-    address === undefined || handle === undefined
+    address === undefined || agentSession === undefined || handle === undefined || orphanedAt === undefined
   ) {
     return null;
   }
   if (typeof lifecycle !== 'string' || !(LIFECYCLES as readonly string[]).includes(lifecycle)) return null;
+  // `null` and an absent field both read as "no measured id", so a record written before the
+  // field existed parses to the same reach it always did; only a measured id is kept.
+  const readReach: AgentReach = { team, seat, session, pane, address };
+  if (agentSession !== null) readReach.agent_session = agentSession;
   const agent: Agent = {
     id,
     name,
@@ -390,7 +433,7 @@ function fromValue(value: YamlValue): Agent | null {
     cli,
     launcher,
     launch,
-    reach: { team, seat, session, pane, address },
+    reach: readReach,
     mcp,
     skills,
     lifecycle: lifecycle as AgentLifecycle,
@@ -411,8 +454,12 @@ function fromValue(value: YamlValue): Agent | null {
     },
   };
   if (handle !== null) agent.seat_handle = handle;
+  if (orphanedAt !== null) agent.orphaned_at = orphanedAt;
   if (isObj(value.policies) && Object.keys(value.policies).length > 0) {
     agent.policies = value.policies;
+  }
+  if (isObj(value.settings) && Object.keys(value.settings).length > 0) {
+    agent.settings = value.settings;
   }
   return agent;
 }
@@ -426,8 +473,13 @@ function invalid(agent: Agent): string | null {
     return 'the signing triple (model, version, role) is incomplete';
   }
   if (!agent.reach.team.trim() || !agent.reach.seat.trim()) return 'reach.team and reach.seat are required';
+  if (agent.reach.agent_session != null && !agent.reach.agent_session.trim()) return 'reach.agent_session is empty';
   if (!(LIFECYCLES as readonly string[]).includes(agent.lifecycle)) return `"${agent.lifecycle}" is not a lifecycle state`;
   if (agent.seat_handle != null && !isSeatId(agent.seat_handle)) return 'seat_handle is not seat_ plus 12 hex';
+  if (agent.orphaned_at != null && !Number.isFinite(Date.parse(agent.orphaned_at))) {
+    return 'orphaned_at is not a readable timestamp';
+  }
+  if (agent.settings !== undefined && !isObj(agent.settings)) return '"settings" must be a map';
   return null;
 }
 
@@ -473,6 +525,24 @@ function emitPolicies(policies: Record<string, YamlValue>): string[] {
   return lines;
 }
 
+function emitSettings(settings: Record<string, YamlValue>): string[] {
+  const keys = Object.keys(settings).sort();
+  if (keys.length === 0) return [];
+  const lines = ['settings:'];
+  for (const name of keys) {
+    const entry = settings[name];
+    if (isObj(entry)) {
+      lines.push(`  ${quote(name)}:`);
+      for (const [k, v] of Object.entries(entry)) {
+        lines.push(`    ${k}: ${emitYamlValue(v ?? null)}`);
+      }
+    } else {
+      lines.push(`  ${quote(name)}: ${emitYamlValue(entry ?? null)}`);
+    }
+  }
+  return lines;
+}
+
 function emit(agent: Agent): string {
   const lines = [
     `id: ${quote(agent.id)}`,
@@ -489,6 +559,7 @@ function emit(agent: Agent): string {
     `  team: ${quote(agent.reach.team)}`,
     `  seat: ${quote(agent.reach.seat)}`,
     `  session: ${quote(agent.reach.session)}`,
+    `  agent_session: ${scalarOrNull(agent.reach.agent_session)}`,
     `  pane: ${scalarOrNull(agent.reach.pane)}`,
     `  address: ${scalarOrNull(agent.reach.address)}`,
     `mcp: ${list(agent.mcp)}`,
@@ -516,8 +587,14 @@ function emit(agent: Agent): string {
     lines.push(`    command: ${quote(agent.provenance.delegated.command)}`);
   }
   if (agent.seat_handle != null) lines.push(`seat_handle: ${quote(agent.seat_handle)}`);
+  // A retained record whose declaration is gone says so in its own line; a live seat's file
+  // carries no mark, so the records every ordinary run writes read as they always did.
+  if (agent.orphaned_at != null) lines.push(`orphaned_at: ${quote(agent.orphaned_at)}`);
   if (agent.policies && Object.keys(agent.policies).length > 0) {
     lines.push(...emitPolicies(agent.policies));
+  }
+  if (agent.settings && Object.keys(agent.settings).length > 0) {
+    lines.push(...emitSettings(agent.settings));
   }
   return `${lines.join('\n')}\n`;
 }

@@ -1,6 +1,6 @@
 # team grant
 
-Writes an authority record for the current team, in one of two forms. `team grant <seat>
+Writes an authority record for the current team, in one of three forms. `team grant <seat>
 --scope <act,...>` sets the orchestrator's grant in the team file; a later invocation replaces
 that scope exactly, and the file holds one grant. `team grant <seat|@team> --capabilities
 <cap,...>` writes a standing grant record — an owner-signed record naming the grantee's registry
@@ -10,6 +10,7 @@ identity, an agent id for a seat or a team id for `@team`.
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> [--inbox] [--expires <ISO>] [--json]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
 `--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,
@@ -30,9 +31,23 @@ it the scope is the project root itself. `--expires` is a readable timestamp; wi
 grant does not expire. `--name` sets the record's file name; without it the name is
 `seat-<agent id>` or `team-<team id>`. The words `grant`, `delegate` and `revoke-…` are reserved.
 
+In the third form `--public-key` reads the public side of a client key pair written by
+[`team client`](client.md) `keygen` — `client.pub`, or `client.key`, whose public half is derived.
+The grant binds the client id, the entity and the key's directory, and is signed with the owner's
+key into the shared grants folder; its id begins `cg_`. This slice admits only the one principal
+and destination of the local bot relay: `--client grok-bot`, `--entity floor`, a recipient of
+`orchestrator@floor`. `--expires` is an ISO timestamp no more than seven days ahead; without it
+the grant expires seven days after it is written, and a grant never carries an unlimited or a past
+expiry. `--dry-run`, `--scope`, `--capabilities`, `--name` and positional arguments belong to the
+other forms and are refused here. The grant admits only the signed client request form, with no
+owner, seat or terminal authority. `--inbox` widens the vocabulary to `send` and `messages`: the
+same grant then admits the client's own read of its replies (`team messages --client`, see
+[`team messages`](messages.md)) as well as its sends. Without `--inbox` the grant is exactly the
+send-only grant earlier builds wrote, byte for byte, and a read presented under it is refused.
+
 ## Who may run it
 
-Only the owner, from a terminal outside herdr, in both forms. An agent, seat, delegate or caller
+Only the owner, from a terminal outside herdr, in every form. An agent, seat, delegate or caller
 without a terminal is refused before the team file is read. A grant cannot authorize this command,
 and no mode waives the gate; `--dry-run` has the same owner requirement.
 
@@ -47,6 +62,11 @@ is read for the project's root and team, never changed. A revocation is not rest
 under the same name is a new record, and [team revoke](revoke.md) appends the revocation record
 that ends it. Runtime admission still requires a verified record of the team file on this machine;
 `reload` reads the live file's grant. Writing either record does not change the team file.
+
+The third form writes one owner-signed client grant into the same shared grants folder, under the
+grant id; the team file is read for nothing and changed by nothing. A grant id is unique: a second
+invocation for the same client key writes a second grant with its own id, and
+[team revoke](revoke.md) ends either one by id.
 
 ## Output and exit codes
 

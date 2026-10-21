@@ -48,6 +48,34 @@ Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
   `› /exit  exit Codex` sits above the input row.
 - `exit.txt`: the pane after Enter, read `unknown`. Codex asks no exit question; the
   shell is back with the task's own advice above it.
+- `idle-wide-warning.txt`: supplied by Floor, not captured here — a sanitized 8-line frame
+  from a wide pane running the observed build (`»` prompt). The status row is
+  `GPT-6.1-Sol ultra · Context 100% left · weekly 94% left`, with the account's
+  `⚠ 1 warning · f2 to view` right-aligned on the same row and no chrome row under it. It
+  read `unknown` until the warning tail counted as the row's own end.
+
+## Constructed
+
+Nothing in these files was read from a live pane. Each is `idle-hint.txt` with its last
+rows changed, as a seat's own screen draws them.
+
+- `ready-context-used.txt`: the idle hint at 100% context, with the context shown used —
+  `  GPT-6.1-Sol medium · Context 100% used` — and the chrome row under it. Read
+  `unknown` before the profile exempted a status row ending `% used`; a seat up at this
+  prompt was then reported not ready after a restart.
+- `ready-context-used-bare.txt`: the same screen with no chrome row, the status row
+  last.
+- `near-context-used-typed.txt`: `› Ask Codex to do anything else` in the box, over the
+  used status row. Not ready: the box holds text.
+- `near-context-used-follower.txt`: the used status row with the seat's own row under
+  it. Not a composer: a row that is not the pane's chrome means the row above it is
+  not the status row.
+- `near-context-used-nostatus.txt`: the idle hint with no status row. Not a composer:
+  the profile declares no fallback.
+
+The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` prints
+`Context `, `% left`, `Context `, `% used` beside the status-surface ids
+`context-remaining` and `context-used`, so the context is drawn either way.
 
 ## Not produced
 

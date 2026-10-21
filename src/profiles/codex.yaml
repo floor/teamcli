@@ -13,7 +13,6 @@ unattended:
   - never
   - -s
   - danger-full-access
-  - --no-daemon
   - --no-alt-screen
 rules: first-message
 login:
@@ -78,7 +77,7 @@ mcp_inbox:
     - -c
     - 'mcp_servers.team_inbox.command="{command_json}"'
     - -c
-    - 'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}]'
+    - 'mcp_servers.team_inbox.args=["{entry_json}","mcp","serve","--seat","{seat_json}"{file_args}{epoch_args}]'
 models:
   option:
     - -m
@@ -163,11 +162,18 @@ screen:
     status_line: '^\s+GPT-[0-9][\w.-]*\s+[^·]*·'
     # 0.161.0 at 54 columns wraps the status row: `weekly 9` stays on the status line and
     # the next line is the ellipsis alone. A status line that already holds `…`, an `L:`
-    # quota, or that ends `% left` keeps the last-line reading. The wrap is the status
-    # row only when the line under it is that ellipsis and nothing follows it.
+    # quota, or that ends `% left` or `% used` keeps the last-line reading, and so does one
+    # that ends with the account's `⚠ N warning · f2 to view` tail: 0.161.0 draws the context
+    # either way — `Context 100% left` or `Context 100% used` are both its own status surfaces
+    # (`context-remaining` and `context-used`) — and a seat at its idle prompt with the used
+    # figure was read `unknown`, so `restart` called the already-fresh seat not ready. A wide
+    # pane right-aligns that warning on the status row itself and draws no chrome row under it
+    # (idle-wide-warning.txt), so the tail is part of the row and never the ellipsis row the
+    # wrap expects. The wrap is the status row only when the line under it is that ellipsis and
+    # nothing follows it.
     status_below:
       line: '^…\s*$'
-      except: '…|L:|% left$'
+      except: '…|L:|% (?:left|used)$|⚠ \d+ warnings?\s*·\s*f2 to view\s*$'
     # The pane's own row under the status line, and the whole of what may stand there: the
     # captures draw `← for agents · ? for shortcuts` (0.161.0/idle-hint.txt, working.txt), and
     # the same hint carries the account's warning on it — `? for shortcuts … ⚠ N warning · f2 to
@@ -184,8 +190,10 @@ screen:
     # there, content on the rows below at the second, and exit-typed.txt keeps the old
     # transcript and menu rows above it — and a prompt glyph on a content row is never the
     # input row. The read scans up from the status line and anchors this pattern to the
-    # captured column.
-    prompt: '^›(?:\s|$)'
+    # captured column. An observed build draws the same ready screen with `»` in place of `›`
+    # (GPT-6.1-Sol ultra); the two glyphs are the one prompt, and a row carrying either at
+    # that column is the input row.
+    prompt: '^[›»](?:\s|$)'
     # No captured Codex frame draws its box without a status row, so there is nothing the
     # fallback may call idle or unsent. An empty list is a declared one: a screen with no
     # status row stays unknown.

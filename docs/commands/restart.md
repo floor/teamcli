@@ -18,6 +18,17 @@ says the screen was not read. A seat whose profile says herdr cannot report it
 (`herdr_status: unreliable`) is free when its own screen reads idle, and it is stopped on its
 profile's exit key there.
 
+Before anything is typed into the relaunched seat, the run delivers the general seat brief: the
+session's `briefs` records a fresh incarnation and runtime epoch, the brief's sha256 and the
+record's expected id, and the signed drop is posted at exactly that id. The relaunch's turn-start
+reader names the claim's epoch (`team drops --read --epoch <run_id>`), so the process that just
+stopped — a reader started under the old epoch — cannot satisfy the new claim. The run also
+delivers to every other live or human declared seat, without touching their panes. A name held at
+the expected id by another file, a link or a folder is
+refused, never replaced or followed — [`team brief rollout --apply`](brief.md) recovers that
+delivery at the claim's next attempt. A delivery that cannot be written is said and logged, and
+the restart goes on; [`team check`](check.md) names the seat.
+
 ## Synopsis
 
     team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
@@ -26,7 +37,7 @@ profile's exit key there.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--abandon` | — | close the workspace of a stuck seat without typing into its pane; a seat caller cannot abandon a `working` seat or a lead seat |
+| `--abandon` | — | close the workspace of a stuck seat without typing into its pane, and replace a `replaced` pane herdr still names as the seat; a seat caller cannot abandon a `working` seat or a lead seat |
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
@@ -107,7 +118,26 @@ agents: all
 ```
 
 A seat mid-turn is not interrupted — its work would be lost — and `restart` says which state it was
-in:
+in. If the pane host restored the process under a new pid, `restart` treats it as the same seat only
+when herdr still names that seat on the recorded pane and the live conversation id matches the
+agent registry's recorded `reach.agent_session`. The registry record is the proof on its own: a
+state file written before the id was recorded is no bar to recognizing the seat, and no bar to
+resuming it either. The seat is then relaunched with that recorded conversation through its
+launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `codex … resume
+<id>`; a CLI with no measured resume form is left as it is unless the caller abandons the
+conversation with `--abandon`, a state that names another id is relaunched without one, and a
+conversation that differs or cannot be read remains refused (`<seat> has a process in its old
+pane that is not the signed seat; left as it is`, exit 1).
+
+A launch line that itself names a conversation — another id, `--last`, or a resume with no id —
+is never run: the repair is refused before the stop, and `--abandon` does not start it fresh
+either, because that line would run the same selection. Clear the selection from the seat's
+launch line for a fresh start.
+
+That refusal's `--json` `repair` names `team restart <seat> --abandon` when herdr still names
+the seat on the recorded pane. With the flag the run closes that pane's workspace without typing
+into it — the conversation there is not this run's to answer — and launches the seat again in a
+fresh workspace. A pane herdr does not name as the seat is refused with or without the flag.
 
 ```console screens="claude-beacon=working"
 $ team restart claude-beacon ; echo "exit $?"

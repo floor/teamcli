@@ -185,6 +185,9 @@ export type RuntimeMailboxRecordInput = {
   session: string;
   /** The instant the record carries; `new Date()` when absent. */
   at?: string;
+  /** Publish once: a record already at the name is the first publication, left as it stands.
+   *  Without it the writer replaces the record, as the owner's delivery always has. */
+  once?: boolean;
 };
 
 /** Writes one signed message into a mailbox as the Runtime — the writer the owner's delivery
@@ -194,7 +197,7 @@ export type RuntimeMailboxRecordInput = {
  *  record it counts. */
 export function writeRuntimeMailboxRecord(
   input: RuntimeMailboxRecordInput,
-): { ok: true; path: string } | { ok: false; error: string } {
+): { ok: true; path: string; existing?: true } | { ok: false; error: string } {
   const payload: MessagePayload = {
     kind: 'message',
     id: input.id,
@@ -212,6 +215,7 @@ export function writeRuntimeMailboxRecord(
     return { ok: false, error: `the message key could not be read: ${String(error)}` };
   }
   const path = messageFile(input.root, input.to, input.id);
+  if (input.once === true && existsSync(path)) return { ok: true, path, existing: true };
   try {
     writePrivateAtomic(path, `${JSON.stringify({ payload, signature }, null, 2)}\n`);
   } catch (error) {

@@ -238,7 +238,7 @@ A session entry:
 | `watch` | `{ pid?, heartbeat, pane?, workspace? }` | the watch's process, last pass, pane and workspace |
 | `launched_file` | string | the team file the session was launched from |
 | `watchdog` | `{ file, pane? }` | the team file a flagless watch may read, and the pane that may read it |
-| `nudge` | `{ pending_since }` | the work drop the watch is waiting to type |
+| `nudge` | `{ pending_since }` | declared in the state shape; no code at the tag writes or reads it |
 | `procs` | map | the processes seats recorded with `team proc add` |
 
 A seat record:

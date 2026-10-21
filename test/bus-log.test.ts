@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import {
   checkPrivilegedSelfSubscription,
   DEFAULT_OWNER_AT_ONCE_KINDS,
@@ -74,7 +74,8 @@ afterEach(() => {
 
 describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendment 01 §4.3, §4.4)', () => {
   test('validates closed event kinds, privileged kinds, owner-at-once defaults, and threshold constants', () => {
-    expect(EVENT_KINDS.length).toBe(32);
+    expect(EVENT_KINDS.length).toBe(34);
+    expect(isEventKind('config.changed')).toBe(true);
     expect(isEventKind('message.arrived')).toBe(true);
     expect(isEventKind('team.policy-refused')).toBe(true);
     expect(isEventKind('record.invalid')).toBe(true);
@@ -98,6 +99,9 @@ describe('bus kinds, privileged self-subscription, and routing (RFC 002 Amendmen
     expect(isPrivilegedKind('security.refused')).toBe(true);
     expect(isPrivilegedKind('message.arrived')).toBe(false);
     expect(isPrivilegedKind('message.arrived', ['message.arrived'])).toBe(true);
+    // A setting is a value, not a limit: the change is routed, never privileged, never at once.
+    expect(isPrivilegedKind('config.changed')).toBe(false);
+    expect(DEFAULT_OWNER_AT_ONCE_KINDS).not.toContain('config.changed');
 
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('seat.at-prompt');
     expect(DEFAULT_OWNER_AT_ONCE_KINDS).toContain('team.policy-refused');
@@ -776,4 +780,187 @@ describe('bus verification checkpoint: verify only what came after the last veri
     expect(restored.checked).toBe(1);
     expect(restored.events.map((event) => event.payload.seq)).toEqual([1]);
   });
+});
+
+describe('event log appends are serialized across processes (RFC 002 Amendment 01 §4.1)', () => {
+  const TS = '2026-10-21T12:00:00.000Z';
+  const DAY_MS = 86_400 * 1_000;
+
+  test('twelve concurrent writers each take a unique sequence and every record is read past a shared cursor', async () => {
+    const { root, home } = makeScratch();
+    const seed = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'seed' },
+      { deduplicate: false, retain: false },
+    );
+    expect(seed.ok).toBe(true);
+    if (!seed.ok) return;
+    expect(seed.record.payload.seq).toBe(1);
+
+    // Each writer is a separate process released at one instant, so the scene exercises the
+    // cross-process path: allocation and append must serialize or two writers mint one sequence.
+    const script = join(import.meta.dir, 'bus-log-race-run.ts');
+    const startAt = Date.now() + 1_500;
+    const children = Array.from({ length: 12 }, (_, at) => {
+      const id = `race-${String(at)}`;
+      const child = Bun.spawn([process.execPath, script, root, home, id, String(startAt)], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      return { id, child };
+    });
+
+    const written: { id: string; ok: boolean; seq?: number; reason?: string }[] = [];
+    for (const { id, child } of children) {
+      const [out, err, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect({ id, err, code }).toEqual({ id, err: '', code: 0 });
+      written.push(JSON.parse(out.trim().split('\n').at(-1) ?? 'null') as (typeof written)[number]);
+    }
+
+    expect(written.filter((result) => result.ok !== true)).toEqual([]);
+    const seqs = written.map((result) => result.seq ?? -1).sort((a, b) => a - b);
+    expect(seqs).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+
+    // A consumer that had already passed seq 1 sees every sibling: the cursor filter drops only
+    // records at or below the cursor, so a duplicate sequence would silently hide one.
+    const read = readEventsFromCursor('acme', root, home, 1, { kept: 2 });
+    expect(read.ok).toBe(true);
+    if (!read.ok || read.kind !== 'events') return;
+    expect(read.events.map((event) => event.payload.seq).sort((a, b) => a - b)).toEqual(seqs);
+    const tracker = createSequenceTracker(1);
+    for (const event of read.events) {
+      expect(tracker.accept(event)).toBe(true);
+    }
+    expect(tracker.cursor).toBe(13);
+
+    const full = readEvents('acme', root, home);
+    expect(full.ok).toBe(true);
+    if (!full.ok) return;
+    expect(full.events).toHaveLength(13);
+    expect(full.unverified).toBe(0);
+  }, 30_000);
+
+  test('a drop declared from inside an append takes the next sequence, and the append after it is stale by nothing', () => {
+    const { root, home } = makeScratch();
+    const appendOne = (id: string, options: Parameters<typeof appendEvent>[4] = {}) =>
+      appendEvent(
+        'acme',
+        root,
+        home,
+        { ts: TS, kind: 'message.arrived', session: 'acme', record_id: id },
+        { deduplicate: false, ...options },
+      );
+    expect(appendOne('kept-1', { retain: false }).ok).toBe(true);
+    expect(appendOne('kept-2', { retain: false }).ok).toBe(true);
+
+    // Backdate the live file past the window: the next append seals it, the prune drops it, and
+    // the drop declaration appends its signed record from inside that append.
+    const path = eventLogPath('acme', root, home);
+    const monthAgo = new Date(Date.now() - 31 * DAY_MS);
+    utimesSync(path, monthAgo, monthAgo);
+
+    const fresh = appendOne('fresh');
+    expect(fresh.ok).toBe(true);
+    if (!fresh.ok) return;
+    expect(fresh.record.payload.seq).toBe(3);
+
+    const after = appendOne('after');
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.record.payload.seq).toBe(5);
+
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((event) => [event.payload.record_id, event.payload.seq])).toEqual([
+      ['fresh', 3],
+      ['retention:1-2', 4],
+      ['after', 5],
+    ]);
+    expect(read.unverified).toBe(0);
+  });
+
+  test('the standalone prune pass holds the same lock, so a startup prune cannot mint a sequence beside a writer', async () => {
+    const { root, home } = makeScratch();
+    const seed = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'kept' },
+      { deduplicate: false, retain: false },
+    );
+    expect(seed.ok).toBe(true);
+    if (!seed.ok) return;
+
+    // A separate process holds the event lock; the prune pass must wait for it before it touches
+    // the retained files or precomputes its declaration. Without the wait it would return at once.
+    const storeDir = dirname(eventLogPath('acme', root, home));
+    const ready = join(storeDir, 'holder.ready');
+    const holder = Bun.spawn(
+      [process.execPath, join(import.meta.dir, 'bus-log-hold-lock-run.ts'), storeDir, ready, '3000'],
+      { stdout: 'ignore', stderr: 'pipe' },
+    );
+    const exit = holder.exited;
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(ready) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    expect(existsSync(ready)).toBe(true);
+
+    const started = Date.now();
+    pruneEventLog('acme', root, home);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(500);
+    expect(await exit).toBe(0);
+    expect(await new Response(holder.stderr).text()).toBe('');
+  }, 20_000);
+
+  test('an append that cannot take the lock within its bounded wait fails closed and writes nothing', async () => {
+    const { root, home } = makeScratch();
+    const seed = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'seed' },
+      { deduplicate: false, retain: false },
+    );
+    expect(seed.ok).toBe(true);
+    if (!seed.ok) return;
+
+    // The holder outlasts the append's bounded wait, so the append must answer with the
+    // structured failure instead of blocking forever or writing beside the holder.
+    const storeDir = dirname(eventLogPath('acme', root, home));
+    const ready = join(storeDir, 'holder-busy.ready');
+    const holder = Bun.spawn(
+      [process.execPath, join(import.meta.dir, 'bus-log-hold-lock-run.ts'), storeDir, ready, '8000'],
+      { stdout: 'ignore', stderr: 'pipe' },
+    );
+    const exit = holder.exited;
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(ready) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    expect(existsSync(ready)).toBe(true);
+
+    const busy = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'busy' },
+      { deduplicate: false, retain: false },
+    );
+    expect(busy).toEqual({ ok: false, reason: 'the event log is busy; the record was not written' });
+    expect(await exit).toBe(0);
+    expect(await new Response(holder.stderr).text()).toBe('');
+
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((event) => event.payload.record_id)).toEqual(['seed']);
+  }, 20_000);
 });

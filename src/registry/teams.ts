@@ -50,6 +50,8 @@ export type TeamRecord = {
   lobbies: Record<string, string>;
   roster: RosterEntry[];
   lifecycle: TeamLifecycle;
+  /** Owner-signed team-level settings, one signed entry per key, when present. */
+  settings?: Record<string, YamlValue>;
   provenance: TeamProvenance;
 };
 
@@ -107,7 +109,13 @@ export function getTeam(home: string, id: string): TeamRecord | null {
 
 /** What `upsertTeam` takes: any of the record's fields, and who is writing and when. A team not
  *  yet registered needs `project`, `session` and `root` at least. */
-export type TeamPatch = Partial<Omit<TeamRecord, 'id' | 'provenance'>> & { by?: string; at?: string };
+export type TeamPatch = Partial<Omit<TeamRecord, 'id' | 'provenance'>> & {
+  by?: string;
+  at?: string;
+  /** Entries to set, or to remove with `null`, inside the record's settings map. Applied to the
+   *  record the writer reads under the registry lock, so two writes of different keys both land. */
+  settingsDelta?: Record<string, YamlValue | null>;
+};
 
 /** Creates the team's record, or changes the fields the patch names and nothing else. */
 export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamRecord {
@@ -115,7 +123,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     const teams = readTeams(home);
     const at = patch.at ?? new Date().toISOString();
     const prior = teams[id];
-    const { by, at: _at, ...fields } = patch;
+    const { by, at: _at, settingsDelta, ...fields } = patch;
     let record: TeamRecord;
     if (prior) {
       record = { ...prior, ...definedOnly(fields), provenance: { ...prior.provenance, updated_at: at } };
@@ -133,15 +141,26 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
         lobbies: fields.lobbies ?? (fields.lobby ? { [fields.session as string]: fields.lobby } : {}),
         roster: fields.roster ?? [],
         lifecycle: fields.lifecycle ?? 'defined',
+        ...(fields.settings !== undefined ? { settings: fields.settings } : {}),
         provenance: { registered_by: by ?? 'team', registered_at: at, updated_at: at },
       };
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
     if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
+    if (settingsDelta !== undefined) {
+      const settings: Record<string, YamlValue> = { ...(record.settings ?? {}) };
+      for (const [key, entry] of Object.entries(settingsDelta)) {
+        if (entry === null) delete settings[key];
+        else settings[key] = entry;
+      }
+      record.settings = settings;
+    }
     // A write of the primary session's lobby keeps that session's map entry in step; every other
     // entry is left exactly as it was, which is what keeps the other sessions' lobbies.
     record.lobbies = { ...(record.lobbies ?? {}) };
     if (record.lobby) record.lobbies[record.session] = record.lobby;
+    if (record.settings !== undefined && Object.keys(record.settings).length === 0) delete record.settings;
+    if (record.settings !== undefined && !isMap(record.settings)) throw new TeamsError('"settings" must be a map');
     delete record.id;
     teams[id] = record;
     write(home, teams);
@@ -395,6 +414,10 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
     }
   }
   if (lobby) lobbies[session] = lobby;
+  // A settings map that is not a map is refused here, not dropped: a reader that ignored it
+  // would answer as if the team had no settings, and the settings it holds would vanish unseen.
+  if (raw.settings !== undefined && raw.settings !== null && !isMap(raw.settings)) bad('"settings" must be a map');
+  const settings = isMap(raw.settings) && Object.keys(raw.settings).length > 0 ? raw.settings : undefined;
   return {
     id,
     project: text('project'),
@@ -406,6 +429,7 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
     lobbies,
     roster: entries,
     lifecycle: lifecycle as TeamLifecycle,
+    ...(settings !== undefined ? { settings } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };
 }
@@ -425,6 +449,32 @@ function scalar(text: string): string {
 
 function nullable(text: string | null): string {
   return text === null ? 'null' : scalar(text);
+}
+
+function emitSettingValue(v: YamlValue): string {
+  if (v === null) return 'null';
+  if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+  if (typeof v === 'string') return scalar(v);
+  if (Array.isArray(v)) return `[${v.map((item) => emitSettingValue(item)).join(', ')}]`;
+  return JSON.stringify(v);
+}
+
+function emitSettings(indent: string, settings: Record<string, YamlValue>): string[] {
+  const keys = Object.keys(settings).sort();
+  if (keys.length === 0) return [];
+  const lines = [`${indent}settings:`];
+  for (const name of keys) {
+    const entry = settings[name];
+    if (isMap(entry)) {
+      lines.push(`${indent}  ${scalar(name)}:`);
+      for (const [k, v] of Object.entries(entry)) {
+        lines.push(`${indent}    ${scalar(k)}: ${emitSettingValue(v ?? null)}`);
+      }
+    } else {
+      lines.push(`${indent}  ${scalar(name)}: ${emitSettingValue(entry ?? null)}`);
+    }
+  }
+  return lines;
 }
 
 function emit(teams: Record<string, TeamRecord>): string {
@@ -463,6 +513,9 @@ function emit(teams: Record<string, TeamRecord>): string {
       lines.push('    roster: []');
     }
     lines.push(`    lifecycle: ${team.lifecycle}`);
+    if (team.settings && Object.keys(team.settings).length > 0) {
+      lines.push(...emitSettings('    ', team.settings));
+    }
     const p = team.provenance;
     lines.push(`    provenance: { registered_by: ${scalar(p.registered_by)}, registered_at: ${scalar(p.registered_at)}, updated_at: ${scalar(p.updated_at)} }`);
   }

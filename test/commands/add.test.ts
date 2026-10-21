@@ -18,13 +18,14 @@ import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import { seatIsStopped, takeOut } from '../../src/file/lines.ts';
+import { currentBriefClaim } from '../../src/launch/general-brief.ts';
 import { writePolicySet } from '../../src/policy/index.ts';
 import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
 const NOW = new Date('2026-10-03T14:02:00Z');
-const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9, pressure: 'normal' };
 const IDLE = CLAUDE_IDLE;
 const PERMISSION = 'Do you want to proceed?\n1. Yes\n';
 
@@ -243,6 +244,21 @@ describe('team add', () => {
     expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
   });
 
+  test('a launched seat keeps the binding its hook file names', async () => {
+    // The seat holds no state before the run: the binding it ends with is the one this launch
+    // minted, and its settings file names that same incarnation. A run that did type the line
+    // keeps its successor; only a refusal before it takes the rotation back.
+    expect(readState(join(project, '.agents')).sessions.acme?.seats.worker).toBeUndefined();
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker'], io, sources(made))).toBe(0);
+    const binding = readState(join(project, '.agents')).sessions.acme?.seats.worker?.presence_binding;
+    expect(binding).toMatch(/^prs_[0-9a-f]{12}$/);
+    const settings = readFileSync(join(project, '.agents', 'hooks', 'acme', 'worker.json'), 'utf8');
+    expect(settings).toContain(`--binding ${binding} --event turn-start`);
+    expect(settings).toContain(`--binding ${binding} --event turn-end`);
+  });
+
   test('adds a declared copy of a seat and starts it under the new name', async () => {
     const before = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
     const record = readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8');
@@ -405,6 +421,49 @@ describe('team add', () => {
     expect(record?.provenance.dev_mode).toBe(true);
     expect(record?.provenance.dev_mode_by).toBe('helper');
     expect(record?.provenance.registered_by).toBe('helper');
+  });
+
+  test('dev mode stands the live file in for the approval add asks for, and only dev mode does', async () => {
+    // The record is signed, but its key is gone: no verified approval stands for this folder.
+    rmSync(join(home, '.config', 'team-key', 'key.json'));
+    const said = 'the record is signed, but its key is missing';
+    const live = join(project, '.agents', 'team.yaml');
+
+    // Unset: the standing refusal ends the run before anything is launched or edited.
+    const bare = testIo(project, owner);
+    const refused = world();
+    expect(await runAdd(['worker'], bare, sources(refused))).toBe(1);
+    expect(bare.err).toBe(`team add: ${said}\n`);
+    expect(refused.creates).toEqual([]);
+    expect(readFileSync(live, 'utf8')).toContain('stopped: true');
+
+    // A dry run says the fold beside its plan and writes no audit line: nothing was run.
+    const preview = testIo(project, owner);
+    preview.env = { TEAMCLI_DEV_MODE: '1' };
+    const none = world();
+    const previewed = await runAdd(['worker', '--dry-run'], preview, sources(none));
+    expect(preview.err).toBe('');
+    expect(previewed).toBe(0);
+    expect(preview.out).toContain(`! warning: ${said}; the live team file ${live} counts as approved; dev mode continues\n`);
+    expect(preview.err).toBe('');
+    expect(none.creates).toEqual([]);
+    expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
+
+    // Set to exactly 1: the live file this run edits counts as approved, the warning names it,
+    // and the audit log records the caller the fold admitted before the edit.
+    const io = testIo(project, owner);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const made = world();
+    expect(await runAdd(['worker'], io, sources(made))).toBe(0);
+    expect(io.err).toBe(`team add: warning: ${said}; the live team file ${live} counts as approved; dev mode continues\n`);
+    expect(made.creates).toEqual(['worker']);
+    expect(readFileSync(live, 'utf8')).not.toMatch(/# the seat stays in this order\n    stopped: true/);
+    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toContain(
+      `add [owner] warning: ${said}; the live team file ${live} counts as approved; dev mode continues`,
+    );
+    const record = readAgents(home).find((agent) => agent.reach.seat === 'worker');
+    expect(record?.provenance.dev_mode).toBe(true);
+    expect(record?.provenance.dev_mode_by).toBe('owner');
   });
 
   test('a dry run previews a launch-line refusal, creates nothing, and edits nothing', async () => {
@@ -807,7 +866,7 @@ describe('team add', () => {
     const cases: { machine: Machine; text: string }[] = [
       { machine: { ...fine, loadPerCore: 9 }, text: 'the load is 9.0 per core, above 3' },
       { machine: { ...fine, memoryFree: 10 }, text: 'free memory is 10%, below 25%' },
-      { machine: { ...fine, swapFree: 1.1e9 }, text: 'free swap is 1.1 GB, below 2.0 GB' },
+      { machine: { ...fine, pressure: 'critical' }, text: 'memory pressure is critical' },
     ];
     for (const item of cases) {
       const made = world();
@@ -822,24 +881,24 @@ describe('team add', () => {
   test('a machine refusal writes one line with the printed refusal and its readings', async () => {
     const made = world();
     const io = testIo(project, owner);
-    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 };
+    const machine: Machine = { loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9, pressure: 'critical' };
     expect(await runAdd(['worker'], io, sources(made, { machine: () => machine }))).toBe(1);
-    expect(io.err).toContain('team add: free swap is 1.2 GB, below 2.0 GB');
+    expect(io.err).toContain('team add: memory pressure is critical');
     const lines = readFileSync(join(project, '.agents', 'team.log'), 'utf8').split('\n')
-      .filter((line) => line.includes('refused: free swap is '));
+      .filter((line) => line.includes('refused: memory pressure is critical'));
     expect(lines).toEqual([
-      '2026-10-03T14:02:00.000Z add [owner] refused: free swap is 1.2 GB, below 2.0 GB — readings: load 1.0/core, memory 69%, disk 200000000000 B free, swap used 7000000000 B of 8200000000 B (free 1200000000 B)',
+      '2026-10-03T14:02:00.000Z add [owner] refused: memory pressure is critical — readings: load 1.0/core, memory 69%, disk 200000000000 B free, pressure critical, swap used 7000000000 B of 8200000000 B (free 1200000000 B)',
     ]);
   });
 
   test('a dry run and a caller refused before the gate write no line', async () => {
-    const refusing = { ...fine, swapFree: 1.2e9 };
+    const refusing = { ...fine, pressure: 'critical' as const };
     const log = join(project, '.agents', 'team.log');
     const logged = () => (existsSync(log) ? readFileSync(log, 'utf8') : null);
     // A dry run decides nothing and writes nothing, though its refusal reads as the real one's.
     const dry = testIo(project, owner);
     expect(await runAdd(['--dry-run', 'worker'], dry, sources(world(), { machine: () => refusing }))).toBe(1);
-    expect(dry.err).toContain('team add: free swap is 1.2 GB, below 2.0 GB');
+    expect(dry.err).toContain('team add: memory pressure is critical');
     expect(logged()).toBeNull();
     // A caller the caller gate refuses returns before the machine gate is even read.
     const seat = testIo(project, { kind: 'seat', name: 'stranger', pane: 'w1:p1' });
@@ -866,8 +925,15 @@ describe('team add', () => {
     const lines = readFileSync(join(project, '.agents', 'team.log'), 'utf8').split('\n')
       .filter((line) => line.includes('refused: swap grew by '));
     expect(lines).toEqual([
-      '2026-10-03T14:02:00.000Z add [owner] refused: swap grew by 2.0 GB in 10 minutes, above 1.0 GB — readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 3000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:02:00.000Z add [owner] refused: swap grew by 2.0 GB in 10 minutes, above 1.0 GB — readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure normal, swap used 3000000000 B of 9000000000 B (free 8000000000 B)',
     ]);
+  });
+
+  test('free swap under the file does not refuse a launch on its own', async () => {
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker'], io, sources(made, { machine: () => ({ ...fine, swapFree: 1.2e9 }) }))).toBe(0);
+    expect(made.creates).toEqual(['worker']);
   });
 
   test('readings inside every limit still start the seat', async () => {
@@ -1135,13 +1201,30 @@ describe('team add', () => {
       // The launch delivered the general brief before it typed: the seat's record and its state entry.
       deliverBriefs({ dir: join(project, '.agents'), root: project, session: 'acme', seats: ['worker'], home, at: NOW.toISOString() });
       const before = readFileSync(join(project, '.agents/team.state.json'), 'utf8');
+      const beforeState = readState(join(project, '.agents'));
       const made = world();
       const closes: string[] = [];
       made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
       const listed: HerdrAgent = { name: 'worker', agent: 'claude', pane: 'w9:p1', workspace: 'w9', status: 'idle', cwd: null };
       made.launch.agents = () => [listed];
       made.launch.paneText = () => IDLE;
-      return { made, closes, listed, before };
+      return { made, closes, listed, before, beforeState };
+    }
+
+    /** A refusal the run reaches after the delivery went out: the seats and the work trees stand
+     *  as they were, and the seat's new claim is the delivery's own fresh lifetime, holding the
+     *  first id as superseded. The brief is a file fact, not a claim of launch. */
+    function expectDeliveredAndLeft(before: ReturnType<typeof readState>) {
+      const after = readState(join(project, '.agents'));
+      expect(after.sessions.acme?.seats).toEqual(before.sessions.acme?.seats);
+      expect(after.sessions.acme?.worktrees).toEqual(before.sessions.acme?.worktrees);
+      const held = currentBriefClaim(after.sessions.acme?.briefs?.worker);
+      const was = currentBriefClaim(before.sessions.acme?.briefs?.worker);
+      expect(held).not.toBeNull();
+      expect(was).not.toBeNull();
+      expect(held!.id).not.toBe(was!.id);
+      expect(held!.incarnation).not.toBe(was!.incarnation);
+      expect(held!.superseded).toContain(was!.id);
     }
 
     test('agent list binding failed', async () => {
@@ -1309,7 +1392,7 @@ describe('team add', () => {
     });
 
     test('an unrecognised screen still names abandon when the pane is the seat\'s again', async () => {
-      const { made, closes, listed, before } = setupReadySeat();
+      const { made, closes, listed, beforeState } = setupReadySeat();
       let reads = 0;
       made.launch.processInfo = () => {
         reads += 1;
@@ -1327,11 +1410,11 @@ describe('team add', () => {
       expect(io.out).not.toContain("worker: its pane is the seat's again; left as it is\n");
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
-      expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
+      expectDeliveredAndLeft(beforeState);
     });
 
     test('restarts to same between plan and close', async () => {
-      const { made, closes, listed, before } = setupReadySeat();
+      const { made, closes, listed, beforeState } = setupReadySeat();
       let reads = 0;
       made.launch.processInfo = () => {
         reads += 1;
@@ -1348,7 +1431,7 @@ describe('team add', () => {
       expect(io.out).not.toContain("worker: its pane is the seat's again; left as it is\n");
       expect(closes).toEqual([]);
       expect(made.creates).toEqual([]);
-      expect(readFileSync(join(project, '.agents/team.state.json'), 'utf8')).toBe(before);
+      expectDeliveredAndLeft(beforeState);
     });
   });
 });
@@ -1424,6 +1507,30 @@ describe('team add delegated', () => {
     expect(asked[0]!.dir).toBe(join(project, '.agents'));
     expect(asked[0]!.flags).toEqual(['temporary', 'like', 'until']);
     expect(asked[0]!.io).toBe(io);
+  });
+
+  test('a verdict that folded the approval is printed and logged, and the add goes on as a delegated one', async () => {
+    approve(DELEGATE_FILE);
+    const made = world();
+    const io = testIo(project, pilot);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const live = join(project, '.agents', 'team.yaml');
+    const line = `warning: delegation needs a verified approval: the file was never approved on this machine; the live team file ${live} counts as approved; dev mode continues`;
+    const asked: Parameters<NonNullable<AddSources['delegateGate']>>[0][] = [];
+    const code = await runAdd(['worker'], io, sources(made, {
+      delegateGate: (input) => {
+        asked.push(input);
+        return { kind: 'passed' as const, pane: 'main/w1:p1', devApproval: line };
+      },
+    }));
+    // The dev run asked with its own verdict and the live file's path; the line is printed
+    // before the same-copy rule still refuses the add of a stopped seat, and it is logged.
+    expect(asked[0]!.dev?.on).toBe(true);
+    expect(asked[0]!.file).toBe(live);
+    expect(code).toBe(1);
+    expect(io.err).toBe(`team add: ${line}\n${EDIT_REFUSAL}`);
+    expect(made.creates).toEqual([]);
+    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toContain(`add [pilot] ${line}`);
   });
 
   test('a delegated add that would clear stopped is refused before any write or signing', async () => {

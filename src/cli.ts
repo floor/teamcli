@@ -9,7 +9,9 @@ import { description, homepage, license, version } from './version.ts';
 // Each command is loaded only when it is called. A slice adds its line here. The table is exported
 // so a test can walk it: every command, `--help`, `-h` and a usage line.
 export const commands: Record<string, () => Promise<{ default: Command; USAGE: string }>> = {
+  brief: () => import('./commands/brief.ts'),
   check: () => import('./commands/check.ts'),
+  client: () => import('./commands/client.ts'),
   commits: () => import('./commands/commits.ts'),
   doctor: () => import('./commands/doctor.ts'),
   down: () => import('./commands/down.ts'),
@@ -17,9 +19,11 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   init: () => import('./commands/init.ts'),
   grant: () => import('./commands/grant.ts'),
   delegate: () => import('./commands/delegate.ts'),
+  'development-mode': () => import('./commands/development-mode.ts'),
   revoke: () => import('./commands/revoke.ts'),
   status: () => import('./commands/status.ts'),
   seats: () => import('./commands/seats.ts'),
+  seat: () => import('./commands/seat.ts'),
   list: () => import('./commands/list.ts'),
   up: () => import('./commands/up.ts'),
   watch: () => import('./commands/watch.ts'),
@@ -28,6 +32,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   sessions: () => import('./commands/sessions.ts'),
   next: () => import('./commands/next.ts'),
   plan: () => import('./commands/plan.ts'),
+  queue: () => import('./commands/queue.ts'),
   worktree: () => import('./commands/worktree.ts'),
   add: () => import('./commands/add.ts'),
   answer: () => import('./commands/answer.ts'),
@@ -39,6 +44,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   restart: () => import('./commands/restart.ts'),
   send: () => import('./commands/send.ts'),
   reply: () => import('./commands/reply.ts'),
+  ack: () => import('./commands/ack.ts'),
   route: () => import('./commands/route.ts'),
   feed: () => import('./commands/feed.ts'),
   release: () => import('./commands/release.ts'),
@@ -52,11 +58,15 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   raise: () => import('./commands/raise.ts'),
   broker: () => import('./commands/broker.ts'),
   bus: () => import('./commands/bus.ts'),
+  daemon: () => import('./commands/daemon.ts'),
   mcp: () => import('./commands/mcp.ts'),
   proc: () => import('./commands/proc.ts'),
   projects: () => import('./commands/projects.ts'),
   policy: () => import('./commands/policy.ts'),
   rename: () => import('./commands/rename.ts'),
+  config: () => import('./commands/config.ts'),
+  settings: () => import('./commands/settings.ts'),
+  swap: () => import('./commands/swap.ts'),
 };
 
 /** Commands an earlier line carried and this one does not, each with the one line a typed one
@@ -85,6 +95,12 @@ The team is declared in <project>/.agents/team.yaml.
 Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error, 2 when no command or an unknown command is given.
 `;
 
+// The hidden presence hook is written into a seat's settings file at install time, so no person
+// types it. `--help` is the one way to read its words, and it ends through the help site every
+// command uses.
+const PRESENCE_HOOK_USAGE = `Usage: team presence-hook --dir <path> --session <name> --seat <name> --binding <binding> --event <event> [--notification permission_prompt]
+`;
+
 export { version };
 
 /** `team --about`'s text: version, licence, docs link, and the `what 0.5.0 must not pretend` block. */
@@ -105,6 +121,13 @@ export function helpText(): string {
   const names = Object.keys(commands);
   const usage = USAGE.replace('{commands}', names.length ? names.map((n) => `  ${n}`).join('\n') : '  (none in this build)');
   return `${description()}\n\n${usage}`;
+}
+
+/** The one help end: print a command's usage and stop. A table command and the hidden presence
+ *  hook both reach it, so the help exit stays one site with one row. */
+function printHelp(io: Io, usage: string): number {
+  io.stdout(usage);
+  return 0; // exit: team.command-help
 }
 
 /** What the process entry point does when a command throws: one line on stderr, exit code 1. */
@@ -148,6 +171,14 @@ export async function main(argv: string[], io: Io): Promise<number> {
     const { default: run } = await import('./conformance/adapter.ts');
     return run(rest, io);
   }
+  // Hidden: a seat's settings-file hook stages one presence event. Turn words are in argv and the
+  // command reads no stdin; the notification command also exact-filters the CLI's payload. It
+  // prints nothing. It is not a command in the help text.
+  if (name === 'presence-hook') {
+    if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, PRESENCE_HOOK_USAGE);
+    const { default: run } = await import('./daemon/presence/hook.ts');
+    return run(rest);
+  }
   const load = commands[name];
   if (!load) {
     // 0.3.5's last setup step was `team approve`. A user typing it out of habit is told the
@@ -165,10 +196,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
   const command = await load();
   // The one path for every command's `--help`/`-h`: it prints the command's usage and stops,
   // before any option parsing, file reading, caller check or herdr call in the command itself.
-  if (rest.includes('--help') || rest.includes('-h')) {
-    io.stdout(command.USAGE);
-    return 0; // exit: team.command-help
-  }
+  if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, command.USAGE);
   return command.default(rest, io);
 }
 

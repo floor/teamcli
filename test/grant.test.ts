@@ -6,6 +6,7 @@ import { approvalOf, approvedFingerprints } from '../src/approve/approval.ts';
 import { compare, describe as describeDifference, fingerprints } from '../src/approve/fingerprint.ts';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
 import { ORDINARY_SECTIONS } from '../src/delegate.ts';
+import { type DevModeRun } from '../src/dev_mode.ts';
 import { GRANT_SCOPES, type LoadResult } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { grantGate } from '../src/grant.ts';
@@ -233,6 +234,54 @@ describe('the grant gate', () => {
     })).toEqual({
       kind: 'passed',
       grant: { session: 'acme', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] },
+    });
+  });
+
+  test('dev mode stands the live file in for the approval alone, and never for approve', () => {
+    const dir = stateDir(placed);
+    const home = mkdtempSync(join(tmpdir(), 'team-grant-home-'));
+    const path = join(dir, 'team.yaml');
+    const load = (text: string) => (): LoadResult => ({ ok: true, team: teamOf(text), root: '/grant/root', path, warnings: [], text });
+    const sources = { load: load(GRANTED), standing: (): Standing => ({ kind: 'none' }) };
+    const dev: DevModeRun = { on: true, by: 'env', governed: false, ignored: false, expired: null, refusals: [] };
+    // Dev mode on: the gate passes without a verified record, and the verdict carries the line
+    // the caller prints and logs — the refusal's own words, the file that counted, the fold.
+    expect(grantGate({ act: 'up', io: io(seat('lead', 'alpha', 'acme')), home, dev, sources })).toEqual({
+      kind: 'passed',
+      grant: { session: 'acme', seat: 'lead', scope: ['up', 'down', 'approve', 'init'] },
+      devApproval: `warning: a grant needs a verified approval: the file was never approved on this machine; the live team file ${path} counts as approved; dev mode continues`,
+    });
+    // `approve` writes the verified record and reads its fingerprints: it never runs on a file
+    // only dev mode stands behind, even when a dev run is handed in.
+    expect(grantGate({ act: 'approve', io: io(seat('lead', 'alpha', 'acme')), home, dev, sources })).toEqual({
+      kind: 'refused',
+      id: 'grant.approval',
+      text: 'a grant needs a verified approval: the file was never approved on this machine',
+    });
+    // Only the approval folds: the scope, the placement and the grant's own presence still refuse.
+    const narrow = GRANTED.replace('    - down\n    - approve\n    - init\n', '');
+    expect(grantGate({
+      act: 'init',
+      io: io(seat('lead', 'alpha', 'acme')),
+      home,
+      dev,
+      sources: { ...sources, load: load(narrow) },
+    })).toEqual({ kind: 'refused', id: 'grant.scope', text: 'the grant does not list `init`' });
+    expect(grantGate({ act: 'up', io: io(seat('lead', 'beta', 'acme')), home, dev, sources })).toEqual({
+      kind: 'refused',
+      id: 'grant.another-pane',
+      text: anotherPaneRefusal('lead', 'alpha'),
+    });
+    // No dev run, or a run that is off, is exactly the refusal the gate made before the fold.
+    expect(grantGate({ act: 'up', io: io(seat('lead', 'alpha', 'acme')), home, sources })).toEqual({
+      kind: 'refused',
+      id: 'grant.approval',
+      text: 'a grant needs a verified approval: the file was never approved on this machine',
+    });
+    expect(grantGate({ act: 'up', io: io(seat('lead', 'alpha', 'acme')), home, dev: { ...dev, on: false, by: null }, sources })).toEqual({
+      kind: 'refused',
+      id: 'grant.approval',
+      text: 'a grant needs a verified approval: the file was never approved on this machine',
     });
   });
 

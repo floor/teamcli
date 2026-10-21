@@ -306,6 +306,87 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     const result = pass({ team: file, watch: file.watch, state: emptySession(), live, machine: fine, now: 10 * MIN, memory });
     expect(result.reports.map((r) => r.text)).toEqual(['deepseek-acme has been idle since the watch started']);
   });
+
+  test('a native-held seat types no work drop and gets no idle report, while an unheld sibling is unchanged', () => {
+    const file = valid(defaultExample);
+    const live = liveScene({
+      'deepseek-acme': { status: 'idle', screen: idleScreen },
+      'deepseek-acme-2': { status: 'idle', screen: idleScreen },
+    });
+    const heldMemory = newMemory();
+    const hold = new Set(['deepseek-acme']);
+    pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 0, memory: heldMemory, nativeHeld: hold,
+    });
+    const held = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 10 * MIN, memory: heldMemory, nativeHeld: hold,
+    });
+    // The held seat's pane is idle and its box is empty: only the native hold keeps both the
+    // work drop and the idle report away. Its sibling takes the ordinary path in the same pass.
+    expect(held.work).toEqual([{ pane: 'w4:p1', seat: 'deepseek-acme-2', cli: 'claude-code', body: NUDGE_TEXT }]);
+    expect(held.reports.map((r) => r.text)).toEqual(['deepseek-acme-2 has been idle since the watch started']);
+
+    // The same instant with no hold is the ordinary pass: both seats are reported and dropped, so
+    // the hold is the only difference.
+    const controlMemory = newMemory();
+    pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 0, memory: controlMemory,
+    });
+    const control = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 10 * MIN, memory: controlMemory,
+    });
+    expect(control.work.map((drop) => drop.seat).sort()).toEqual(['deepseek-acme', 'deepseek-acme-2']);
+    expect(control.reports.map((r) => r.text)).toEqual(expect.arrayContaining([
+      'deepseek-acme has been idle since the watch started',
+      'deepseek-acme-2 has been idle since the watch started',
+    ]));
+
+    // The held pass cleared the seat's stretch; once the hold lifts it is due at idle_first again,
+    // and the sibling, already served, is not.
+    const freed = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 20 * MIN, memory: heldMemory,
+    });
+    expect(freed.work.map((drop) => drop.seat)).toEqual(['deepseek-acme']);
+  });
+
+  test('a native-held seat is not rung and takes no pause notice; both wait for the hold to lift', () => {
+    const file = valid(defaultExample);
+    const live = liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } });
+    const mailbox = [{
+      id: 'msg-1', to: 'deepseek-acme', at: 0, pane: 'w3:p1', status: 'idle',
+      cli: 'claude-code', screen: idleScreen,
+    }];
+    const held = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 10 * MIN, memory: newMemory(), mailbox, nativeHeld: new Set(['deepseek-acme']),
+    });
+    expect(held.ring).toBeNull();
+
+    const control = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 10 * MIN, memory: newMemory(), mailbox,
+    });
+    expect(control.ring).toMatchObject({ pane: 'w3:p1', to: 'deepseek-acme', id: 'msg-1' });
+
+    // The pause's own notice is typed too: skipped under the hold, and written once it lifts.
+    const pause = { by: 'owner', at: new Date(0).toISOString(), stops: [] };
+    const memory = newMemory();
+    const heldPause = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 10 * MIN, memory, pause, nativeHeld: new Set(['deepseek-acme']),
+    });
+    expect(heldPause.work).toEqual([]);
+    const freedPause = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 11 * MIN, memory, pause,
+    });
+    expect(freedPause.work.map((drop) => drop.seat)).toEqual(['deepseek-acme']);
+  });
 });
 
 describe('approvals and legacy watch digest', () => {

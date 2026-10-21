@@ -34,6 +34,7 @@ import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
+import { LockBusyError, withLock } from '../state.ts';
 import {
   messageKeyOf,
   messageKeyState,
@@ -71,6 +72,28 @@ export type EventPayload = {
   reason?: string;
   prompt?: string;
   rule?: string;
+  /** On `config.changed`: the key and the level the signed record was written at. */
+  config_key?: string;
+  config_level?: string;
+  /** The value before and after, in words (an order as its legs). An unset carries the old value
+   *  only; a change the reconcile pass appends carries the new one only, because the record holds
+   *  no history. */
+  config_old?: string;
+  config_new?: string;
+  /** On `presence.changed`: one applied, current-runtime-binding transition from a seat's
+   *  presence log. The four presence words and the event that establishes them are carried
+   *  exactly; `presence_seq` is the per-seat presence log's own sequence and `presence_event_id`
+   *  is that log's record id, so the bus record's identity is reproducible on a replay. */
+  presence_state?: string;
+  presence_event?: string;
+  presence_source?: string;
+  presence_binding?: string;
+  presence_event_id?: string;
+  presence_observed_at?: string;
+  presence_seq?: number;
+  /** On a `config.changed` the reconcile pass appended for a signed record it found without one:
+   *  `true`, so a reader can tell an event raised at write time from one raised after a crash. */
+  reconciled?: string;
   /** On `team.event-log-dropped`: the oldest sequence retention has dropped (carried forward
    *  across declarations) and the newest sequence the declaring pass dropped. */
   dropped_oldest_seq?: number;
@@ -115,6 +138,9 @@ export type CursorReadResult =
       newestSeq: number | null;
       checked: number;
       full: boolean;
+      /** Lines read alongside the verified events whose signature did not verify. They are
+       *  skipped, never returned, and this count is the reader's honest disclosure of them. */
+      unverified: number;
     }
   | {
       ok: true;
@@ -428,12 +454,19 @@ export function pruneEventLog(
   try {
     const kept = options.kept ?? EVENT_LOG_KEPT;
     const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
-    const path = eventLogPath(project, root, home);
-    const drops: DroppedSegment[] = [];
-    const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
-    if (sealed !== null) drops.push(sealed);
-    drops.push(...pruneSealed(path, home, kept, options));
-    declareDrop(project, root, home, kept, options, drops, options.session ?? project);
+    const storeDir = storePath(project, root, home);
+    if (ensureStoreLadder(storeDir, home) !== null) return;
+    // The whole pass holds the append lock: its rotation and drops move the retained files the
+    // append scans, and its declaration precomputes a sequence override before appending. A
+    // writer that slipped between those two steps could mint that same sequence.
+    withEventLock(storeDir, () => {
+      const path = eventLogPath(project, root, home);
+      const drops: DroppedSegment[] = [];
+      const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+      if (sealed !== null) drops.push(sealed);
+      drops.push(...pruneSealed(path, home, kept, options));
+      declareDrop(project, root, home, kept, options, drops, options.session ?? project);
+    });
   } catch {
     // Dropped on purpose: reads and writes are unaffected by retention failing.
   }
@@ -449,9 +482,20 @@ const OPTIONAL_STRING_FIELDS = [
   'reason',
   'prompt',
   'rule',
+  'config_key',
+  'config_level',
+  'config_old',
+  'config_new',
+  'reconciled',
+  'presence_state',
+  'presence_event',
+  'presence_source',
+  'presence_binding',
+  'presence_event_id',
+  'presence_observed_at',
 ] as const;
 
-const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq'] as const;
+const OPTIONAL_SEQUENCE_FIELDS = ['dropped_oldest_seq', 'dropped_newest_seq', 'presence_seq'] as const;
 
 const ALLOWED_PAYLOAD_KEYS = new Set<string>([
   'v',
@@ -733,6 +777,7 @@ export function readEventsFromCursor(
     newestSeq,
     checked: read.checked,
     full: read.full,
+    unverified: read.unverified,
   };
 }
 
@@ -750,6 +795,27 @@ type AppendIndex = {
 };
 
 const appendIndexes = new Map<string, AppendIndex>();
+
+/** The append locks this process holds, by lock directory. Append is synchronous, so a set is
+ *  the whole reentrancy state: the nested drop declaration's append runs under the lock its
+ *  caller already holds instead of waiting on itself. */
+const heldEventLocks = new Set<string>();
+
+/** Runs `work` under the store's event lock. A call made while this process already holds the
+ *  lock — the drop declaration's append, from inside an append or from the prune pass — runs
+ *  directly under the lock its caller holds. */
+function withEventLock<T>(storeDir: string, work: () => T): T {
+  const lockDir = join(storeDir, 'locks', 'events');
+  if (heldEventLocks.has(lockDir)) return work();
+  return withLock(lockDir, () => {
+    heldEventLocks.add(lockDir);
+    try {
+      return work();
+    } finally {
+      heldEventLocks.delete(lockDir);
+    }
+  });
+}
 
 function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
   return `${payload.kind}\u0000${payload.record_id}\u0000${payload.session}`;
@@ -935,6 +1001,22 @@ export function appendEvent(
   const storeDir = storePath(project, root, home);
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };
+
+  // Allocation and the append it stamps are one critical section across processes: two writers
+  // that scan the same newest sequence would otherwise mint it twice, and one of the two records
+  // would then be invisible to every cursor reader. A call made from inside this lock (the drop
+  // declaration) skips the wrapper below and runs the append under the lock its caller holds.
+  const lockDir = join(storeDir, 'locks', 'events');
+  if (!heldEventLocks.has(lockDir)) {
+    try {
+      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options));
+    } catch (error) {
+      if (error instanceof LockBusyError) {
+        return { ok: false, reason: 'the event log is busy; the record was not written' };
+      }
+      throw error;
+    }
+  }
 
   const indexed = appendIndexOf(project, root, home, kept);
   if (!indexed.ok) return indexed;

@@ -1,7 +1,12 @@
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
+import {
+  readPresenceFeed,
+  type PresenceFeedEvent,
+  type PresenceFeedResult,
+} from '../daemon/presence/feed.ts';
 import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
@@ -17,26 +22,29 @@ import {
   statusOfOutcome,
   type HistoryEntry,
 } from '../send/history.ts';
-import { storePath } from '../store/store.ts';
+import { storePath, storesFolder } from '../store/store.ts';
 
 export const USAGE = `Usage: team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]
 
 Reads the project's message history from the 0600 log in its state folder
 (~/.config/team/<project>-<hash>/messages.jsonl), together with any brief files
-(briefs/<from>-to-<to>.md) and Desk audit lines when present. Each event is one
-row: when it was written, its kind (the send outcome), who sent it to whom, and
-its body folded to one line.
+(briefs/<from>-to-<to>.md) and Desk audit lines when present, and merges it with
+the verified presence.changed records in the same state folder's bus event log.
+Each event is one row: when it was written, its kind, who it concerns, and its
+body or canonical state folded to one line. A presence row carries no sender,
+recipient or body.
 
 Options:
-  --seat <name>    only messages sent by or to this seat
-  --limit <n>      at most the last <n> entries (default 50)
-  --all            read message history across all project state folders on this machine
+  --seat <name>    only messages sent by or to this seat, and presence events for it
+  --limit <n>      at most the last <n> events on the combined timeline (default 50)
+  --all            read every project state folder on this machine, messages and presence alike
   --audit <path>   include Desk or bridge audit JSONL lines from <path>
   --briefs <dir>   include <from>-to-<to>.md brief files from <dir>
-  --follow         keep reading as new lines arrive, across log rotations
-  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, status, thread?, in_reply_to?, spec?, resolved?, from_team?, ms?, via?, failed?}]})
+  --follow         keep reading as new lines arrive, across log rotations; a bus-log
+                   gap is printed as it is found and the read resyncs from the retained log
+  --json           one team.feed document ({..., events: [message {ts, from, to, body, id, outcome, status, thread?, in_reply_to?, spec?, resolved?, from_team?, ms?, via?, failed?} | presence {kind: "presence.changed", ts, session, seat, state, event, source, binding, seq, presence_seq, event_id, observed_at, id}]})
 
-Exits 0 when the feed is printed, 1 when the history log can't be read, 2 when the invocation or team file can't be read.
+Exits 0 when the feed is printed, 1 when the history log or the presence event log can't be read, 2 when the invocation or team file can't be read.
 `;
 
 export const DEFAULT_FEED_LIMIT = 50;
@@ -526,6 +534,156 @@ function collectEntries(
   return { ok: true, entries: oneOutcomePerId(all) };
 }
 
+/**
+ * One row of the combined timeline. A message keeps the shape the history writes; a presence
+ * transition is its own typed event — the canonical state, event and source words, the binding,
+ * both sequences and both ids — and never borrows `from`, `to` or `body`: a state is not a
+ * message, and the feed does not dress it as one. `sourceKey` is the store the record was read
+ * from, so one seat's record echoed by two stores stays two rows and a re-read stays one.
+ */
+type FeedItem =
+  | { kind: 'message'; entry: HistoryEntry }
+  | { kind: 'presence'; event: PresenceFeedEvent; sourceKey: string };
+
+type PresenceGap = Extract<PresenceFeedResult, { kind: 'gap' }>;
+
+const STORE_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{12}$/;
+
+type PresenceSource = { key: string; project: string; root: string };
+
+/** The root a store's approval record names: the index entry that makes its bus log findable.
+ *  Read for the path alone and tolerantly, the way `find` indexes stores — a legacy or partly
+ *  unreadable record that still names a root locates the store, and the feed trusts it for
+ *  nothing else. */
+function recordedRoot(store: string): string | null {
+  const text = readNoFollow(join(store, 'approval.json'));
+  if (text === null) return null;
+  try {
+    const parsed = JSON.parse(text) as { root?: unknown };
+    return typeof parsed.root === 'string' && parsed.root !== '' ? parsed.root : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The stores whose bus event logs this run reads. Inside one checkout with no `--all`, that
+ * project's store only, keyed the way the bus log path is derived. `--all` — and a run that
+ * names no single team, such as the lobby — reads every indexed store: one with an approval
+ * record, whose recorded root is the path the store folder name hashes. A store with no readable
+ * approval is not indexed and contributes no presence.
+ */
+function presenceSources(
+  project: string | null,
+  root: string | null,
+  allTeams: boolean,
+  home: string,
+): PresenceSource[] {
+  if (!allTeams && project !== null && root !== null) {
+    return [{ key: `${project}\u0000${root}`, project, root }];
+  }
+  const folder = storesFolder(home);
+  let names: string[];
+  try {
+    names = readdirSync(folder).sort();
+  } catch {
+    return [];
+  }
+  const out: PresenceSource[] = [];
+  for (const name of names) {
+    if (name === 'lobby' || name === 'lobbies') continue;
+    if (!STORE_DIR_NAME.test(name)) continue;
+    const store = join(folder, name);
+    if (heldAt(store).kind !== 'folder') continue;
+    const recorded = recordedRoot(store);
+    if (recorded === null) continue;
+    const project = name.replace(/-[0-9a-f]{12}$/, '');
+    // The record must locate this very folder. One that names another store's root would read
+    // that store's log under this folder's name — an alias, and a duplicate beside the record
+    // that truthfully locates it. An index that does not hash to its own folder is not read.
+    if (storePath(project, recorded, home) !== store) continue;
+    out.push({ key: name, project, root: recorded });
+  }
+  return out;
+}
+
+/** The hole the bus log declared, in the feed's own words: the range that passed retention, or
+ *  the records before the retained head that cannot be read. Never a silently skipped record. */
+function gapNotice(gap: PresenceGap, project: string | null): string {
+  const where = project === null ? '' : ` for ${project}`;
+  if (gap.reason === 'retention') {
+    const range =
+      gap.dropped_oldest_seq !== undefined && gap.dropped_newest_seq !== undefined
+        ? `events ${String(gap.dropped_oldest_seq)}..${String(gap.dropped_newest_seq)}`
+        : `events before ${String(gap.oldest_seq)}`;
+    return `presence: gap${where} — ${range} passed retention; resyncing from the retained log`;
+  }
+  return `presence: gap${where} — events before ${String(gap.oldest_seq)} are missing; resyncing from the retained log`;
+}
+
+function itemTime(item: FeedItem): string {
+  return item.kind === 'presence' ? item.event.ts : item.entry.ts;
+}
+
+function byTime(a: FeedItem, b: FeedItem): number {
+  const left = itemTime(a);
+  const right = itemTime(b);
+  // The presence contract accepts whole-second UTC and 1..3 fractional digits, and byte order
+  // disagrees with the instant inside one second ("01Z" sorts after "01.500Z"). Compare the
+  // instants when both parse; when either does not, keep the history's own byte order, which is
+  // what a legacy line has always been ordered by. Equal instants keep their stable order.
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (!Number.isNaN(leftMs) && !Number.isNaN(rightMs)) return leftMs - rightMs;
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+type Collected =
+  | { ok: true; items: FeedItem[]; notices: string[] }
+  | { ok: false; source: 'messages' | 'presence'; reason: string };
+
+/**
+ * One pass over both sources: the history, briefs and audits exactly as before, plus the verified
+ * presence feed after each store's own cursor. Message entries are untouched; presence rows are
+ * filtered by `--seat` and merged into the one timeline by their own instant. A bus-log gap is
+ * reported as a notice and the store's cursor resets to the retained head for the next pass, so a
+ * follower never pretends it saw the hole.
+ */
+function collectFeed(
+  project: string | null,
+  root: string | null,
+  allTeams: boolean,
+  sources: FeedSources,
+  seatFilter: string | undefined,
+  explicitAudit: string | undefined,
+  explicitBriefs: string | undefined,
+  cursors: Map<string, number>,
+): Collected {
+  const entries = collectEntries(project, root, allTeams, sources, seatFilter, explicitAudit, explicitBriefs);
+  if (!entries.ok) return { ok: false, source: 'messages', reason: entries.reason };
+
+  const items: FeedItem[] = entries.entries.map((entry) => ({ kind: 'message', entry }));
+  const notices: string[] = [];
+  for (const source of presenceSources(project, root, allTeams, sources.home)) {
+    const read = readPresenceFeed(source.project, source.root, sources.home, {
+      after: cursors.get(source.key) ?? 0,
+    });
+    if (read.kind === 'bad') return { ok: false, source: 'presence', reason: read.why };
+    if (read.kind === 'gap') {
+      notices.push(gapNotice(read, allTeams ? source.project : null));
+      cursors.set(source.key, 0);
+      continue;
+    }
+    cursors.set(source.key, read.cursor);
+    for (const event of read.events) {
+      if (seatFilter !== undefined && event.seat !== seatFilter) continue;
+      items.push({ kind: 'presence', event, sourceKey: source.key });
+    }
+  }
+  items.sort(byTime);
+  return { ok: true, items, notices };
+}
+
 function timeOf(ts: string): string {
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(ts)) {
     return ts.slice(11, 19);
@@ -627,28 +785,63 @@ function readableFrom(entry: HistoryEntry, naming: SenderNaming): string {
   return senderDisplayName({ seat: entry.from, team: entry.from_team }, naming);
 }
 
+/** One verified presence transition as the feed's JSON event. The `kind` discriminates it from a
+ *  message event, which keeps exactly the fields it had; the canonical words and both ids let a
+ *  consumer place the transition against the seat's own presence log without parsing prose. */
+function presenceJson(item: Extract<FeedItem, { kind: 'presence' }>): Record<string, unknown> {
+  const event = item.event;
+  return {
+    kind: 'presence.changed',
+    ts: event.ts,
+    session: event.session,
+    seat: event.seat,
+    state: event.state,
+    event: event.event,
+    source: event.source,
+    binding: event.binding,
+    seq: event.seq,
+    presence_seq: event.presenceSeq,
+    event_id: event.eventId,
+    observed_at: event.observedAt,
+    id: event.recordId,
+  };
+}
+
+/** One row of the table. A presence row prints its own instant, the record kind, the seat it
+ *  concerns (no arrow: nothing was addressed) and the canonical transition — state, the event
+ *  that established it, and the source that wrote it. */
+function rowOf(item: FeedItem, naming: SenderNaming): string[] {
+  if (item.kind === 'presence') {
+    return [
+      timeOf(item.event.ts),
+      'presence.changed',
+      item.event.seat,
+      `${item.event.state} (${item.event.event} via ${item.event.source})`,
+    ];
+  }
+  const entry = item.entry;
+  // The SEAT cell carries the readable sender name the project's `sender_name` asks for; the
+  // line's own `from` — the seat name history records — is what `--json` carries.
+  return [timeOf(entry.ts), kindOf(entry), `${readableFrom(entry, naming)} -> ${entry.to}`, detailOf(entry)];
+}
+
 /** One batch of events: the context line when it has not opened the run yet, the four-column
  *  table, and the batch's count. `--follow` prints one batch per pass that brought new events. */
-function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): void {
+function printBatch(io: Io, scope: Scope, items: readonly FeedItem[]): void {
   printContext(io, scope);
   const lines = renderTable({
     headers: ['TIME', 'KIND', 'SEAT', 'DETAIL'],
-    // The SEAT cell carries the readable sender name the project's `sender_name` asks for; the
-    // line's own `from` — the seat name history records — is what `--json` carries.
-    rows: entries.map((entry) => [
-      timeOf(entry.ts),
-      kindOf(entry),
-      `${readableFrom(entry, scope.naming)} -> ${entry.to}`,
-      detailOf(entry),
-    ]),
+    rows: items.map((item) => rowOf(item, scope.naming)),
     indent: scope.context === null ? '' : '  ',
     style: ttyStyle(io, { json: false }),
   });
-  io.stdout(`${lines.join('\n')}\n${pluralCount(entries.length, 'event')}\n`);
+  io.stdout(`${lines.join('\n')}\n${pluralCount(items.length, 'event')}\n`);
 }
 
-function keyOf(entry: HistoryEntry): string {
-  return `${entry.id}\0${entry.outcome}\0${entry.ts}`;
+function keyOf(item: FeedItem): string {
+  if (item.kind === 'presence') return `presence\u0000${item.sourceKey}\u0000${item.event.recordId}`;
+  const entry = item.entry;
+  return `message\u0000${entry.id}\u0000${entry.outcome}\u0000${entry.ts}`;
 }
 
 function usage(io: Io, message: string, json: boolean): number {
@@ -668,6 +861,13 @@ function unreadable(io: Io, reason: string, json: boolean): number {
   if (json) writeJsonError(io, 'feed.unreadable', message, null);
   else io.stderr(`team feed: ${message}\n`);
   return 1; // exit: feed.unreadable
+}
+
+function presenceUnreadable(io: Io, reason: string, json: boolean): number {
+  const message = `the presence event log cannot be read: ${reason}`;
+  if (json) writeJsonError(io, 'feed.presence-unreadable', message, null);
+  else io.stderr(`team feed: ${message}\n`);
+  return 1; // exit: feed.presence-unreadable
 }
 
 export async function runFeed(argv: string[], io: Io, sources: FeedSources = realSources): Promise<number> {
@@ -737,11 +937,16 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
     return configuration(io, message || 'the team file cannot be read', json);
   }
 
-  const initial = collectEntries(project, root, allTeams, sources, seatFilter, explicitAudit, explicitBriefs);
-  if (!initial.ok) return unreadable(io, initial.reason, json);
+  const cursors = new Map<string, number>();
+  const initial = collectFeed(project, root, allTeams, sources, seatFilter, explicitAudit, explicitBriefs, cursors);
+  if (!initial.ok) {
+    return initial.source === 'presence'
+      ? presenceUnreadable(io, initial.reason, json)
+      : unreadable(io, initial.reason, json);
+  }
 
   const seen = new Set<string>();
-  const slice = initial.entries.slice(-limit);
+  const slice = initial.items.slice(-limit);
   const scope: Scope = {
     context: project !== null && session !== null ? contextLine(project, session) : null,
     printed: false,
@@ -751,12 +956,20 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
       ? namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team })
       : namingAcross(sources.home),
   };
+  // A gap cannot open on the first read (every cursor starts at 0, before the retained head), and
+  // `--follow` never runs with `--json`; the guard keeps a notice out of a document if one did.
+  if (!json) {
+    for (const notice of initial.notices) {
+      printContext(io, scope);
+      io.stdout(`${notice}\n`);
+    }
+  }
   if (json) {
     writeJson(io, 'team.feed', {
       format: 1 as const,
       project,
       session,
-      events: slice.map(eventJson),
+      events: slice.map((item) => (item.kind === 'presence' ? presenceJson(item) : eventJson(item.entry))),
     });
   } else if (slice.length > 0) {
     printBatch(io, scope, slice);
@@ -765,20 +978,28 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
     printContext(io, scope);
     io.stdout(`${pluralCount(0, 'event')}\n`);
   }
-  for (const entry of initial.entries) seen.add(keyOf(entry));
+  for (const item of initial.items) seen.add(keyOf(item));
 
   if (follow) {
     const poll = sources.poll ?? (() => defaultPoll());
     let tick = 0;
     while (await poll(tick++)) {
-      const next = collectEntries(project, root, allTeams, sources, seatFilter, explicitAudit, explicitBriefs);
-      if (!next.ok) return unreadable(io, next.reason, json);
-      const fresh: HistoryEntry[] = [];
-      for (const entry of next.entries) {
-        const key = keyOf(entry);
+      const next = collectFeed(project, root, allTeams, sources, seatFilter, explicitAudit, explicitBriefs, cursors);
+      if (!next.ok) {
+        return next.source === 'presence'
+          ? presenceUnreadable(io, next.reason, json)
+          : unreadable(io, next.reason, json);
+      }
+      for (const notice of next.notices) {
+        printContext(io, scope);
+        io.stdout(`${notice}\n`);
+      }
+      const fresh: FeedItem[] = [];
+      for (const item of next.items) {
+        const key = keyOf(item);
         if (seen.has(key)) continue;
         seen.add(key);
-        fresh.push(entry);
+        fresh.push(item);
       }
       if (fresh.length > 0) printBatch(io, scope, fresh);
     }

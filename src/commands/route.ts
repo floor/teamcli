@@ -125,7 +125,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   const processes = host.processInfo(recipient.reach.session, pane);
   const address = readRouteAddress(recipient.reach.address, processes, socketFolders(host));
   const native = recipient.cli === 'claude-code';
-  const fromId = admission.sender !== 'owner' && 'id' in admission.sender ? admission.sender.id : null;
+  const fromId = typeof admission.sender === 'object' && 'id' in admission.sender ? admission.sender.id : null;
   const record: RouteRecord = {
     ts: host.now().toISOString(),
     from: who,
@@ -188,7 +188,13 @@ function livePlacement(host: SendHost, agent: Agent): { pane: string } | { error
     return { error: `${agent.id}: herdr does not report the CLI of "${agent.reach.seat}", so no address was answered` };
   }
   const profile = PROFILES.find((one) => one.cli === agent.cli);
-  const same = profile === undefined ? cli === agent.cli : processNameMatches(cli, profile.processes);
+  // herdr's `agent` field names the CLI it detected. Most CLIs it names by process (`claude`
+  // for claude-code), which is what a profile's `processes` list holds; a cursor session it
+  // names `cursor` while the profile's process name is the launch binary `cursor-agent`. The
+  // record and the live pane agree when herdr's name is the recorded CLI itself, so that is a
+  // match on its own; the profile's process names remain the reading for the CLIs herdr names
+  // by process.
+  const same = cli === agent.cli || (profile !== undefined && processNameMatches(cli, profile.processes));
   if (!same) {
     return { error: `${agent.id}: herdr names "${agent.reach.seat}" running "${cli}", not the recorded CLI "${agent.cli}"; no address was answered` };
   }

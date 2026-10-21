@@ -46,9 +46,13 @@ const allCommandNames = Array.from(
  * state, require live tmux/herdr panes or network/Keychain access, or run long-lived daemons.
  */
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
+  ack: "writes one signed read receipt into the addressee's folder",
   answer: 'types an answer into a live herdr pane dialog',
+  client: 'writes an Ed25519 client key pair into an owner folder and reads no project state',
+  'development-mode': 'reads or writes the machine development-mode record, which is an owner setting with no registered output schema',
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
   bus: 'starts a long-running local event bus server on .agents/bus.sock',
+  daemon: 'starts the one machine daemon, and installs or removes its user service unit through the system service manager',
   hold: 'mutates .agents/state.json to place or clear a team hold',
   pause: 'writes pause state for one or more teams',
   resume: 'clears pause state for one or more teams',
@@ -80,6 +84,9 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: '--about', args: ['--about'], schemaKey: 'team.about' },
   { command: 'status', args: ['status'], schemaKey: 'team.status' },
   { command: 'seats', args: ['seats'], schemaKey: 'team.seats' },
+  { command: 'settings', args: ['settings', 'claude-keeper'], schemaKey: 'team.settings' },
+  { command: 'seat', args: ['seat', 'claude-keeper'], schemaKey: 'team.seat' },
+  { command: 'config', args: ['config', 'keys'], schemaKey: 'team.config-keys' },
   { command: 'sessions', args: ['sessions'], schemaKey: 'team.sessions' },
   { command: 'doctor', args: ['doctor'], schemaKey: 'team.doctor' },
   { command: 'check', args: ['check'], schemaKey: 'team.check' },
@@ -89,6 +96,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'proc', args: ['proc', 'list'], schemaKey: 'team.proc' },
   { command: 'issues', args: ['issues'], schemaKey: 'team.issues' },
   { command: 'plan', args: ['plan'], schemaKey: 'team.plan', asSeat: true },
+  { command: 'queue', args: ['queue', 'list'], schemaKey: 'team.queue' },
   { command: 'feed', args: ['feed'], schemaKey: 'team.feed' },
   { command: 'messages', args: ['messages'], schemaKey: 'team.messages' },
   { command: 'worktree', args: ['worktree', 'list'], schemaKey: 'team.worktree' },
@@ -110,24 +118,45 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'grant', args: ['grant', 'claude-keeper', '--scope', 'up', '--dry-run'], schemaKey: 'team.grant' },
   { command: 'delegate', args: ['delegate', 'ext/w1:p1', '--commands', 'add', '--dry-run'], schemaKey: 'team.delegate' },
   { command: 'revoke', args: ['revoke', 'grant', '--dry-run'], schemaKey: 'team.revoke' },
+  { command: 'brief', args: ['brief', 'rollout'], schemaKey: 'team.brief' },
+  { command: 'swap', args: ['swap'], schemaKey: 'team.swap' },
 ];
+
+/** One cold entry into src/cli.ts is a fresh Bun process; a healthy `--help` answers in well
+ *  under a second. This per-child deadline names a hung command at its own window, instead of
+ *  leaving it to the runner's test timeout, which kills every child still in flight (exit 143). */
+const COLD_ENTRY_DEADLINE_MS = 10_000;
+
+/** The batch below launches two cold entries per command through 16 lanes. A 2-vCPU hosted
+ *  runner needs more than one 5s test deadline for that many spawns; the per-child deadline
+ *  above, not this budget, is what catches a hang. */
+const COLD_ENTRY_BATCH_DEADLINE_MS = 30_000;
 
 async function runCli(
   args: string[],
   opts?: { cwd?: string; env?: Record<string, string | undefined> },
-): Promise<{ code: number; stdout: string; stderr: string }> {
+): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
   const proc = Bun.spawn([process.execPath, cliEntry, ...args], {
     cwd: opts?.cwd,
     env: opts?.env,
     stdout: 'pipe',
     stderr: 'pipe',
   });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { code, stdout, stderr };
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, COLD_ENTRY_DEADLINE_MS);
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr, timedOut };
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 
 async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -169,7 +198,8 @@ describe('CLI cold-entry smoke test across every command', () => {
       ...(await runCli(args)),
     }));
 
-    for (const { name, args, code, stdout, stderr } of results) {
+    for (const { name, args, code, stdout, stderr, timedOut } of results) {
+      expect(timedOut, `${args.join(' ')} finished within ${COLD_ENTRY_DEADLINE_MS}ms`).toBe(false);
       expect(stderr, `${args.join(' ')} stderr`).not.toContain('before initialization');
       expect(stderr, `${args.join(' ')} stderr`).not.toMatch(/^\s*at\s+/m);
       expect(stderr, `${args.join(' ')} stderr`).toBe('');
@@ -179,7 +209,7 @@ describe('CLI cold-entry smoke test across every command', () => {
         expect(stdout, `${args.join(' ')} usage header`).toMatch(new RegExp(`^Usage: team ${name}\\b`));
       }
     }
-  });
+  }, COLD_ENTRY_BATCH_DEADLINE_MS);
 
   test('every read-only command runs in a scratch fixture, validates its --json schema, and prints clean human output', async () => {
     const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-cli-smoke-')));

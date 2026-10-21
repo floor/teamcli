@@ -300,8 +300,10 @@ describe('entity create-grant in ~/.config/team/grants/', () => {
       mkdirSync(sendHost.socketsDir, { recursive: true });
       expect(await runSend(['builder-1', 'first brief'], sendIo, sendHost)).toBe(0);
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
-      // the outcome is the plain word.
-      expect(sendIo.out).toBe('team acme-v4, session "acme-v4"\nbuilder-1: delivered\n');
+      // the outcome names the trigger sent, never a read.
+      expect(sendIo.out).toBe(
+        'team acme-v4, session "acme-v4"\nbuilder-1: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+      );
 
       // 2. Under ~/Code/acme-lab/archive: also admitted by the same record.
       const archive = join(sb.lab, 'archive');

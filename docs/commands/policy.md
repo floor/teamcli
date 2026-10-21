@@ -14,9 +14,11 @@ policy declarations (`team policy set` and `team policy unset`).
 Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross-teams`,
 `state-trace-window-seconds`, `state-blind-after-seconds`, `state-hook-working-seconds`,
 `liveness-idle-lead-seconds`, `liveness-idle-owner-seconds`, `delivery-order`,
+`brief-transport`,
 `event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
-`event-idle-threshold-seconds`, `event-reconcile-interval-seconds`).
+`event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
+`swap-wait-seconds`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
@@ -33,6 +35,24 @@ a value above the release default is refused, and so is a level's word that leng
 above it. The shorter field spellings (`held_threshold_seconds`, `thread-ttl`, …) are accepted
 and written back under the canonical name. `team bus` reads the held, retention and reconcile
 numbers when it starts, and `team reply` reads the thread life and cap from the caller's chain.
+
+`model-rule` is the entity's rule for which models may run on which seats, held as one line of
+`;`-separated entries, `<seat|role|*>=<lab>+<lab>`. A seat name beats a role word, a role beats
+`*`, and a seat no entry names may run any model; labs are vendor words as a seat writes
+`vendor:`, and an entry whose words are all `!lab` refuses those labs instead of allowing them.
+Only the entity may set it — `orchestrator=anthropic; architect=anthropic; *=!anthropic` is one
+rule — and the watch and `team check` carry it out in every team of the entity.
+`swap-wait-seconds` is how long a queued model swap may wait for its boundary: 1800 seconds
+(30 minutes) when nothing declares it, a shorter word being the tighter one, and a broken seat
+swaps at once.
+
+`brief-transport` says how a general seat brief reaches its seat. `file`, the default, writes the
+claim and the signed drop and nothing else; `message` sends the whole brief as a real send body
+through the seat's own delivery legs, so its receipt, history line and outcome are an ordinary
+send's; `memory` is an experiment no runtime in this build proves zero-persistence for, so a
+`memory` policy delivers nothing, refuses every seat and every `team send --brief`, and falls
+back to nothing. `message` is within `file`; `memory` is comparable only to itself. It takes the
+entity, project and team levels.
 
 ## Who may run it
 

@@ -39,7 +39,7 @@ The other record fields are carried whole in `--json`; the plain listing is the 
 | --- | --- | --- |
 | the records were listed | `team <project>, session "<session>"`, the `ID  STATE  ASSIGNEE  TITLE` table, and `<n> issue` or `<n> issues`, in file order | 0 |
 | the list was empty | the context line and `0 issues` | 0 |
-| the team file can't be read, it declares no task source or one that is a broker's, the task file is missing or not a list, or a record is not a task | `team issues: <reason>` (with `--json`, a `team.error` document) | 1 |
+| the team file can't be read, its source is a broker's, the task file is missing or not a list, or a record is not a task | `team issues: <reason>` (with `--json`, a `team.error` document) | 1 |
 | the invocation can't be read, or this folder is neither a checkout nor a team root | `team issues: <problem>`, with the usage for the invocation (with `--json`, a `team.error` document) | 2 |
 
 ## Example

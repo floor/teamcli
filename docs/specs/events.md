@@ -76,7 +76,7 @@ The status words:
 | Status | Meaning |
 |---|---|
 | `sent` | the record exists and a transport took it |
-| `delivered` | the transport confirmed the seat's program has it (the inbox fetched it, the drop watcher receipted it, or the typed outcome was `delivered`) |
+| `delivered` | the transport confirmed the seat's program has it (the inbox fetched it, the drop watcher receipted it, the socket frame was written, or a typed trigger's own `team drops --read` signed the receipt; a typed trigger taken with no receipt is only sent, never this) |
 | `read` | the seat's own tool showed the body |
 | `replied` | a record on the thread answers it |
 | `held` | the record waits: a dialog, unsent text in the box, or an unreachable seat; the side and reason named |
@@ -172,14 +172,17 @@ reply tool writes the reply record. Nothing is typed into the pane.
 ### The delivery order, with `drop`
 
 `DELIVERY_LEGS` at the tip: `native`, `mcp-inbox`, `typed`, `drop`. The fallback order
-(`src/settings/inherit.ts`): `mcp-inbox`, then `drop`, then `typed`.
+(`src/settings/inherit.ts`): `mcp-inbox`, then `typed`, then `drop`.
 
 - `mcp-inbox` takes a send only while the seat's own inbox server is listening, and writes the
   message to that inbox without typing; otherwise it is skipped as `no live inbox listener`.
+- `typed` is the leg that wakes an idle seat: one trigger line, the seat's own drop read, whose
+  signed receipt is what makes the send `delivered (read)`; without a receipt the line is
+  `sent (unconfirmed)`.
 - `drop` writes the same 0600 file and types nothing at all: a receiver that watches its folder —
   the inbox server where its CLI has an MCP front, the launch's start-of-turn read where it has a
-  hook — takes the message there, and a seat that watches nothing never walks this leg.
-- `typed` stays the last fallback.
+  hook — takes the message there, and a seat that watches nothing never walks this leg. Nothing
+  on this leg wakes an idle seat.
 - `native` is not in the default: a level that names it is the sender choosing its own
   cross-session channel and recording the delivery itself; it is the one leg a declared word may
   add.

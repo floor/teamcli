@@ -18,6 +18,7 @@ import {
 } from '../output/index.ts';
 import type { TaskAdapter, TaskRecord } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
+import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
 
 export const USAGE = `Usage: team issues [--json]
 
@@ -118,8 +119,10 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
     }
     return refuse(io, 'file', message, json);
   }
-  if (!loaded.team.tasks) return refuse(io, 'file', 'the team file declares no task source', json);
-  if (loaded.team.tasks.source === 'linear') {
+  // A team that declares no source reads its own local queue; a missing one is an empty queue,
+  // not a refusal. The declared sources keep their own reads and refusals unchanged.
+  const tasks = loaded.team.tasks ?? LOCAL_TASKS;
+  if (tasks.source === 'linear') {
     // A broker source is not listed here: the read lives behind the socket, the seat gate and
     // the policy, which this command has none of. No socket connection is attempted.
     return refuse(
@@ -131,9 +134,12 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
     );
   }
   const registry = sources.registry ?? fileRegistry;
-  const adapter = registry[loaded.team.tasks.source];
+  const adapter = registry[tasks.source];
   if (!adapter) return refuse(io, 'file', 'tasks.source must be file', json);
-  const read = adapter.read({ root: loaded.root, path: loaded.team.tasks.path });
+  const source = fileSourceOf(loaded.team);
+  const read = source !== null && source.local
+    ? readFileSource(loaded.root, source)
+    : adapter.read({ root: loaded.root, path: tasks.path });
   if (read.kind === 'missing') {
     return refuse(io, 'missing', 'the task file is not there', json);
   }

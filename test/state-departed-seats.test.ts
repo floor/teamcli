@@ -11,6 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runTeamCheck, type CheckSources } from '../src/check/team.ts';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
+import { currentBriefClaim } from '../src/launch/general-brief.ts';
+import { readMessage } from '../src/mcp/inbox.ts';
 import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { findAgent } from '../src/registry/agents.ts';
@@ -109,7 +111,34 @@ function registerSources(w: World, over: Partial<RegisterSources> = {}): Registe
 async function register(w: World, argv: string[], over: Partial<RegisterSources> = {}): Promise<{ code: number; out: string; err: string }> {
   const io = testIo(w.root, OWNER);
   const code = await runRegister(argv, io, registerSources(w, over));
+  // A registration attributes the seat, so it delivers the brief under a fresh claim lifetime —
+  // the launch's earlier claim and its receipt are superseded. The seat's next turn reads what
+  // the registration wrote, the way the run's own claim-bound reader does.
+  if (code === 0) readBrief(w);
   return { code, out: io.out, err: io.err };
+}
+
+/**
+ * The seat's first turn after its registration reads the brief. The receipt is the run's signed,
+ * claim-bound one: the current claim is resolved again before the write, so the receipt answers
+ * for the id the check will read and never for a superseded launch claim.
+ */
+function readBrief(w: World, seat = 'lead'): void {
+  const claimOf = () => currentBriefClaim(readState(w.dir).sessions.acme?.briefs?.[seat]);
+  const claim = claimOf();
+  if (claim === null) throw new Error(`the fixture has no current brief claim for ${seat}`);
+  const read = readMessage(
+    {
+      dropDir: join(w.root, '.agents', 'send-drops', 'acme', seat),
+      root: w.root,
+      seat,
+      session: 'acme',
+    },
+    claim.id,
+    w.home,
+    { claim: claimOf },
+  );
+  if (!read.ok) throw new Error(`the fixture's brief was not read: ${read.reason}`);
 }
 
 /** The live session the check reads: the lead on its recorded pane, quiet at its prompt. */

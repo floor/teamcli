@@ -11,8 +11,10 @@
 //   now: 2026-10-04T09:00:00Z
 //   machine: calm            calm | tight | small-swap
 //   watch: alive             alive | none | stale (a heartbeat older than two intervals)
-//   briefs: none             none | delivered (delivered: every seeded seat holds the general
-//                            brief's signed record, as a launch leaves it)
+//   briefs: none             none | delivered | delivered-and-read (delivered: every seeded seat
+//                            holds the general brief's signed record, as a launch leaves it;
+//                            delivered-and-read: every CLI seat also holds the read receipt its
+//                            turn-start reader leaves)
 //   tools:                   per cli: fine | missing | old | logged-out | unread
 //     claude-code: fine
 //   state:                   merged into the session's record in .agents/team.state.json
@@ -58,7 +60,7 @@ export type Spec = {
   now: string;
   machine: 'calm' | 'tight' | 'small-swap';
   watch: 'alive' | 'none' | 'stale';
-  briefs: 'none' | 'delivered';
+  briefs: 'none' | 'delivered' | 'delivered-and-read';
   tools: Record<string, ToolState>;
   state: Record<string, unknown>;
   checks: string[];
@@ -240,7 +242,7 @@ export function specOf(block: Block | undefined): Spec {
     now: text(map.now, DEFAULT_SPEC.now, 'now'),
     machine: oneOf(map.machine, ['calm', 'tight', 'small-swap'] as const, DEFAULT_SPEC.machine, 'machine'),
     watch: oneOf(map.watch, ['alive', 'none', 'stale'] as const, DEFAULT_SPEC.watch, 'watch'),
-    briefs: oneOf(map.briefs, ['none', 'delivered'] as const, DEFAULT_SPEC.briefs, 'briefs'),
+    briefs: oneOf(map.briefs, ['none', 'delivered', 'delivered-and-read'] as const, DEFAULT_SPEC.briefs, 'briefs'),
     tools: mapped(map.tools, TOOLS, 'tools'),
     state: object(map.state, 'state'),
     checks: paths(map.checks, 'checks'),

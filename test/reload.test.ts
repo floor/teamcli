@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runReload, USAGE, type ReloadSources } from '../src/commands/reload.ts';
-import { generalBriefId } from '../src/launch/general-brief.ts';
+import { currentBriefClaim, generalBriefBody, generalBriefId } from '../src/launch/general-brief.ts';
 import { RELOAD_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { readRecord } from '../src/send/record.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -541,6 +541,32 @@ describe('team reload', () => {
     expect(logText()).toContain('reload [helper] warning: the file grants nothing; dev mode continues\n');
   });
 
+  test('dev mode stands the live file in for the approval the grant gate asks for', async () => {
+    remember('lead', 'high');
+    remember('worker', 'low');
+    // The record is signed, but its key is gone: no verified approval stands for this folder.
+    rmSync(join(home, '.config', 'team-key', 'key.json'));
+    const path = join(dir, 'team.yaml');
+    const said = 'a grant needs a verified approval: the record is signed, but its key is missing';
+
+    // Unset: the gate's approval sentence refuses and nothing closes.
+    const bare = testIo(root, LEAD);
+    const refused = harness();
+    expect(await runReload(['worker'], bare, refused.sources)).toBe(1);
+    expect(bare.err).toBe(`team reload: ${said}\n`);
+    expect(refused.closed).toEqual([]);
+
+    // Set to exactly 1: the live file the run edits counts as approved, the warning names it,
+    // and the audit log records the caller the fold admitted before the close.
+    const io = testIo(root, LEAD);
+    io.env = { TEAMCLI_DEV_MODE: '1' };
+    const { sources, closed } = harness();
+    expect(await runReload(['worker'], io, sources)).toBe(0);
+    expect(io.err).toBe(`team reload: warning: ${said}; the live team file ${path} counts as approved; dev mode continues\n`);
+    expect(closed).toEqual(['worker-ws']);
+    expect(logText()).toContain(`reload [lead] warning: ${said}; the live team file ${path} counts as approved; dev mode continues\n`);
+  });
+
   test('--json carries the action envelope under the registered schema', async () => {
     remember('worker', 'low');
     const { sources } = harness();
@@ -585,15 +611,29 @@ describe('team reload', () => {
     expect(doc).not.toHaveProperty('notes');
     // The drop is on disk and the session records the delivery: `team check`'s repair works
     // on a seat whose model, version and effort already match the file.
-    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
-    const looked = readRecord(path, generalBriefId());
-    expect(looked.ok && looked.record?.payload).toMatchObject({ to: 'worker', session: 'alpha' });
-    expect(readState(dir).sessions.alpha?.briefs?.worker).toEqual({ id: generalBriefId(), at: NOW.toISOString() });
+    const claim = currentBriefClaim(readState(dir).sessions.alpha?.briefs?.worker);
+    if (claim === null) throw new Error('the reload recorded no claim');
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', claim.id);
+    const looked = readRecord(path, claim.id);
+    expect(looked.ok && looked.record?.payload).toMatchObject({ to: 'worker', session: 'alpha', incarnation: claim.incarnation });
+    expect(claim.at).toBe(NOW.toISOString());
+    expect(claim.stage).toBe('ready');
   });
 
   test('--json: a brief that cannot be written is a note in the document', async () => {
     remember('worker', 'high');
-    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
+    // The seat's claim is this build's predecessor: a current claim with another text's digest,
+    // so the delivery is due. The next delivery keeps its lifetime and therefore its expected id,
+    // which this test holds with a folder before the run.
+    const incarnation = 'inc_0123456789ab';
+    const epoch = 'run_0123456789ab';
+    updateState(dir, (state) => {
+      const session = (state.sessions.alpha ??= emptySession());
+      session.briefs = {
+        worker: { id: generalBriefId(incarnation, generalBriefBody()), at: NOW.toISOString(), incarnation, epoch, sha256: 'a'.repeat(64), attempt: 0, stage: 'claimed' as const },
+      };
+    });
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId(incarnation, generalBriefBody()));
     mkdirSync(dirname(path), { recursive: true });
     mkdirSync(path);
     const { sources } = harness();

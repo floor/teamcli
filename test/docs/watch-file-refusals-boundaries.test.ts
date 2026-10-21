@@ -61,8 +61,8 @@ seats:
     launch: claude --model claude-opus-5-5
 `;
 
-const TURN_OFF = 'watch.checks can\'t turn off attention: attention, missing, model-drift, prompt-escalation, approval always run';
-const UNKNOWN = 'unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-free, swap-growth, budget';
+const TURN_OFF = 'watch.checks can\'t turn off attention: attention, missing, model-drift, model-rule, prompt-escalation, approval always run';
+const UNKNOWN = 'unknown check "disks" in watch.checks: the checks are missing, restored, model-drift, model-rule, attention, provider-error, unsent, idle, extra, team-idle, prompt-escalation, approval, load, memory, disk, swap-free, swap-growth, budget';
 
 describe("the watch page's schema-refusal demo after team approve left the build", () => {
   test('the page says it in prose and shows it under the up name, exit 2', () => {

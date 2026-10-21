@@ -35,7 +35,7 @@ function make(): World {
 /** The signed record in a drop folder, past the marker the drop leg leaves beside it: the
  *  directory holds `<id>` and `<id>.pending`, and readdir order is the filesystem's. */
 function dropRecord(drops: string): string {
-  const name = readdirSync(drops).find((candidate) => !candidate.endsWith('.pending'));
+  const name = readdirSync(drops).find((candidate) => !candidate.includes('.'));
   if (name === undefined) throw new Error(`no drop record in ${drops}`);
   return join(drops, name);
 }

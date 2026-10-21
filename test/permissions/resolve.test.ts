@@ -7,11 +7,14 @@
 // cannot widen the team envelope. The store scenes write real owner-signed records into a
 // temporary home and resolve through `resolveFromHome` — the fresh read every gate makes.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { grantsDir } from '../../src/grant.ts';
 import {
+  activeGrants,
   GRANT_CAPABILITIES,
+  GRANT_DOMAIN,
   writeGrant,
   writeRevocation,
   type GrantRecord,
@@ -19,6 +22,7 @@ import {
 } from '../../src/permissions/grants.ts';
 import { COMMAND_GATES, type Capability } from '../../src/permissions/map.ts';
 import { resolveFromHome, resolvePermission, type CallerRecord } from '../../src/permissions/resolve.ts';
+import { bumpGeneration, keyOf, signDomain } from '../../src/store/keys.ts';
 
 const TEAM = 'aaaaaaaaaaaa';
 const OTHER_TEAM = 'bbbbbbbbbbbb';
@@ -71,7 +75,7 @@ function makeHome(): string {
   return home;
 }
 
-function granted(home: string, request: Omit<GrantRequest, 'roots'>): GrantRecord {
+function granted(home: string, request: Omit<GrantRequest, 'roots'> & { roots?: readonly string[] }): GrantRecord {
   const result = writeGrant(home, { roots: ROOTS, ...request }, { now: NOW });
   if (!result.ok) throw new Error(`the scene's grant was refused: ${result.why}`);
   return result.record;
@@ -239,7 +243,7 @@ describe('the capability rows: the own list intersected with the envelope', () =
 
 describe('the map names every word the contract exposes, and no more', () => {
   test('a word the map does not name is refused, not judged', () => {
-    for (const command of ['sudo', 'create', 'approve', 'swap']) {
+    for (const command of ['sudo', 'create', 'approve', 'teleport']) {
       const decision = resolvePermission(OWNER, { id: TEAM }, command, [], TARGET);
       expect(decision).toMatchObject({ effect: 'deny', rule: 'not-in-map' });
       expect(decision.why).toContain("gates no command the Kernel's table does not name");
@@ -394,12 +398,257 @@ describe('records: the fresh read every gate makes', () => {
   test('revoking the team envelope ends every seat grant inside it', () => {
     const home = makeHome();
     granted(home, { name: 'flag-gate', kind: 'seat', grantee: AGENT, capabilities: ['merge'] });
-    const envelopeRecord = granted(home, { name: 'team-envelope', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
-    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({ effect: 'allow' });
-    const revoked = writeRevocation(home, { name: 'revoke-envelope', grant: 'team-envelope', generation: envelopeRecord.generation }, { now: NOW });
+    const firstEnvelope = granted(home, { name: 'team-envelope', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
+    const secondEnvelope = granted(home, { name: 'team-envelope-overlap', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({ effect: 'allow', rule: 'seat-grant' });
+
+    // Revoking one of two overlapping envelopes already ends the covered seat grant durably.
+    expect(writeRevocation(home, { name: 'revoke-envelope', grant: 'team-envelope', generation: firstEnvelope.generation }, { now: NOW }).ok).toBe(true);
+    expect(activeGrants(home, NOW).filter((grant) => grant.kind === 'seat')).toEqual([]);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
+
+    // Revoking the remaining covering envelope leaves no active envelope at all.
+    const revoked = writeRevocation(
+      home,
+      { name: 'revoke-envelope-overlap', grant: 'team-envelope-overlap', generation: secondEnvelope.generation },
+      { now: NOW },
+    );
     expect(revoked.ok).toBe(true);
     const after = resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET);
     expect(after).toMatchObject({ effect: 'deny', rule: 'outside-envelope' });
+
+    // A replacement covering envelope does not revive the pre-revocation seat grant; only a fresh
+    // explicit seat grant issued after the envelope revocation admits again.
+    granted(home, { name: 'team-envelope-next', kind: 'team', grantee: TEAM, capabilities: ['merge'] });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({
+      effect: 'deny',
+      rule: 'absent',
+    });
+    granted(home, { name: 'flag-gate-next', kind: 'seat', grantee: AGENT, capabilities: ['merge'] });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, TARGET)).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+  });
+
+  test('envelope revocation stays durable across envelope overwrite, removal, replay, and exact-generation legacy records', () => {
+    const home = makeHome();
+    const otherRoot = '/Users/x/Code/other';
+    granted(home, { name: 'seat-gate', kind: 'seat', grantee: AGENT, capabilities: ['gate'] });
+    granted(
+      home,
+      { name: 'seat-merge-other', kind: 'seat', grantee: AGENT, capabilities: ['merge'], scope: [otherRoot], roots: [otherRoot] },
+    );
+    const envA = granted(home, { name: 'env-a', kind: 'team', grantee: TEAM, capabilities: ['gate'] });
+    const envAPath = join(grantsDir(home), 'env-a.json');
+    const envAOldBytes = readFileSync(envAPath);
+    granted(home, { name: 'env-b', kind: 'team', grantee: TEAM, capabilities: ['gate'] });
+
+    expect(writeRevocation(home, { name: 'revoke-env-a', grant: 'env-a', generation: envA.generation }, { now: NOW }).ok).toBe(true);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
+
+    // Overwriting env-a.json under the same stem with a new generation carrying different scope/capabilities
+    // neither revives seat-gate nor falsely terminates seat-merge-other (which was issued before revoke-env-a).
+    const envAReissued = writeGrant(
+      home,
+      { name: 'env-a', kind: 'team', grantee: TEAM, capabilities: ['merge'], scope: [otherRoot], roots: [otherRoot] },
+      { now: NOW },
+    );
+    expect(envAReissued.ok).toBe(true);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: otherRoot })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+
+    // Removing env-a.json from disk still preserves seat-gate's durable termination via the signed revocation envelope.
+    unlinkSync(envAPath);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
+    expect(activeGrants(home, NOW).filter((grant) => grant.kind === 'seat').map((grant) => grant.name)).toEqual([
+      'seat-merge-other',
+    ]);
+
+    // Replaying the originally signed env-a@gen bytes onto disk neither activates env-a nor revives seat-gate.
+    writeFileSync(envAPath, envAOldBytes);
+    expect(activeGrants(home, NOW).filter((grant) => grant.kind === 'team').map((grant) => grant.name)).toEqual(['env-b']);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, TARGET)).toMatchObject({ effect: 'deny', rule: 'absent' });
+
+    // A legacy revocation record (signed without an embedded `envelope` field) uses the exact
+    // on-disk grant_generation while that envelope file is present, and fails closed for older
+    // seat grants if the legacy revoked envelope file is removed or overwritten.
+    const folder = grantsDir(home);
+    granted(
+      home,
+      { name: 'env-merge-other', kind: 'team', grantee: TEAM, capabilities: ['merge'], scope: [otherRoot], roots: [otherRoot] },
+    );
+    const legacyEnv = granted(
+      home,
+      { name: 'env-legacy', kind: 'team', grantee: TEAM, capabilities: ['deploy'], scope: [otherRoot], roots: [otherRoot] },
+    );
+    const legacyRevGen = bumpGeneration(folder, home, NOW);
+    const legacyDisk = {
+      grant: 'env-legacy',
+      grant_generation: legacyEnv.generation,
+      by: 'owner',
+      at: NOW.toISOString(),
+      generation: legacyRevGen,
+    };
+    const legacySig = signDomain(GRANT_DOMAIN, { name: 'revoke-env-legacy', revocation: legacyDisk }, keyOf(home));
+    writeFileSync(join(folder, 'revoke-env-legacy.json'), `${JSON.stringify({ revocation: legacyDisk, signature: legacySig }, null, 2)}\n`);
+    // While env-legacy@gen is still on disk, its exact (`deploy`, otherRoot) boundary is known, so
+    // `seat-merge-other` (`merge` at otherRoot) remains active.
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: otherRoot })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+    // If the legacy revoked envelope file is removed or overwritten (whether by a different team's
+    // envelope or by a seat grant under the same stem) so its original boundary can no longer be
+    // verified from disk, `activeGrants` never infers historical target identity/kind/scope from a
+    // newer same-stem record and fails closed for pre-existing seat grants older than `legacyRevGen`.
+    unlinkSync(join(folder, 'env-legacy.json'));
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: otherRoot })).toMatchObject({
+      effect: 'deny',
+      rule: 'absent',
+    });
+    granted(
+      home,
+      { name: 'env-legacy', kind: 'team', grantee: 'bbbbbbbbbbbb', capabilities: ['merge'], scope: [otherRoot], roots: [otherRoot] },
+    );
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: otherRoot })).toMatchObject({
+      effect: 'deny',
+      rule: 'absent',
+    });
+    granted(
+      home,
+      { name: 'env-legacy', kind: 'seat', grantee: 'agt_999999999999', capabilities: ['merge'], scope: [otherRoot], roots: [otherRoot] },
+    );
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: otherRoot })).toMatchObject({
+      effect: 'deny',
+      rule: 'absent',
+    });
+    granted(
+      home,
+      { name: 'seat-merge-other-fresh', kind: 'seat', grantee: AGENT, capabilities: ['merge'], scope: [otherRoot], roots: [otherRoot] },
+    );
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: otherRoot })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+  });
+
+  test('revoking an envelope that covers part of a multi-scope, multi-capability seat grant preserves its uncovered capabilities and scopes', () => {
+    const home = makeHome();
+    const rootA = '/Users/x/Code/acme';
+    const rootB = '/Users/x/Code/beta';
+    granted(home, {
+      name: 'seat-multi',
+      kind: 'seat',
+      grantee: AGENT,
+      capabilities: ['gate', 'merge'],
+      scope: [rootA, rootB],
+      roots: [rootA, rootB],
+    });
+    const envGateA = granted(home, {
+      name: 'env-gate-a',
+      kind: 'team',
+      grantee: TEAM,
+      capabilities: ['gate'],
+      scope: [rootA],
+      roots: [rootA],
+    });
+    const envGateB = granted(home, {
+      name: 'env-gate-b',
+      kind: 'team',
+      grantee: TEAM,
+      capabilities: ['gate'],
+      scope: [rootB],
+      roots: [rootB],
+    });
+    granted(home, {
+      name: 'env-merge-both',
+      kind: 'team',
+      grantee: TEAM,
+      capabilities: ['merge'],
+      scope: [rootA, rootB],
+      roots: [rootA, rootB],
+    });
+
+    // Revoke only the envelope covering (`gate`, rootA) and even issue a replacement envelope for (`gate`, rootA).
+    expect(writeRevocation(home, { name: 'revoke-gate-a', grant: 'env-gate-a', generation: envGateA.generation }, { now: NOW }).ok).toBe(true);
+    granted(home, {
+      name: 'env-gate-a-next',
+      kind: 'team',
+      grantee: TEAM,
+      capabilities: ['gate'],
+      scope: [rootA],
+      roots: [rootA],
+    });
+
+    // (`gate`, rootA) is durably ended, while (`gate`, rootB) and (`merge`, rootA/rootB) remain active.
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, { root: rootA })).toMatchObject({
+      effect: 'deny',
+      rule: 'outside-scope',
+    });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, { root: rootB })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: rootA })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: rootB })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+
+    // Direct `resolvePermission` over `activeGrants(home, NOW)` (without teamId) and over shallow
+    // object-spread clones of those records reaches the exact same answers.
+    const active = activeGrants(home, NOW);
+    expect(resolvePermission(seat(), { id: TEAM }, 'gate', active, { root: rootA }).effect).toBe('deny');
+    expect(resolvePermission(seat(), { id: TEAM }, 'gate', active, { root: rootB })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+    expect(resolvePermission(seat(), { id: TEAM }, 'merge', active, { root: rootA })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+    const cloned = active.map((entry) => ({ ...entry }));
+    expect(resolvePermission(seat(), { id: TEAM }, 'gate', cloned, { root: rootA }).effect).toBe('deny');
+    expect(resolvePermission(seat(), { id: TEAM }, 'gate', cloned, { root: rootB })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+
+    // Revoking (`gate`, rootB) as well ends `gate` across all scopes on `seat-multi`, narrowing its
+    // active capabilities to `['merge']` while still preserving `merge` at both roots.
+    expect(writeRevocation(home, { name: 'revoke-gate-b', grant: 'env-gate-b', generation: envGateB.generation }, { now: NOW }).ok).toBe(true);
+    const activeAfterBothGateRevoked = activeGrants(home, NOW).filter((grant) => grant.kind === 'seat');
+    expect(activeAfterBothGateRevoked).toHaveLength(1);
+    expect(activeAfterBothGateRevoked[0]?.capabilities).toEqual(['merge']);
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, { root: rootA })).toMatchObject({
+      effect: 'deny',
+      rule: 'absent',
+    });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'merge', NOW, { root: rootA })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
+
+    // A fresh explicit seat grant issued after the revocations recovers (`gate`, rootA).
+    granted(home, {
+      name: 'seat-gate-fresh',
+      kind: 'seat',
+      grantee: AGENT,
+      capabilities: ['gate'],
+      scope: [rootA],
+      roots: [rootA],
+    });
+    expect(resolveFromHome(home, seat(), { id: TEAM }, 'gate', NOW, { root: rootA })).toMatchObject({
+      effect: 'allow',
+      rule: 'seat-grant',
+    });
   });
 
   test('an expired grant is not among the active set either', () => {

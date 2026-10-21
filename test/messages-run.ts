@@ -11,7 +11,7 @@ import { findRoot } from '../src/file/load.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { RING_TEXT } from '../src/watch/pass.ts';
+import { ringText } from '../src/watch/pass.ts';
 import { testIo } from './helpers.ts';
 
 const SESSION = 'mailbox-evidence';
@@ -174,7 +174,7 @@ try {
     pane,
     receipt,
     typed,
-    ring: RING_TEXT,
+    ring: ringText('lead', 'acme'),
     leadAfter,
     leadCreated,
     workerCreated,

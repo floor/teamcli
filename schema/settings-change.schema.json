@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/floor/teamcli/blob/main/schema/settings-change.schema.json",
+  "title": "team settings set|unset --json output",
+  "$comment": "generated from src/output/schema.ts: the output contract in docs/reference/output.md is the source of truth",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "format",
+    "dry_run",
+    "status",
+    "action_summary",
+    "level",
+    "target",
+    "seat",
+    "settings"
+  ],
+  "properties": {
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "team.settings-change"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        }
+      }
+    },
+    "format": {
+      "type": "integer",
+      "const": 1
+    },
+    "dry_run": {
+      "type": "boolean"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "dry-run",
+        "updated",
+        "unset"
+      ]
+    },
+    "action_summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "step",
+          "detail"
+        ],
+        "properties": {
+          "step": {
+            "type": "string",
+            "minLength": 1
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seat": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prefix": {
+            "type": "string",
+            "enum": [
+              "+",
+              "!",
+              "skip"
+            ]
+          }
+        }
+      }
+    },
+    "notice": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "level": {
+      "type": "string",
+      "enum": [
+        "entity",
+        "project",
+        "team",
+        "seat"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "seat": {
+      "type": "string",
+      "minLength": 1
+    },
+    "settings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value",
+          "old",
+          "applies"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "model",
+              "effort",
+              "nickname",
+              "delivery_order",
+              "human"
+            ]
+          },
+          "value": {
+            "type": [
+              "string",
+              "boolean",
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "socket",
+                "native",
+                "mcp-inbox",
+                "typed",
+                "drop",
+                "headless-resume"
+              ]
+            }
+          },
+          "old": {
+            "type": [
+              "string",
+              "boolean",
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "socket",
+                "native",
+                "mcp-inbox",
+                "typed",
+                "drop",
+                "headless-resume"
+              ]
+            }
+          },
+          "applies": {
+            "type": "string",
+            "enum": [
+              "restart-resume",
+              "at-once"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

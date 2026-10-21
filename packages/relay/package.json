@@ -1,0 +1,34 @@
+{
+  "name": "@teamcli/relay",
+  "version": "0.1.0",
+  "description": "TeamCLI's message transport: one durable signed copy, then one route attempt at a time.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./host/server": {
+      "types": "./host/server.d.ts",
+      "default": "./host/server.js"
+    },
+    "./host/queue": {
+      "types": "./host/queue.d.ts",
+      "default": "./host/queue.js"
+    }
+  },
+  "engines": { "node": ">=22" },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "host/server.js",
+    "host/server.d.ts",
+    "host/queue.js",
+    "host/queue.d.ts",
+    "README.md"
+  ]
+}

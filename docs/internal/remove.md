@@ -329,7 +329,7 @@ stopped, with the same parenthesised line):
 
 ```console caller=claude-keeper screens="claude-reviewer=unknown"
 $ team remove claude-reviewer ; echo "exit $?"
-removed claude-reviewer (its pane w3:p1 was left running; nothing was typed; it now reads as claude-reviewer-left)
+removed claude-reviewer (its pane w1:p2 was left running; nothing was typed; it now reads as claude-reviewer-left)
 exit 0
 ```
 

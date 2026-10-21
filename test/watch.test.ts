@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runStatus } from '../src/commands/status.ts';
-import { plantMessage, type MessagePayload } from '../src/commands/messages.ts';
+import { plantMessage, receiptFile, type MessagePayload } from '../src/commands/messages.ts';
+import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { findRoot } from '../src/file/load.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
@@ -15,13 +16,20 @@ import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { parseLoadavg, parseMeminfo, parseMemoryPressure, parseSwapUsage, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
+import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parsePsiMemory, parseSwapUsage, parseVmPressureLevel, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
-import { newMemory, NUDGE_TEXT, pass, RING_TEXT } from '../src/watch/pass.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
+import { newMemory, NUDGE_TEXT, pass, ringText } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
+
+// The ring line is the receiver's own: this fixture's team session is `acme-web`, and each
+// scene's seat is the one its record names.
+const ringFor = (seat: string): string => ringText(seat, 'acme-web');
+const RING_TEXT = ringFor('deepseek-acme');
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8')
   .replace('operator: claude-coordinator-acme', 'operator: claude-operator-acme')
@@ -166,6 +174,15 @@ describe('the machine\'s figures', () => {
     expect(parseMemoryPressure('…\nSystem-wide memory free percentage: 49%\n')).toBe(49);
     expect(parseMemoryPressure('')).toBeNull();
   });
+  test('macOS memory pressure level', () => {
+    expect(parseVmPressureLevel('1\n')).toBe('normal');
+    expect(parseVmPressureLevel('2\n')).toBe('warn');
+    expect(parseVmPressureLevel('4\n')).toBe('critical');
+    // A value this code doesn't know is unread, never normal.
+    expect(parseVmPressureLevel('3\n')).toBeNull();
+    expect(parseVmPressureLevel('critical\n')).toBeNull();
+    expect(parseVmPressureLevel('')).toBeNull();
+  });
   test('Linux meminfo, with and without swap', () => {
     const info = 'MemTotal:       16000000 kB\nMemAvailable:    4000000 kB\nSwapTotal:       2000000 kB\nSwapFree:         500000 kB\n';
     expect(parseMeminfo(info)).toEqual({ memoryFree: 25, swapTotal: 2000000 * 1024, swapFree: 500000 * 1024, swapUsed: 1500000 * 1024 });
@@ -177,22 +194,39 @@ describe('the machine\'s figures', () => {
     expect(parseLoadavg('')).toBeNull();
     expect(parseLoadavg('load average: 1.00')).toBeNull();
   });
+  test('Linux PSI memory pressure, on the same three levels', () => {
+    const psi = (avg10: string) => `some avg10=${avg10} avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n`;
+    expect(parsePsiMemory(psi('0.00'))).toBe('normal');
+    expect(parsePsiMemory(psi('9.99'))).toBe('normal');
+    expect(parsePsiMemory(psi('10.00'))).toBe('warn');
+    expect(parsePsiMemory(psi('49.99'))).toBe('warn');
+    expect(parsePsiMemory(psi('50.00'))).toBe('critical');
+    expect(parsePsiMemory(psi('100.00'))).toBe('critical');
+    // No readable `some` line is unread, never normal: a kernel without PSI has no file at all.
+    expect(parsePsiMemory('full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n')).toBeNull();
+    expect(parsePsiMemory('some avg10=x avg60=0.00')).toBeNull();
+    expect(parsePsiMemory('')).toBeNull();
+  });
 
-  test('Linux: memory, swap and load read from a captured /proc, not from macOS commands', () => {
-    // A 16 GB machine halfway through its memory, 2 GB of swap with 1.5 GB of it used, load 0.52.
+  test('Linux: memory, swap, load and pressure read from a captured /proc, not from macOS commands', () => {
+    // A 16 GB machine halfway through its memory, 2 GB of swap with 1.5 GB of it used, load 0.52,
+    // and PSI `some avg10=12.34`: a warning level.
     const machine = readMachine(process.cwd(), 'linux', new URL('./fixtures/linux/proc', import.meta.url).pathname);
     expect(machine.memoryFree).toBe(50);
     expect(machine.swapTotal).toBe(2 * 1024 ** 3);
     expect(machine.swapFree).toBe(512 * 1024 ** 2);
     expect(machine.swapUsed).toBe(1536 * 1024 ** 2);
     expect(machine.loadPerCore).toBeCloseTo(0.52 / cpus().length, 10);
+    expect(machine.pressure).toBe('warn');
   });
 
-  test('this machine: every figure it can read is a number', () => {
+  test('this machine: every figure it can read is a number, and its level is a known one', () => {
     const machine = readMachine(process.cwd());
     expect(machine.loadPerCore).toBeGreaterThanOrEqual(0);
     expect(machine.diskFree).toBeGreaterThan(0);
-    for (const value of Object.values(machine)) expect(value === null || Number.isFinite(value)).toBe(true);
+    const { pressure, ...figures } = machine;
+    for (const value of Object.values(figures)) expect(value === null || Number.isFinite(value)).toBe(true);
+    expect(pressure === null || pressure === 'normal' || pressure === 'warn' || pressure === 'critical').toBe(true);
   });
 
   test('the swap total the check can never meet', () => {
@@ -202,36 +236,66 @@ describe('the machine\'s figures', () => {
     };
     const small: Machine = { loadPerCore: 0.4, memoryFree: 62, diskFree: 120e9, swapTotal: 1e9, swapFree: 0.5e9, swapUsed: 0.5e9 };
     expect(swapTotalProblem(small, limits)).toBe(
-      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep',
+      'the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep',
     );
     // The check can pass in principle — its floor sits under the machine's total — and the free
-    // figure is low right now: `up`'s refusal and the watch's finding, and nothing here.
+    // figure is low right now: the watch's finding, and nothing here.
     expect(swapTotalProblem({ ...small, swapTotal: 16e9, swapFree: 0.5e9 }, limits)).toBeNull();
     // Exactly the total the check asks for is meetable.
     expect(swapTotalProblem({ ...small, swapTotal: 2e9 }, limits)).toBeNull();
     // A figure that wasn't read is neither fine nor bad: a machine with no swap at all leaves
-    // both null, and `launchLimit`'s swap rule can't fire there either.
+    // both null, and neither this warning nor `launchLimit` can fire there.
     expect(swapTotalProblem({ ...small, swapTotal: null, swapFree: null }, limits)).toBeNull();
     expect(swapTotalProblem({ ...small, swapFree: null }, limits)).toBeNull();
   });
 
+  test('the launch gate: critical pressure refuses, free swap alone never does', () => {
+    const limits: TeamFile['machine'] = {
+      loadStart: 3, loadMax: 6, memoryStart: 25, memoryMin: 15, diskMin: 10e9,
+      swapFreeMin: 2e9, swapGrowthMax: 1e9, swapGrowthWindow: 600,
+    };
+    // The host this slice was measured on: 49% of physical memory free, the OS level normal, and
+    // 0.99 GB of a 15.36 GB swap free — under the 2 GB the file asks, and still no refusal.
+    const host: Machine = { loadPerCore: 0.4, memoryFree: 49, diskFree: 120e9, swapTotal: 15.36e9, swapFree: 0.99e9, swapUsed: 14.37e9, pressure: 'normal' };
+    const now = Date.parse('2026-10-20T09:00:00Z');
+    expect(launchLimit(host, limits, [], now)).toBeNull();
+    // A warning level does not refuse either.
+    expect(launchLimit({ ...host, pressure: 'warn' }, limits, [], now)).toBeNull();
+    // A critical level does, whatever the figures say.
+    expect(launchLimit({ ...host, pressure: 'critical' }, limits, [], now)).toBe('memory pressure is critical');
+    // A level that wasn't read is neither fine nor bad: the other limits still decide.
+    expect(launchLimit({ ...host, pressure: null }, limits, [], now)).toBeNull();
+    const older: Machine = { loadPerCore: 0.4, memoryFree: 49, diskFree: 120e9, swapTotal: 15.36e9, swapFree: 0.99e9, swapUsed: 14.37e9 };
+    expect(launchLimit(older, limits, [], now)).toBeNull();
+    // Physical free memory is its own limit, independent of the level.
+    expect(launchLimit({ ...host, memoryFree: 10 }, limits, [], now)).toBe('free memory is 10%, below 25%');
+    expect(launchLimit({ ...host, memoryFree: 10, pressure: 'critical' }, limits, [], now)).toBe('free memory is 10%, below 25%');
+    // The swap-growth guard is kept.
+    expect(launchLimit({ ...host, swapUsed: 15e9, swapFree: 0.36e9 }, limits, [{ at: now - 60_000, used: 13e9 }], now))
+      .toBe('swap grew by 2.0 GB in 10 minutes, above 1.0 GB');
+  });
+
   test('the readings as one sentence, in the log\'s fixed order, in the bytes the gate compared', () => {
-    expect(readingsText({ loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9 }))
-      .toBe('load 1.0/core, memory 69%, disk 200000000000 B free, swap used 7000000000 B of 8200000000 B (free 1200000000 B)');
-    // The watch spelling: the disk figure no moment recorded, the rest from a reading taken.
+    expect(readingsText({ loadPerCore: 1, memoryFree: 69, diskFree: 200e9, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 7e9, pressure: 'normal' }))
+      .toBe('load 1.0/core, memory 69%, disk 200000000000 B free, pressure normal, swap used 7000000000 B of 8200000000 B (free 1200000000 B)');
+    // The watch spelling: the disk figure and the pressure level no moment recorded, the rest
+    // from a reading taken.
     expect(readingsText({ loadPerCore: 0.7, memoryFree: 69, diskFree: null, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: 6.9e9 }))
-      .toBe('load 0.7/core, memory 69%, disk unread, swap used 6900000000 B of 8200000000 B (free 1200000000 B)');
+      .toBe('load 0.7/core, memory 69%, disk unread, pressure unread, swap used 6900000000 B of 8200000000 B (free 1200000000 B)');
     // Not a rounding of the bytes: a figure the gate compared byte for byte prints byte for byte,
     // so a later launch parsing the newest line's swap figures reads the figure it compared.
-    expect(readingsText({ loadPerCore: 0.5, memoryFree: 68, diskFree: 199_999_999_999, swapTotal: 8_192_620_000, swapFree: 1_314_750_000, swapUsed: 6_877_870_000 }))
-      .toBe('load 0.5/core, memory 68%, disk 199999999999 B free, swap used 6877870000 B of 8192620000 B (free 1314750000 B)');
+    expect(readingsText({ loadPerCore: 0.5, memoryFree: 68, diskFree: 199_999_999_999, swapTotal: 8_192_620_000, swapFree: 1_314_750_000, swapUsed: 6_877_870_000, pressure: 'critical' }))
+      .toBe('load 0.5/core, memory 68%, disk 199999999999 B free, pressure critical, swap used 6877870000 B of 8192620000 B (free 1314750000 B)');
   });
   test('a figure that wasn\'t read prints unread, never a guessed number', () => {
-    const none: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null };
-    expect(readingsText(none)).toBe('load unread, memory unread, disk unread, swap unread');
+    const none: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null, pressure: null };
+    expect(readingsText(none)).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
     // One of the three swap figures missing makes the whole swap reading unread.
-    expect(readingsText({ ...none, swapUsed: 6.9e9 })).toBe('load unread, memory unread, disk unread, swap unread');
-    expect(readingsText({ ...none, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: null })).toBe('load unread, memory unread, disk unread, swap unread');
+    expect(readingsText({ ...none, swapUsed: 6.9e9 })).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
+    expect(readingsText({ ...none, swapTotal: 8.2e9, swapFree: 1.2e9, swapUsed: null })).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
+    // An older reading object that omits the level is unread too, never normal.
+    const older: Machine = { loadPerCore: null, memoryFree: null, diskFree: null, swapTotal: null, swapFree: null, swapUsed: null };
+    expect(readingsText(older)).toBe('load unread, memory unread, disk unread, pressure unread, swap unread');
   });
 });
 
@@ -350,7 +414,7 @@ describe('a pass of the watch', () => {
     const screen = readFileSync(new URL('./fixtures/codex/0.157.0/working.txt', import.meta.url), 'utf8');
     const drift = live({ 'codex-acme': { status: 'working', screen } });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: drift, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
-    expect(texts).toEqual(['codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme']);
+    expect(texts).toEqual(['codex-acme runs GPT Terra 5.6; the registry says GPT Sol 6: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme']);
   });
 
   test('a stopped seat that runs is watched like a parked one: its permission prompt is reported', () => {
@@ -497,7 +561,7 @@ describe('a pass of the watch', () => {
     now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: watchLabel('acme-web') });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: now, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
     expect(texts).toEqual([
-      'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)',
+      'claude-coordinator-acme runs Claude Fable 5.1; the registry says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)',
       'deepseek-acme-2 is in the file and is not running',
       'stranger (w8:p1) is running and is not in the file',
     ]);
@@ -644,6 +708,34 @@ describe('a pass of the watch', () => {
     expect(at({ 'w3:p1': { shell: 500, foreground: [501] } })).toEqual([launcher]);
     // A pane back at its shell is the generic line only.
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([restored]);
+  });
+
+  test('a restored agent session is recognized while its observed model drift is still reported', () => {
+    const state = emptySession();
+    state.seats['codex-acme'] = {
+      stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 400, cli: [401] }, agent_session: 'kept',
+    };
+    const seen = live({
+      'codex-acme': {
+        status: 'working',
+        screen: readFileSync(new URL('./fixtures/codex/0.157.0/working.txt', import.meta.url), 'utf8'),
+      },
+    });
+    const codex = seen.agents.find((candidate) => candidate.name === 'codex-acme');
+    if (!codex) throw new Error('fixture is missing codex-acme');
+    codex.session = 'kept';
+
+    const result = pass({
+      team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory: newMemory(),
+      processes: { 'w2:p1': { shell: 500, foreground: [501] } },
+      signing: new Map([['codex-acme', { model: 'GPT Sol', version: '6' }]]),
+    });
+
+    // The pane's new pid is recognized as the same agent conversation, so no generic restored
+    // warning is emitted. The live model still differs from its signing record and is reported.
+    expect(result.reports.map((report) => report.text)).toEqual([
+      'codex-acme runs GPT Terra 5.6; the registry says GPT Sol 6: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme',
+    ]);
   });
 
   test('a reading herdr can\'t give is no change: it never clears the report-once mark', () => {
@@ -946,6 +1038,7 @@ describe('team watch', () => {
   function sources(passes: number, over: Partial<WatchSources> = {}): WatchSources {
     let left = passes;
     return {
+      home: join(dir, 'home'),
       live: () => scene,
       machine: () => fine,
       standing: approvedNow(),
@@ -1114,9 +1207,9 @@ describe('team watch', () => {
     const lines = readFileSync(join(dir, '.agents', 'team.log'), 'utf8')
       .split('\n').filter((line) => line.includes('watch [watch] readings: '));
     expect(lines).toEqual([
-      '2026-10-03T14:00:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
-      '2026-10-03T14:10:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
-      '2026-10-03T14:20:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:00:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure unread, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:10:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure unread, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
+      '2026-10-03T14:20:00.000Z watch [watch] readings: load 1.0/core, memory 50%, disk 200000000000 B free, pressure unread, swap used 1000000000 B of 9000000000 B (free 8000000000 B)',
     ]);
   });
 
@@ -1124,7 +1217,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     expect(await runWatch(['--file', file], io, sources(1, { machine: () => ({ ...fine, memoryFree: null, swapFree: null }) }))).toBe(0);
     const log = readFileSync(join(dir, '.agents', 'team.log'), 'utf8');
-    expect(log).toContain('watch [watch] readings: load 1.0/core, memory unread, disk 200000000000 B free, swap unread');
+    expect(log).toContain('watch [watch] readings: load 1.0/core, memory unread, disk 200000000000 B free, pressure unread, swap unread');
   });
 
   test('a log that cannot be written does not kill the pass', async () => {
@@ -1159,6 +1252,28 @@ describe('team watch', () => {
     expect(io.out).toContain('watching the session "acme-web" every 120s');
     expect(waits).toEqual([120]);
     expect(io.out).not.toContain('the file differs from the approved one');
+  });
+
+  test('a signed watch-rhythm change is reloaded by the running watch on its next pass', async () => {
+    const io = testIo(dir, { kind: 'owner' });
+    const waits: number[] = [];
+    let changed = false;
+    const code = await runWatch(['--file', file], io, sources(2, {
+      wait: async (seconds) => {
+        waits.push(seconds);
+        if (!changed) {
+          changed = true;
+          const wrote = writePolicySet(join(dir, 'home'), {
+            level: 'team', target: teamIdOf(dir), teamRoot: dir, name: 'watch-rhythm', value: 'relaxed',
+          }, { now: new Date(clock) });
+          if (!wrote.ok) throw new Error(wrote.why);
+          return true;
+        }
+        return false;
+      },
+    }));
+    expect(code).toBe(0);
+    expect(waits).toEqual([120, 240]);
   });
 
   test('an edited grant and delegates logs no approved-copy difference', async () => {
@@ -1397,7 +1512,7 @@ describe('team watch', () => {
     let looks = 0;
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { ...waiting('codex-acme'), screen: () => (looks++ === 0 ? codexIdle : pinned) }));
-    expect(typed).toEqual([`w2:p1 ${RING_TEXT}`]);
+    expect(typed).toEqual([`w2:p1 ${ringFor('codex-acme')}`]);
     expect(io.out).toContain('a nudge was typed and not sent');
   });
 
@@ -1555,7 +1670,7 @@ describe('team watch', () => {
         return true;
       },
     }));
-    expect(typed).toEqual([`w2:p1 ${RING_TEXT}`, 'w2:p1 <enter>']);
+    expect(typed).toEqual([`w2:p1 ${ringFor('codex-acme')}`, 'w2:p1 <enter>']);
     expect(io.out).toContain('rang codex-acme');
   });
 
@@ -1926,6 +2041,18 @@ describe('team watch', () => {
     return payload;
   }
 
+  /** The receipt `team messages` writes for a message read from the older store: signed with the
+   *  message key over the receipt's own domain, so the watch's unread filter verifies it. */
+  function readMailbox(payload: MessagePayload): void {
+    const home = join(dir, 'home');
+    const receipt = {
+      kind: 'receipt', id: payload.id, to: payload.to, root: payload.root, session: payload.session,
+      at: '2026-10-03T13:59:30.000Z',
+    };
+    const signature = signDomain(RECEIPT_DOMAIN, receipt as Json, messageKeyOf(home));
+    writeFileSync(receiptFile(payload.root, payload.to, payload.id), `${JSON.stringify({ payload: receipt, signature }, null, 2)}\n`);
+  }
+
   test('--no-nudge types no ring and presses no Enter; the record stays', async () => {
     // The older `--no-nudge` test already has a report waiting, so the nudge branch runs and the
     // ring branch does not. This pass has no report: the ring would be the only typed line.
@@ -1934,7 +2061,7 @@ describe('team watch', () => {
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file, '--no-nudge'], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
     expect(typed).toEqual([]);
-    expect(io.out).toContain(`ring not typed (--no-nudge): ${RING_TEXT}`);
+    expect(io.out).toContain(`ring not typed (--no-nudge): ${ringFor('claude-operator-acme')}`);
     expect(io.out).not.toContain(body);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
@@ -1945,11 +2072,70 @@ describe('team watch', () => {
     planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
-    expect(typed).toEqual([`w0:p1 ${RING_TEXT}`, 'w0:p1 <enter>']);
+    // The line is the receiving seat's own: its name and the session its mailbox was read for.
+    expect(typed).toEqual([
+      'w0:p1 Team: run team drops --read --seat claude-operator-acme --session acme-web',
+      'w0:p1 <enter>',
+    ]);
     expect(typed.join('\n')).not.toContain(body);
-    expect(io.out).toContain(`rang claude-operator-acme: ${RING_TEXT}`);
+    expect(io.out).toContain(`rang claude-operator-acme: ${ringFor('claude-operator-acme')}`);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
+  });
+
+  test('a message read after the pass read the mailbox is not rung', async () => {
+    // The mailbox snapshot is taken at the top of the pass; the seat reads the message while the
+    // pass is still reporting it. The receipt is the seat's own word, so the ring would be a
+    // duplicate reminder: the line is not typed, and the watch says the message is already read.
+    const body = 'the message body itself';
+    const payload = planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources(1, {
+      home: join(dir, 'home'),
+      notify: (text) => {
+        notified.push(text);
+        if (text.includes('asked a question')) readMailbox(payload);
+      },
+    }));
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
+    expect(io.out).toContain('ring not typed: message m1 is already read');
+    expect(io.out).not.toContain('rang claude-operator-acme');
+  });
+
+  test('an idle report for another seat cannot keep a read drop alive by reusing its id', async () => {
+    const target = planted('deepseek-acme', 'target body', '2026-10-03T13:59:00.000Z');
+    const start = Date.parse('2026-10-03T14:00:00Z');
+    const operatorIdle = live({
+      'deepseek-acme': { status: 'working', screen: busy },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    const bothIdle = live({
+      'deepseek-acme': { status: 'idle', screen: idle },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    const io = testIo(dir, { kind: 'owner' });
+    let passes = 4;
+    const code = await runWatch(['--file', file], io, sources(4, {
+      live: () => clock >= start + 6 * 60_000 ? bothIdle : operatorIdle,
+      wait: async (seconds) => {
+        clock += seconds * 1000;
+        return --passes > 0;
+      },
+      notify: (text) => {
+        notified.push(text);
+        if (text.includes('deepseek-acme-2 has been idle')) {
+          readMailbox(target);
+          // A different seat can have the same message id. Its unread record must not
+          // authorize ringing the target whose receipt just appeared.
+          planted('deepseek-acme-2', 'other body', '2026-10-03T14:05:00.000Z');
+        }
+      },
+    }));
+    expect(code).toBe(0);
+    expect(notified.some((text) => text.includes('deepseek-acme-2 has been idle'))).toBe(true);
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme:');
   });
 
   test('a waiting report is never the typed line: the ring is', async () => {
@@ -1960,7 +2146,7 @@ describe('team watch', () => {
     planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home') }));
-    expect(typed).toEqual([`w0:p1 ${RING_TEXT}`, 'w0:p1 <enter>']);
+    expect(typed).toEqual([`w0:p1 ${ringFor('claude-operator-acme')}`, 'w0:p1 <enter>']);
     expect(io.out).toContain('deepseek-acme-2 asked a question');
     expect(io.out).not.toContain(`w3:p1 ${NUDGE_TEXT}`);
     expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
@@ -2028,7 +2214,7 @@ describe('team watch', () => {
   test('a restarted watch does not send a box that already holds the wake line', async () => {
     const body = 'the message body itself';
     planted('claude-operator-acme', body, '2026-10-03T13:59:00.000Z');
-    const held = claudeBox(RING_TEXT);
+    const held = claudeBox(ringFor('claude-operator-acme'));
     const sceneHeld = live({ 'claude-operator-acme': { status: 'idle', screen: held } });
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, {
@@ -2044,9 +2230,9 @@ describe('team watch', () => {
   test('a record is not rung when the watch is not given a home', async () => {
     planted('claude-operator-acme', 'the message body itself', '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
-    await runWatch(['--file', file], io, sources(1, { live: () => live() }));
+    await runWatch(['--file', file], io, sources(1, { home: undefined, live: () => live() }));
     expect(typed).toEqual([]);
-    expect(io.out).not.toContain(RING_TEXT);
+    expect(io.out).not.toContain(ringFor('claude-operator-acme'));
   });
 
   test('a file that never validated, and a bad option', async () => {

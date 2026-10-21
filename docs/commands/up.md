@@ -12,11 +12,19 @@ it is — and it does not count as short of ready.
 Before the plan types anything, the run delivers the general seat brief: TeamCLI's built-in
 default, the first text every seat gets, written as a signed message record into the drop folder
 of every seat the plan launches or relaunches, and of every declared seat the session records no
-launch of — a human seat, which is never launched, among them — and recorded in the session's
-state. A seat the state records as already launched, and that the run leaves as it is, is left
-exactly so: no drop and no state entry. It travels the drop leg and is never typed; a seat that
-already holds this brief's verified record is left as it is, a file planted at the brief's id is
-replaced by the signed record, and a link, a folder or a FIFO there is refused, never followed.
+launch of — a human seat, which is never launched, among them. Each delivery is a claim and a
+drop: the claim in the session's state names the delivery's incarnation, the runtime epoch, the
+brief's sha256 and the record's expected id, and it is written before the drop. When this build's
+brief is ahead of any live or human seat's claim, the run also delivers to those seats, without
+relaunching them; every other delivery is the plan's own seats. The claim's epoch is the runtime
+the launch hands its reader, so an older process — one started under an earlier epoch — serves
+nothing until its seat is launched again; a launch that ends short of ready leaves its delivery
+on disk and a read by that process is provisional, never a successful read. A seat the state
+records as already launched, and that the run leaves as it is, is left exactly so when its claim
+is current: no drop and no state entry. The brief travels the drop leg and is never typed; a seat
+that already holds this brief's verified record is left as it is, and a name held at the claim's
+expected id by another file, a link, a folder or a FIFO is refused, never replaced or followed —
+only [`team brief rollout --apply`](brief.md) recovers that delivery at the claim's next attempt.
 [`team check`](check.md) names a seat the session launched without a verified delivery record.
 
 ## Synopsis

@@ -62,9 +62,10 @@ type World = { base: string; home: string; root: string; sockets: string };
  * `spare` — with the team file, the registry records, the team record, the state and a socket
  * folder of its own. `helper`'s registry record carries a recorded address whose pid (222) is
  * the one the fake pane runs, so the reading says `live`; the file is named here and dialed
- * nowhere.
+ * nowhere. Beside it stands one seat of another entity: a pair no rule admits, which the
+ * refusal halves are proven on.
  */
-function acme(): { w: World; id: string; lead: Agent; helper: Agent; address: string; leadIo: TestIo; helperIo: TestIo } {
+function acme(): { w: World; id: string; otherId: string; lead: Agent; helper: Agent; address: string; leadIo: TestIo; helperIo: TestIo } {
   const base = temp('b4-nat-');
   const home = join(base, 'home');
   const root = join(base, 'acme');
@@ -110,9 +111,38 @@ ${seatBlock('coordinator', 'lead')}${seatBlock('implementer', 'helper')}${seatBl
     ['helper', 'w1:p2'],
     ['spare', 'w1:p3'],
   ]);
+
+  // A second team, of another entity: its one seat is no address any rule of `acme` reaches, so
+  // the refusal halves prove their promise on a pair the policy really refuses.
+  const otherRoot = join(base, 'other');
+  mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: otherRoot, stdio: 'ignore' });
+  writeFileSync(join(otherRoot, '.agents', 'team.yaml'), `format: 1
+project: other
+entity: other
+coordinator: stranger
+operator: stranger
+session: other
+workspace:
+  mode: shared
+seats:
+${seatBlock('coordinator', 'stranger')}`);
+  const otherId = teamIdOf(otherRoot);
+  const stranger = registered(home, otherId, { seat: 'stranger', role: 'coordinator', pane: 'w2:p1', session: 'other' });
+  upsertTeam(home, otherId, {
+    project: 'other',
+    entity: 'other',
+    session: 'other',
+    root: otherRoot,
+    lobby: lobbyDir(home),
+    lifecycle: 'running',
+    roster: [{ agent: stranger.id, seat: 'stranger', role: 'coordinator', leads: true }],
+  });
+
   return {
     w: { base, home, root, sockets },
     id,
+    otherId,
     lead,
     helper,
     address,
@@ -125,7 +155,7 @@ ${seatBlock('coordinator', 'lead')}${seatBlock('implementer', 'helper')}${seatBl
 function registered(
   home: string,
   team: string,
-  seat: { seat: string; role: string; pane: string; address?: string },
+  seat: { seat: string; role: string; pane: string; address?: string; session?: string },
 ): Agent {
   return registerAgent(home, {
     name: seat.seat,
@@ -134,7 +164,7 @@ function registered(
     cli: 'claude-code',
     launcher: null,
     launch: 'claude-code --model test',
-    reach: { team, seat: seat.seat, session: 'acme', pane: seat.pane, address: seat.address ?? null },
+    reach: { team, seat: seat.seat, session: seat.session ?? 'acme', pane: seat.pane, address: seat.address ?? null },
     mcp: [],
     skills: [],
     lifecycle: 'running',
@@ -235,14 +265,14 @@ describe('native acceptance: the route half', () => {
   });
 
   test('a refused route answers no address, and writes no line anywhere', async () => {
-    const { w, id, helperIo } = acme();
+    const { w, id, otherId, helperIo } = acme();
 
-    const code = await runRoute(['spare'], helperIo, rig(w));
+    const code = await runRoute([`stranger@${otherId}`], helperIo, rig(w));
 
     expect(code).toBe(1);
     expect(helperIo.out).toBe('');
     expect(helperIo.err).toBe(
-      `team route: refused: helper@${id} may not send to spare@${id}: no rule admits it (${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY})\n`,
+      `team route: refused: helper@${id} may not send to stranger@${otherId}: no rule admits it (${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY})\n`,
     );
     expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
   });
@@ -279,13 +309,13 @@ describe('native acceptance: the record half', () => {
   });
 
   test('--record is judged by admission like any send: a pair no rule admits is refused, nothing written', async () => {
-    const { w, id, helperIo } = acme();
+    const { w, id, otherId, helperIo } = acme();
 
-    const code = await runSend(['--record', 'spare', '--channel', 'native', '--ms', '9'], helperIo, rig(w));
+    const code = await runSend(['--record', `stranger@${otherId}`, '--channel', 'native', '--ms', '9'], helperIo, rig(w));
 
     expect(code).toBe(1);
     expect(helperIo.err).toBe(
-      `team send: refused: helper@${id} may not send to spare@${id}: no rule admits it (${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY})\n`,
+      `team send: refused: helper@${id} may not send to stranger@${otherId}: no rule admits it (${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY})\n`,
     );
     expect(existsSync(historyPath('acme', w.root, w.home))).toBe(false);
   });

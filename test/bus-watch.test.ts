@@ -542,6 +542,7 @@ describe('bus socket server, privileged subscription refusal, and watch integrat
       parked: false,
       stopped: false,
       seat: parsed.team.seats[2],
+      rule: undefined,
       recorded: 'ready',
       identity: 'same',
       continuity: 'doubt',

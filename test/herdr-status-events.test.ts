@@ -31,6 +31,7 @@ import {
   type StatusTarget,
 } from '../src/watch/status-events.ts';
 import { testIo } from './helpers.ts';
+import type { WorkPushRequest } from '../src/watch/dispatch.ts';
 
 const dirs: string[] = [];
 
@@ -360,6 +361,53 @@ describe('status-to-event mapping table and screen-module boundaries', () => {
       'seat.done',
       'seat.idle',
     ]);
+  });
+
+  test('a native-held seat publishes no legacy seat.idle and no nudge; the stretch starts afresh when the hold lifts', async () => {
+    const { root, home } = makeScratch();
+    const team = parseTeam();
+    let clock = 1_700_000_000_000;
+    let held = true;
+    const source: StatusSource = {
+      async waitStatus() {
+        return { outcome: 'timeout', at: clock };
+      },
+      promptKind() {
+        return 'unknown' as PromptKind;
+      },
+    };
+    const engine = createSeatStatusEngine({
+      team,
+      root,
+      home,
+      source,
+      now: () => clock,
+      idleThresholdSeconds: 300,
+      promptEscalationSeconds: 300,
+      graceMs: 120_000,
+      assignedSeats: ['worker-1'],
+      nativeHeld: () => (held ? new Set(['worker-1']) : new Set()),
+    });
+
+    await engine.observe('worker-1', 'working', clock);
+    clock += 600_000;
+    const stillHeld = await engine.observe('worker-1', 'idle', clock);
+    // The screen says idle for ten minutes, but the native store says the seat is not: no
+    // screen-derived idle record is written and nothing is nudged.
+    expect(stillHeld.events).toEqual([]);
+    expect(stillHeld.nudgeDue).toBe(false);
+    expect(await engine.tick(clock)).toEqual([]);
+
+    // The hold lifts: the old stretch was dropped, so the window must pass again from here.
+    held = false;
+    clock += 1_000;
+    const freed = await engine.observe('worker-1', 'idle', clock);
+    expect(freed.events).toEqual([]);
+    expect(freed.nudgeDue).toBe(false);
+    clock += 301_000;
+    const after = await engine.observe('worker-1', 'idle', clock);
+    expect(after.events.map((ev) => ev.input.kind)).toEqual(['seat.idle']);
+    expect(after.nudgeDue).toBe(true);
   });
 });
 
@@ -941,16 +989,47 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       subject: 'jules-1',
     });
     expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'jules-1', clock + 1_000, { project: 'acme', home })).toBe(false);
+
+    // 4. The general seat brief is not assigned work: neither the current delivery nor an id its
+    // claim replaced. Any other drop in the folder still is.
+    const dropsDir = join(root, '.agents', 'send-drops', 'acme-dev', 'worker-3');
+    mkdirSync(dropsDir, { recursive: true });
+    const replaced = '0a5b7c1d-8e2f-4a6b-9c3d-1e2f3a4b5c6d';
+    writeFileSync(join(dropsDir, replaced), 'a delivery the claim replaced\n');
+    updateState(join(root, '.agents'), (state) => {
+      const current = (state.sessions['acme-dev'] ??= emptySession());
+      current.briefs = {
+        'worker-3': {
+          id: '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d',
+          at: '2026-10-04T09:00:00.000Z',
+          incarnation: 'inc_000000000010',
+          epoch: 'run_000000000010',
+          sha256: '4b273912a6c995f1b2b8ab1a43a0432cad323c1dbb986c9ae50b4ad2a7f84fec',
+          attempt: 0,
+          stage: 'ready',
+          superseded: [replaced],
+        },
+      };
+    });
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(false);
+    // The delivery and the claim-bound read receipt the seat's reader writes beside it: the
+    // receipt is metadata about the read, not a second piece of work.
+    writeFileSync(join(dropsDir, '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d'), '{"kind":"message"}\n');
+    writeFileSync(join(dropsDir, '9a0b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d.read.json'), '{"kind":"receipt"}\n');
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(false);
+    writeFileSync(join(dropsDir, '1b6c8d2e-9f30-4b7c-8d4e-2f3a4b5c6d7e'), 'a message from a seat\n');
+    expect(seatHasAssignedWorkOnDisk(root, 'acme-dev', 'worker-3', clock)).toBe(true);
   });
 
-  test('runWatch drains statusEngine nudges and writes a work drop when a worker seat with assigned work is idle past threshold', async () => {
+  test('runWatch routes the idle worker\'s one work request through the dispatcher and drains the status-engine nudge', async () => {
     const { root, home } = makeScratch();
     execSync('git init -q -b main', { cwd: root, stdio: 'ignore' });
     const file = join(root, '.agents', 'team.yaml');
     writeFileSync(file, TEAM_YAML);
     const team = parseTeam();
 
-    // Give worker-1 an active lease so `hasAssignedWorkForSeat` is true.
+    // Give worker-1 an active lease so `hasAssignedWorkForSeat` is true, and a persisted stamp
+    // past the idle window: the status engine's legacy nudge is due here.
     const leasesDir = join(root, '.agents', 'leases');
     mkdirSync(leasesDir, { recursive: true });
     let clock = Date.parse('2026-10-19T06:00:00Z');
@@ -958,6 +1037,18 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       join(leasesDir, 'TASK-1.json'),
       JSON.stringify({ id: 'TASK-1', seat: 'worker-1', until: new Date(clock + 7_200_000).toISOString() }),
     );
+    // The dispatcher owns every automatic work request: its reading needs takeable queue work and
+    // the canonical idle clock the watch folds, not the legacy nudge's word.
+    writeFileSync(join(root, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
+    writeFileSync(join(root, '.agents', 'team.state.json'), `${JSON.stringify({
+      format: 1,
+      sessions: {
+        'acme-dev': {
+          seats: { 'worker-1': { stage: 'ready', last_active: new Date(clock - 600_000).toISOString() } },
+          worktrees: {},
+        },
+      },
+    })}\n`);
 
     const statusSource: StatusSource = {
       async waitStatus() {
@@ -971,6 +1062,7 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       { 'crew-lead': 'idle', 'worker-1': 'idle' },
       { 'crew-lead': 'idle', 'worker-1': 'idle' },
     ];
+    const pushed: WorkPushRequest[] = [];
     const sources: WatchSources = {
       live: () => {
         const current = scenes[Math.min(passIdx, scenes.length - 1)]!;
@@ -988,7 +1080,8 @@ describe('production watch wiring, assigned-work gate, and screen verification',
             { id: 'w1', label: 'crew-lead' },
             { id: 'w2', label: 'worker-1' },
           ],
-          screens: { 'w1:p1': '', 'w2:p1': '' },
+          // The dispatcher's labelled fallback reads the pane screen, not herdr's word alone.
+          screens: { 'w1:p1': IDLE_SCREEN, 'w2:p1': IDLE_SCREEN },
         };
       },
       machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
@@ -1013,14 +1106,22 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       pid: 4242,
       home,
       statusSource,
+      pushWork: async (request) => {
+        pushed.push(request);
+        return { ok: true, outcome: 'delivered' };
+      },
     };
 
     const io = testIo(root, { kind: 'owner' });
     expect(await runWatch(['--file', file], io, sources), io.err).toBe(0);
 
+    // The status engine's nudge is drained, not typed: the dispatcher's direct route is the one
+    // automatic work request, made exactly once for the idle worker.
+    expect(pushed.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(pushed[0]!.pane).toBe('w2:p1');
     const dropDir = join(root, '.agents', 'send-drops', 'acme-dev', 'worker-1');
     const drops = existsSync(dropDir) ? readdirSync(dropDir).filter((n) => n.startsWith('work-')) : [];
-    expect(drops).toHaveLength(1);
+    expect(drops).toEqual([]);
   });
 
   test('shouldReadScreenForStatus and reconcileStatusWithScreen verify Antigravity/Gemini/Cursor/Jules without overriding reliable CLIs, and OWNER_PROMPT_KINDS has no hyphenated rate-limit', async () => {

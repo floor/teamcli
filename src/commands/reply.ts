@@ -20,9 +20,9 @@
 // carries no thread and is read, never answered.
 //
 // A reply is delivered the way the drop leg delivers: the record is left in the target's folder,
-// nothing is typed and no frame is sent, and the receiving seat's own watch rings
-// `Team: run team messages`. A human's pane takes exactly that, so no separate human rule is
-// needed here.
+// nothing is typed and no frame is sent, and the receiving seat's own watch rings its own read
+// (`Team: run team drops --read --seat <seat> --session <session>`). A human's pane takes exactly
+// that, so no separate human rule is needed here.
 import { randomUUID, type KeyObject } from 'node:crypto';
 import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -38,12 +38,14 @@ import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { eventThresholdsInForce, type EventThresholds } from '../policy/index.ts';
+import { resolveOwnerReplyTo } from '../policy/owner-reply.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { sayThreshold } from '../settings/inherit.ts';
 import { senderHeader } from '../send/admit.ts';
 import { namingFor } from '../send/names.ts';
 import { appendHistory } from '../send/history.ts';
+import { resolveTarget, type Target } from '../send/resolve.ts';
 import {
   closeFile,
   readClose,
@@ -93,9 +95,9 @@ export default reply;
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
 /** One record this run answers: the folder it was found in, its path, and its envelope. */
-type Found = { seat: string; path: string; record: SignedRecord };
+export type Found = { seat: string; path: string; record: SignedRecord };
 
-type Lookup =
+export type Lookup =
   | { kind: 'found'; found: Found }
   | { kind: 'none' }
   | { kind: 'legacy' }
@@ -121,7 +123,7 @@ function isDir(path: string): boolean {
 }
 
 /** Two spellings of one folder: the real paths where both can be read, the strings otherwise. */
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   try {
     return realpathSync(a) === realpathSync(b);
   } catch {
@@ -171,7 +173,7 @@ function candidatesOf(root: string, session: string): { seat: string; path: stri
 }
 
 /** Whether the store an earlier build wrote holds this id for any seat of the checkout. */
-function legacyHolds(root: string, id: string): boolean {
+export function legacyHolds(root: string, id: string): boolean {
   const dir = join(root, '.agents', 'messages');
   if (!isDir(dir)) return false;
   let seats: string[];
@@ -185,7 +187,7 @@ function legacyHolds(root: string, id: string): boolean {
 
 /** The candidate files named exactly `id` in this session's tree: what a lookup has to weigh,
  *  before any key is read. A name no record can take is not one of them. */
-function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
+export function recordHits(root: string, session: string, id: string): { seat: string; path: string }[] {
   return candidatesOf(root, session).filter((candidate) => basename(candidate.path) === id);
 }
 
@@ -196,7 +198,7 @@ function recordHits(root: string, session: string, id: string): { seat: string; 
  * folder, is refused for the same reason `team messages` shows it as a difference — a copy is
  * not the message.
  */
-function findRecord(hits: { seat: string; path: string }[], root: string, session: string, id: string, me: string, key: KeyObject): Lookup {
+export function findRecord(hits: { seat: string; path: string }[], root: string, session: string, id: string, me: string, key: KeyObject): Lookup {
   const verified: Found[] = [];
   for (const hit of hits) {
     const read = readRecord(hit.path, id);
@@ -235,6 +237,9 @@ function threadStateOf(
   key: KeyObject,
   now: Date,
   thresholds: Pick<EventThresholds, 'thread_ttl_seconds' | 'thread_cap'>,
+  /** Records on the thread that live outside the seat folders — the verified replies in a
+   *  client's inbox. The seat path passes none and reads exactly as before. */
+  extra: readonly { at: string }[] = [],
 ): ThreadState {
   let count = 0;
   let latest = 0;
@@ -255,6 +260,11 @@ function threadStateOf(
     if (close.payload.thread !== thread) continue;
     if (close.payload.session !== session || !samePath(close.payload.root, root)) continue;
     if (verifyClose(close, key)) closed = true;
+  }
+  for (const record of extra) {
+    count += 1;
+    const at = Date.parse(record.at);
+    if (Number.isFinite(at) && at > latest) latest = at;
   }
   if (closed) return { open: false, reason: 'close' };
   if (latest > 0 && now.getTime() - latest >= thresholds.thread_ttl_seconds * 1_000) {
@@ -281,6 +291,13 @@ function closedWords(
 function refused(io: Io, json: boolean, message: string): number {
   refuse(io, json, 'reply', { id: 'reply.refused', message, repair: null });
   return 1; // exit: reply.refused
+}
+
+/** A refusal on a thread an external client opened: its own id, so a seat and a client thread
+ *  never read as the same refusal. Exit 1, always. */
+function clientRefused(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'reply', { id: 'reply.client-refused', message, repair: null });
+  return 1; // exit: reply.client-refused
 }
 
 /** A team file this run cannot read: nothing is wrong with the pair, the run can't start.
@@ -312,7 +329,7 @@ function seatList(team: TeamFile): string {
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
  *  caller's seat, the seat it addressed and the folder the call stood in — never the message. */
-function raiseSecurityRefusal(
+export function raiseSecurityRefusal(
   team: TeamFile,
   root: string,
   home: string,
@@ -405,11 +422,16 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   const found = lookup.found;
   const answered = found.record.payload;
 
+  // A record a client wrote is answered under the client thread's own id in every refusal; the
+  // binding checks below are the first place the two paths differ, so they pick their id here.
+  const clientThread = answered.from_client !== undefined;
   if (answered.session !== session) {
-    return refused(io, json, `record ${id} is bound to session "${answered.session}", not to "${session}"`);
+    const why = `record ${id} is bound to session "${answered.session}", not to "${session}"`;
+    return clientThread ? clientRefused(io, json, why) : refused(io, json, why);
   }
   if (!samePath(answered.root, root)) {
-    return refused(io, json, `record ${id} is bound to another checkout`);
+    const why = `record ${id} is bound to another checkout`;
+    return clientThread ? clientRefused(io, json, why) : refused(io, json, why);
   }
 
   // The thread's life and cap are the owner's event thresholds, read from the caller's own chain:
@@ -496,40 +518,78 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     }, `${contextLine(team.project, session)}\n${summary}\n`);
   }
 
-  // The reply goes back to the sender of the record it answers, and only to a seat this file
-  // declares: a seat removed from the file is not reached by a reply either.
-  const target = answered.from;
-  if (target === 'owner') {
-    return refused(io, json, `record ${id} was sent by the owner, and this build does not deliver a reply to the owner; nothing was written`);
+  // ---- a thread an external client opened ------------------------------------------------
+  //
+  // The answered record carries `from_client`: the pair is seat -> client, and answering it
+  // would publish a signed record and a replied receipt into the client inbox. Client reply
+  // publication is not in this release: refuse here, before any grant read or inbox creation,
+  // so this path cannot write; seat replies and client sends are untouched below.
+  if (answered.from_client !== undefined) {
+    return clientRefused(io, json, 'client reply publication is not in this release: a client thread is read, not answered; nothing was written');
   }
-  if (!team.seats.some((seat) => seat.name === target)) {
-    raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', target, host.now());
-    return refused(io, json, `${target}: it is not a declared seat; the file's seats are ${seatList(team)}; nothing was written`);
+
+  // The reply goes back to the sender of the record it answers. A seat sender must still be
+  // declared by this file: a seat removed from the file is not reached by a reply either. A
+  // record the owner sent has no seat of this file to answer it: its reply goes to the entity's
+  // declared `owner-reply-to` endpoint — the address the owner-origin frame names — resolved
+  // through the registry, across teams.
+  let targetSeat: string;
+  let endpoint: Target | null = null;
+  if (answered.from === 'owner') {
+    const replyTo = resolveOwnerReplyTo(root, host.home, team.entity, host.now());
+    if (!replyTo.ok) {
+      return refused(io, json, `record ${id} was sent by the owner, and the owner's reply endpoint is ${replyTo.reason} (${replyTo.why}); nothing was written`);
+    }
+    const resolved = resolveTarget(host.home, replyTo.target, io);
+    if ('error' in resolved) {
+      return refused(io, json, `record ${id} was sent by the owner, and the owner's reply endpoint ${replyTo.target} cannot be resolved: ${resolved.error}; nothing was written`);
+    }
+    endpoint = resolved;
+    targetSeat = resolved.agent.reach.seat;
+  } else {
+    targetSeat = answered.from;
+    if (!team.seats.some((seat) => seat.name === targetSeat)) {
+      raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
+      return refused(io, json, `${targetSeat}: it is not a declared seat; the file's seats are ${seatList(team)}; nothing was written`);
+    }
   }
 
   // The pair is judged as a send's, with `open-thread` in the context: the thread the reply is
   // written onto is open by construction — the answered thread while it is open, and otherwise
-  // the new one this reply opens and cites (§3.5). A reply between seats no other rule pairs is
-  // admitted by the reply rule; a send never carries the context.
-  const admission = admissionOf(placed, team, null, target, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
+  // the new one this reply opens and cites (§3.5). The seat rules admit the ordinary pairs
+  // first — two seats of one team, and two seats of one entity's teams — so the reply rule
+  // admits what no other rule pairs: two seats of different entities. A send never carries the
+  // context.
+  const admission = admissionOf(placed, team, endpoint, targetSeat, host.home, fileTeamId, () => host.now(), standing, 'open-thread');
   if (!admission.ok) {
-    raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', target, host.now());
+    raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
     return refused(io, json, `refused: ${admission.why}`);
   }
 
   const replyId = host.newId?.() ?? randomUUID();
   const thread = state.open ? answered.thread : replyId;
-  // A reply goes back to a seat of this file, so the headline reads this team's word on how a
-  // sender reads — the same line a send would write into that seat's folder.
-  const naming = namingFor({ home: host.home, root, viewerTeam: teamIdOf(root), seat: target, file: team });
+  // The receiving side of this reply: the answered seat's own team, or the owner endpoint's seat
+  // in its team. The headline reads that side's word on how a sender reads — the same line a send
+  // would write into that seat's folder.
+  const toRoot = endpoint === null ? root : endpoint.team.root;
+  const toSession = endpoint === null ? session : endpoint.agent.reach.session;
+  const toDir = endpoint === null ? dir : join(endpoint.team.root, '.agents');
+  const toId = endpoint === null ? answered.from_id : endpoint.agent.id;
+  const naming = namingFor({
+    home: host.home,
+    root: toRoot,
+    viewerTeam: endpoint === null ? teamIdOf(root) : endpoint.agent.reach.team,
+    seat: targetSeat,
+    ...(endpoint === null ? { file: team } : {}),
+  });
   const body = `${senderHeader(admission.sender, admission.rule, naming)}\n${text}`;
   const payload: RecordPayload = {
     kind: 'message',
     id: replyId,
-    to: target,
-    to_id: answered.from_id,
-    root,
-    session,
+    to: targetSeat,
+    to_id: toId,
+    root: toRoot,
+    session: toSession,
     at,
     body,
     from: me,
@@ -539,15 +599,15 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     in_reply_to: answered.id,
   };
 
-  const lock = acquireSeatLock(dir, session, target);
+  const lock = acquireSeatLock(toDir, toSession, targetSeat);
   if (!('release' in lock)) {
-    return refused(io, json, `${target}: another command holds it (pid ${String(lock.held)}); nothing was written`);
+    return refused(io, json, `${targetSeat}: another command holds it (pid ${String(lock.held)}); nothing was written`);
   }
   try {
     try {
-      sealDropTree(dir, session, target);
+      sealDropTree(toDir, toSession, targetSeat);
     } catch {
-      return refused(io, json, `${target}: the record could not be written; nothing was written`);
+      return refused(io, json, `${targetSeat}: the record could not be written; nothing was written`);
     }
     let signed: SignedRecord;
     try {
@@ -555,8 +615,8 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     } catch {
       return refused(io, json, 'no message key; nothing was written');
     }
-    const written = writeRecord(recordDir(root, session, target), signed);
-    if (!written.ok) return refused(io, json, `${target}: the record could not be written (${written.reason}); nothing was written`);
+    const written = writeRecord(recordDir(toRoot, toSession, targetSeat), signed);
+    if (!written.ok) return refused(io, json, `${targetSeat}: the record could not be written (${written.reason}); nothing was written`);
     // The answered record moves to `replied` — a receipt the receiving side writes, beside the
     // message it answers. The reply record is the message; a receipt that cannot be written is
     // an annotation missing, not a reply lost, so it changes no exit.
@@ -565,11 +625,13 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
   } finally {
     lock.release();
   }
-  logLine(dir, 'reply', who, `${target}: replied`, host.now());
-  appendHistory(team.project, root, host.home, {
+  logLine(dir, 'reply', who, `${targetSeat}: replied`, host.now());
+  // The history line belongs to the team the record was written into: the answer's own team, which
+  // is the owner endpoint's team when the owner asked.
+  appendHistory(endpoint === null ? team.project : endpoint.team.project, toRoot, host.home, {
     ts: at,
     from: me,
-    to: target,
+    to: targetSeat,
     // The team the replying seat stands in: a reader of this history resolves the sender the way
     // the record does, never by a local seat name it happens to share.
     from_team: teamIdOf(root),
@@ -582,7 +644,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     via: 'drop',
   });
 
-  const summary = `${target}: replied`;
+  const summary = `${targetSeat}: replied`;
   return written(io, json, {
     format: 1,
     status: 'replied',
@@ -592,7 +654,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     record: replyId,
     thread,
     in_reply_to: answered.id,
-    to: target,
+    to: targetSeat,
     rule: admission.rule,
     reply: text,
     at,

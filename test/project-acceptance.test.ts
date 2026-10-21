@@ -16,7 +16,7 @@
 //     were refused stay refused.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
@@ -208,12 +208,17 @@ function seatCaller(name: string): Caller {
   return { kind: 'seat', name, pane: at.pane, session: at.session };
 }
 
-/** The drop the trigger names: the typed line's whitespace-free token that is a path. */
-function dropOf(pane: Pane): { path: string; text: string } {
-  const typed = pane.typed[0] as Typed;
-  const word = typed.text.split(/\s+/).find((part) => part.startsWith('/'));
-  if (!word) throw new Error(`no absolute path in the typed trigger: ${typed.text}`);
-  return { path: word, text: readFileSync(word, 'utf8') };
+/** The one drop in a seat's folder — the record the send wrote. The typed trigger is the seat's
+ *  own receipt-writing read and names no path, so the folder is read, not the line. */
+function dropOf(root: string, session: string, seat: string): { path: string; text: string } {
+  const dir = join(root, '.agents', 'send-drops', session, seat);
+  const names = readdirSync(dir).filter((one) => !one.includes('.'));
+  for (const name of names) {
+    const path = join(dir, name);
+    const text = readFileSync(path, 'utf8');
+    if (!text.includes('from the launch — admitted by:')) return { path, text };
+  }
+  throw new Error(`no send drop was written in ${dir}`);
 }
 
 // ---- (1) two team files register into one project ----
@@ -265,7 +270,7 @@ describe('a project leads cross their teams', () => {
 
     expect(code).toBe(0);
     expect(ioLeadPane.typed.length).toBe(1);
-    const drop = dropOf(ioLeadPane);
+    const drop = dropOf(w.rootB, 'teamcli-io', 'lead-io');
     const sender = readAgents(w.home).find((one) => one.reach.team === teamIdOf(w.rootA) && one.reach.seat === 'lead');
     expect(drop.text).toContain(sender?.id ?? 'no agent id');
     expect(drop.text).toContain(BODY);

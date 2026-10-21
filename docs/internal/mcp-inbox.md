@@ -102,15 +102,16 @@ refusal event. It says the seat *read* the message, not that it acted on it. So:
 - no receipt is `sent (unconfirmed)`, with the drop kept;
 - nothing on this leg is ever reported as acted on.
 
-The receipt is the signed status receipt, write-once per status for the message and context it
-verifies for: a signed receipt at the name that verifies for this message, seat, checkout and
-session is never rewritten, so a second reader adds nothing and no read moves a status backward,
-while a regular file at the name that proves nothing for this message — unsigned, another
-message's, another seat's, session's or checkout's — is replaced by the signed receipt, never
-trusted and never left to block it; a name held by a link, a folder or a FIFO is refused instead.
-Its signature is the procedural evidence: a file at that name this key did not sign, or one naming
-another message, seat, checkout or session, proves nothing; the read that finds it replaces it with
-the signed receipt, and until that read the message is still waiting. Nothing it says is ever derived from pane text or a status.
+The receipt is the signed status receipt, and it is the per-id gate: `inbox_read` publishes it with
+an exclusive, no-clobber `link` and flushes it with its folder before the body is returned. A
+valid receipt at the name — a `read`, or the `replied` that came after one — means the message was
+already served, so a second read adds nothing and no read moves a status backward. A file at the
+read or replied receipt name that proves nothing for this message — unsigned, another message's,
+another seat's, session's or checkout's — may hide a read that happened, so it is preserved and
+the read returns no body; a name held by a link, a folder or a FIFO is refused the same way.
+Nothing a read finds at a receipt name is ever replaced: a rival's receipt and a damaged one are
+evidence, and neither is rewritten. Its signature is the procedural evidence, and nothing it says
+is ever derived from pane text or a status.
 
 ## Checking a build
 

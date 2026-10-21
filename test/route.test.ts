@@ -472,6 +472,28 @@ describe('route: the address the native channel answers', () => {
     expect(existsSync(routesPath('acme', w.root, w.home))).toBe(false);
   });
 
+  test('a cursor seat herdr names "cursor" is answered on that pane', async () => {
+    const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code'), seatBlock('implementer', 'helper', 'cursor')]);
+    const id = teamIdOf(w.root);
+    const lead = agent(w.home, { name: 'lead', role: 'coordinator', cli: 'claude-code', team: id, seat: 'lead', session: 'acme', pane: 'w1:p1' });
+    const helper = agent(w.home, { name: 'helper', role: 'implementer', cli: 'cursor', team: id, seat: 'helper', session: 'acme', pane: 'w1:p2' });
+    team(w.home, id, 'acme', 'acme', w.root, [
+      { agent: lead.id, seat: 'lead', role: 'coordinator', leads: true },
+      { agent: helper.id, seat: 'helper', role: 'implementer', leads: false },
+    ]);
+    // A live cursor seat: herdr names the CLI it detected (`cursor`), while the profile's
+    // process name is the launch binary (`cursor-agent`). The record and the live pane agree.
+    const run = host(w, { agents: () => [{ name: 'helper', pane: 'w1:p2', cli: 'cursor' }] });
+    const io = testIo(w.root, OWNER);
+
+    const code = await runRoute(['helper'], io, run);
+
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('pane w1:p2\n');
+    expect(routeLines(routesPath('acme', w.root, w.home))[0]).toMatchObject({ pane: 'w1:p2', socket: null, native: false });
+  });
+
   test('a session herdr cannot be read is refused, and no address is answered', async () => {
     const w = world('acme', 'acme', 'lead', [seatBlock('coordinator', 'lead', 'claude-code')]);
     const id = teamIdOf(w.root);

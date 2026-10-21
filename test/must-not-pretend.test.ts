@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
+import { KEY_ISOLATION_LINE } from '../src/client/records.ts';
 import { check, loadConfig } from '../src/commands/check.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { CheckSources } from '../src/check/team.ts';
@@ -164,7 +165,7 @@ describe('team check omits the footer on every run; team doctor and team --about
     const ran = await runCheck(running());
     expect(ran.code).toBe(0);
     expect(ran.err).toBe('');
-    expect(ran.out).toBe('team beacon, session "beacon"\nno differences\n');
+    expect(ran.out).toBe(`team beacon, session "beacon"\n${KEY_ISOLATION_LINE}\nno differences\n`);
     expect(ran.out).not.toContain(NOT_KNOWN);
     expect(ran.out).not.toContain(INTEGRITY_NOT_AUTHORITY);
   });
@@ -175,6 +176,7 @@ describe('team check omits the footer on every run; team doctor and team --about
     expect(ran.err).toBe('');
     expect(ran.out).toBe(
       'team beacon, session "beacon"\n' +
+        `${KEY_ISOLATION_LINE}\n` +
         'difference: claude-keeper is in the file and is not running\n' +
         '  repair: team up\n' +
         '  who: the owner\n' +

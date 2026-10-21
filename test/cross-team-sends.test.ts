@@ -24,6 +24,8 @@ import { updateAgent } from '../src/registry/agents.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { readTeams, setRoster, teamIdOf } from '../src/registry/teams.ts';
 import { historyPath } from '../src/send/history.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
+import { installKey } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
@@ -348,6 +350,30 @@ describe('cross-team --list', () => {
     );
     expect(reading.out).not.toContain('@beta');
     expect(reading.out).not.toContain('@data');
+  });
+
+  test("a signed nickname stands where the roster's projection did, in the row and at the address", async () => {
+    // `api-lead` signs a new word: the row prints it and a send addresses it, while the file word
+    // the record replaced names nobody any more.
+    const roster = readTeams(world.home)[teamIdOf(world.roots.api as string)]?.roster ?? [];
+    const lead = roster.find((line) => line.seat === 'api-lead');
+    if (lead === undefined) throw new Error('the test world has no api-lead roster line');
+    installKey(world.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const plan = planConfigSet(world.home, { level: 'seat', target: lead.agent, settings: [{ key: 'nickname', value: 'athena' }] });
+    if (!plan.ok) throw new Error(plan.why);
+    const written = writeConfigSet(world.home, plan, { now: NOW });
+    if (!written.ok) throw new Error(written.why);
+
+    const reading = await list({ team: 'api', seat: 'api-lead' });
+    expect(reading.code).toBe(0);
+    const row = reading.out.split('\n').find((line) => line.startsWith('  api-lead '));
+    expect(row).toContain('@athena');
+    expect(reading.out).not.toContain('@zeus');
+
+    admitted(await send({ team: 'web', seat: 'web-lead' }, 'athena@api'));
+    const gone = await send({ team: 'web', seat: 'web-lead' }, 'zeus@api');
+    expect(gone.code).toBe(1);
+    expect(gone.err).toContain('no registered agent holds the seat or nickname "zeus"');
   });
 
   test('the launch projects a seat\'s nickname into its team\'s registry roster', () => {

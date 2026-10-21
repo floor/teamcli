@@ -59,7 +59,8 @@ function place(): { base: string; root: string; home: string } {
     };
   });
   // The launch delivered the general brief before it typed: the seat's record and its state entry.
-  deliverBriefs({ dir: join(root, '.agents'), root, session: 'acme', seats: ['lead'], home, at: NOW.toISOString() });
+  // The launch stopped at `launched`, so the seat never had the turn that reads it.
+  deliverBriefs({ dir: join(root, '.agents'), root, session: 'acme', seats: ['lead'], home, at: NOW.toISOString(), read: false });
   return { base, root, home };
 }
 
@@ -89,9 +90,14 @@ describe('a relaunch left before ready', () => {
     const { base, root, home } = place();
     const { code, out } = check(root, home);
     expect(out).toContain('difference: lead: its launch stopped at "launched"\n  repair: team up (it resumes the launch)\n');
+    // A delivery is a file fact: the brief landed, and the launch's own difference stands beside
+    // it. The seat never had the turn that reads it, so no read is demanded.
+    expect(out).toContain('difference: lead: the general seat brief has been delivered; launch not ready\n');
+    expect(out).not.toContain('delivered and not read');
+    expect(out).not.toContain('before readiness');
     expect(out).not.toContain('the owner runs');
     // The check's summary is the contract's own line: the count alone, no command prefix.
-    expect(out).toContain('1 difference\n');
+    expect(out).toContain('2 differences\n');
     expect(code).toBe(1);
     rmSync(base, { recursive: true, force: true });
   });

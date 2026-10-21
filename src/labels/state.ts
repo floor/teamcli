@@ -1,32 +1,55 @@
 // The state half of a seat's own reading, beside observe.ts's label half: what the
 // seat is doing, best source first —
 //
-//   1. a screen that is neither mid-turn nor at its prompt — a dialog, a question, an error, a
-//      composer holding unsent text: blocked, whatever any clock says;
-//   2. the CLI's own signal through the hooks this run installed: working at turn start, idle at
+//   1. certainties TeamCLI's own bookkeeping already judged: a hold over the team, herdr out of
+//      reach, the recorded process gone from its pane;
+//   2. the daemon's presence projection for the seat's runtime incarnation (read under the
+//      binding its state records; a predecessor's file never reaches this reading): the runtime's
+//      own turn start, turn end, human wait and session end, read back as one standing state. A
+//      projection that exists answers before every screen and trace, live or last known — it is
+//      never expired by elapsed time, never overridden by a contradictory screen, and a trace
+//      inside its window never replaces it. The legacy words map it (`waiting-for-a-person` is
+//      `blocked`, `gone` is `done`) while the reading keeps the canonical word and provenance;
+//   3. the CLI's own signal through the hooks this run installed: working at turn start, idle at
 //      turn end, with the instant it wrote — the working word outranking the screen only while
 //      its turn is young (`state_hook_working_seconds`), so an interrupted turn cannot leave a
 //      stale `working` standing for the day;
-//   3. the pane's screen, read against the seat's CLI — working, or idle at its prompt;
-//   4. herdr's own screen status;
-//   5. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
+//   4. the pane's screen, read against the seat's CLI — working, or idle at its prompt; this is
+//      the terminal-host classification, the labelled fallback only where no projection exists
+//      at all (the runtime writes no presence, or the channel never had one);
+//   5. herdr's own screen status;
+//   6. TeamCLI's traces within a window — the seat's last ack, message or commit: a trace this
 //      fresh means working, and it outranks an idle word, from the hook, the screen or herdr;
-//   6. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
+//   7. otherwise unknown. Unknown past the blind threshold counts as not working, and `status`
 //      and `check` flag the seat `blind` as a must-fix.
 //
-// TeamCLI's own bookkeeping answers first where it is certain about something a screen cannot
-// say: a hold stands over the team (`held`), herdr cannot reach the seat at all (`unreachable`),
-// or the process the launch recorded no longer stands in its pane (`done`). The thresholds are
-// settings (src/settings/inherit.ts); the fallbacks below are the shipped values.
+// The thresholds are settings (src/settings/inherit.ts); the fallbacks below are the shipped
+// values. They govern the legacy sources only: the presence log has its own channel health and
+// its own binding, and no elapsed time changes what its last event said.
 import { DEFAULT_STATE_THRESHOLDS, sayThreshold, type StateThresholds } from '../settings/inherit.ts';
+import type { PresenceEvent, PresenceState, PresenceWriterSource } from '../daemon/presence/contract.ts';
 import type { Screen } from '../watch/screen.ts';
 import { readScreen } from '../watch/screen.ts';
 
 export type SeatStateWord = 'working' | 'idle' | 'done' | 'blocked' | 'held' | 'unreachable' | 'unknown';
 
-/** Where a reading came from: the CLI's own screen, the state file the CLI's hooks keep, herdr's
- *  status, TeamCLI's traces, the seat's own process, the hold over the team, or nothing at all. */
-export type StateSource = 'cli' | 'cli-hook' | 'herdr' | 'trace' | 'process' | 'hold' | 'none';
+/** Where a reading came from: the CLI's own screen, its presence projection, the state file its
+ *  hooks keep, herdr's status, TeamCLI's traces, the seat's own process, the hold over the team,
+ *  or nothing at all. `presence` is the display's category; the projection's own runtime source
+ *  travels beside it in `PresenceObservation.source`. */
+export type StateSource = 'cli' | 'presence' | 'cli-hook' | 'herdr' | 'trace' | 'process' | 'hold' | 'none';
+
+/** The daemon's presence projection, already read for the seat: the canonical four-state word,
+ *  the runtime source that wrote it, the contract event behind it, the event's own instant, and
+ *  whether it is qualified as live (this incarnation's binding, channel healthy). False is last
+ *  known, shown as itself. */
+export type PresenceObservation = {
+  state: PresenceState;
+  source: PresenceWriterSource;
+  event: PresenceEvent;
+  since: string;
+  live: boolean;
+};
 
 /** One reading the seat's CLI wrote through the hooks its launch installed: `working` when a turn
  *  started, `idle` when the turn ended, and the instant it wrote, ISO 8601. */
@@ -57,6 +80,13 @@ export type SeatStateObservation = {
   present?: boolean;
   /** The CLI's own signal: the pane's screen, read against the seat's CLI, when one was read. */
   screen?: Screen;
+  /** The daemon's presence projection, when one exists for the seat. It answers before every
+   *  screen and trace, live or last known. */
+  presence?: PresenceObservation | null;
+  /** A projection exists but this build cannot read it as this seat's own — malformed, unfenced
+   *  by the recorded binding, or written by another incarnation: the runtime speaks, and no
+   *  screen may answer in its place. The reading is `unknown`, sourced `presence`. */
+  presenceUnreadable?: boolean;
   /** The state file the CLI's own hooks keep for the seat, when the launch installed them. */
   hook?: CliHookReading | null;
   /** herdr's own screen status for the seat's agent, when herdr reports one. */
@@ -72,17 +102,25 @@ export type SeatStateReading = {
   source: StateSource;
   /** Unknown past the blind threshold: not working, and a must-fix in `status` and `check`. */
   blind: boolean;
+  /** The projection the reading came from, canonical word and provenance kept beside the
+   *  legacy word: `waiting-for-a-person` shows as `blocked`, `gone` as `done`, and a reader
+   *  that needs the runtime's own word and source finds them here. */
+  presence?: PresenceObservation;
+  /** The projection exists but this build cannot read it as this seat's own: unknown, from
+   *  `presence`. */
+  presenceUnreadable?: true;
 };
 
 /**
- * The reading itself. First answer wins, in the order above — save two: a trace inside the
+ * The reading itself. First answer wins, in the order above — save one: a trace inside the
  * window beats an idle word, from the hook, the screen or from herdr, because a seat that just
- * committed, acked or was messaged is working even while its prompt shows; and a screen that
- * still reads outranks a `working` hook older than the short working window, because an
- * interrupted turn leaves that word behind while the prompt is what the seat shows now. An
- * absent or unrecognised screen, like a herdr word that is neither `working` nor `idle`, falls
- * through to the next source. `unknown` carries `blind`: no trace at all, or none younger than
- * the blind threshold.
+ * committed, acked or was messaged is working even while its prompt shows. A presence
+ * projection, live or last known, answers before any screen or trace: it is the runtime's own
+ * event, it does not expire by elapsed time, and a contradictory screen or a fresh trace never
+ * replaces it. An absent or unrecognised screen, like a herdr word that is neither `working`
+ * nor `idle`, falls through to the next source; the hook's own working window and day still
+ * govern the hook file's legacy reading. `unknown` carries `blind`: no trace at all, or none
+ * younger than the blind threshold.
  */
 export function seatState(
   observation: SeatStateObservation,
@@ -92,6 +130,21 @@ export function seatState(
   if (observation.held === true) return { state: 'held', source: 'hold', blind: false };
   if (observation.reachable === false) return { state: 'unreachable', source: 'herdr', blind: false };
   if (observation.present === false) return { state: 'done', source: 'process', blind: false };
+  // The daemon's presence projection answers before every screen and trace, live or last known:
+  // no elapsed time expires it, no contradictory screen overrides it, and no fresh trace stands
+  // in for it. The legacy words map it; the reading keeps the canonical word and provenance.
+  const presence = observation.presence;
+  if (presence !== undefined && presence !== null) {
+    const word: SeatStateWord = presence.state === 'waiting-for-a-person'
+      ? 'blocked'
+      : presence.state === 'gone' ? 'done' : presence.state;
+    return { state: word, source: 'presence', blind: false, presence };
+  }
+  // The projection exists but cannot be read as this build's contract: the runtime speaks, so
+  // the answer is unknown from presence — never a screen's guess in its place.
+  if (observation.presenceUnreadable === true) {
+    return { state: 'unknown', source: 'presence', blind: false, presenceUnreadable: true };
+  }
   const screen = observation.screen;
   const traced = observation.trace ? Date.parse(observation.trace) : Number.NaN;
   const age = Number.isFinite(traced) ? now.getTime() - traced : Number.POSITIVE_INFINITY;
@@ -104,7 +157,8 @@ export function seatState(
   // composer holding unsent text — is the seat not working and waiting on someone: blocked. It
   // outranks every clock, the hook included: the hook cannot see the dialog that the CLI stopped
   // at after its last write, and nothing can be typed into a composer holding a line until its
-  // owner clears or sends it, however recent the last turn's end.
+  // owner clears or sends it, however recent the last turn's end. It is also the terminal-host
+  // fallback: it answers only when no presence projection exists at all.
   if (screen !== undefined && screen.kind !== 'working' && screen.kind !== 'idle'
     && screen.kind !== 'unknown') {
     return { state: 'blocked', source: 'cli', blind: false };
@@ -164,6 +218,10 @@ export type ObservedSeatInput = {
   screenText?: string;
   /** The state file the CLI's own hooks keep for the seat, when the launch installed them. */
   hook?: CliHookReading | null;
+  /** The daemon's presence projection for the seat, when one exists — live or last known. */
+  presence?: PresenceObservation | null;
+  /** A projection exists but this build cannot read it: unknown from presence, never a screen. */
+  presenceUnreadable?: boolean;
   /** The seat's newest recorded trace, ISO. */
   trace?: string | null;
   /** The file stops this seat: its process is gone on purpose, and it is done. */
@@ -188,6 +246,8 @@ export function observedSeatState(input: ObservedSeatInput): SeatStateReading {
       ? { screen: readScreen(input.cli, input.screenText) }
       : {}),
     hook: input.hook ?? null,
+    presence: input.presence ?? null,
+    ...(input.presenceUnreadable === true ? { presenceUnreadable: true } : {}),
     trace: input.trace ?? null,
   };
   return seatState(observation, input.now, input.limits ?? DEFAULT_STATE_THRESHOLDS);

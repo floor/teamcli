@@ -41,8 +41,9 @@ const TO_THE_FILE: Record<string, string[]> = {
 
 /** Commands that read the machine instead of a team file, so the sentence cannot come from
  *  them: `team usage` prints the live quota status lines, which a test folder does not
- *  isolate and a real machine answers slowly. */
-const MACHINE_ONLY = new Set(['usage']);
+ *  isolate and a real machine answers slowly, and `team daemon` manages or runs the
+ *  machine-wide daemon process. */
+const MACHINE_ONLY = new Set(['usage', 'daemon']);
 
 const OFFER = 'or pass --file';
 const NO_REPO = 'not inside a git repository';
@@ -60,6 +61,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
  *  held to. A run that stopped before the message would pass the offer check vacuously, so
  *  the set of nodes that printed it is pinned. */
 const REACHED = [
+  'ack',
   'broker',
   'bus',
   'delegate',
@@ -72,6 +74,10 @@ const REACHED = [
   'messages',
   'next',
   'plan',
+  'queue add',
+  'queue install',
+  'queue list',
+  'queue ready',
   'proc add',
   'proc done',
   'proc list',
@@ -91,7 +97,10 @@ describe('outside a checkout, the sentence offers --file only where the contract
     .filter(
       ({ path, node }) =>
         !MACHINE_ONLY.has(path[0] as string) &&
+        // Hidden dispatchers: neither is a command in the table, and neither prints a no-repository
+        // sentence — one answers a port's protocol, the other stages a hook's record.
         path[0] !== 'conformance-adapter' &&
+        path[0] !== 'presence-hook' &&
         !node.flags.some((flag) => flag.name === '--file'),
     );
 

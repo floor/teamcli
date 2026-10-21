@@ -10,6 +10,7 @@ import {
   captureDraft,
   deliverTrigger,
   dropIdOf,
+  dropPathOf,
   showsDrop,
   type DeliverHost,
 } from '../src/send/deliver.ts';
@@ -410,6 +411,16 @@ describe('the drop in a screen', () => {
     expect(dropIdOf(LINE)).toBe(DROP_ID);
     expect(dropIdOf('hello there')).toBeNull();
     expect(dropIdOf('Read /tmp/dir/ and do that.')).toBeNull();
+  });
+
+  test('a wake that names its sender names the same drop', () => {
+    const named = LINE.replace(/^Read /, 'From tester-2@teamcli: read ');
+    expect(dropPathOf(named)).toBe(dropPathOf(LINE));
+    expect(dropIdOf(named)).toBe(DROP_ID);
+    // The drop path is the one the trigger's own tail names, never a sender-supplied one.
+    expect(dropPathOf('From tester-2@teamcli: read /tmp/x and do that.')).toBe('/tmp/x');
+    expect(dropPathOf('From tester-2@teamcli /tmp/x and do that.')).toBeNull();
+    expect(dropPathOf('From : read /tmp/x and do that.')).toBeNull();
   });
 
   test('a row that names the id counts, with or without styling and decoration', () => {

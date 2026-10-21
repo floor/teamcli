@@ -10,10 +10,11 @@ import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
-import { pluralCount } from '../output/text.ts';
+import { pluralCount, type DifferenceWho } from '../output/text.ts';
+import { continuitySessionOf } from '../registry/resume.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
-import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, runningModel, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -67,6 +68,11 @@ export type Difference = {
    *  a held seat is named once. `status` prints the row as it stands, and nothing serializes the
    *  mark. */
   promptSeat?: string;
+  /** Who runs the repair, where the repair's command alone would read it wrongly: `team swap
+   *  queue` is in the grant scopes (`GRANT_SCOPES`), so `whoFromCommand` would call it a grant
+   *  holder's, and the command admits the team's lead. Set where the difference is created and
+   *  never re-derived from the wording. */
+  who?: DifferenceWho;
 };
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
@@ -150,13 +156,18 @@ function limitMark(seat: Seat | undefined, screen: Screen): string | null {
  * whose pane holds a bare shell is not either. Herdr unable to tell (`processes` null) keeps the
  * reading: there is no verdict to act on.
  */
-export function paneShowsSeat(recorded: SeatState | undefined, agent: HerdrAgent, live: Live): boolean {
+export function paneShowsSeat(
+  recorded: SeatState | undefined,
+  agent: HerdrAgent,
+  live: Live,
+  recordedSession: string | undefined = recorded?.agent_session,
+): boolean {
   const processes = live.processes?.[agent.pane] ?? null;
   const verdict = seatProcessVerdict(recorded?.launched, processes);
   const continuity = replacedSeat(verdict, {
     asked: true,
     namedOnPane: recorded?.pane === agent.pane,
-    recordedSession: recorded?.agent_session,
+    recordedSession,
     liveSession: agent.session,
   });
   if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) return false;
@@ -179,6 +190,8 @@ export function compare(
   watch: TeamFile['watch'] = team.watch,
   sockets: string | readonly string[] = defaultSocketsDirs(),
   trust = false,
+  signing?: ReadonlyMap<string, { model: string; version: string }>,
+  continuityIds?: ReadonlyMap<string, string | null>,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -190,7 +203,7 @@ export function compare(
   for (const declared of team.seats) {
     const agent = live.agents.find((candidate) => candidate.name === declared.name);
     const recorded = state.seats[declared.name];
-    const seat: Seat = recorded?.model && recorded?.version && recorded?.launch_line && recorded.launch_line !== declared.launch
+    const priorSeat: Seat = recorded?.model && recorded?.version && recorded?.launch_line && recorded.launch_line !== declared.launch
       ? {
           ...declared,
           model: recorded.model,
@@ -200,6 +213,10 @@ export function compare(
           launch: recorded.launch_line,
         }
       : declared;
+    const registered = signing?.get(declared.name);
+    const seat: Seat = registered
+      ? { ...priorSeat, model: registered.model, version: registered.version, display: defaultLabel(registered.model, registered.version) }
+      : priorSeat;
     const seatId = recorded?.id ?? state.retained_seats?.[seat.name]?.id;
     const idField = seatId ? { id: seatId } : {};
     if (agent) {
@@ -208,17 +225,20 @@ export function compare(
       // runs no CLI, or one whose process is not the recorded one, is not this seat: it is
       // never shown idle, working or ready, and never under its model as if it were running.
       const verdict = seatProcessVerdict(recorded?.launched, live.processes?.[agent.pane] ?? null);
+      // The registry's binding speaks for the seat where a record exists; the state's own copy
+      // is the fallback only for a seat no record covers.
+      const recordedSession = continuitySessionOf(continuityIds, declared.name, recorded?.agent_session);
       const continuity = replacedSeat(verdict, {
         asked: true,
         namedOnPane: recorded?.pane === agent.pane,
-        recordedSession: recorded?.agent_session,
+        recordedSession,
         liveSession: agent.session,
       });
       // The stored session is on this pane: the seat is running, whatever its pids are now.
       if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) {
         const found = verdict === 'gone'
           ? notLaunched(seat, agent.pane, verdict, live.screens[agent.pane])
-          : cannotTie(seat, agent.pane, live.screens[agent.pane], team);
+          : cannotTie(seat, agent.pane, live.screens[agent.pane], team, recorded?.pane === agent.pane);
         rows.push({ ...found.row, ...idField });
         if (found.difference) differences.push(found.difference);
         if (found.note) notes.push(found.note);
@@ -248,7 +268,7 @@ export function compare(
       const shell = noIdentity && paneHoldsShell(live.processes?.[agent.pane] ?? null);
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
-      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified);
+      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered !== undefined);
       const held = waitingView(seat.name, recorded, trust);
       if (held) {
         rows.push({
@@ -402,7 +422,9 @@ export function compare(
     }
     if (held && verdict === 'replaced') {
       claimed.add(held);
-      const found = cannotTie(seat, held, live.screens[held], team);
+      // Herdr lists no agent of this name: no pane it names is the recorded one, so no
+      // per-seat command takes this process — the repair is to look at it.
+      const found = cannotTie(seat, held, live.screens[held], team, false);
       rows.push({ ...found.row, ...idField });
       if (found.difference) differences.push(found.difference);
       if (found.note) notes.push(found.note);
@@ -606,9 +628,16 @@ function cannotTie(
   pane: string,
   screen: string | undefined,
   team: TeamFile,
+  /** Herdr still names this seat on the pane the state recorded: `--abandon` is the form that
+   *  takes that process. The flag without it only leaves the pane as it is. */
+  namedOnPane: boolean,
 ): { row: Row; difference?: Difference; note?: string } {
-  const running = seatModel(seat, screen);
+  const running = runningModel(seat.cli, screen ?? '');
   const launcher = usesLauncher(seat);
+  // The command that would actually run: a program in front is taken only by `--abandon`, and
+  // only while herdr names the seat on the recorded pane. Where it does not, the repair is to
+  // look, never a command that refuses.
+  const repair = namedOnPane ? `team restart ${seat.name} --abandon` : 'look at the pane';
   const shown = running
     ? `${seat.name}: its pane runs ${running.model} ${running.version}; that process is not the one team launched`
     : undefined;
@@ -637,8 +666,8 @@ function cannotTie(
       row,
       difference: {
         what: restoredProcessWhat(seat, running, launcher),
-        repair: `team restart ${seat.name}`,
-        needs: 'approve',
+        repair,
+        ...(repair === 'look at the pane' ? {} : { needs: 'approve' as const }),
       },
     };
   }
@@ -720,9 +749,10 @@ function modelOf(
   team: TeamFile,
   /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
   unidentified: boolean,
+  registered: boolean,
 ): string {
   const screen = live.screens[agent.pane];
-  const running = seatModel(seat, screen);
+  const running = registered ? runningModel(seat.cli, screen ?? '') : seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.
@@ -746,7 +776,7 @@ function modelOf(
   const observed = `${running.model} ${running.version}${seen ? ` ${seen}` : ''}`;
   const file = `${declared}${seat.effort ? ` ${seat.effort}` : ''}`;
   const detail = modelDrifts
-    ? `running ${observed}, file says ${file}`
+    ? `running ${observed}, ${registered ? 'registry' : 'file'} says ${file}`
     : `effort ${seen}, file says ${seat.effort}`;
   differences.push(unidentified
     ? {

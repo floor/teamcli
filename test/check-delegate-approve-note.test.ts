@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
 import { check as checkCommand } from '../src/commands/check.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
@@ -123,6 +123,7 @@ function live(title = TITLE): Live {
 function check(root: string, session: Live = live()): { code: number; out: string } {
   const io = testIo(root, { kind: 'owner' });
   const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    home: join(dirname(root), 'home'),
     live: () => session,
     branch: () => 'main',
     standing: (at) => approvalStanding(at, join(root, 'nowhere')),

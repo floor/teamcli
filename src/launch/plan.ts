@@ -1,11 +1,13 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
+import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { launchCommand, shellQuote } from '../profiles/profile.ts';
+import { launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
+import { launchBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
@@ -27,7 +29,17 @@ export type Op =
    *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
    *  will learn a drop is waiting, as this run leaves it; recorded with the launch. Absent only
    *  on a hand-built op: every planned launch names them. */
-  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher }
+  | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
+      /**
+       * This launch starts (or reuses) the managed Codex app-server endpoint recorded on the
+       * seat's current presence binding, and attaches the TUI to it with `--remote`. Set only
+       * for a Codex seat with the signed `codex-daemon` policy on, a plain Codex launch line,
+       * and no `--remote`/`--no-daemon` of the file's own to collide with. The endpoint and the
+       * attach are decided at launch time, so the printed line stays the file's own. `dir` is the
+       * state folder the endpoint's record is written in, carried by the plan so the launch's
+       * host methods take no folder of their own.
+       */
+      codexEndpoint?: { dir: string } }
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
@@ -188,6 +200,9 @@ export interface UpSeat {
    * wrote it.
    */
   sessionName?: string;
+  /** The resolved `codex-daemon` policy (`on | off`) for a Codex seat. When omitted, `upPlan`
+   *  resolves it from the signed policy chain (`entity -> project -> team -> seat`). */
+  codexDaemon?: CodexDaemonValue;
   /** For a seat whose rules travel as a first message: the file its rules are written to and the
    *  one line typed in its pane. Absent when the path can't be typed safely. */
   rulesFile?: { path: string; line: string };
@@ -248,6 +263,21 @@ export interface UpSeat {
    * closed. `launched` is the process in the pane now; the record stores it.
    */
   restored?: { launched: LaunchedIdentity; session: string; detail: string };
+  /** A bound registry policy. Its launch/model are authoritative over the team file. */
+  registry?: { launch: string; model: string; version: string; sessionId?: string };
+  /**
+   * The conversation a relaunch through this seat's line resumes, when the pane itself proved
+   * it: the registry binding read against the live agent's session, even where the seat state
+   * names no id. Set on a repair the proof decided (a restored seat whose model drifted, or the
+   * seat's own process drifted); `registry.sessionId`, where present, stays the first choice.
+   */
+  resume?: string;
+  /**
+   * A proven conversation this seat's launch line cannot carry: it names another resume id, or
+   * resumes without naming one, or the CLI has no measured resume form. Nothing is closed and
+   * nothing is launched; the record stays ready and the run exits 1.
+   */
+  resumeHold?: string;
   /**
    * The pane holds a program this record cannot tie to the launch. Nothing is closed and
    * the stored process is left as it is.
@@ -321,11 +351,25 @@ export interface UpInput {
    */
   cliHooks?: Readonly<Record<string, string>>;
   /**
+   * The runtime epoch each seat's general brief was delivered under, by seat name, when this run
+   * wrote a claim. A launch-line inbox route names it to the server, so the server serves only
+   * that delivery. Absent on a dry run, and for a seat this run delivered no brief to.
+   */
+  briefEpochs?: Readonly<Record<string, string>>;
+  /**
    * The team file this run read and validated, as its absolute path. A seat's folder may be a
    * lobby with no team file, so the launch's inbox registration and the server it names are told
    * this file. Absent on a plan built by hand, whose launches register from the seat's folder.
    */
   teamFile?: string;
+  /** The home directory used to resolve signed policies (`entity`, `project`, `team`, `seat`). */
+  home?: string;
+  /**
+   * The team's state folder (`.agents`). A managed Codex seat's app-server endpoint is recorded
+   * there, so a launch without it manages no endpoint: presence stays whatever it was, and no
+   * path is guessed in the state's place. Present on every real launch.
+   */
+  stateDir?: string;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -488,6 +532,23 @@ export function upPlan(input: UpInput): Step[] {
       continue;
     }
     if (seat.stage === 'ready') {
+      // A proven conversation the seat's own launch line cannot carry: the repair stops before
+      // the close, so nothing is destroyed that cannot be put back. The record stays ready and
+      // the run exits 1 with the reason.
+      if (seat.resumeHold) {
+        steps.push({
+          kind: 'skip',
+          text: `${seat.name}: ${seat.resumeHold}`,
+          do: {
+            do: 'record',
+            seat: seat.name,
+            record: { kind: 'ready' },
+            detail: `  ${seat.resumeHold}\n`,
+            held: true,
+          },
+        });
+        continue;
+      }
       // A drifted seat this run will not close keeps the ready record. The detail names the
       // caller's own way; the skip words are that line, not the ordinary "left as it is".
       if (seat.driftHold) {
@@ -621,22 +682,56 @@ export function upPlan(input: UpInput): Step[] {
     // team file's own session instead (`mcp/register.ts`), read from the file this run read:
     // the server refuses any other. A launch-line route names the same file to its server, so
     // both resolve the team from it rather than from the seat's folder.
-    const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
+    let codexDaemon: CodexDaemonValue | undefined = seat.codexDaemon;
+    if (codexDaemon === undefined && profile.cli === 'codex' && input.home !== undefined) {
+      codexDaemon = codexDaemonForSeat({
+        home: input.home,
+        root: input.root,
+        ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+        seat: seat.name,
+        session,
+      });
+    }
+    // The id a proven conversation writes into the launch line: the state-agreeing record's
+    // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
+    // form cannot carry either; the plan says so on the launch rather than losing it silently.
+    const resumeId = seat.registry?.sessionId ?? seat.resume;
+    const carried = resumeId === undefined ? undefined : resumeCarry(profile.cli, seat.launch, resumeId);
+    const recordedLine = carried?.kind === 'line' ? carried.line : seat.launch;
+    const resumeGap = carried?.kind === 'refuse'
+      ? `its recorded conversation cannot be resumed: ${carried.why}`
+      : undefined;
+    const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
-    }, seat.sessionName);
+      ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon });
+    // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
+    // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
+    // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
+    // than probed past. Nothing is recorded when the policy is off or unreadable.
+    const managedCodex = profile.cli === 'codex'
+      && codexDaemon === 'on'
+      && input.stateDir !== undefined
+      && launchBinary(seat.launch) === profile.binary
+      && !/(^|\s)--remote(=|\s|$)/.test(command)
+      && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
       const said = takeNotice();
       const watched = watcherNote(watcher);
+      // `would launch` joins a notice or a resume gap; a plain watcher note stands alone.
+      const launchNote = [said, resumeGap, said === undefined && resumeGap === undefined ? undefined : 'would launch', watched]
+        .filter((part): part is string => part !== undefined)
+        .join('; ');
       steps.push({
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
-        note: said ? `${said}; would launch; ${watched}` : watched,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher },
+        note: launchNote,
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }
     const rules = profile.rulesMode;
@@ -775,6 +870,9 @@ export interface DownSeat {
    *  and the workspace for this seat: close it, type nothing, unless `keep` names the seat.
    *  The name is not the match. */
   title?: string;
+  /** The caller's `--abandon` takes a pane herdr names as this seat but whose process cannot be
+   *  tied to the launch: close its workspace, type nothing — no key, no exit text, no draft. */
+  unproven?: true;
 }
 
 export interface DownInput {
@@ -830,6 +928,23 @@ export function downPlan(input: DownInput): Step[] {
         text: `${seat.name}: the pane is a human's; nothing is typed into it; left running`,
       });
       left++;
+      continue;
+    }
+    // A pane herdr names as this seat, whose process is not the launched one, and which the
+    // caller's `--abandon` takes: its conversation is not this run's to answer, so nothing is
+    // typed into it. The workspace close ends whatever is in front.
+    if (seat.unproven) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'close', seat.workspace),
+        note: 'abandoned: its process is not the launched one; closed without typing',
+        do: {
+          do: 'close',
+          seat: seat.name,
+          workspace: seat.workspace,
+          said: 'its process is not the launched one; its workspace was closed without typing',
+        },
+      });
       continue;
     }
     if (seat.unnamed || seat.title) {

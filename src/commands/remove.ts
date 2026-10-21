@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
-import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
+import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -25,6 +25,7 @@ import { downPlan, type DownSeat } from '../launch/plan.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
+import { readCodexEndpointRecord } from '../daemon/presence/endpoint-record.ts';
 import { emptySession, readState, updateState, withLock } from '../state.ts';
 import { registerEnd } from '../registry/sync.ts';
 import { keyExit, paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
@@ -91,6 +92,26 @@ const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
   // here because the type names a clause for every state.
   exited: 'its CLI had exited; closed without typing',
 };
+
+/** Whether the seat's state carries a readable managed Codex endpoint record. Shape alone is
+ *  enough here: the record names an ownership claim, and this command either proves the claim
+ *  before stopping the process or refuses to go on. */
+function recordedEndpointOf(dir: string, session: string, seat: string): boolean {
+  try {
+    return readCodexEndpointRecord(readState(dir).sessions[session]?.seats[seat]?.codex_endpoint) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** The one refusal a managed Codex seat's endpoint can end a removal with: a path that leaves
+ *  the pane running cannot keep the record, and a stop that cannot prove the recorded process
+ *  is never forced. Both leave the seat, its record and the endpoint as they are. */
+function refuseEndpoint(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'remove', { id: 'remove.endpoint', message, repair: null });
+  // exit: remove.endpoint
+  return 1;
+}
 
 export const remove: Command = (argv, io) => runRemove(argv, io, realSources);
 export default remove;
@@ -241,7 +262,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const session = judged.session;
   // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
-  // exactly `1` keeps its behaviour. Only the caller line below is ever folded.
+  // exactly `1` keeps its behaviour. The caller line and the approval are folded below, and the
+  // delegate and swap gates' approval folds carry their own lines.
   const dev = resolveDevMode('remove', io, {
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     team,
@@ -281,9 +303,18 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       // A swap is admitted by the entry's `swap` word alone, and its `--keep` is then the
       // delegate's: `remove` in an entry never reaches a lead.
       ...(swap ? { swap: true } : {}),
+      // Dev mode folds the delegation's approval precondition, and the verdict carries the
+      // warning naming the live file; the removal then goes on as a delegated one.
+      dev,
+      file: path,
     });
     if (decided.kind === 'refused') return delegateRefused(io, json, decided);
     delegatePane = decided.pane;
+    if (decided.devApproval !== undefined) {
+      if (json) collect(decided.devApproval);
+      else io.stderr(`team remove: ${decided.devApproval}\n`);
+      logDevMode(dir, 'remove', describeCaller(shown), decided.devApproval, sources.now());
+    }
   }
   if (verdict.kind === 'no-pane' && delegatePane === null) {
     refuse(io, json, 'remove', { id: 'remove.no-pane', message: noPaneRefusal(verdict.name), repair: null });
@@ -302,8 +333,8 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   if (verdict.kind === 'refused' && delegatePane === null && !createGranted) {
     // The caller gate, the one dev mode lifts for this command (`dev_mode.ts`): on, the
     // refusal's own words print as a warning, the run goes on, and the audit log records the
-    // caller it admitted. Every later gate — the owner-only abandon, the lead's seat, the
-    // placement in the session — still refuses.
+    // caller it admitted. Every later gate — the lead's seat, the placement in the session —
+    // still refuses; the owner-only abandon below has its own dev-mode admission.
     const said = `only the owner or \`leads\` removes a seat; this call is ${describeCaller(shown)}${devModeExpiryNote(dev)}`;
     const folded = devModeCallerGate(dev, said);
     if (folded === null) {
@@ -322,11 +353,23 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   }
   const abandon = args.flags.has('abandon');
   if (abandon && caller.kind !== 'owner') {
-    // Owner-only in every mode: abandoning is not the caller gate dev mode lifts, so the
-    // caller gate above may have been folded and this one still refuses.
-    refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null });
-    // exit: remove.abandon
-    return 1;
+    // The owner's dev-mode admission for exactly this gate: a placed lead or
+    // orchestrator continues with the warning; every other caller keeps the refusal.
+    const lift = devModeOwnerLift(io, {
+      command: 'remove',
+      refusal: 'only the owner abandons a seat, from a terminal outside herdr',
+      ...(sources.home !== undefined ? { home: sources.home } : {}),
+      team,
+      root,
+      dir,
+      now: sources.now(),
+    });
+    if (!lift.lifted) {
+      refuse(io, json, 'remove', { id: 'remove.abandon', message: 'only the owner abandons a seat, from a terminal outside herdr', repair: null });
+      // exit: remove.abandon
+      return 1;
+    }
+    io.stderr(`${lift.warning}\n`);
   }
   // A lead is taken out of the file by the owner alone. Its swap — `--keep` — is the owner's,
   // the granted seat's when the grant lists `swap`, or an approved delegate's whose entry lists
@@ -353,7 +396,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
       return 1;
     }
     if (delegatePane === null) {
-      const said = (sources.grantGate ?? grantGate)({ act: 'swap', io, home: sources.home });
+      const said = (sources.grantGate ?? grantGate)({ act: 'swap', io, home: sources.home, dev });
       if (said.kind === 'refused') {
         refuse(io, json, 'remove', {
           id: 'remove.swap-grant',
@@ -362,6 +405,13 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
         });
         // exit: remove.swap-grant
         return 1;
+      }
+      // The gate folded its approval in dev mode: the warning names the file, and the audit log
+      // records the caller it admitted before the swap has effects.
+      if (said.devApproval !== undefined) {
+        if (json) collect(said.devApproval);
+        else io.stderr(`team remove: ${said.devApproval}\n`);
+        logDevMode(dir, 'remove', describeCaller(shown), said.devApproval, sources.now());
       }
       // The grant names the orchestrator, and the self-swap was refused above: what passes here
       // is the orchestrator swapping the operator's seat.
@@ -399,9 +449,19 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const home = sources.home ?? homedir();
   const standing = sources.standing?.(root) ?? approvalStanding(root, home);
   if (standing.kind !== 'verified' && standing.kind !== 'none') {
-    refuse(io, json, 'remove', { id: 'remove.never-approved', message: notInForce(standing), repair: null });
-    // exit: remove.never-approved
-    return 1;
+    // Dev mode's approval fold: on, the live team file this run edits counts as approved, the
+    // warning names the file and the caller goes to the audit log; off, today's refusal. The
+    // later gates below still refuse.
+    const said = notInForce(standing);
+    const folded = devModeFileApproval(dev, said, path);
+    if (folded === null) {
+      refuse(io, json, 'remove', { id: 'remove.never-approved', message: said, repair: null });
+      // exit: remove.never-approved
+      return 1;
+    }
+    if (json) collect(folded);
+    else io.stderr(`team remove: ${folded}\n`);
+    logDevMode(dir, 'remove', describeCaller(shown), folded, sources.now());
   }
   // The live file names the seat. A stored copy is not a second roster.
   const copySeat = team.seats.find((seat) => seat.name === name);
@@ -529,6 +589,18 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
 
+  // A managed Codex seat records the endpoint its launch owns. A removal that leaves the pane
+  // running keeps that client attached, so the record cannot go with the seat: this run has
+  // nowhere else to keep it, and dropping it would orphan a live server. The seat is left as it
+  // is, with its record and endpoint intact, rather than removed without them.
+  if (leave && recordedEndpointOf(dir, session, name)) {
+    return refuseEndpoint(
+      io,
+      json,
+      `${name} records a managed Codex endpoint and this run would leave its pane running; the endpoint record cannot be kept with the seat removed, so it is left as it is`,
+    );
+  }
+
   // An edit that will not validate is refused before the seat is stopped. Stopping first would
   // end the live session and then report that nothing was written.
   if (!temporary && !swap) {
@@ -555,6 +627,15 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   try {
+    // A seat herdr no longer lists has no CLI left to stop, but the endpoint its launch started
+    // may still be alive. It is stopped before the file and state are written; a stop that
+    // cannot prove the recorded process refuses the removal and keeps the record that names it.
+    if (!agent && sources.codexEndpoint !== undefined && recordedEndpointOf(dir, session, name)) {
+      const endpoint = sources.codexEndpoint.stop({ dir, session, seat: name });
+      if (!endpoint.stopped) {
+        return refuseEndpoint(io, json, `${name}: ${endpoint.why ?? 'its managed Codex endpoint could not be stopped'}; left as it is`);
+      }
+    }
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is
     // committed to its effects — the stop below when the seat runs, the file edit after it. Every
     // refusal came sooner; a `--keep` run never got past the gate.
@@ -768,6 +849,7 @@ export async function stopRunning(input: {
   }
   const { seat, session, sources } = input;
   let stopped = false;
+  let endpointRefused = false;
   const steps = downPlan({
     session,
     seats: [seat],
@@ -837,6 +919,17 @@ export async function stopRunning(input: {
     running() {},
     drop(dropped) {
       if (dropped !== seat.name) return;
+      // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
+      // now that the CLI has exited, before the record that names it goes. A stop that cannot
+      // prove the recorded process is never forced; the record stays and the removal fails.
+      if (input.sources.codexEndpoint !== undefined && recordedEndpointOf(input.dir, session, dropped)) {
+        const endpoint = input.sources.codexEndpoint.stop({ dir: input.dir, session, seat: dropped });
+        if (!endpoint.stopped) {
+          endpointRefused = true;
+          input.io.stderr(`team remove: ${dropped}: ${endpoint.why ?? 'its managed Codex endpoint could not be stopped'}; left as it is\n`);
+          return;
+        }
+      }
       stopped = true;
       updateState(input.dir, (file) => {
         const current = (file.sessions[session] ??= emptySession());
@@ -856,5 +949,5 @@ export async function stopRunning(input: {
     log: (who, what) => logLine(input.dir, input.logCommand, input.caller, `${who}: ${what}`, sources.now()),
   };
   await executePlan(steps, session, host);
-  return stopped;
+  return stopped && !endpointRefused;
 }

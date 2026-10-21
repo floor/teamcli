@@ -358,6 +358,26 @@ export function sessionsPath(team: TeamFile, root: string, home: string): string
   return storePath(team.project, root, home);
 }
 
+/**
+ * The last session `seat` started in this team and herdr session, as the registry folded it —
+ * its `cli_session` is the id a swap resumes where the CLI keeps sessions. Null when the
+ * registry holds none of this seat or cannot be read: a swap that finds no id hands over.
+ */
+export function latestSessionOf(
+  home: string,
+  team: TeamFile,
+  root: string,
+  session: string,
+  seat: string,
+): SessionRecord | null {
+  const read = readStoreSessions(sessionsPath(team, root, home), home);
+  if (!read.ok) return null;
+  const mine = read.sessions.filter(
+    (one) => one.team === team.project && one.herdr_session === session && one.seat === seat,
+  );
+  return mine.at(-1) ?? null;
+}
+
 /** The session id this version mints: `ses_` and 12 lowercase hex characters. */
 export function mintSessionId(): string {
   return `ses_${randomBytes(6).toString('hex')}`;
@@ -377,6 +397,11 @@ export type BeginInput = {
   pane: string;
   workspace?: string;
   cli_session?: string;
+  /**
+   * The handover file the new conversation reads first, when the launch replaces a conversation
+   * that wrote one (a swap to another CLI, or one the CLI cannot resume).
+   */
+  handover?: string;
   /**
    * Why the open session this launch replaces ended, when the launcher closed it on purpose:
    * a drift repair is a `swap`. Absent, a replaced session is a `crash`.
@@ -461,6 +486,7 @@ export function beginSession(input: BeginInput): { id: string } | { note: string
         ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
         ...(input.cli_session === undefined ? {} : { cli_session: input.cli_session }),
         ...(input.cli_session !== undefined && supportsSessionResume(seat.cli) ? { resumable: true } : {}),
+        ...(input.handover === undefined ? {} : { handover: input.handover }),
         ...(previous === undefined ? {} : { previous }),
       };
       const written = appendSessionEvent(home, team, root, event);

@@ -166,14 +166,15 @@ export type InboxBlock = {
  *  install's runner — the executable and its entry script — which reach the inbox server
  *  whether or not `team` is on the PATH. `file` is the team file the launch read, when it read
  *  one: the server resolves the team from it, whatever folder it starts in. */
-export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string };
+export type InboxPlace = { seat: string; session: string; command: string; entry: string; file?: string; epoch?: string };
 
 /** A profile word with the launch's own values filled in.
  *
  *  `{file_args}` is for a launch-line route whose word holds the server's arguments inside a
  *  structured string (codex's `mcp_servers.team_inbox.args=[...]`): it is the `--file` pair as
  *  array elements, the path escaped as a JSON string (which is also a TOML basic string), and
- *  nothing at all when the launch named no team file. A whole `{file}` word is for a command's
+ *  nothing at all when the launch named no team file. `{epoch_args}` is the same for the runtime
+ *  epoch the seat's brief was delivered under, and nothing when this launch has no claim. A whole `{file}` word is for a command's
  *  own argv (`mcp add`), where the pair is two words and the shell never sees them.
  *
  *  `{command_json}`, `{entry_json}` and `{seat_json}` are the same values escaped for a
@@ -190,7 +191,8 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
     .replaceAll('{command_json}', inside(place.command))
     .replaceAll('{entry_json}', inside(place.entry))
     .replaceAll('{seat_json}', inside(place.seat))
-    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`);
+    .replaceAll('{file_args}', place.file === undefined ? '' : `,"--file",${JSON.stringify(place.file)}`)
+    .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
 }
 
 /**
@@ -207,9 +209,15 @@ export function launchCommand(
   cliHook?: string | null,
   place?: InboxPlace,
   displayName?: string,
+  runtimePolicies?: { codexDaemon?: 'on' | 'off' },
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = profile.unattended.filter((option) => !words.has(option));
+  if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !words.has('--no-daemon')) {
+    const altIdx = options.indexOf('--no-alt-screen');
+    if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
+    else options.push('--no-daemon');
+  }
   // The session's own display name, where the CLI takes one and the line names none: a person
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
   // readable name rather than an anonymous session.
@@ -260,9 +268,20 @@ export function supportsSessionId(cli: string): boolean {
  *
  *      -r, --resume [value]                  Resume a conversation - provide a session ID
  *                                            or interactively select a conversation
+ *
+ *  and from Codex's own subcommand, `codex resume --help` (codex-cli 0.161.0):
+ *
+ *      Resume a previous interactive session (picker by default; use --last to continue the
+ *      most recent)
+ *
+ *      Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]
+ *
+ *  Codex takes the id as a word after `resume`, not as a flag. `codex -m gpt-6-sol -c
+ *  model_reasoning_effort=high resume --help` printed that usage and exited 0 in an empty
+ *  synthetic home, so a recorded line's own options stay in front of the subcommand.
  */
 export function supportsSessionResume(cli: string): boolean {
-  return cli === 'claude-code';
+  return cli === 'claude-code' || cli === 'codex';
 }
 
 /** The session id a launch line already names with `--session-id`, if it names one. */
@@ -285,6 +304,82 @@ export function withLaunchSession(cli: string, command: string): { command: stri
   if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return { command };
   const sessionId = randomUUID();
   return { command: `${command} --session-id ${sessionId}`, sessionId };
+}
+
+/**
+ * The command a pane runs to resume a recorded conversation, where the CLI keeps sessions: the
+ * id is appended after every other argument, as `withLaunchSession` appends a new one. The
+ * measured lines are Claude Code's (`-r, --resume [value] Resume a conversation - provide a
+ * session ID`, `claude --help` 2.1.303) and Codex's subcommand (`Usage: codex resume [OPTIONS]
+ * [SESSION_ID] [PROMPT]`, `codex resume --help` 0.161.0; both quoted on
+ * {@link supportsSessionResume}). A Codex line takes the subcommand, so its id is a word after
+ * `resume`, never a flag. Null when the CLI cannot resume: the caller hands over instead. Null,
+ * too, for a launch line that already names a session — the flags below for Claude Code, the
+ * `resume` subcommand for Codex: appending ours would leave two choices on the line, and the
+ * line's own choice is the one the file records. `-c` is a flag's name only on a Claude Code
+ * line: Codex's own `-c` is a config override, and a recorded Codex line carries one.
+ */
+export function withResume(cli: string, command: string, sessionId: string): string | null {
+  if (!supportsSessionResume(cli)) return null;
+  if (cli === 'codex') {
+    if (/(^|\s)resume(\s|$)/.test(command)) return null;
+    return `${command} resume ${sessionId}`;
+  }
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return null;
+  return `${command} --resume ${sessionId}`;
+}
+
+/**
+ * The conversation a launch line already names to resume, read from the measured grammar above:
+ * the id after Claude Code's `--resume`/`-r`, or the word after Codex's `resume`. Null when the
+ * line names no resume at all. `''` when it resumes without naming one — `--continue`/`-c`
+ * (Claude Code's most recent), `--last`, `--all` or a bare `resume` (Codex's picker) — which
+ * cannot be told from the id a record binds. A line this version does not read is null: an
+ * unmeasured form is not a resume this tool may reason about.
+ */
+export function namedResumeTarget(cli: string, command: string): string | null {
+  if (cli === 'codex') {
+    const words = command.trim().split(/\s+/);
+    const at = words.indexOf('resume');
+    if (at === -1) return null;
+    const next = words[at + 1];
+    return next === undefined || next.startsWith('-') ? '' : next;
+  }
+  if (cli !== 'claude-code') return null;
+  const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$)/.exec(command);
+  if (named) return named[1] ?? '';
+  if (/(?:^|\s)(?:--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return '';
+  return null;
+}
+
+/** How a launch line carries a proven conversation: the line itself when it already names that
+ *  id, the line with the id appended where the CLI has a measured form and the line names none,
+ *  otherwise the reason it cannot. A line naming another id — or resuming without naming one —
+ *  is never rewritten: the id a file records is the file's to keep, and a relaunch that swapped
+ *  it silently would resume a conversation nothing proved. */
+export function resumeCarry(
+  cli: string,
+  command: string,
+  sessionId: string,
+): { kind: 'line'; line: string } | { kind: 'refuse'; why: string } {
+  const named = namedResumeTarget(cli, command);
+  if (named === sessionId) return { kind: 'line', line: command };
+  if (named !== null) {
+    return {
+      kind: 'refuse',
+      why: named === ''
+        ? 'its launch line resumes without naming the recorded conversation'
+        : 'its launch line resumes a different conversation',
+    };
+  }
+  const line = withResume(cli, command, sessionId);
+  if (line !== null) return { kind: 'line', line };
+  return {
+    kind: 'refuse',
+    why: launchSessionId(command) === undefined
+      ? 'its launch line has no measured resume form'
+      : 'its launch line already sets a new session id',
+  };
 }
 
 /** True when the CLI accepts an effort override flag on its launch line. */

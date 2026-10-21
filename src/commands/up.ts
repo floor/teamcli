@@ -49,9 +49,11 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
-import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
-import { deliverGeneralBrief } from '../launch/general-brief.ts';
+import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
+import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -70,12 +72,13 @@ import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lob
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
-import { shellQuote } from '../profiles/profile.ts';
+import { namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
+import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -87,7 +90,7 @@ import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
-import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, runningModel, seatModel } from '../status/statusline.ts';
 import { watchLabel, watchRunning } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
@@ -143,6 +146,13 @@ export type Launch = {
    *  none. Null when the profile carries no file route; a refusal leaves the seat on its drop
    *  and typed legs. Absent on a world that registers nothing: fake launches and reads. */
   registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
+  /** Starts and stops the managed Codex app-server endpoint a launch owns. Present on the shipped
+   *  launch surface; a fake launch that omits it plans no endpoint, so no scene reaches a real
+   *  process. */
+  codexEndpoint?: {
+    managed(input: { dir: string; session: string; seat: string; cwd?: string }): Promise<ManagedEndpointRead>;
+    stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
@@ -214,6 +224,10 @@ const realLaunch: Launch = {
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  codexEndpoint: {
+    managed: (input) => ensureCodexEndpoint(input),
+    stop: (input) => stopSeatCodexEndpoint(input),
+  },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
@@ -292,6 +306,21 @@ function overCeiling(ceilings: Ceilings, running: readonly Running[], seat: Seat
   return null;
 }
 
+/** The refusal a proven conversation gets when the line the repair would actually run cannot
+ *  carry it — the record's own launch where there is one, the declared line otherwise. The
+ *  repair is not attempted, because its close would destroy a conversation the launch cannot
+ *  put back. A line naming another id, or resuming without naming one, is never rewritten; a
+ *  fresh start there is the caller's own edit of the launch line, not `--abandon`, which would
+ *  run the same selection. */
+function uncarryableResume(seat: { name: string; cli: string; launch: string }, session: string): string | undefined {
+  const carried = resumeCarry(seat.cli, seat.launch, session);
+  if (carried.kind !== 'refuse') return undefined;
+  const way = namedResumeTarget(seat.cli, seat.launch) !== null
+    ? 'its launch line names a conversation of its own: clear that selection from its launch line for a fresh start'
+    : `team restart ${seat.name} --abandon for a fresh start`;
+  return `its recorded conversation cannot be resumed: ${carried.why}; left as it is (${way})`;
+}
+
 /** What a caller is told when a drifted seat is working and this `up` will not close it. */
 function driftWay(owner: boolean, name: string): string {
   return owner
@@ -311,17 +340,21 @@ function modelDrift(
   processes: Readonly<Record<string, PaneProcesses | null>>,
   screenOf: (pane: string) => string | null,
   owner: boolean,
+  expected: { model: string; version: string } = seat,
+  restored = false,
 ): { kind: 'skip' } | { kind: 'hold'; detail: string } | { kind: 'cycle'; way: string } {
   if (isLeadSeat(team, seat.name)) return { kind: 'skip' };
   if (!recorded.launched || !recorded.pane || !recorded.workspace || !seat.version) return { kind: 'skip' };
-  if (seatProcessVerdict(recorded.launched, processes[seat.name] ?? null) !== 'same') return { kind: 'skip' };
+  if (!restored && seatProcessVerdict(recorded.launched, processes[seat.name] ?? null) !== 'same') return { kind: 'skip' };
   const listed = agents.find((agent) => agent.pane === recorded.pane);
   if (!listed || listed.name !== seat.name) return { kind: 'skip' };
-  if (!canShowModel(seat)) return { kind: 'skip' };
   const text = screenOf(recorded.pane);
   if (text == null || text === '') return { kind: 'skip' };
-  const running = seatModel(seat, text);
-  if (!running || !modelDiffers(running, { model: seat.model, version: seat.version })) return { kind: 'skip' };
+  // Registry signing governs even a model that the team file says a different CLI hosts (for
+  // example DeepSeek via Claude Code). `seatModel` intentionally hides that case for legacy
+  // team-file comparisons; the signed registry comparison must read the CLI's status directly.
+  const running = expected === seat ? seatModel(seat, text) : runningModel(seat.cli, text);
+  if (!running || !modelDiffers(running, expected)) return { kind: 'skip' };
   const kind = readScreen(seat.cli, text).kind;
   const way = driftWay(owner, seat.name);
   // Herdr's word and the screen: either one saying the seat is mid-turn keeps the pane.
@@ -402,15 +435,33 @@ function seatPlan(
   /** Dev-mode mount: a message seat's rules come from the live file, with no approval in force. */
   liveRules = false,
 ): UpSeat {
+  const binding = recorded
+    ? recordedSeatSession({ home, root, herdrSession: session, seat, state: recorded })
+    : { kind: 'none' as const, why: 'no state record' };
+  // The registry's own binding, for recognition and for the recipe a relaunch runs: a state
+  // copy that names no session does not withhold it, so a restored seat a CLI without a resume
+  // flag left behind is still proven by the record. The resume id above stays the one the
+  // state agrees with; this read never resumes by itself.
+  const bound = recorded
+    ? recordedSeatContinuity({ home, root, herdrSession: session, seat, state: recorded })
+    : { kind: 'none' as const, why: 'no state record' };
+  const registry = bound.kind === 'bound' && bound.recorded.launch && bound.recorded.model && bound.recorded.version
+    ? bound.recorded as typeof bound.recorded & { launch: string; model: string; version: string }
+    : undefined;
+  const continuitySession = continuityIdOf(bound, recorded);
+  const resumeSession = binding.kind === 'bound' ? binding.recorded.sessionId : undefined;
   const planned: UpSeat = {
     name: seat.name,
     cli: seat.cli,
-    launch: seat.launch,
+    launch: registry?.launch ?? seat.launch,
     cwd: seat.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
-    model: seat.model,
-    version: seat.version,
+    model: registry?.model ?? seat.model,
+    version: registry?.version ?? seat.version,
+    // `sessionId` is the resume id, and only the state-agreeing reader offers one: a restored
+    // seat's record can prove the pane without the launch line resuming anything.
+    ...(registry ? { registry: { launch: registry.launch, model: registry.model, version: registry.version, ...(resumeSession === undefined ? {} : { sessionId: resumeSession }) } } : {}),
     ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
@@ -485,21 +536,46 @@ function seatPlan(
   const continuity = replacedSeat(verdict, {
     asked,
     namedOnPane: Boolean(onRecordedPane),
-    recordedSession: recorded.agent_session,
+    recordedSession: continuitySession ?? undefined,
     liveSession: onRecordedPane?.session,
   });
-  // A program is in front and its agent session is the one stored at launch. The pids changed;
+  const restoredSession = continuity === 'restored' ? continuitySession : null;
+  // A program is in front and its agent session is the one the records bind. The pids changed;
   // the seat did not. Nothing is closed, and the record takes the pids the pane holds now.
-  if (continuity === 'restored' && recorded.agent_session && recorded.pane && recorded.workspace && recorded.launched) {
+  if (restoredSession !== null && recorded.pane && recorded.workspace && recorded.launched) {
     const next = launchedIdentity(processes[seat.name] ?? null);
     if (next) {
+      const drift = registry
+        ? modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry, true)
+        : { kind: 'skip' as const };
+      if (drift.kind === 'cycle') {
+        // A proven conversation this seat's own launch line cannot carry stops the repair before
+        // its close: the conversation would not come back. The line checked is the one the
+        // repair would run — the record's launch, not the line the file was declared with.
+        const resumeHold = uncarryableResume(planned, restoredSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: next,
+            cli: seat.cli,
+            drift: { way: drift.way },
+          },
+          // The pane's live agent is the recorded conversation (`restored`): the relaunch through
+          // the record's launch resumes it, whether or not the state copy names it.
+          resume: restoredSession,
+        };
+      }
+      if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
       return {
         ...planned,
         stage: 'ready',
         restored: {
           launched: next,
-          session: recorded.agent_session,
-          detail: restoredDetail(seat, recorded, screenOf),
+          session: restoredSession,
+          detail: restoredDetail({ ...seat, model: registry?.model ?? seat.model, version: registry?.version ?? seat.version }, recorded, screenOf),
         },
       };
     }
@@ -526,8 +602,20 @@ function seatPlan(
   const onPane = recorded.pane ? known.some((agent) => agent.pane === recorded.pane) : false;
   if (recorded.stage === 'ready') {
     if (named || onPane) {
-      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner);
+      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry ?? seat);
+      // The pane's own agent names the conversation the records bind: a relaunch may resume it,
+      // even where the state copy names no id. A pane naming another session proves nothing.
+      const provenSession = continuitySession !== null
+        && onRecordedPane?.session !== undefined
+        && onRecordedPane.session !== ''
+        && onRecordedPane.session === continuitySession
+        ? continuitySession
+        : undefined;
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
+        // The line checked is the one the repair would run — the record's launch where there is
+        // one — so a record naming another conversation is refused before the close.
+        const resumeHold = provenSession === undefined ? undefined : uncarryableResume(planned, provenSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
         return {
           ...planned,
           repair: {
@@ -537,6 +625,7 @@ function seatPlan(
             cli: seat.cli,
             drift: { way: drift.way },
           },
+          ...(provenSession === undefined ? {} : { resume: provenSession }),
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
@@ -767,6 +856,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     delegated: string | null;
     grantedSeat: string | null;
     grantRefusal: string | null;
+    /** The warning line a dev-mode approval fold owed, and the file whose folder logs it. */
+    approval: string | null;
+    approvalDir: string;
   } => {
     const verdict = delegatesFile
       ? (sources.delegateGate ?? delegateGate)({
@@ -777,6 +869,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           flags: [...args.flags, ...Object.keys(args.values)],
           io,
           home: sources.home,
+          // Dev mode folds the delegation's approval precondition, and the verdict carries
+          // the warning naming the live file. `aimedDev` is that same default file's chain.
+          dev: aimedDev,
+          file: delegatesFile.path,
         })
       : null;
     // The approved `<session>/<pane id>` when this run is a delegated one: the default file's
@@ -789,12 +885,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
     let grantedSeat: string | null = null;
     let grantRefusal: string | null = null;
+    let approval: string | null = verdict?.kind === 'passed' ? verdict.devApproval ?? null : null;
+    let approvalDir = aimedDir;
     if (delegated === null && delegateMissed && grantFile) {
-      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home });
-      if (said.kind === 'passed') grantedSeat = said.grant.seat;
-      else grantRefusal = said.text;
+      const said = (sources.grantGate ?? grantGate)({ act: 'up', io, home: sources.home, dev: aimedDev });
+      if (said.kind === 'passed') {
+        grantedSeat = said.grant.seat;
+        if (said.devApproval !== undefined) {
+          approval = said.devApproval;
+          approvalDir = dirname(grantFile.path);
+        }
+      } else grantRefusal = said.text;
     }
-    return { verdict, delegated, grantedSeat, grantRefusal };
+    return { verdict, delegated, grantedSeat, grantRefusal, approval, approvalDir };
   };
   if (!mayLaunchSeats(walked) && aimed) {
     const gates = judgeGates();
@@ -919,7 +1022,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const dir = dirname(loaded.path);
   // The run's own dev mode, from the file it mounts: a policy value anywhere in the caller's
   // chain governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value, the variable
-  // set to exactly `1` keeps its behaviour. Only the caller gate is ever folded (below).
+  // set to exactly `1` keeps its behaviour. The caller gate is folded here; the grant and
+  // delegate gates folded theirs earlier, from the default file's chain (`aimedDev`).
   const dev = resolveDevMode('up', io, { home: sources.home, team, root, now: sources.now?.() ?? new Date() });
   // The configuration lines the run owes once: the variable ignored under a governing policy,
   // and a policy source that could not be read or ordered. Written before any refusal returns,
@@ -1300,7 +1404,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // The seats' own state hooks: a settings file per seat, named at the end of its launch line.
   // A dry run plans the map it would write; the real run writes the files below, before the
   // plan is built, and a seat whose file did not land launches exactly as the file declares.
-  const hookSeats = () => seats.map(({ name, cli, launch, human }) => ({ name, cli, launch, ...(human ? { human: true as const } : {}) }));
+  const hookSeats = (fresh: readonly string[] = []) => seats.map(({ name, cli, launch, human }) => ({
+    name, cli, launch,
+    ...(human ? { human: true as const } : {}),
+    ...(fresh.includes(name) ? { fresh: true as const } : {}),
+  }));
   let cliHooks = plannedCliHooks(dir, session, hookSeats());
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
@@ -1317,6 +1425,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     ...(watchFile ? { watchFile } : {}),
     teamFile: loaded.path,
     cliHooks,
+    briefEpochs: currentBriefEpochs(dir, session),
+    home: sources.home,
+    // A launch surface with no endpoint seam plans none: the marker is what makes the launch
+    // start one, and a scene's fake launch must never reach a real process.
+    ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
   });
 
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
@@ -1353,14 +1466,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   const warning = foldedLine;
   // The one override sentence every lifecycle command prints, its tail included.
   const folded = warning ? devModeCallerGate(dev, warning) ?? warning : '';
-  // The audit line the fold owes: written where the gate is used, on a real run, whether a
+  // A grant or delegate gate that folded its own approval comes with the line the gate
+  // returned: the refusal's words, the live file that counted, the fold. It printed where the
+  // gate is used, so it is one more warning line beside the caller's, never wrapped again.
+  const gateApproval = gates?.approval ?? null;
+  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval])];
+  // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
-  if (!dry && folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
+  if (!dry) {
+    if (folded) logDevMode(dir, 'up', callerLabel(caller), folded, sources.now?.() ?? new Date());
+    if (gateApproval !== null) {
+      logDevMode(gates?.approvalDir ?? dir, 'up', callerLabel(caller), gateApproval, sources.now?.() ?? new Date());
+    }
+  }
 
   if (dry) {
     stampLobbyTrust(false);
     if (!json) {
-      if (folded) out.stdout(`! ${plainText(folded)}\n`);
+      for (const line of warnings) out.stdout(`! ${plainText(line)}\n`);
       // The same cause can reach the list twice — the gate and `doctor` both read the
       // approval — so a refusal is said once. A refusal leaves through the real run's
       // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -1379,10 +1502,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // A dev-mode warning rides in the same sentence, so it is not lost in the envelope.
     if (json) {
       const first = refusals[0]!;
-      const message = folded ? `${plainText(folded)}; ${plainText(first.message)}` : plainText(first.message);
+      const lead = warnings.map(plainText).join('; ');
+      const message = lead === '' ? plainText(first.message) : `${lead}; ${plainText(first.message)}`;
       refuse(io, true, 'up', { id: first.id, message, repair: first.repair ?? null });
     } else if (!dry) {
-      if (folded) out.stderr(`team up: ${plainText(folded)}\n`);
+      for (const line of warnings) out.stderr(`team up: ${plainText(line)}\n`);
       for (const refusal of uniqueRefusals(refusals)) out.stderr(`team up: ${plainText(refusal.message)}\n`);
     }
     // exit: up.never-approved
@@ -1395,13 +1519,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.placement
     return 1;
   }
-  if (!dry && folded) stderrLine(`team up: ${plainText(folded)}\n`);
+  if (!dry) for (const line of warnings) stderrLine(`team up: ${plainText(line)}\n`);
   if (dry) {
     if (json) {
       // The plan is the document's: the warning first when there is one, then one step per
       // plan line, each with the prefix the terminal draws (`+`, `!`, `skip`).
       const plan: PlanStep[] = [
-        ...(folded ? [{ step: 'warning', detail: folded, prefix: '!' as const }] : []),
+        ...warnings.map((line) => ({ step: 'warning' as const, detail: line, prefix: '!' as const })),
         ...planStepsOf(buildPlan()),
       ];
       writeJson(io, 'team.up', {
@@ -1495,33 +1619,38 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
     stampGrantedTrust();
-    // The settings files land before the plan types a line, so every launch carries its flag. A
-    // seat whose file did not land is said once, in the log, and its launch is the plain line.
-    const installed = installCliHooks(dir, session, hookSeats(), { project: team.project, root, home: sources.home });
-    for (const name of Object.keys(cliHooks)) {
-      if (installed[name] === undefined) {
-        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
-      }
-    }
-    cliHooks = installed;
-    const plan = buildPlan();
     // The general seat brief goes first: one signed drop in the folder of every seat this plan
-    // launches or relaunches, and of every declared seat the session records no launch of. A seat
-    // the state records as already launched, which this run leaves as it is, is left exactly so:
-    // no drop and no state entry. A delivery that cannot be written is said and logged, and the
-    // launch goes on; `team check` names the seat with no record.
-    const launchedSeats = plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    // launches or relaunches, and of every declared seat the session records no launch of that
+    // does not already hold a ready claim for this brief. A seat the state records as already
+    // launched, which this run leaves as it is, is left exactly so: no drop and no state entry. A
+    // delivery that cannot be written is said and logged, and the launch goes on; `team check`
+    // names the seat with no record. The plan is built here with the planned settings map — the
+    // launch set does not depend on the files — so the claim exists before the settings files are
+    // written below, which name the epoch it was delivered under.
+    const planned = buildPlan();
+    const launchedSeats = planned.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    // A declared seat this session never launched is delivered to only until it holds a ready
+    // claim for this build's brief: an unchanged second run leaves that claim and its drop as
+    // they are, while a missing, failed or older claim is delivered again.
+    const claimStands = (name: string): boolean => {
+      const claim = currentBriefClaim(recorded?.briefs?.[name]);
+      return claim !== null && claim.stage === 'ready' && claim.sha256 === GENERAL_BRIEF_SHA256;
+    };
     const briefSeats = team.seats
-      .filter((seat) => launchedSeats.includes(seat.name) || recorded?.seats[seat.name] === undefined)
+      .filter((seat) => launchedSeats.includes(seat.name)
+        || (recorded?.seats[seat.name] === undefined && !claimStands(seat.name)))
       .map((seat) => seat.name);
-    const briefs = deliverGeneralBrief({
+    const briefs = deliverBriefForAttribution({
       dir,
       root,
       session,
-      seats: briefSeats,
       home: sources.home,
-      at: (sources.now?.() ?? new Date()).toISOString(),
+      now: sources.now?.() ?? new Date(),
+      team,
+      state: recorded ?? emptySession(),
+      attributed: briefSeats,
     });
+    await walkBriefDeliveries(briefs, { dir, home: sources.home });
     for (const delivery of briefs.deliveries) {
       if (delivery.ok) continue;
       const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
@@ -1533,6 +1662,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       stderrLine(`team up: ${said}\n`);
       logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
     }
+    // The binding each planned seat holds before this install mints its successor. A seat whose
+    // line never runs keeps it; one this install creates goes back out without a record.
+    const beforeInstall = readState(dir).sessions[session]?.seats ?? {};
+    const priorBindings = new Map(launchedSeats.map((name) => [name, beforeInstall[name]?.presence_binding]));
+    // The settings files land before the plan types a line, so every launch carries its flag. A
+    // seat whose file did not land is said once, in the log, and its launch is the plain line.
+    const installed = installCliHooks(dir, session, hookSeats(launchedSeats), { project: team.project, root, home: sources.home });
+    for (const name of Object.keys(cliHooks)) {
+      if (installed[name] === undefined) {
+        logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
+      }
+    }
+    cliHooks = installed;
+    const plan = buildPlan();
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
     resetCliHookState(dir, session, launchedSeats);
@@ -1540,6 +1683,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // Every launch uses the limits declared in the live file, with or without a stored approval.
     const ceilings = ceilingsOf(team);
     const running: Running[] = [];
+    // The planned seats whose launch line the pane actually ran (`sessionStarted`).
+    const startedSeats = new Set<string>();
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
       for (const agent of agents) {
@@ -1577,6 +1722,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      ...(launch.codexEndpoint === undefined
+        ? {}
+        : {
+            managedCodexEndpoint: (input: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(input),
+            stopManagedCodexEndpoint: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(input),
+          }),
       ...(launch.registerInbox
         ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
         : {}),
@@ -1733,6 +1884,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       sessionStarted(name, started) {
         const seat = team.seats.find((item) => item.name === name);
         if (!seat) return;
+        startedSeats.add(name);
         const began = beginSession({
           home: sources.home,
           root,
@@ -1891,7 +2043,23 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       polled: dialogsTrustInForce(sources.home, root, now()) && input.classification === 'trust',
     });
 
-    const report = await executePlan(plan, session, host, { concurrency });
+    // The continuity the plan read, in one map for the close path: execute re-reads the pane and
+    // must decide the same way this plan did, including a seat whose state copy names no session.
+    const continuityIds = continuityIdsOf({
+      home: sources.home,
+      root,
+      herdrSession: session,
+      seats: team.seats,
+      states: recorded?.seats ?? {},
+    });
+    const report = await executePlan(plan, session, host, { concurrency, continuityIds });
+    // A fresh install minted a binding for every seat this run planned to launch. A seat whose
+    // line never ran — refused before it, or its step left out — never loaded the settings file
+    // that names the successor, so it keeps the binding it held. The same rule `add` and `reload`
+    // apply follows here; a seat the install itself created goes back out with no record.
+    for (const name of launchedSeats) {
+      if (!startedSeats.has(name)) restorePresenceBinding(dir, session, name, priorBindings.get(name));
+    }
     // The reach projection, after the plan's effects and outside the lobby's identity rechecks
     // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
     // the bridge and the seat-shuttle daemon read them. A skip — no lobby, a lobby not 0700,
@@ -1911,11 +2079,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         // the gate's pane as actor, the one command `up` — never the pane as signer.
         ...(delegated === null ? {} : { delegated: { actor: delegated, command: 'up' as const } }),
       },
-      team.seats.map((seat) => ({
-        seat,
-        pane: afterwards[seat.name]?.stage === 'ready' ? (afterwards[seat.name]?.pane ?? null) : null,
-        ...(afterwards[seat.name]?.id ? { handle: afterwards[seat.name]?.id } : {}),
-      })),
+      team.seats.map((seat) => {
+        const held = afterwards[seat.name];
+        return {
+          seat,
+          pane: held?.stage === 'ready' ? (held.pane ?? null) : null,
+          ...(held?.id ? { handle: held.id } : {}),
+          // The same measured id the launch wrote into the seat's record: the registry keeps it
+          // beside the pane, and a seat with no reading leaves the record's own id in place.
+          ...(held?.agent_session ? { agent_session: held.agent_session } : {}),
+        };
+      }),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
     // The address: a claude-code seat this run left ready records the socket its session answers
     // at, so a later send reaches it without re-reading herdr. A pane herdr cannot read leaves

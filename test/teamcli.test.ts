@@ -33,6 +33,12 @@ function npmRun(home: string, args: string[], cwd: string, timeout?: number) {
   });
 }
 
+function teamDependencyVersion(): string {
+  const version = readJson(join(repo, 'packages/teamcli/package.json')).dependencies?.team;
+  if (!version) throw new Error('packages/teamcli/package.json has no team dependency');
+  return version;
+}
+
 test('teamcli is the same version as team, and depends on that exact version', () => {
   const root = readJson(join(repo, 'package.json'));
   const teamcli = readJson(join(repo, 'packages/teamcli/package.json'));
@@ -40,20 +46,21 @@ test('teamcli is the same version as team, and depends on that exact version', (
   expect(teamcli.publishConfig?.access).toBe('public');
   expect(teamcli.bin).toEqual({ teamcli: 'cli.js', team: 'cli.js' });
   expect(teamcli.version).toBe(root.version);
-  expect(teamcli.version).toBe('0.5.2');
+  expect(teamcli.version).toBe('0.5.3-hotfix.24');
   expect(teamcli.dependencies?.team).toBe(root.version);
-  expect(teamcli.dependencies?.team).toBe('0.5.2');
+  expect(teamcli.dependencies?.team).toBe('0.5.3-hotfix.24');
 });
 
 test('the teamcli tarball lists exactly the package manifest, the shim and the readme', () => {
+  const teamcli = readJson(join(repo, 'packages/teamcli/package.json'));
   const home = mkdtempSync(join(tmpdir(), 'teamcli-home-'));
   const dest = mkdtempSync(join(tmpdir(), 'teamcli-pack-'));
   const packed = npmRun(home, ['pack', '--json', '--pack-destination', dest], join(repo, 'packages/teamcli'));
   expect(packed.status).toBe(0);
   const report = JSON.parse(packed.stdout)[0];
   expect(report.name).toBe('@teamcli/cli');
-  expect(report.version).toBe('0.5.2');
-  expect(report.filename).toBe('teamcli-cli-0.5.2.tgz');
+  expect(report.version).toBe(teamcli.version);
+  expect(report.filename).toBe(`teamcli-cli-${teamcli.version}.tgz`);
   const tarball = join(dest, report.filename);
   const listed = spawnSync('tar', ['-tzf', tarball], { encoding: 'utf8' });
   expect(listed.status).toBe(0);
@@ -71,7 +78,7 @@ function publishedTeam(dest: string, home: string): string {
   mkdirSync(join(dir, 'dist'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({
     name: 'team',
-    version: '0.5.2',
+    version: teamDependencyVersion(),
     type: 'module',
     bin: { team: 'dist/cli.js' },
     exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
@@ -100,18 +107,23 @@ test('packed team and teamcli bins match the team cli, and a signal reaches the 
   const built = spawnSync('bun', ['run', 'build'], { cwd: repo, encoding: 'utf8', timeout: 40_000 });
   expect(built.status).toBe(0);
 
+  const teamcliManifest = readJson(join(repo, 'packages/teamcli/package.json'));
   const home = mkdtempSync(join(tmpdir(), 'teamcli-home-'));
   const dest = mkdtempSync(join(tmpdir(), 'teamcli-bins-'));
   const rootPack = npmRun(home, ['pack', '--json', '--pack-destination', dest], repo);
   expect(rootPack.status).toBe(0);
   const rootReport = JSON.parse(rootPack.stdout)[0];
   const rootPaths: string[] = rootReport.files.map((file: { path: string }) => file.path);
-  expect(rootPaths.some((path) => path === 'packages' || path.startsWith('packages/'))).toBe(false);
+  expect(
+    rootPaths.some(
+      (path) => (path === 'packages' || path.startsWith('packages/')) && !path.startsWith('packages/relay/'),
+    ),
+  ).toBe(false);
   const teamcliPack = npmRun(home, ['pack', '--json', '--pack-destination', dest], join(repo, 'packages/teamcli'));
   expect(teamcliPack.status).toBe(0);
   const teamcliReport = JSON.parse(teamcliPack.stdout)[0];
 
-  expect(teamcliReport.filename).toBe('teamcli-cli-0.5.2.tgz');
+  expect(teamcliReport.filename).toBe(`teamcli-cli-${teamcliManifest.version}.tgz`);
   const teamcliTarball = join(dest, teamcliReport.filename);
   const published = mkdtempSync(join(tmpdir(), 'teamcli-published-'));
   installPair(published, publishedTeam(mkdtempSync(join(tmpdir(), 'teamcli-published-pack-')), home), teamcliTarball, home);
@@ -197,7 +209,7 @@ function instrumentedTeam(dest: string, home: string): string {
   mkdirSync(join(dir, 'dist'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), `${JSON.stringify({
     name: 'team',
-    version: '0.5.2',
+    version: teamDependencyVersion(),
     type: 'module',
     bin: { team: 'dist/cli.js' },
     exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },

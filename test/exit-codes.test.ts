@@ -1,8 +1,8 @@
 // One run per row of contract/exit-codes.json. Each trigger is a temporary directory and the
 // injectable stand-ins the other command tests use: no herdr session, no user-level store.
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { createConnection } from 'node:net';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,13 +12,20 @@ import { startBroker } from '../src/broker/server.ts';
 import { saveReadings, type Seen } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import type { CheckSources } from '../src/check/team.ts';
+import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
+import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
+import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
+import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
+import runPresenceHook from '../src/daemon/presence/hook.ts';
+import type { ServiceManager } from '../src/daemon/service.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
+import { runClient } from '../src/commands/client.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
@@ -29,7 +36,9 @@ import { runInit } from '../src/commands/init.ts';
 import { runRoute } from '../src/commands/route.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { pendingPath } from '../src/send/pending.ts';
-import { plantMessage, plantRecord, runMessages, type MessagePayload } from '../src/commands/messages.ts';
+import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
+import { clientInboxFolder } from '../src/client/inbox.ts';
+import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { runIssues } from '../src/commands/issues.ts';
 import { runList, type ListSources } from '../src/commands/list.ts';
 import { runLock } from '../src/commands/lock.ts';
@@ -39,10 +48,13 @@ import { runHold } from '../src/commands/hold.ts';
 import { runRaise } from '../src/commands/raise.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
+import { runAck } from '../src/commands/ack.ts';
+import { runDevelopmentMode } from '../src/commands/development-mode.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
 import { runPlan } from '../src/commands/plan.ts';
+import { runQueue } from '../src/commands/queue.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { pr } from '../src/commands/pr.ts';
 import { runProc, type ProcSources } from '../src/commands/proc.ts';
@@ -55,14 +67,19 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runRename } from '../src/commands/rename.ts';
 import { runRestart, type RestartSources } from '../src/commands/restart.ts';
 import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
+import { runSeat } from '../src/commands/seat.ts';
 import { runSessions } from '../src/commands/sessions.ts';
+import { runConfig } from '../src/commands/config.ts';
+import { runSettings, type SettingsCommandOptions } from '../src/commands/settings.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
+import { runSwap } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runUsage } from '../src/commands/usage.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { runWorktree, type WorktreeSources } from '../src/commands/worktree.ts';
 import { main, reportFailure, version } from '../src/cli.ts';
+import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
@@ -75,13 +92,14 @@ import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
 import type { Key, Terminal } from '../src/launch/terminal.ts';
 import { writeGrant } from '../src/permissions/grants.ts';
+import { writePolicySet } from '../src/policy/index.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
-import { registerAgent } from '../src/registry/agents.ts';
+import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
+import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { analyze, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
@@ -869,6 +887,61 @@ scene('add.delegate-edit', async (place) => {
   })), 'only a same-copy seat');
 });
 
+async function briefed(place: Place, argv: string[], caller: Caller): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runBrief(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+// A live, settled lead: the state records it on its pane and the launch delivered the brief.
+function settledLead(place: Place): void {
+  recordsLead(place);
+  deliverBriefs({ dir: join(place.root, '.agents'), root: place.root, session: 'acme', seats: ['lead'], home: place.home, at: NOW.toISOString() });
+}
+
+scene('brief.plan', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['rollout'], owner), 'brief lead: current');
+});
+scene('brief.stale', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  return show(await briefed(place, ['rollout'], owner), 'deliver lead:');
+});
+scene('brief.current', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['rollout', '--apply'], owner), 'brief lead: current');
+});
+scene('brief.incomplete', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  // A regular file where the seat's drop folder must be: the claim is written, the record is not.
+  mkdirSync(join(place.root, '.agents', 'send-drops', 'acme'), { recursive: true });
+  writeFileSync(join(place.root, '.agents', 'send-drops', 'acme', 'lead'), 'not a folder\n');
+  return show(await briefed(place, ['rollout', '--apply'], owner), 'failed lead:');
+});
+scene('brief.file-owner', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  return show(await briefed(place, ['rollout', '--file', '.agents/team.yaml'], leadSeat), "--file is the owner's");
+});
+scene('brief.session-owner', async (place) => {
+  write(place, TEAM);
+  recordsLead(place);
+  return show(await briefed(place, ['rollout', '--session', 'other'], leadSeat), "--session is the owner's");
+});
+scene('brief.not-yours', async (place) => {
+  write(place, TEAM);
+  return show(await briefed(place, ['rollout'], other), 'this team is not yours to read');
+});
+scene('brief.invocation', async (place) => show(await briefed(place, ['deploy'], owner), 'unexpected "deploy"'));
+scene('brief.file', async (place) => show(await briefed(place, ['rollout', '--file', 'missing.yaml'], owner), 'no team file'));
+scene('brief.file-invalid', async (place) => {
+  invalid(place);
+  return show(await briefed(place, ['rollout', '--file', 'team.yaml'], owner), 'line');
+});
+
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await check(argv, io, loader(place), sources), out: io.out, err: io.err };
@@ -976,6 +1049,46 @@ scene('check.state', async (place) => {
 scene('check.herdr', async (place) => {
   write(place, TEAM);
   return show(await checked(place, [], owner, checkSources(null)), "doesn't answer");
+});
+
+// The keygen scenes need a home outside the OS temp tree: the placement rule refuses a key
+// directory that overlaps it, and every other scene's place lives under mkdtemp's tree.
+function clientHome(label: string): string {
+  return realpathSync(mkdtempSync(join(process.cwd(), `.client-exit-${label}-`)));
+}
+
+function ranClient(place: Place, argv: string[], home: string = place.home): Ran {
+  const io = testIo(place.root, owner);
+  return { code: runClient(argv, io, home), out: io.out, err: io.err };
+}
+
+scene('client.usage', async (place) => show(ranClient(place, []), 'a subcommand is required'));
+scene('client.unknown', async (place) => show(ranClient(place, ['nope']), 'unknown subcommand'));
+scene('client.keygen.invocation', async (place) => show(ranClient(place, ['keygen']), '--out is required'));
+scene('client.keygen.refused', async (place) => show(ranClient(place, ['keygen', '--out', join(place.home, 'keys')]), 'is outside'));
+scene('client.keygen.write', async (place) => {
+  const home = clientHome('write');
+  try {
+    const held = join(home, '.config', 'team-client', 'held');
+    mkdirSync(dirname(held), { recursive: true });
+    writeFileSync(held, 'not a directory\n');
+    return show(ranClient(place, ['keygen', '--out', held], home), 'cannot be created');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+scene('client.keygen.done', async (place) => {
+  const home = clientHome('done');
+  try {
+    const dir = join(home, '.config', 'team-client', 'bot');
+    const ran = ranClient(place, ['keygen', '--out', dir], home);
+    if (ran.code !== 0) throw new Error(`${ran.err}${ran.out}`);
+    expect(existsSync(join(dir, 'client.key'))).toBe(true);
+    expect(existsSync(join(dir, 'client.pub'))).toBe(true);
+    return show(ran, 'key isolation: not enforced (pane guard pending)');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 scene('commits.invocation', async (place) => {
   const io = testIo(place.root, owner);
@@ -1121,6 +1234,28 @@ scene('conformance-adapter.finished', async () => {
   const code = await proc.exited;
   const out = await new Response(proc.stdout).text();
   return show({ code, out, err: await new Response(proc.stderr).text() }, 'the line is not JSON');
+});
+
+scene('development-mode.done', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'local-fast', '--show'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'would set the machine development mode to local-fast',
+  );
+});
+scene('development-mode.refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'off'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'only the owner switches the machine development mode',
+  );
+});
+scene('development-mode.invocation', async (place) => {
+  const io = testIo(place.root, other);
+  return show(
+    { code: await runDevelopmentMode(['set', 'maybe'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
+    'the mode must be one of local-fast|pr-per-change|off',
+  );
 });
 
 scene('doctor.invocation', async (place) => {
@@ -1509,6 +1644,27 @@ scene('remove.edit', async (place) => {
   approve(place, TWO);
   return show(await removed(place, ['lead'], owner, downSources({ home: place.home })), 'coordinator "lead"');
 });
+scene('remove.endpoint', async (place) => {
+  // A managed seat whose pane is left running keeps its endpoint record, so the seat stays too.
+  const humanWorker = WORKER.replace('    stopped: true\n', '    human: true\n');
+  approve(place, TWO.replace(WORKER, humanWorker));
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.worker = {
+      stage: 'ready',
+      pane: 'w1:p1',
+      presence_binding: 'prs_ab12cd34ef56',
+      codex_endpoint: {
+        url: 'unix:///tmp/acme/run/acme/worker/ab12cd34ef56.sock',
+        binding: 'prs_ab12cd34ef56',
+        pid: 4242,
+        started_at: '2026-10-04T08:00:00Z',
+      },
+    };
+  });
+  return show(await removed(place, ['worker'], owner, downSources({
+    sessionRunning: () => true, agents: () => [agent('worker')], home: place.home,
+  })), 'records a managed Codex endpoint');
+});
 scene('remove.unverified', async (place) => {
   approve(place, TEAM);
   updateState(join(place.root, '.agents'), (state) => {
@@ -1814,6 +1970,227 @@ scene('seats.not-yours', async (place) => {
   return ran;
 });
 
+{
+  async function configRun(place: Place, argv: readonly string[]): Promise<Ran> {
+    const io = testIo(place.root, owner);
+    return { code: await runConfig([...argv], io), out: io.out, err: io.err };
+  }
+  scene('config.invocation', async (place) => show(await configRun(place, []), 'a subcommand is required'));
+  scene('config.shown', async (place) => show(await configRun(place, ['keys']), 'delivery_order'));
+}
+
+/** A home whose registry holds the owner's key and one registered `lead` agent in the roster,
+ *  so a settings write has a record to land in. */
+function registeredSeat(place: Place): string {
+  installKey(place.home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const agentId = registerAgent(place.home, {
+    name: 'Lead One',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: 'acme', seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  }).id;
+  upsertTeam(place.home, teamIdOf(place.root), {
+    project: 'acme',
+    session: 'acme',
+    root: place.root,
+    lobby: '',
+    roster: [{ agent: agentId, seat: 'lead', role: 'coordinator' }],
+  });
+  return agentId;
+}
+
+/** A home whose registry holds one signed seat setting for `lead`, tampered so the record no
+ *  longer verifies: the settings reads must refuse it rather than fall back to the file. */
+function tamperedSeatSetting(place: Place): void {
+  const agentId = registeredSeat(place);
+  const plan = planConfigSet(place.home, {
+    level: 'seat',
+    target: agentId,
+    settings: [{ key: 'model', value: 'claude-opus-5-5' }],
+  });
+  if (!plan.ok) throw new Error(`plan refused: ${plan.why}`);
+  const written = writeConfigSet(place.home, plan, { now: NOW });
+  if (!written.ok) throw new Error(`write refused: ${written.why}`);
+  const path = join(agentsDir(place.home), `${agentId}.yaml`);
+  const text = readFileSync(path, 'utf8');
+  // The fixture's launch line carries the same model name, so the tamper targets the settings
+  // entry's own `value:` line; the first match would land on `launch` and leave the record
+  // verifying.
+  const tampered = text.replace('value: "claude-opus-5-5"', 'value: "claude-haiku-5-5"');
+  if (tampered === text) throw new Error('the record has no value to tamper');
+  writeFileSync(path, tampered);
+}
+
+{
+  async function settingsRun(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    over: SettingsCommandOptions = {},
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return {
+      code: await runSettings([...argv], io, { home: place.home, now: NOW, ...over }),
+      out: io.out,
+      err: io.err,
+    };
+  }
+  scene('settings.invocation', async (place) => show(await settingsRun(place, []), 'a seat name is required'));
+  scene('settings.file-owner', async (place) => show(await settingsRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
+  scene('settings.not-a-repo', async (place) => show(await settingsRun(place, ['lead']), 'not inside a git repository'), false);
+  scene('settings.file', async (place) => show(await settingsRun(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+  scene('settings.file-invalid', async (place) => {
+    invalid(place);
+    return show(await settingsRun(place, ['lead', '--file', 'team.yaml']), 'line');
+  });
+  scene('settings.not-yours', async (place) => {
+    write(place, TEAM);
+    return show(
+      await settingsRun(place, ['lead'], other, { gate: { standing: () => ({ kind: 'none' }) } }),
+      'this team is not yours to read',
+    );
+  });
+  scene('settings.no-seat', async (place) => {
+    write(place, TEAM);
+    return show(await settingsRun(place, ['ghost']), 'no seat "ghost" is declared in acme');
+  });
+  scene('settings.shown', async (place) => {
+    write(place, TEAM);
+    return show(await settingsRun(place, ['lead']), 'delivery_order');
+  });
+  scene('settings.source', async (place) => {
+    write(place, TEAM);
+    tamperedSeatSetting(place);
+    return show(await settingsRun(place, ['lead']), 'signature verification failed for setting "model"');
+  });
+  scene('settings.set', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'settings: set nickname=Atlas at seat (lead)');
+  });
+  scene('settings.unset', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    const set = await settingsRun(place, ['set', 'lead', 'nickname=Atlas']);
+    if (set.code !== 0) throw new Error(`the set before the unset failed: ${set.err}`);
+    return show(await settingsRun(place, ['unset', 'lead', 'nickname']), 'settings: unset nickname at seat (lead)');
+  });
+  scene('settings.dry-run', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(
+      await settingsRun(place, ['set', 'lead', 'nickname=Atlas', '--dry-run']),
+      'settings: would set nickname=Atlas at seat (lead)',
+    );
+  });
+  scene('settings.key', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nope=1']), 'unknown setting "nope"');
+  });
+  scene('settings.value', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'model=nope']), 'unknown model "nope" for claude-code');
+  });
+  scene('settings.policy', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(
+      await settingsRun(place, ['set', 'lead', 'delivery_order=drop']),
+      'loosens policy "delivery-order"',
+    );
+  });
+  scene('settings.not-owner', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas'], other), 'only the owner sets a seat');
+  });
+  scene('settings.no-agent', async (place) => {
+    write(place, TEAM);
+    // The seat is declared and never launched, so the first set bootstraps its record; a path
+    // where the agent registry belongs cannot hold it, and the refusal names that instead.
+    mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(place.home, '.config', 'team', 'agents'), 'not a directory');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'has no registered agent record');
+  });
+  scene('settings.not-set', async (place) => {
+    write(place, TEAM);
+    registeredSeat(place);
+    return show(await settingsRun(place, ['unset', 'lead', 'model']), 'is not set at level seat');
+  });
+}
+
+{
+  async function seatRun(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    sources: SeatsSources = statusSources(quiet),
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runSeat([...argv], io, sources), out: io.out, err: io.err };
+  }
+  scene('seat.invocation', async (place) => show(await seatRun(place, []), 'a seat name is required'));
+  scene('seat.file-owner', async (place) => show(await seatRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
+  scene('seat.session-owner', async (place) => show(await seatRun(place, ['lead', '--session', 'acme'], other), "--session is the owner's"));
+  scene('seat.not-a-repo', async (place) => show(await seatRun(place, ['lead']), 'not inside a git repository'), false);
+  scene('seat.file', async (place) => show(await seatRun(place, ['lead', '--file', 'missing.yaml']), 'no team file'));
+  scene('seat.file-invalid', async (place) => {
+    invalid(place);
+    return show(await seatRun(place, ['lead', '--file', 'team.yaml']), 'line');
+  });
+  scene('seat.not-yours', async (place) => {
+    write(place, TEAM);
+    return show(
+      await seatRun(place, ['lead'], other, {
+        ...statusSources(quiet),
+        home: place.home,
+        gate: { standing: () => ({ kind: 'none' }) },
+      }),
+      'this team is not yours to read',
+    );
+  });
+  scene('seat.no-seat', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['ghost']), 'no seat "ghost" is declared in acme');
+  });
+  scene('seat.herdr', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['lead'], owner, statusSources(null)), "doesn't answer");
+  });
+  scene('seat.sessions', async (place) => {
+    write(place, TEAM);
+    const log = sessionsRegistry(place);
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(join(place.base, 'real-sessions.jsonl'), '');
+    symlinkSync(join(place.base, 'real-sessions.jsonl'), log);
+    return show(
+      await seatRun(place, ['lead'], owner, { ...statusSources(quiet), home: place.home }),
+      'a symbolic link was found and not followed',
+    );
+  });
+  scene('seat.shown', async (place) => {
+    write(place, TEAM);
+    return show(await seatRun(place, ['lead']), 'delivery_order');
+  });
+  scene('seat.source', async (place) => {
+    write(place, TEAM);
+    tamperedSeatSetting(place);
+    return show(
+      await seatRun(place, ['lead'], owner, { ...statusSources(quiet), home: place.home }),
+      'signature verification failed for setting "model"',
+    );
+  });
+}
+
 async function up(place: Place, argv: string[], caller: Caller, sources: UpSources): Promise<Ran> {
   const io = testIo(place.root, caller);
   return runCompared(place, argv, (args) => runUp(args, io, sources), io);
@@ -2053,6 +2430,23 @@ scene('watch.already', async (place) => {
   });
   return show(await watched(place, [], owner, watchSources({ alive: (pid) => pid === 99 })), 'already runs');
 });
+scene('watch.standby', async (place) => {
+  write(place, TEAM);
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.watch = { pid: 99, heartbeat: NOW.toISOString() };
+  });
+  const stood: string[] = [];
+  const hosted = {
+    signal: new AbortController().signal,
+    wait: async () => false,
+    cycled: () => {},
+    standby: (why: string) => void stood.push(why),
+  };
+  const ran = await watched(place, [], owner, watchSources({ alive: (pid) => pid === 99, hosted }));
+  expect(stood).toEqual([`a watch already runs for the session "acme" (pid 99)`]);
+  return ran;
+});
 scene('watch.stopped', async (place) => {
   write(place, TEAM);
   return show(await watched(place, [], owner), 'stopped');
@@ -2072,6 +2466,41 @@ scene('watch.started', async (place) => {
     paneRun: () => true,
     watchCommand: () => 'team watch',
   })), 'the watch runs in its own workspace');
+});
+
+// The hidden settings-file hook prints nothing by design, so its scenes assert the status and
+// the spool the run leaves behind, never output. `--dir` is the team file's own folder.
+const HOOK_BINDING = 'prs_0123456789ab';
+function hooked(place: Place, words: string[]): Ran {
+  return { code: runPresenceHook(['--dir', place.root, ...words]), out: '', err: '' };
+}
+scene('team.presence-hook-invalid', async (place) => {
+  const ran = hooked(place, ['--session', 'crew', '--seat', 'writer', '--binding', 'not-a-binding', '--event', 'turn-end']);
+  expect(existsSync(join(place.root, 'presence'))).toBe(false);
+  return ran;
+});
+scene('team.presence-hook-ignored', async (place) => {
+  // A notification that is not the measured permission prompt declines with exit 0 and stages
+  // nothing: the payload filter, not the event word alone, is the whole condition.
+  const code = runPresenceHook(
+    ['--dir', place.root, '--session', 'crew', '--seat', 'writer', '--binding', HOOK_BINDING, '--event', 'human-wait', '--notification', 'permission_prompt'],
+    () => JSON.stringify({ hook_event_name: 'Notification', notification_type: 'idle_prompt' }),
+  );
+  expect(existsSync(join(place.root, 'presence'))).toBe(false);
+  return { code, out: '', err: '' };
+});
+scene('team.presence-hook-staged', async (place) => {
+  const ran = hooked(place, ['--session', 'crew', '--seat', 'writer', '--binding', HOOK_BINDING, '--event', 'turn-end']);
+  const spool = join(place.root, 'presence', 'crew', 'writer', 'spool');
+  expect(readdirSync(spool).some((name) => name.endsWith('.json'))).toBe(true);
+  return ran;
+});
+scene('team.presence-hook-refused', async (place) => {
+  // The writer refuses the seat name before any folder is made: a record the contract's seat
+  // rule rejects still leaves the hook exit 1, and the settings-file command ignores it.
+  const ran = hooked(place, ['--session', 'crew', '--seat', 'not a seat', '--binding', HOOK_BINDING, '--event', 'turn-end']);
+  expect(existsSync(join(place.root, 'presence'))).toBe(false);
+  return ran;
 });
 
 async function used(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
@@ -3224,6 +3653,23 @@ scene('next.paused', async (place) => {
   });
   return show(await nexted(place), 'nothing new is claimed until `team resume`');
 });
+scene('next.swap', async (place) => {
+  write(place, TASKS);
+  recordLead(place);
+  updateState(join(place.root, '.agents'), (state) => {
+    state.swaps = {
+      lead: {
+        from: { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' },
+        to: { cli: 'claude-code', vendor: 'deepseek', model: 'DeepSeek Flash', version: '4.0', display: 'DeepSeek Flash 4.0', launch: 'claude --model deepseek-flash' },
+        reason: 'owner',
+        queuedAt: NOW.toISOString(),
+        deadline: new Date(NOW.getTime() + 1800 * 1000).toISOString(),
+        waitFor: "the seat's boundary (quiet, no turn, no dialog, no lease, no work drop)",
+      },
+    };
+  });
+  return show(await nexted(place), 'nothing new is claimed until it runs or `team swap cancel lead`');
+});
 
 // The broker's own rows. One credential read is stood in everywhere: the shipped wiring reads
 // the owner's Keychain, which no scene may ever run. The socket is real — unix sockets under a
@@ -3334,6 +3780,167 @@ scene('bus.stopped', async (place) => {
   expect(existsSync(join(place.root, '.agents', 'bus.sock'))).toBe(false);
   return show(ran, 'team bus: stopped');
 });
+
+type FakeDaemonService = ServiceManager & { calls: string[] };
+
+function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonService {
+  const calls: string[] = [];
+  const unit = (home: string): string => join(home, 'unit.plist');
+  return {
+    kind: 'system-service-manager',
+    unitPath: unit,
+    plan: (home, program) => ({ unitPath: unit(home), program: [program.execPath, program.entry, 'daemon', 'run'] }),
+    install: (home) => {
+      calls.push('install');
+      return { ok: true, unitPath: unit(home) };
+    },
+    uninstall: (home) => {
+      calls.push('uninstall');
+      return { ok: true, unitPath: unit(home), removed: true };
+    },
+    ...overrides,
+    calls,
+  };
+}
+
+const daemonSnapshot: DaemonHealthSnapshot = {
+  pid: 42,
+  uid: 501,
+  since: '2026-10-20T10:00:00.000Z',
+  startedBy: 'service-manager',
+  version: 'test',
+  heartbeatAt: '2026-10-20T10:00:05.000Z',
+  stuck: [],
+  features: { broker: 'absent' },
+};
+
+function daemonSources(place: Place, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
+  return {
+    home: place.home,
+    program: { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js' },
+    version: 'test',
+    ...overrides,
+  };
+}
+
+async function daemonRan(
+  place: Place,
+  argv: string[],
+  caller: Caller = owner,
+  overrides: Partial<DaemonCommandSources> = {},
+): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runDaemon(argv, io, daemonSources(place, overrides)), out: io.out, err: io.err };
+}
+
+scene('daemon.entry-missing', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, { service: fakeDaemonService(), program: null }),
+    'the CLI entry cannot be found',
+  );
+});
+scene('daemon.already-running', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async () => ({ kind: 'already-running', pid: 42 }),
+    }),
+    'team daemon: already running (pid 42)',
+  ));
+scene('daemon.dry-run', async (place) => {
+  write(place, TEAM);
+  const service = fakeDaemonService();
+  const ran = await daemonRan(place, ['install', '--dry-run'], owner, { service });
+  expect(service.calls).toEqual([]);
+  return show(ran, 'team daemon: would install');
+});
+scene('daemon.installed', async (place) => {
+  write(place, TEAM);
+  const service = fakeDaemonService();
+  const ran = await daemonRan(place, ['install'], owner, { service });
+  expect(service.calls).toEqual(['install']);
+  return show(ran, 'team daemon: installed');
+});
+scene('daemon.not-owner', async (place) =>
+  show(
+    await daemonRan(place, ['install'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
+    'only the owner installs or removes the machine daemon',
+  ));
+scene('daemon.no-root', async (place) => show(await daemonRan(place, ['install'], owner, { service: fakeDaemonService() }), 'run team from a project'));
+scene('daemon.run-root', async (place) =>
+  show(
+    await daemonRan(place, ['run', '--root', join(place.home, 'missing-checkout')], owner, {
+      start: async () => {
+        throw new Error('a start must not run when a named root cannot be read');
+      },
+    }),
+    'missing-checkout',
+  ));
+scene('daemon.run-failed', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async () => ({ kind: 'locked', pid: 43 }),
+    }),
+    'another start holds the machine lock (pid 43)',
+  ));
+scene('daemon.install-failed', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null }),
+      }),
+    }),
+    'the system service manager refused to start the daemon',
+  );
+});
+scene('daemon.run-not-owner', async (place) =>
+  show(
+    await daemonRan(place, ['run'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
+    'only the owner or the system service manager runs the machine daemon',
+  ));
+scene('daemon.service-unavailable', async (place) =>
+  show(
+    await daemonRan(place, ['install'], owner, { service: null }),
+    'no system service manager adapter is available on this platform yet',
+  ));
+scene('daemon.uninstall-failed', async (place) =>
+  show(
+    await daemonRan(place, ['uninstall'], owner, {
+      service: fakeDaemonService({
+        uninstall: () => ({ ok: false, why: 'the system service manager refused to stop the daemon', detail: null }),
+      }),
+    }),
+    'the system service manager refused to stop the daemon',
+  ));
+scene('daemon.status', async (place) => show(await daemonRan(place, ['status']), 'team daemon: not running'));
+scene('daemon.stopped', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async () => ({
+        kind: 'serving',
+        daemon: {
+          socketPath: join(place.home, 'daemon.sock'),
+          roots: [],
+          routes: [],
+          health: () => daemonSnapshot,
+          close: async () => {},
+        },
+      }),
+      stop: (end) => {
+        setTimeout(end, 0);
+        return () => {};
+      },
+    }),
+    'team daemon: stopped',
+  ));
+scene('daemon.uninstalled', async (place) => {
+  const service = fakeDaemonService();
+  const ran = await daemonRan(place, ['uninstall'], owner, { service });
+  expect(service.calls).toEqual(['uninstall']);
+  return show(ran, 'team daemon: uninstalled');
+});
+scene('daemon.usage', async (place) => show(await daemonRan(place, ['watch']), 'unknown subcommand'));
 scene('next.broker', async (place) => {
   write(place, LINEAR);
   recordLead(place);
@@ -3424,6 +4031,100 @@ scene('plan.read', async (place) => {
   }
 });
 
+async function queued(place: Place, argv: string[], caller: Caller = leadSeat): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runQueue(argv, io, { home: place.home }), out: io.out, err: io.err };
+}
+
+/** A live lease on `id`, written with the machine's clock: the exit scenes run in real time. */
+function leaseFile(place: Place, id: string, seat = 'lead', pane = 'w1:p1'): void {
+  const at = new Date().toISOString();
+  const until = new Date(Date.now() + 60 * 60_000).toISOString();
+  mkdirSync(join(place.root, '.agents', 'leases'), { recursive: true });
+  writeFileSync(
+    join(place.root, '.agents', 'leases', `${id}.json`),
+    `${JSON.stringify({ format: 1, id, seat, pane, acquiredAt: at, renewedAt: at, until }, null, 2)}\n`,
+  );
+}
+
+/** A queue holding `q1`, written directly: these scenes test the producer, not the add. */
+function queueQ1(place: Place): void {
+  writeFileSync(join(place.root, '.agents', 'queue.yaml'), '- id: "q1"\n  title: "a leased task"\n');
+}
+
+scene('queue.added', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1']), 'queued q1 in .agents/queue.yaml');
+});
+scene('queue.present', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1']), 'q1 is already queued in .agents/queue.yaml');
+});
+scene('queue.none', async (place) => {
+  write(place, TEAM);
+  return show(await queued(place, ['list']), '0 tasks');
+});
+scene('queue.shown', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['list']), 'q1  a queued task');
+});
+scene('queue.caller', async (place) => {
+  write(place, TEAM);
+  return show(await queued(place, ['add', 'a queued task', '--id', 'q1'], other), 'only the owner or a seat of this team adds to the queue; this call is other');
+});
+scene('queue.duplicate', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  await queued(place, ['add', 'a queued task', '--id', 'q1']);
+  return show(await queued(place, ['add', 'another queued task', '--id', 'q1']), 'q1 is already queued with a different record');
+});
+scene('queue.file', async (place) => show(await queued(place, ['list']), 'no team file'));
+scene('queue.read', async (place) => {
+  write(place, TASKS);
+  return show(await queued(place, ['list']), 'the task file is not there');
+});
+scene('queue.source', async (place) => {
+  write(place, LINEAR);
+  return show(await queued(place, ['list']), 'declares a linear task source');
+});
+scene('queue.invocation', async (place) => show(await queued(place, ['bogus']), 'unexpected "bogus"'));
+scene('queue.not-a-repo', async (place) => show(await queued(place, ['list']), 'run team from a project\n'), false);
+scene('queue.ready', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  queueQ1(place);
+  leaseFile(place, 'q1');
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'ready q1 at abcdef1');
+});
+scene('queue.install', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['install', 'q1', '--commit', 'abcdef1'], { kind: 'owner' }), 'installed q1 at abcdef1');
+});
+scene('queue.lease', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'holds no live lease');
+});
+scene('queue.installer', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  return show(await queued(place, ['install', 'q1', '--commit', 'abcdef1']), 'designates no installer');
+});
+scene('queue.record', async (place) => {
+  write(place, TEAM);
+  recordLead(place);
+  queueQ1(place);
+  leaseFile(place, 'q1');
+  writeFileSync(join(place.root, '.agents', 'green-slices.json'), 'nope\n');
+  return show(await queued(place, ['ready', 'q1', '--commit', 'abcdef1']), 'is not valid JSON');
+});
+
 /** `team send`'s fixtures: a fake seat of the fixture's own file, a sockets folder with a file
  *  at the pid the fake pane process reports, and a deliver that accepts — with `reply` set,
  *  the seat also answers at the sender's own pid path, as a session does. No path calls this
@@ -3489,6 +4190,250 @@ async function sent(place: Place, argv: string[], caller: Caller, host: SendHost
   return { code, out: io.out, err: io.err };
 }
 
+/**
+ * A synthetic home for a client invocation: the owner key, one registered floor coordinator on
+ * `place.root`, one app key and one owner-signed grant. The key folder lives outside the OS temp
+ * directory, because the placement rules refuse a client key under tmpdir. The scene removes it.
+ */
+function clientWorld(place: Place, options: { inbox?: boolean } = {}): {
+  base: string;
+  home: string;
+  grantPath: string;
+  keyPath: string;
+  grantId: string;
+  recipientId: string;
+} {
+  const base = realpathSync(mkdtempSync(join(process.cwd(), '.team-exit-client-')));
+  const home = join(base, 'home');
+  mkdirSync(home, { recursive: true });
+  const ownerKey = keyOf(home);
+  const teamId = teamIdOf(place.root);
+  const agent = registerAgent(home, {
+    name: 'Orchestrator',
+    signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'true',
+    reach: { team: teamId, seat: 'orchestrator', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'test',
+  });
+  upsertTeam(home, teamId, {
+    project: 'floor',
+    entity: 'floor',
+    session: 'acme',
+    root: place.root,
+    lobby: join(base, 'lobby'),
+    roster: [{ agent: agent.id, seat: 'orchestrator', role: 'orchestrator', leads: true }],
+    lifecycle: 'running',
+  });
+  const pair = newClientKeyPair();
+  const keyDir = clientKeyDir(home, 'grok-bot');
+  const written = writeClientKeyFiles(keyDir, pair);
+  if (!written.ok) throw new Error(written.why);
+  const grant = writeClientGrant(
+    home,
+    { clientId: 'grok-bot', entity: 'floor', publicKey: pair.publicKey, keyId: pair.keyId, keyDir, ...(options.inbox === true ? { inbox: true } : {}) },
+    { now: NOW, key: ownerKey },
+  );
+  if (!grant.ok) throw new Error(grant.why);
+  return {
+    base,
+    home,
+    grantPath: grant.path,
+    keyPath: join(keyDir, 'client.key'),
+    grantId: grant.grant.grantId,
+    recipientId: agent.id,
+  };
+}
+
+/** The client's opening record: a signed client send, waiting in the grant recipient's folder. */
+function plantClientRoot(place: Place, world: ReturnType<typeof clientWorld>, id: string): void {
+  const session = 'acme';
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: 'orchestrator',
+    to_id: world.recipientId,
+    root: place.root,
+    session,
+    at: NOW.toISOString(),
+    body: 'from the client — admitted by: a signed client request\n\nhello',
+    from: 'client:grok-bot',
+    from_id: null,
+    rule: 'a signed client request',
+    thread: id,
+    from_client: { client_id: 'grok-bot', grant_id: world.grantId },
+  };
+  const dir = recordDir(place.root, session, 'orchestrator');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, world.home), null, 2)}\n`, { mode: 0o600 });
+}
+
+/** The seat's reply onto that record: a signed client-thread reply in the client's own inbox. */
+function plantClientReply(place: Place, world: ReturnType<typeof clientWorld>, rootId: string, id: string): void {
+  const payload: RecordPayload = {
+    kind: 'message',
+    id,
+    to: 'client:grok-bot',
+    to_id: null,
+    root: place.root,
+    session: 'acme',
+    at: new Date(NOW.getTime() + 1000).toISOString(),
+    body: 'from the seat orchestrator — admitted by: a reply on a client thread, to the client that opened it\n\nthe answer',
+    from: 'orchestrator',
+    from_id: world.recipientId,
+    rule: 'a reply on a client thread, to the client that opened it',
+    thread: rootId,
+    in_reply_to: rootId,
+    to_client: { client_id: 'grok-bot', grant_id: world.grantId },
+  };
+  const dir = clientInboxFolder(place.root, 'acme', 'grok-bot');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, world.home), null, 2)}\n`, { mode: 0o600 });
+}
+
+async function readClient(place: Place, home: string, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root);
+  const code = await runMessages(argv, io, { home, now: () => NOW });
+  return { code, out: io.out, err: io.err };
+}
+
+async function sentClient(place: Place, home: string, argv: string[]): Promise<Ran> {
+  const io = testIo(place.root, { kind: 'owner' });
+  const host = { home, now: () => NOW, sendId: () => '99999999-9999-4999-8999-999999999999' } as unknown as SendHost;
+  const code = await runSend(argv, io, host);
+  return { code, out: io.out, err: io.err };
+}
+
+scene('send.client-sent', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath, 'orchestrator@floor', 'hello']),
+      'sent: orchestrator@floor (drop ',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('send.client-refused', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', join(world.base, 'missing.json'), '--key', world.keyPath, 'orchestrator@floor', 'hello']),
+      'team send: refused: ',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('send.client-usage', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', world.grantPath, 'orchestrator@floor', 'hello']),
+      '--client needs --key',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+const CLIENT_ROOT = '88888888-8888-4888-8888-888888888888';
+const CLIENT_REPLY = '77777777-7777-4777-8777-777777777777';
+
+scene('messages.client-shown', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    plantClientRoot(place, world, CLIENT_ROOT);
+    plantClientReply(place, world, CLIENT_ROOT, CLIENT_REPLY);
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      'shown',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-none', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    messageKeyOf(world.home);
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      'nothing is waiting',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-key', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
+      'team messages:',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-refused', async (place) => {
+  return show(
+    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')]),
+    'team messages: refused:',
+  );
+});
+
+scene('messages.client-usage', async (place) => {
+  return show(
+    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0']),
+    '--limit is a page bound',
+  );
+});
+
+scene('reply.client-refused', async (place) => {
+  const ORCH_TEAM = `format: 1
+project: acme
+coordinator: orchestrator
+operator: orchestrator
+session: acme
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: orchestrator
+    label: orchestrator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+  write(place, ORCH_TEAM);
+  const world = clientWorld(place);
+  try {
+    plantClientRoot(place, world, CLIENT_ROOT);
+    updateState(join(place.root, '.agents'), (state) => {
+      state.sessions.acme = { seats: { orchestrator: { stage: 'ready' as const, pane: 'w1:p1' } } } as never;
+    });
+    const io = testIo(place.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
+    const code = await runReply([CLIENT_ROOT, 'the answer'], io, { home: world.home, now: () => NOW });
+    return show({ code, out: io.out, err: io.err }, 'client reply publication is not in this release');
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
 const ASK_SHOW_MARKER =
   '{"v":1,"request_id":"req-ask-show-v1","question_sha256":"7fa2d11897a567998b667f4b453ac20b68a6813fde68222e583f90a5bf453b96","expires_at":"2026-10-12T18:00:00.000Z","mac":"8d53d07c074d438d6676e20b45b11ea021b54e30d36d840b48e4f7a41223cbce"}';
 
@@ -3536,6 +4481,20 @@ scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
 });
+scene('send.brief-memory', async (place) => {
+  // The fixture's worker is stopped, which is its own refusal; the lead is open, and the
+  // transport is read before the draft or any drop is touched.
+  write(place, TEAM);
+  const path = join(place.root, 'brief.md');
+  writeFileSync(path, 'the whole brief\n');
+  const wrote = writePolicySet(
+    place.home,
+    { level: 'team', target: place.root, teamRoot: place.root, name: 'brief-transport', value: 'memory' },
+    { now: NOW },
+  );
+  expect(wrote.ok).toBe(true);
+  return show(await sent(place, ['lead', '--brief', path], owner, sendHost(place)), 'brief-transport is memory');
+});
 scene('send.held', async (place) => {
   write(place, TEAM);
   // No socket file: a held message is the typed path's own refusal, and a taken frame on a
@@ -3570,7 +4529,12 @@ scene('send.not-submitted', async (place) => {
 });
 scene('send.delivered', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place)), 'lead: delivered');
+  // The typed leg took the trigger line: a trigger sent, and no signed receipt, so the words say
+  // `sent (unconfirmed)` and never claim a read. The contract row's own meaning is unchanged.
+  return show(
+    await sent(place, ['lead', 'hello'], owner, sendHost(place)),
+    'lead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)',
+  );
 });
 scene('send.sent-unconfirmed', async (place) => {
   write(place, TEAM);
@@ -3578,6 +4542,40 @@ scene('send.sent-unconfirmed', async (place) => {
   // never has time to land and the leg ends `sent (unconfirmed)` — exit 0, nothing typed.
   liveInbox(place);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: sent (unconfirmed) (mcp-inbox, 0 ms)');
+});
+scene('send.queued', async (place) => {
+  write(place, TEAM);
+  // A daemon that answers `queued`: the receiver is busy, the signed copy is stored, and the
+  // sender is answered now. The id on the line is the one the daemon will deliver under.
+  const id = '55555555-5555-4555-8555-555555555555';
+  const sock = join(place.base, 'daemon.sock');
+  const server = createServer((socket) => {
+    socket.on('data', () => {
+      socket.end(`${JSON.stringify({
+        v: 1,
+        ok: true,
+        id,
+        seat: 'lead',
+        outcome: 'queued',
+        status: 'receiver busy',
+        detail: 'lead: queued (receiver busy)',
+      })}\n`);
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(sock, resolve);
+  });
+  try {
+    const host = sendHost(place);
+    host.daemonSocket = sock;
+    return show(await sent(place, ['lead', 'hello'], owner, host), `lead: queued (receiver busy) (typed, 0 ms; id ${id})`);
+  } finally {
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
+  }
 });
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
@@ -3753,6 +4751,15 @@ scene('feed.unreadable', async (place) => {
   mkdirSync(dirname(log), { recursive: true, mode: 0o700 });
   symlinkSync('/etc/passwd', log);
   return show(await fed(place, []), 'the history log cannot be read: a symbolic link was found and not followed');
+});
+scene('feed.presence-unreadable', async (place) => {
+  write(place, TEAM);
+  // The message log is fine; the bus event log the presence rows come from is not, and the feed
+  // refuses rather than print a timeline with a silence it cannot explain.
+  const log = join(storePath('acme', place.root, place.home), 'events.jsonl');
+  mkdirSync(dirname(log), { recursive: true, mode: 0o700 });
+  symlinkSync('/etc/passwd', log);
+  return show(await fed(place, []), 'the presence event log cannot be read: a symbolic link was found and not followed');
 });
 scene('feed.configuration', async (place) => {
   const inRepo = show(await fed(place, []), 'no team file');
@@ -4495,7 +5502,218 @@ for (const [name, command, args, invalidArgs] of [
   scene('reply.usage', async (place) => show(await replied(place, []), '<id> is required'));
 }
 
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement']);
+{
+  const SENT = '3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  const FILE = TWO.replace('workspace:', 'session: acme\nworkspace:');
+  async function acked(place: Place, argv: readonly string[]): Promise<Ran> {
+    const io = testIo(place.root, owner);
+    return { code: await runAck([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('ack.read', async (place) => {
+    write(place, FILE);
+    plantRecord(place.home, place.root, 'acme', 'owner', SENT, "from the file's seat worker (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\nquestion", { from: 'worker', at: NOW.toISOString() });
+    return show(await acked(place, [SENT]), `${SENT}: read`);
+  });
+  scene('ack.refused', async (place) => {
+    write(place, FILE);
+    messageKeyOf(place.home);
+    return show(await acked(place, [SENT]), 'no record named');
+  });
+  scene('ack.configuration', async (place) => {
+    write(place, 'format: [\n');
+    return show(await acked(place, [SENT]), 'team ack:');
+  });
+  scene('ack.usage', async (place) => show(await acked(place, []), '<id> is required'));
+}
+
+{
+  // `team swap` reads the entity's model rule from the signed entity source and owns the
+  // project's queue. The rule is seeded through the same writer `team policy set` uses; the
+  // queue lives in the state file beside the team file.
+  const SWAP_TEAM = `format: 1
+project: acme
+entity: lab
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+  - role: coordinator
+    name: lead
+    label: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude --model deepseek-flash
+`;
+  async function swapped(
+    place: Place,
+    argv: readonly string[],
+    caller: Caller = owner,
+    over: Partial<RestartSources> = {},
+  ): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return {
+      code: await runSwap([...argv], io, {
+        home: place.home,
+        now: () => NOW,
+        sources: restartSources(place, over),
+      }),
+      out: io.out,
+      err: io.err,
+    };
+  }
+  function swapRule(place: Place, value = '*=!anthropic'): void {
+    const wrote = writePolicySet(place.home, { level: 'entity', target: 'lab', name: 'model-rule', value }, { now: NOW });
+    if (!wrote.ok) throw new Error(wrote.why);
+  }
+  scene('swap.listed', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, []), 'nothing queued');
+  });
+  scene('swap.rule', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['queue', 'lead']), 'declares no model rule');
+  });
+  scene('swap.seat', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['queue', 'nobody']), 'no seat "nobody"');
+  });
+  scene('swap.unchanged', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    return show(await swapped(place, ['queue', 'worker']), 'declares a model the rule allows');
+  });
+  scene('swap.target', async (place) => {
+    write(place, SWAP_TEAM);
+    // Both vendors are refused, so the entity holds no donor the target may copy from.
+    swapRule(place, '*=!anthropic+!deepseek');
+    return show(await swapped(place, ['queue', 'lead']), 'no seat of the entity');
+  });
+  scene('swap.queued', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    return show(await swapped(place, ['queue', 'lead']), 'swap queued: lead');
+  });
+  scene('swap.forced', async (place) => {
+    approve(place, SWAP_TRUST(place));
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    const oldPane = 'w9:p1';
+    let typed = '';
+    let shelled = false;
+    const ran = await swapped(place, ['now', 'lead'], owner, {
+      agents: () => [{ ...agent('lead'), pane: oldPane }],
+      launch: downLaunch({
+        typeText: (_session, pane, text) => {
+          if (pane === oldPane) typed = text;
+          return true;
+        },
+        pressEnter: (_session, pane) => {
+          if (pane === oldPane) shelled = true;
+          return true;
+        },
+      }),
+      screenText: (_session, pane) => (pane === oldPane ? (typed === '' ? IDLE : claudeBox(typed)) : undefined),
+      foreground: (_session, pane) => (pane === oldPane && shelled ? ['zsh'] : ['claude']),
+    });
+    expect(ran.out).toContain('swapped: lead in w1:p1 (read-back unread)');
+    return show(ran, 'swap forced: lead');
+  });
+  scene('swap.cancelled', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    return show(await swapped(place, ['cancel', 'lead']), 'swap cancelled: lead');
+  });
+  scene('swap.caller', async (place) => {
+    write(place, SWAP_TEAM);
+    // A seat of the team that is neither the orchestrator nor the operator: the verdict names
+    // no exact step, only that the call is a seat.
+    const worker: Caller = { kind: 'seat', name: 'worker', pane: 'w1:p2', session: 'acme' };
+    return show(await swapped(place, ['queue', 'lead'], worker), 'only the owner, the orchestrator or the operator');
+  });
+  scene('swap.detached', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['now', 'lead'], detachedCaller), 'a terminal outside herdr');
+  });
+  scene('swap.io', async (place) => {
+    write(place, SWAP_TEAM);
+    writeFileSync(join(place.root, '.agents', 'team.state.json'), '{ not json\n');
+    return show(await swapped(place, ['cancel', 'lead']), 'is not valid JSON');
+  });
+  scene('swap.not-queued', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['cancel', 'lead']), 'waits on no swap');
+  });
+  scene('swap.invocation', async (place) => {
+    write(place, SWAP_TEAM);
+    return show(await swapped(place, ['queue']), 'a <seat> is required for "swap queue"');
+  });
+  scene('swap.file', async (place) => show(await swapped(place, []), 'no team file'));
+  // The run's own outcomes. A run reads herdr before it does anything, so a scene that would
+  // run a swap stands herdr in; the stop is the down path's own typing, and the fake renders
+  // the exit text back so the stop reads it, then reports the shell once Enter is pressed.
+  const SWAP_TRUST = (place: Place): string => SWAP_TEAM.replace(
+    'workspace:\n',
+    `trust:\n  - ~/.config/team/lobbies/lab\n  - ${place.root}\nworkspace:\n`,
+  );
+  scene('swap.herdr', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    return show(
+      await swapped(place, ['--run'], owner, { agents: () => null }),
+      'herdr cannot be read, so no swap can be run now',
+    );
+  });
+  scene('swap.ran', async (place) => {
+    approve(place, SWAP_TRUST(place));
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    const oldPane = 'w9:p1';
+    let typed = '';
+    let shelled = false;
+    return show(await swapped(place, ['--run'], owner, {
+      agents: () => [{ ...agent('lead'), pane: oldPane }],
+      launch: downLaunch({
+        typeText: (_session, pane, text) => {
+          if (pane === oldPane) typed = text;
+          return true;
+        },
+        pressEnter: (_session, pane) => {
+          if (pane === oldPane) shelled = true;
+          return true;
+        },
+      }),
+      screenText: (_session, pane) => (pane === oldPane ? (typed === '' ? IDLE : claudeBox(typed)) : undefined),
+      foreground: (_session, pane) => (pane === oldPane && shelled ? ['zsh'] : ['claude']),
+    }), 'swapped: lead in w1:p1 (read-back unread)');
+  });
+  scene('swap.run-failed', async (place) => {
+    write(place, SWAP_TEAM);
+    swapRule(place);
+    await swapped(place, ['queue', 'lead']);
+    // The record outlives the declaration: the file no longer declares the seat, so the run
+    // reports it and removes the record rather than launching over a name it cannot find.
+    write(place, SWAP_TEAM.replace('coordinator: lead\noperator: lead\n', 'coordinator: worker\noperator: worker\n').replace(LEAD, ''));
+    return show(
+      await swapped(place, ['--run'], owner, { agents: () => [] }),
+      'is no longer declared in the team file; its queued swap was removed',
+    );
+  });
+}
+
+const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
 
 const contract = loadContract();
 if (wanted !== null) {
@@ -4671,6 +5889,16 @@ analyzerTest('a throw in an imported helper is covered by team.command-threw', (
   files.set('src/commands/gate-throw.ts', "export function gateThrow(): void {\n  throw new Error('gate');\n}\n");
   expect(problems({ files })).toEqual([]);
   expect(analyze(files).coveredThrows.some((item) => item.file === 'src/commands/gate-throw.ts' && item.id === 'team.command-threw')).toBe(true);
+});
+
+analyzerTest('a plain-JS import is outside the contract: not read, and a return through it is refused', () => {
+  const files = withDoctor(
+    "  if (argv[0] === '--gate-plain') plainSignal();\n  if (argv[0] === '--gate-plain-code') return plainCode();\n",
+    "import { plainCode, plainSignal } from './plain-signal.js';\n",
+  );
+  const found = problems({ files });
+  expect(found.some((line) => line.includes("can't read this file"))).toBe(false);
+  expect(found.some((line) => line.includes(UNREADABLE))).toBe(true);
 });
 
 analyzerTest('a default-parameter call fails the check', () => {

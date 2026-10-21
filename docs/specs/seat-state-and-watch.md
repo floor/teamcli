@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-10-18
+updated: 2026-10-20
 kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75)
@@ -16,7 +16,9 @@ This spec covers the word a seat's state is read as, the sources it is read from
 ranking, the thresholds that bound the reading, the sixteen checks the watch runs, the reports it
 makes, and the fixed lines it may type. It leaves the launch steps that record a seat's pane
 to the launch spec, the records that hold the state to the registry spec, and the admission rules
-that let a seat act to the Kernel. It says what the code at the tag does, in the code's words.
+that let a seat act to the Kernel. It says what the code at the tag does, in the code's words;
+one section and one rule (§3.10, rule 15) record a change made after the tag and not released,
+and both are marked as such.
 
 ## 2. Terms
 
@@ -29,7 +31,12 @@ that let a seat act to the Kernel. It says what the code at the tag does, in the
 - **liveness windows**: idle-to-lead, idle-to-owner and unknown-to-blind, in whole seconds.
 - **check**: one named module in the watch's pass; sixteen run.
 - **report**: `{ key, text, to }`; `to` is `operator` or `owner`.
-- **nudge**: the one fixed work line the watch types into an idle worker.
+- **nudge**: the one fixed work line the watch types into an idle worker. Post-tag (§3.10) it is
+  the body the dispatcher's direct route carries, and the watch types nothing of it.
+- **dispatcher**: the watch's one path from an idle seat with takeable work to a direct push
+  (post-tag, §3.10).
+- **episode**: one seat's continuous idle stretch in a watch process; one attempt is spent per
+  episode, a refusal included (§3.10).
 - **ring**: the one fixed line the watch types when a message waits for a seat.
 - **held send**: a send held as a drop while a pane was busy, whose trigger the watch may type.
 - **pass**: one interval's reading of the seats, the file, the state and the machine.
@@ -124,8 +131,8 @@ once per setting as a line of its own — never a report, never a typed line:
 
     liveness_idle_lead_seconds: the team declared 10m, longer than the 5m in force — a liveness threshold may be tightened, never loosened, unless the level above allows it
 
-`tempo` scales `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`, and the idle window
-after the tighten-only check; it never scales `idle_owner` or `blind_after`.
+`tempo` scales `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and `unread_after`, and
+the idle window after the tighten-only check; it never scales `idle_owner` or `blind_after`.
 
 ### 3.3 The sixteen checks
 
@@ -154,7 +161,8 @@ switch off.
 A file switches a check off under `watch.checks`; the four always-on checks ignore that switch.
 
 The shipped watch defaults, as `defaultWatch()` carries them: a pass every 120 s, `team_idle`
-600 s, `unsent_after` 60 s and `nudge_wait` 600 s (`src/file/sections/watch.ts`). The machine's
+600 s, `unsent_after` 60 s, `nudge_wait` 600 s and `unread_after` 600 s
+(`src/file/sections/watch.ts`). The machine's
 readings, checks 11 to 15, are logged every ten minutes: `READINGS_EVERY` is 600 s
 (`src/commands/watch.ts`).
 
@@ -217,24 +225,57 @@ the pass.
 
 The watch types fixed lines and never a report.
 
+Post-tag (§3.10), the nudge arm below is no longer typed: the idle-work dispatcher carries its
+body over the direct route, and the typed lines that remain are the ring, the pause notice, the
+held-send retry and the unread wake.
+
 - **The nudge**: the work drop's line, typed into an idle worker. Its body is the file's
   `watch.nudge`, or the fixed line `Team watch: reports are waiting in .agents/team.log` when
   the file omits it.
-- **The ring**: `Team: run team messages`, typed when a message already waits for a seat and the
-  seat's box is an empty idle prompt.
-- **The held-send retry**: `Read <path> and do that.`, naming the drop of a send held while a
-  pane was busy, typed on a local pass unless `--no-nudge` is set. It requires the seat's status
-  to be `idle` or `done` and a readable screen that is either an idle prompt or holds exactly
-  that trigger unsent, and it takes the seat lock before delivering. The pending marker beside
-  the drop is its ownership evidence: a trigger another sender process left may be submitted,
-  and another person's draft is never typed. The retry is bounded, and giving up says the
-  drop's path. The default nudge body `NUDGE_TEXT` is never typed.
+- **The ring**: `Team: run team drops --read --seat <seat> --session <session>`, named for the
+  waiting seat and its own session, typed when a message already waits for that seat and the
+  seat's box is an empty idle prompt. A signed read receipt that lands after the pass read the
+  mailbox keeps the line untyped: the mailbox is read again before the ring is delivered.
+- **The held-send retry**: `Run team drops --read --seat <seat> --session <session> and do
+  that.`, the seat's own drop read for the drop of a send held while a pane was busy, typed on a
+  local pass unless `--no-nudge` is set. It is the same line a typed send types, so a seat that
+  runs it writes the signed read receipt beside the drop; a receipt inside the retry's window is
+  `delivered (read)`, and a line taken with no receipt is `sent (unconfirmed)`. It requires the
+  seat's status to be `idle` or `done` and a readable screen that is either an idle prompt or
+  holds exactly that trigger unsent, and it takes the seat lock before delivering. The pending
+  marker beside the drop is its ownership evidence: a trigger another sender process left may be
+  submitted, and another person's draft is never typed. A receipt that has already landed when
+  the retry would type settles the marker as `delivered (read)` and types nothing. The retry is
+  bounded, and giving up says the drop's path. The default nudge body `NUDGE_TEXT` is never
+  typed.
+- **The unread wake**: the same line, `Run team drops --read --seat <seat> --session
+  <session> and do that.`, typed once for a seat whose message has had no signed receipt for
+  `watch.unread_after` seconds (600 when the file omits it) and whose box is free. It is the
+  same delivery the retry makes, with the same status, screen, seat-lock and human-pane rules,
+  and it skips a message a held send's retry owns (a `.pending` marker). A receipt that lands
+  after the listing is read again under the seat's lock, and an already-read message is not
+  woken. One line serves every message due for that seat at that instant; the history records
+  `sent (unconfirmed)` until a signed receipt verifies, then `delivered (read)`. The wake
+  writes its `<id>.wake` reservation before the line is typed and holds it through the
+  attempt: a crash after the reservation never types a second line, a definite not-delivered
+  outcome (`held`, `not-submitted`) gives the reservation back so a later pass may wake, and an
+  uncertain one (`unreachable`) keeps it, spent. At twice the window a message still unread is reported once to its sender and to the
+  team's lead as a signed Runtime mailbox record — never by typing into a pane — after a
+  `<id>.reported` reservation of its own; the record is published write-once, so a mailbox
+  already holding it keeps those bytes. The sender's mailbox is resolved from the signed
+  `from_id` through this home's registries, never from the `from` name: one agent record naming
+  that seat, and for another team its team record listing that agent at that seat and recording
+  the session the record is bound to. A sender those records cannot pin to one team, seat and
+  session is reported to the lead only, and the missing metadata is named in the record and the
+  line. The report's words say whether a wake line was sent, was reserved with an unconfirmed
+  outcome, or was never typed, and `--no-nudge` skips the wake but still writes the report.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
 orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that
 holds the watch's own typed line is sent, not typed into twice, and only by the process that
-typed it; the held-send retry is the exception, proved by its marker above. `--no-nudge` types
-nothing, the retry included, and writes no drop; `--no-notify` drops the operator's desktop
+typed it; the held-send retry and the unread wake are the exceptions, proved by their markers
+above. `--no-nudge` types nothing, the retry and the unread wake included, and writes no drop;
+`--no-notify` drops the operator's desktop
 notification alone. Neither flag removes a log line or a report from `team status`.
 
 ### 3.7 The watch's record
@@ -282,6 +323,57 @@ report name the difference, and `team register` re-applies both lines from the f
 relaunch. The observed model is not stored on the agent record: the commit-signature policy's
 model match needs it, and the place it is kept is an open point of the Runtime text (§10,
 question 11).
+
+### 3.10 The idle-work dispatcher (post-tag, unreleased)
+
+This section records a change made after the tag and not released. It does not describe
+`52db9b75`: §3.6 is the tag's typing contract, and this section supersedes its first arm (the
+nudge) when it lands.
+
+The watch reads one shared snapshot per pass (`src/watch/idle-work.ts`, `idleWorkReport`), the
+same reading `status` and `check` use, and takes no picker of its own:
+
+- The idle window is the `idle-threshold` policy (a duration with its unit, or whole seconds;
+  300 s when nothing declares one), resolved to the team level. A chain that cannot be read
+  carries `threshold_unknown`, and the dispatcher acts on nothing.
+- A seat is idle only when it is declared and not human, parked, stopped, waiting on a swap, the
+  lead or the operator; exactly one agent carries its name; herdr says `idle` or `done`; its
+  screen reads the empty prompt; and its persisted `last_active` parses and is older than the
+  window. A seat with no parseable stamp is not idle: absence of truthful idle evidence is
+  suppression, never a guessed clock.
+- `takeable` is the records at least one idle seat could claim under the picker's rules, minus
+  ids a live lease holds. A paused team's count is zero. A team whose file names a tracker, or
+  whose file source is missing, outside the root or not a list, reads `null` (unknown), and the
+  dispatcher acts on nothing rather than calling it empty.
+
+For each idle seat the dispatcher makes one attempt per idle episode, a refusal included and
+spent before the route is called. The route is the sources' own direct push (`pushWork`), which
+carries the seat, its pane, its CLI and the rendered body — `watch.nudge` with `<your seat name>`
+replaced by the seat's name, or the fixed line `Team watch: reports are waiting in
+.agents/team.log` when the file sets none. The send the watch runs in its own process stages
+its signed record in the seat's `send-drops` folder and walks only the routes that reach a live
+receiver without a keystroke (`socket`, `headless-resume`); the watch types nothing. A route that
+is absent, refuses or throws leaves one signed Runtime mailbox record for the team lead and one
+for the main orchestrator, deduplicated when they are the same target, and types nothing; a
+target the registry cannot map is named as missing, never replaced by an owner or a guessed
+seat. A wake the route accepted is checked at the first pass at least a minute later: a live
+lease the seat holds, or an activity clock at or past the wake, settles it silently; otherwise
+one still-idle record is written and the episode wakes the seat no more.
+
+An actionable reading with zero takeable records writes one aggregate record per continuous idle
+stretch — `<project>: <n> idle, nothing queued (<names>)` — and none under a pause, whose own
+notices are the word. The stretch's signature is the idle seats and their clocks, so a changed
+cast is a new stretch.
+
+Automatic work is never typed by the watch: the pass's own work-entry typing and the status
+engine's automatic-work nudges are drained without typing. The typed lines that remain are the
+ring, the pause notice, the held-send retry and the unread wake (§3.6); the ring is suppressed
+for a seat whose idle episode the dispatcher owns that pass. The dispatcher publishes no bus
+event kind and invents none.
+
+Hosting: the daemon-hosted watch lifecycle — the same pass driven by the daemon's fixed
+heartbeat tick, with an existing pane watch held as a standby until the transfer is proven — is
+forthcoming. It is not released, and its live activation is not proven.
 
 ## 4. Commands and options
 
@@ -335,14 +427,20 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    (`CheckContext`), `src/watch/checks/idle.ts`. *Proof:* `test/watch.test.ts` (a condition said
    once, and again only after two passes that cleared), `test/watch-idle-once.test.ts` (the
    repeat and the owner once).
-9. **The watch MUST type only its fixed lines and a held send's exact trigger, and MUST NOT type
-   into a dialog or a box that holds unsent text.** The nudge, the ring and the held-send retry
-   are the only delivery paths; the retry MUST use the persisted marker as its ownership
-   evidence, MUST require an idle or done status and a readable idle or exact-trigger screen, and
-   MUST hold the seat lock; `--no-nudge` MUST suppress it too. *Source:* `src/watch/pass.ts`
-   (`NUDGE_TEXT`, `RING_TEXT`), `src/watch/retry.ts`, `src/send/native.ts` (`triggerLine`), the
-   watch command. *Proof:* `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`,
-   `test/held-retry.test.ts`.
+9. **The watch MUST type only its fixed lines and the seat's own drop read (a held send's retry
+   or the unread wake), and MUST NOT type into a dialog or a box that holds unsent text.** The
+   nudge, the ring, the held-send retry and the unread wake are the only delivery paths; the
+   retry MUST use the persisted marker as its ownership evidence, and the wake MUST leave a
+   message a retry marker owns alone; both MUST require an idle or done status and a readable
+   idle or exact-trigger screen, and MUST hold the seat lock; a reminder MUST NOT be typed for
+   a message whose signed read receipt already verifies — the ring reads the mailbox again
+   before typing, and the wake reads the folder again under the lock; `--no-nudge` MUST
+   suppress the wake too. The wake and the unread report MUST reserve their marker before
+   their effect and MUST keep a reservation whose attempt is uncertain, so no crash repeats a
+   typed line or a published record. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `ringText`), `src/watch/retry.ts`,
+   `src/watch/unread.ts`, `src/send/native.ts` (`triggerLine`), the watch command. *Proof:*
+   `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`, `test/held-retry.test.ts`,
+   `test/unread-wake.test.ts`.
 10. **A second watch MUST refuse while the first is alive.** The recorded pane, a heartbeat no
     older than two in-force intervals, or a live pid is what counts. *Source:*
     `src/commands/watch.ts`. *Proof:* `test/watch-nudge-boundaries.test.ts` (the second-watch
@@ -358,6 +456,16 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
     into the team file.** A screen that cannot be read keeps the file's display; an effort word
     once seen stays until a later screen shows a different one. *Source:* `src/labels/observe.ts`,
     `src/watch/seat-label.ts`, `src/status/statusline.ts`. *Proof:* `test/labels-observe.test.ts`.
+15. **(post-tag, unreleased) Automatic work MUST go through the direct route, never a keystroke.**
+    The watch MUST read the shared idle snapshot once per pass and act only on a truthful
+    reading: no parseable `last_active`, an unknown window or an unreadable source yields no
+    attempt, and a paused team yields none. It MUST make one attempt per idle episode, a refusal
+    spent before the route is called, and MUST reach the seat only through the sources' direct
+    push; a route that is absent or refuses MUST leave a signed mailbox record for the team lead
+    and the main orchestrator, and type nothing. The ring MUST NOT be typed for a seat whose
+    episode the dispatcher owns that pass. *Source:* `src/watch/dispatch.ts`,
+    `src/watch/idle-work.ts`, `src/commands/watch.ts`. *Proof:* `test/watch-dispatch.test.ts`,
+    `test/send-no-dial.test.ts`, `test/watch-work-nudge.test.ts`, `test/pause-flow.test.ts`.
 
 ## 6. Registries
 
@@ -418,3 +526,10 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
   and rate limits sit under the optional `provider-error` check; the idle report's repeat is the
   one exception to the once-until-cleared rule; and the held-send retry is a third typing path
   with its marker.
+- **Post-tag change recorded** (the implementing builder, 2026-10-20): §3.10 and rule 15 record the idle-work
+  dispatcher as implemented after `v0.5.0 (52db9b75)` and not released — one shared snapshot per
+  pass, a truthful reading or none, one direct-route attempt per idle episode (a refusal
+  included), signed mailbox records on absent or refused routes, the still-idle check, the
+  empty-source notice, and the retirement of automatic work typing. The tag's §3.6 and rule 9
+  stand as read-at-the-tag text; daemon hosting is forthcoming and its live activation is not
+  proven.

@@ -22,7 +22,9 @@ import {
 } from '../output/index.ts';
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
-import { order, place, takeable } from './next.ts';
+import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
+import { order, takeable } from '../tasks/select.ts';
+import { place } from './next.ts';
 
 export const USAGE = `Usage: team plan [--json]
 
@@ -121,8 +123,9 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
     }
     return file(io, message, json);
   }
-  const tasks = loaded.team.tasks;
-  if (!tasks) return file(io, 'the team file declares no task source', json);
+  // A team that declares no source reads its own local queue; a missing one is an empty queue,
+  // not a refusal. The declared sources keep their own reads and refusals unchanged.
+  const tasks = loaded.team.tasks ?? LOCAL_TASKS;
   if (tasks.source === 'linear') {
     return planFromBroker(io, loaded, tasks, sources, json);
   }
@@ -131,7 +134,10 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
   if (!adapter) return file(io, 'tasks.source must be file', json);
   const placed = place(loaded.team, loaded.root, io);
   if (placed.kind === 'refused') return callerRefuse(io, placed.message, json);
-  const read = adapter.read({ root: loaded.root, path: tasks.path });
+  const source = fileSourceOf(loaded.team);
+  const read = source !== null && source.local
+    ? readFileSource(loaded.root, source)
+    : adapter.read({ root: loaded.root, path: tasks.path });
   if (read.kind === 'missing') return missing(io, json);
   if (read.kind === 'outside') return file(io, 'tasks.path must stay inside the checkout', json);
   if (read.kind === 'not-a-list') {

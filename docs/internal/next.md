@@ -7,7 +7,8 @@ codes stay on the page.
 
 ## What the run does: the intake, the lease, the take
 
-Claims one record from the file the team file names, and holds it with a lease in this clone.
+Claims one record from the file the team file names — or, when it names no source, this clone's
+local queue — and holds it with a lease in this clone.
 A seat cannot pull until `team up` has recorded its pane.
 
 The source is a file the owner committed, or a tracker the owner's broker reads. On a broker
@@ -27,13 +28,15 @@ may keep a field from crossing, and a field left out is absent from the record, 
 A record with `blocked-by`, `repos`, or `needs` is listed by `team issues` and is not taken.
 A deadline is printed and not read as a time. A missed deadline is not decided here.
 Releasing a lease records no progress.
-The watch's ring is unchanged: `Team: run team messages`.
+The watch's ring is unchanged: `Team: run team drops --read --seat <seat> --session <session>`.
 
 ## What it reads and writes
 
 Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
-the team file, the YAML list at `tasks.path`, and the lease files under `.agents/leases/`
-at that root. The path is relative to that root. A record's `id` and `title` are required.
+the team file, the YAML list at `tasks.path` — or, when the team file names no source, the
+local queue at `.agents/queue.yaml`, whose absence is an empty queue — and the lease files
+under `.agents/leases/` at that root. The path is relative to that root. A record's `id` and
+`title` are required.
 The printed block is the `team issues` block, one record. No lease field is printed.
 
 On a broker source it reads the same root and team file, then asks the broker over
@@ -109,7 +112,8 @@ take proceeds with the notice, never with a silent truncation.
 ```text
 team next: only a seat of this team pulls a task; this call is owner
 team next: no pane is recorded for seat <name> in this session: a lead stops that seat and runs `team up`
-team next: the team file declares no task source
+team next: the team is paused (paused since <instant> by <who>); nothing new is claimed until `team resume`
+team next: <seat> waits on a swap: <the queue's line>; nothing new is claimed until it runs or `team swap cancel <seat>`
 team next: tasks.source must be file
 team next: tasks.path must stay inside the checkout
 team next: the task file is not there
@@ -146,11 +150,12 @@ fences it reads, are also on [the `team next` page](../commands/next.md).
 ```yaml file=.agents/team.yaml
 format: 1
 project: beacon
+entity: lab
 coordinator: claude-keeper
 operator: claude-keeper
 
 trust:
-  - ~/.config/team/lobby
+  - ~/.config/team/lobbies/lab
   - ~/Code/beacon
 
 workspace:
@@ -169,6 +174,13 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "4.0"
+    launch: claude --model deepseek-flash
 ```
 
 ```yaml file=.agents/tasks.yaml
@@ -182,4 +194,19 @@ team beacon, session "beacon"
 m1  the task title
 team next: claimed m1
 exit 0
+```
+
+```console
+$ team policy set entity model-rule '*=!anthropic' ; echo "exit $?"
+policy: set model-rule=*=!anthropic at entity (lab)
+exit 0
+$ team swap queue claude-keeper ; echo "exit $?"
+swap queued: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z
+exit 0
+```
+
+```console caller=claude-keeper
+$ team next ; echo "exit $?"
+team next: claude-keeper waits on a swap: claude-keeper: anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (the entity model rule), queued 2026-10-04T09:00:00.000Z, waits for the seat's boundary (quiet, no turn, no dialog, no lease, no work drop), runs by 2026-10-04T09:30:00.000Z; nothing new is claimed until it runs or `team swap cancel claude-keeper`
+exit 1
 ```

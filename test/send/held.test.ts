@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readHistory } from '../../src/send/history.ts';
-import type { NativePane } from '../../src/send/native.ts';
+import { readTriggerLine, type NativePane } from '../../src/send/native.ts';
 import type { SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
 
@@ -182,17 +182,25 @@ describe('team send: the plain send is the typed trigger again', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe('team acme, session "acme"\nlead: delivered\n');
+    expect(io.out).toBe(
+      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    const path = join(drops, readdirSync(drops)[0] as string);
-    expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
+    const path = join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string);
+    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
     expect(host.pane.enters).toBe(1);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
     const read = readHistory('acme', root, host.home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.entries[0]).toMatchObject({ to: 'lead', outcome: 'delivered', ms: 0, via: 'typed' });
+    expect(read.entries[0]).toMatchObject({
+      to: 'lead',
+      outcome: 'sent (unconfirmed)',
+      note: 'trigger taken, no read receipt yet',
+      ms: 0,
+      via: 'typed',
+    });
   });
 });

@@ -90,17 +90,61 @@ Nothing else is repaired. A model drift keeps its relaunch, a blind seat its loo
 roster gap its `team register` — those are decisions the run names, and `--repair` never starts,
 stops or relaunches a seat.
 
-The general seat brief is checked against the state's `briefs` too. A seat the session launched —
-one whose record the state's `seats` hold, and a human's once the session has launched anything —
-with no delivery record is `<seat>: the general seat brief has not been delivered`, repaired with
-`team reload <seat> or team up`, or with `team up` alone when the seat is a human's, since
-`team reload` refuses that pane. The state entry is a claim about a file, so the check verifies the
-file rather than the claim: the record at the current brief's id must hold this brief's text and
-this checkout's message key must have signed it (`recordHolds`, `src/send/record.ts`). An entry
-naming another id, or a file there that is missing, unsigned, foreign or another body, is
-`<seat>: the general seat brief's delivery record does not verify`, with the same repair. The
-repair is a reload or an up, never `--repair`: the difference is advice, and the delivery is the
-launch's own act.
+The general seat brief is checked against the state's `briefs` too (`generalBriefDifferences`,
+`src/check/team.ts`). A session that launched a seat — its `seats` hold one — or recorded a
+delivery — `briefs` is defined — is a session whose seats were due the brief; a session with
+neither is due nothing. The claim is read first (`currentBriefClaim`, `src/launch/general-brief.ts`):
+an entry that is absent, or one an older build wrote without the delivery lifetime, is
+`<seat>: the general seat brief has not been delivered`, repaired with `team reload <seat> or team
+up`, or with `team up` alone when the seat is a human's, since `team reload` refuses that pane. A
+CLI seat this session never launched and never recorded is skipped: its launch is its repair, and
+the comparison already names it when one was due. A claim whose `sha256` is behind this build's
+`GENERAL_BRIEF_SHA256` raises the run's `stale` flag, and the caller prints the one `ROLLOUT_HINT`
+line after the per-seat differences. With no `home` there is no message key to verify a signature,
+so a behind claim is still not delivered and a current one stands as recorded.
+
+A current claim is a claim about a file, so the check verifies the file rather than the claim: the
+record the claim names, at `<root>/.agents/send-drops/<session>/<seat>/<claim.id>`, is rebuilt from
+the claim through `generalBriefRecord` (its `id` and `thread` are the claim's id; `body` and
+`to_id` are not compared) and held against `recordHolds` (`src/send/record.ts`). A missing file is
+a delivery that never landed and keeps the `has not been delivered` line; a file there that does
+not verify — unsigned, foreign, another text, another lifetime or epoch, a planted regular file or
+a link — is `<seat>: the general seat brief's delivery record does not verify`, with the same
+repair. A human seat is delivery-only and the check stops there.
+
+A CLI seat then needs read evidence binding the claim: a signed `read` or `replied` receipt at
+`receiptFile(dropDir, claim.id, status)` verifying through `receiptHolds` against
+`briefBindingOf(claim)` — the claim's id, incarnation, text hash and epoch. A seat whose launch
+did not reach ready keeps its launch difference and its read is not demanded:
+`<seat>: the general seat brief has been delivered; launch not ready`, and a verified read that
+arrived before readiness is `<seat>: a read happened before readiness; the runtime is not
+confirmed`. With no message key the read is not demanded either. Otherwise no verified receipt
+leaves one of three lines: a `read` or `replied` file that exists and does not verify is
+`<seat>: the general seat brief's read receipt does not verify`, repaired by
+`team brief rollout --apply` recovering the delivery at a new id, the file that does not verify
+left in place; a signed receipt for another message (`olderReadReceipt`) is
+`<seat>: the general seat brief's read receipt is stale (an earlier agent or an earlier text)`;
+and nothing at all is `<seat>: the general seat brief has been delivered and not read`. Both of
+the last are repaired by the seat's next turn; a record with `watcher` absent or `none` says how to
+read by hand — `team drops --read --seat <seat>` — and that `team reload <seat>` installs the
+launch's hooks. Every repair is a reload, an up, a read or the rollout's own recovery, never
+`--repair`: the difference is advice, and the delivery is the launch's own act. The check writes
+none of it and has no writer mode and no `--rollout` of its own.
+
+Unread work is named on the same pass (`unreadDifferences`, `src/check/team.ts`): every non-human
+seat's drop folder is read through `listUnread` (`src/mcp/inbox.ts`), the watch's own reading of
+what waits — a UUID-named regular file with no verified read receipt beside it, the general seat
+brief's current and superseded ids aside. A message older than `watch.unread_after` — the value in
+force, 600 s when the file omits it — is one difference for the seat,
+`<seat>: a message from <from> has been unread for <n> min (id <id>)`, with `; <m> more unread`
+when others are due and the oldest named. The repair is the seat's next turn, or
+`team drops --read --seat <seat>` when the seat's record says no turn-start reader is installed.
+The sender is the verified record's `from`; a record that does not verify is named `an
+unverified message`, and the `.pending` marker beside it is never read as a sender — it is
+unsigned, so it may not lend a message the owner's name or a seat's standing. A person's drop is
+read by a person and is never asked for a receipt, and with no message key no receipt can be
+judged: neither is named.
+The line is advice like the rest, and the watch's unread wake is the path that types the read.
 
 ## Seats held at a prompt
 
@@ -214,6 +258,18 @@ and open nothing: the target is the file the caller's own place finds.
   all but one of them`. A sibling the registries cannot answer for — no record, no readable file,
   or one naming another project — is not counted, and a team that declares no lead reads no
   sibling at all. A check with no home reads no registry;
+- the entity policy source (`~/.config/team/entities.yaml`), for the entity's model rule
+  (Policies rule 10): every seat of this team whose declared vendor the rule refuses is one
+  difference, `<seat>: declares vendor <vendor>, which the entity model rule <rule> refuses; a
+  swap to <cli> <model> <version> from <team>/<donor> is proposed` — or, where no recipe is
+  available, the reason in place of the proposal — repaired with `team swap queue <seat>`. It is
+  the breach list [`team swap`](../commands/swap.md) `--rule` prints for the entity, narrowed to
+  the team this check runs in: another team's breaching seat is not this team's difference. The
+  repair's actor is the team's lead, set on the difference itself. A rule that cannot be read is a
+  note — `the entity model rule cannot be read, so no breach is judged: <why>` — never an empty
+  rule, which would read every seat as in rule; a check with no home reads no rule. The wait
+  `team swap` applies is not read here: the difference is the breach, and the queue command reads
+  the wait when a swap is queued;
 - the seat's own reading, the pair [`team seats`](../commands/seats.md) prints as STATE and SOURCE
   (`src/labels/state.ts`): the word and where it came from, best source first — a screen waiting on
   someone (a dialog, a question, an error, a composer holding unsent text), the CLI's own state hook

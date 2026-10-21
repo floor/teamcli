@@ -11,14 +11,23 @@
 // and a caller that does not pass as one of the three gets one fixed sentence and nothing else,
 // whatever failed underneath — a loader error, a refused standing, herdr's silence, an aimed flag
 // and every caller detail among them (the two-phase rule, §4).
+import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, isAbsolute, relative } from 'node:path';
-import { notInForce, watchInForceOf } from '../approve/approval.ts';
+import { join, isAbsolute, relative, resolve } from 'node:path';
+import { notInForce } from '../approve/approval.ts';
+import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
 import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
-import { devModeActive } from '../dev_mode.ts';
+import { devModeActive, devModeOwnerLift } from '../dev_mode.ts';
+import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
+import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
+import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
+import type { DaemonHealth } from '../daemon/health.ts';
+import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
+import { hostedWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -27,9 +36,10 @@ import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
-import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
+import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
+import { listUnread } from '../mcp/inbox.ts';
 import {
   collapseNotes,
   contextLine,
@@ -60,17 +70,21 @@ import {
 } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
+import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
-import { recordHolds } from '../send/record.ts';
+import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
-import { modelDiffers, seatModel } from '../status/statusline.ts';
+import { heldAt } from '../launch/rules-file.ts';
+import { modelDiffers, runningModel } from '../status/statusline.ts';
+import { messageKeyState } from '../store/keys.ts';
 import type { Standing } from '../store/store.ts';
+import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
@@ -96,6 +110,16 @@ export type CheckSources = {
    *  `--repair` re-applies the file's lines through them; the real ones when absent. */
   renameWorkspace?: (session: string, workspace: string, label: string) => boolean;
   reportDisplayAgent?: (session: string, pane: string, text: string) => boolean;
+  /** The idle-with-work snapshot, from the watch. Read-only; absent when no producer is wired, and
+   *  a test stands in for it. */
+  idleWork?(input: IdleWorkInput): IdleWorkReport;
+  /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
+  pendingGreen?(dir: string): PendingGreenSlice[];
+  /** The machine daemon's reading, already probed by the command wrapper before this
+   *  synchronous report runs. Absent in a test that does not stand one in. */
+  daemon?: DaemonHealth;
+  /** The one probe the wrapper awaits; a scene hands `daemon` instead and reads no socket. */
+  daemonHealth?(home: string): Promise<DaemonHealth>;
 };
 
 /**
@@ -149,6 +173,11 @@ export const realCheckSources: CheckSources = {
   standing: realSources.standing,
   now: realSources.now,
   home: realSources.home,
+  // The same snapshot and pending reader `status` uses, wired once: the commands cannot disagree.
+  idleWork: realSources.idleWork,
+  pendingGreen: realSources.pendingGreen,
+  // One probe, at the command wrapper: this report is synchronous and only reads the snapshot.
+  daemonHealth: realSources.daemonHealth,
 };
 
 /**
@@ -210,13 +239,27 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // `--repair` writes: the check's one act, and the owner's alone, as the two aimed flags are.
     if (args.repair === true) {
       const msg = "--repair is the owner's";
-      if (args.json) {
-        writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, fallbackNotice);
-      } else {
-        io.stderr(`team check: ${msg}\n`);
+      // The owner's dev-mode admission for exactly this gate: a placed lead or
+      // orchestrator continues with the warning; the owner's own path above never reaches here.
+      const lift = devModeOwnerLift(io, {
+        command: 'check',
+        refusal: msg,
+        ...(sources.home !== undefined ? { home: sources.home } : {}),
+        team: current.team,
+        root: current.root,
+        dir: current.dir,
+        now: sources.now(),
+      });
+      if (!lift.lifted) {
+        if (args.json) {
+          writeJsonError(io, 'check.repair-owner', msg, null, 1, undefined, fallbackNotice);
+        } else {
+          io.stderr(`team check: ${msg}\n`);
+        }
+        // exit: check.repair-owner
+        return 1;
       }
-      // exit: check.repair-owner
-      return 1;
+      io.stderr(`${lift.warning}\n`);
     }
   }
   const { team, root, dir } = current;
@@ -291,9 +334,34 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   }
   const state = whole.sessions[session] ?? emptySession();
   const policyChecked = policyCheck(team, root, sources.home, sources.now(), io.env, dir, callerLabel(walked));
+  const modelRule = modelRuleCheck(team, root, sources.home);
   // The same live grant `status` reads, so the two readings offer `team answer` together or not
-  // at all: the setting is one record, never a file key and never a stale approval.
-  const comparison = compare(team, session, state, live, sources.now(), watchInForceOf(standing, team), undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
+  // at all: the setting is one record, never a file key and never a stale approval. The pace is
+  // the watch's own: one policy value, converted legacy file values, and an unreadable chain
+  // reported as a note rather than silently replaced.
+  const watchPace = watchPaceOf({ team, root, home: sources.home, now: sources.now(), standing });
+  const inForce = watchInForceWithPace(standing, team, watchPace);
+  // The registry's own continuity per declared seat, read once: the check's process gate and
+  // `compare()` must decide a restored pane the same way `up` and `status` do.
+  const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
+    home: sources.home,
+    root,
+    herdrSession: session,
+    seats: team.seats,
+    states: state.seats,
+  });
+  const comparison = compare(
+    team,
+    session,
+    state,
+    live,
+    sources.now(),
+    inForce,
+    undefined,
+    dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()),
+    undefined,
+    continuityIds,
+  );
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
   // than named seat by seat — `team seats` keeps the mark, and `team status --all --json` keeps
@@ -312,13 +380,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     quiet,
   );
   const provenance = devModeDifferences(team, root, sources.home, quiet);
-  const attention = attentionDifferences(team, state, live, sources.now());
+  const attention = attentionDifferences(team, state, live, sources.now(), continuityIds);
+  const briefs = generalBriefDifferences(team, state, root, sources.home, session);
   comparison.differences = orderAndAnnotateDifferences([
     // A seat the check names itself in its own stuck-prompt line is not named again in
     // `compare()`'s plain words: one line per held seat, the richer one.
     ...comparison.differences.filter((difference) => difference.promptSeat === undefined || !attention.named.has(difference.promptSeat)),
     ...signingDifferences(team, state, live, root, sources.home),
-    ...generalBriefDifferences(team, state, root, sources.home, session),
+    ...briefs.differences,
+    ...unreadDifferences(team, state, root, sources.home, session, inForce.unreadAfter, sources.now()),
     ...provenance.differences,
     ...attention.differences,
     ...labelDifferences(team, state, live),
@@ -326,6 +396,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...registryDifferences(team, root, sources.home),
     ...deliveryOrderDifferences(team, root, sources.home),
     ...policyChecked.differences,
+    ...modelRule.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
     // The same rows `status` prints: a legacy record or one the verification refused still says
     // what it is; a machine that never approved the file is the ordinary file now, and nothing to
@@ -355,6 +426,30 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     })),
   ];
   const warnings = renderDeprecationWarnings(deprecationWarnings);
+  // Idle with work and ready-but-uninstalled slices: the same two reads and the same lines as
+  // `team status`, notes only — neither changes the total nor the exit. A green journal that
+  // cannot be read is named as such, never read as "no slice is ready".
+  const idleWork = sources.idleWork?.({
+    root,
+    team,
+    state,
+    live,
+    now: sources.now(),
+    ...(sources.home !== undefined ? { home: sources.home } : {}),
+    pause: whole.pause ?? null,
+    swaps: Object.keys(whole.swaps ?? {}),
+  });
+  const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
+  const idleNotes = [
+    ...(idleWork !== undefined ? idleWorkNotes(idleWork) : []),
+    ...greenNotes(green),
+    // The daemon's reading: a note only when there is something to act on. A daemon that is
+    // simply not installed is the ordinary state and is said in `status`, not counted here.
+    ...(sources.daemon !== undefined ? daemonProblemNotes(sources.daemon) : []),
+    // A hosted watch the daemon carries, notes only: a standing-down or stopped watch, a failed
+    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing.
+    ...(sources.daemon !== undefined ? hostedWatchCheckNotes(sources.daemon, sources.now()) : []),
+  ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
   const notes = collapseNotes([
@@ -363,29 +458,44 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...leadRoleNotes(team),
     ...lobbyNotes(team, root, sources.home, session),
     ...policyChecked.notes,
+    ...modelRule.notes,
     ...unknownStatusNotes(team, state, live),
     ...record.notes,
     ...provenance.notes,
+    ...idleNotes,
+    ...watchPaceNotes(watchPace),
   ]);
   if (args.json) {
     writeJson(io, 'team.check', {
       format: 1,
       project: team.project,
       session,
+      // The declared limitation of a client app key, carried as a field so the one JSON
+      // document on stdout stays valid; text mode prints the same line on stdout (commands/check.ts).
+      key_isolation: KEY_ISOLATION_LINE,
       ...(notice !== undefined ? { notice } : {}),
       warnings,
       repaired,
       notes,
+      ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
+      ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
+      ...(green?.kind === 'refused' ? { green_notice: green.why } : {}),
+      ...(sources.daemon !== undefined ? { daemon: daemonReading(sources.daemon) } : {}),
       differences: differences.map(toJsonDifference),
       summary: summaryCounts(differences),
+      ...(briefs.stale ? { hint: ROLLOUT_HINT } : {}),
     });
   } else {
     const style = ttyStyle(io);
     io.stdout(`${contextLine(team.project, session)}\n`);
+    io.stdout(`${KEY_ISOLATION_LINE}\n`);
     for (const warning of warnings) io.stdout(`${warning}\n`);
     for (const line of repaired) io.stdout(`repaired: ${line}\n`);
     for (const line of renderNotes(notes, { home: sources.home })) io.stdout(`${line}\n`);
     for (const line of renderDifferences(differences, style, sources.home)) io.stdout(`${line}\n`);
+    // One line, once, after the per-seat lines: this build's brief is ahead of a seat's claim,
+    // and the rollout is the repair that delivers it to every live seat. The exit stays as it is.
+    if (briefs.stale) io.stdout(`${ROLLOUT_HINT}\n`);
     io.stdout(`${renderSummary(differences)}\n`);
   }
   if (differences.length > 0) {
@@ -666,7 +776,7 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
     const recorded = state.seats[seat.name]?.pane;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (!agent || agent.pane !== recorded) continue;
-    const running = seatModel(seat, live.screens[agent.pane]);
+    const running = runningModel(seat.cli, live.screens[agent.pane] ?? '');
     if (!running) continue;
     const record = findAgent(home, { team: teamId, seat: seat.name });
     if (!record) continue;
@@ -689,15 +799,22 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
   return out;
 }
 
+/** The one line the check prints when this build's brief is ahead of any declared seat's claim:
+ *  the rollout is the repair that delivers it to every live seat, once per run. */
+export const ROLLOUT_HINT = 'run team brief rollout --apply to deliver the general seat brief to every live seat';
+
 /**
  * The general seat brief every launch delivers first, by drop. A session that has launched a seat,
- * or recorded a delivery, is a session whose seats were due the brief: one with no record under
- * `briefs` never received it. A recorded delivery is a claim about a file, so the file is checked,
- * not the claim: the record at the current brief's id must be this brief and this checkout's
- * message key must have signed it. A state entry naming anything else is a delivery that does not
- * verify. The repair is the one both delivering paths answer to — `reload` for a CLI seat, `up`
- * for a human's, where reload refuses to touch the pane. A seat the comparison already names as
- * not running is left to that difference: its launch is its repair.
+ * or recorded a delivery, is a session whose seats were due the brief. The claim is what the check
+ * reads first: no claim, or one an older build wrote without the delivery lifetime, is a seat
+ * that has not been delivered. A current claim is checked against the file it names — a missing
+ * record is a delivery that never landed; an existing one that does not verify for the claim
+ * (another text, lifetime, epoch binding, a planted file, a link) is a delivery record that does
+ * not verify, and only the rollout's recovery may move past it. A CLI seat then needs read
+ * evidence binding the claim; a human seat is delivery-only. Every repair is one the delivering
+ * paths answer to, and the read repairs never waive the requirement: a seat whose launch installed
+ * no reader is told how to read by hand and how to install one. The returned `stale` flag is the
+ * one rollout hint the caller prints, once, when this build is ahead of any seat's claim.
  */
 function generalBriefDifferences(
   team: TeamFile,
@@ -705,26 +822,187 @@ function generalBriefDifferences(
   root: string,
   home: string | undefined,
   session: string,
-): Difference[] {
-  if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return [];
+): { differences: Difference[]; stale: boolean } {
+  if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return { differences: [], stale: false };
   const out: Difference[] = [];
+  let stale = false;
+  const key = home === undefined ? null : messageKeyState(home);
   for (const seat of team.seats) {
     const recorded = state.briefs?.[seat.name];
-    const repair = seat.human === true ? 'team up' : `team reload ${seat.name} or team up`;
-    if (recorded === undefined) {
-      if (seat.human !== true && state.seats[seat.name] === undefined) continue;
+    const running = state.seats[seat.name] !== undefined;
+    const human = seat.human === true;
+    const repair = human ? 'team up' : `team reload ${seat.name} or team up`;
+    const claim = currentBriefClaim(recorded);
+    if (claim === null) {
+      stale = true;
+      // A CLI seat this session never launched has no delivery due yet: its launch is its repair,
+      // and the comparison already names the launch if one was due.
+      if (recorded === undefined && !running && !human) continue;
       out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
       continue;
     }
-    // Without a home there is no message key to verify with; the entry stands as before.
-    if (home === undefined) continue;
-    const id = generalBriefId();
-    const expected = generalBriefRecord({ to: seat.name, root, session, at: recorded.at });
-    const path = join(root, '.agents', 'send-drops', session, seat.name, id);
-    if (recorded.id === id && recordHolds(path, expected, home)) continue;
-    out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });
+    if (claim.sha256 !== GENERAL_BRIEF_SHA256) stale = true;
+    if (home === undefined) {
+      // Without a home there is no message key to verify a signature with. A claim that is behind
+      // this build is still a delivery the seat does not have; a current one stands as recorded.
+      if (claim.sha256 !== GENERAL_BRIEF_SHA256) {
+        out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
+      }
+      continue;
+    }
+    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const expected = {
+      ...generalBriefRecord({
+        to: seat.name,
+        root,
+        session,
+        at: claim.at,
+        incarnation: claim.incarnation,
+        attempt: claim.attempt,
+      }),
+      // The claim's id is the delivered body's id: a handover variant is still the claim's record,
+      // and the canonical digest it carries is what ties the text to this build.
+      id: claim.id,
+      thread: claim.id,
+    };
+    const path = join(dropDir, claim.id);
+    if (heldAt(path).kind === 'missing') {
+      out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
+      continue;
+    }
+    if (!recordHolds(path, expected, home, { body: false, to_id: false })) {
+      out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });
+      continue;
+    }
+    if (human) continue;
+    if (key === null || key.kind !== 'key') continue;
+    const context = { to: seat.name, root, session };
+    const binding = briefBindingOf(claim);
+    const readVerified = receiptHolds(receiptFile(dropDir, claim.id, 'read'), claim.id, 'read', context, key.key, binding)
+      || receiptHolds(receiptFile(dropDir, claim.id, 'replied'), claim.id, 'replied', context, key.key, binding);
+    // A delivery is a file fact and never implies a successful attribution: a seat whose launch
+    // did not reach ready keeps its launch difference, and the read is not demanded of it. A read
+    // that arrived before readiness is provisional — the runtime it came from is not confirmed.
+    if (state.seats[seat.name]?.stage !== 'ready') {
+      out.push({
+        what: `${seat.name}: the general seat brief has been delivered; launch not ready`,
+        repair: `the launch's repair runs first; the seat's next turn reads it`,
+      });
+      if (readVerified) {
+        out.push({
+          what: `${seat.name}: a read happened before readiness; the runtime is not confirmed`,
+          repair: `the launch's repair runs first`,
+        });
+      }
+      continue;
+    }
+    if (readVerified) continue;
+    const readRepair = `the seat's next turn reads it; team reload ${seat.name} delivers it again`;
+    const watcher = state.seats[seat.name]?.watcher;
+    const readerRepair = watcher === undefined || watcher === 'none'
+      ? `${readRepair}; no turn-start reader is installed: the seat reads it with team drops --read --seat ${seat.name}, or team reload ${seat.name} installs the launch's hooks`
+      : readRepair;
+    const readHeld = heldAt(receiptFile(dropDir, claim.id, 'read')).kind;
+    const repliedHeld = heldAt(receiptFile(dropDir, claim.id, 'replied')).kind;
+    if (readHeld !== 'missing' || repliedHeld !== 'missing') {
+      out.push({
+        what: `${seat.name}: the general seat brief's read receipt does not verify`,
+        repair: 'team brief rollout --apply recovers this seat at a new id; the file that does not verify is left in place',
+      });
+      continue;
+    }
+    if (olderReadReceipt(dropDir, claim.id, context, key.key)) {
+      out.push({ what: `${seat.name}: the general seat brief's read receipt is stale (an earlier agent or an earlier text)`, repair: readerRepair });
+      continue;
+    }
+    out.push({ what: `${seat.name}: the general seat brief has been delivered and not read`, repair: readerRepair });
+  }
+  return { differences: out, stale };
+}
+
+/**
+ * Every seat with work still unread past `watch.unread_after`. The reading is the watch's own —
+ * `listUnread`, with the same receipt, superseded and claim rules — so the check and the unread
+ * wake agree on what unread means. One difference per seat names the oldest message and counts
+ * the rest. The general seat brief has its own read difference and is not counted twice; a
+ * person's drop is read by a person and is never asked for a receipt, and without a message key
+ * no receipt can be judged, so neither is named here.
+ */
+function unreadDifferences(
+  team: TeamFile,
+  state: SessionState,
+  root: string,
+  home: string | undefined,
+  session: string,
+  windowSeconds: number,
+  now: Date,
+): Difference[] {
+  if (home === undefined) return [];
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') return [];
+  const out: Difference[] = [];
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const brief = state.briefs?.[seat.name];
+    const briefIds = new Set<string>([
+      ...(brief === undefined ? [] : [brief.id]),
+      ...(brief?.superseded ?? []),
+    ]);
+    const dropDir = join(root, '.agents', 'send-drops', session, seat.name);
+    const context = { to: seat.name, root, session };
+    const unread = listUnread(dropDir, context, home).filter((message) => {
+      if (briefIds.has(message.id)) return false;
+      return now.getTime() - Date.parse(message.ts) >= windowSeconds * 1000;
+    });
+    const oldest = unread[0];
+    if (oldest === undefined) continue;
+    const minutes = Math.max(1, Math.round((now.getTime() - Date.parse(oldest.ts)) / 60_000));
+    // The sender is the verified record's own word, and only that. The `.pending` marker beside
+    // it is unsigned: it is never read as the message's sender, so it can never lend a message the
+    // owner's name or a seat's standing. A record that cannot be opened or verified is named as
+    // what it is — an unverified message — and keeps its age, its id and its count.
+    let who = 'an unverified message';
+    const looked = readRecord(join(dropDir, oldest.id), oldest.id);
+    if (looked.ok && looked.record !== null && verifyRecord(looked.record, key.key)) {
+      const from = looked.record.payload.from;
+      who = typeof from === 'string' && from !== '' ? `a message from ${from}` : 'a message from an unknown sender';
+    }
+    const more = unread.length > 1 ? `; ${String(unread.length - 1)} more unread` : '';
+    const watcher = state.seats[seat.name]?.watcher;
+    const repair = watcher === undefined || watcher === 'none'
+      ? `team drops --read --seat ${seat.name} reads it; no turn-start reader is installed, so team reload ${seat.name} installs the launch's hooks`
+      : `the seat's next turn reads it (team drops --read --seat ${seat.name})`;
+    out.push({
+      what: `${seat.name}: ${who} has been unread for ${String(minutes)} min${more} (id ${oldest.id})`,
+      repair,
+    });
   }
   return out;
+}
+
+/** Whether this seat's folder holds a signed read receipt for another message: the read an
+ *  earlier agent or an earlier text left, which no longer binds the current claim. */
+function olderReadReceipt(
+  dropDir: string,
+  claimId: string,
+  context: { to: string; root: string; session: string },
+  key: Parameters<typeof receiptHolds>[4],
+): boolean {
+  let names: string[];
+  try {
+    names = readdirSync(dropDir);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    const match = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(read|replied)\.json$/.exec(name);
+    if (match === null) continue;
+    const id = match[1]!;
+    if (id === claimId) continue;
+    const status = match[2] as 'read' | 'replied';
+    if (receiptHolds(join(dropDir, name), id, status, context, key)) return true;
+  }
+  return false;
 }
 
 // The kinds the check names for a seat held at a prompt, in the words the brief gives them:
@@ -814,6 +1092,7 @@ function attentionDifferences(
   state: SessionState,
   live: Live,
   now: Date,
+  continuityIds?: ReadonlyMap<string, string | null>,
 ): { differences: Difference[]; named: Set<string> } {
   const differences: Difference[] = [];
   const named = new Set<string>();
@@ -844,7 +1123,7 @@ function attentionDifferences(
     // and its scrollback is not read for a prompt — a dialog the CLI drew before it exited is not
     // a seat held at one. A record with no identity whose pane holds a bare shell reads no prompt
     // either.
-    if (!paneShowsSeat(read.recorded, agent, live)) continue;
+    if (!paneShowsSeat(read.recorded, agent, live, continuitySessionOf(continuityIds, read.name, read.recorded?.agent_session))) continue;
     const text = live.screens[pane];
     const screen = readScreen(read.cli, text);
     // A launch's own waiting record already names the seat and the dialog it stopped at, with
@@ -1288,6 +1567,10 @@ function policyCheck(
     return { differences: [], notes };
   }
 
+  // The machine record stands above the chain and the variable; when it is present — verified
+  // or refused — the legacy dev-mode notes below describe a source no gate reads any more.
+  const machine = readDevelopmentMode(home);
+
   let projectId: string | null = null;
   let legacyProjectDeliveryOrder: readonly DeliveryLeg[] | undefined;
   try {
@@ -1309,6 +1592,8 @@ function policyCheck(
   const legacyDeliveryDiffs = deliveryOrderDifferences(team, root, home);
   const differences: Difference[] = [];
   const notes: string[] = [];
+  const machineNote = developmentModeNote(machine);
+  if (machineNote !== null) notes.push(machineNote);
 
   const projectSource = readProjectPolicySource(home, projectId);
   if (
@@ -1419,11 +1704,17 @@ function policyCheck(
   }
 
   const expiredDevMode = teamChain.expired.filter((exp) => exp.name === 'dev-mode').at(-1);
-  if (expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
+  if (machine.kind === 'absent' && expiredDevMode && (!teamChain.ok || teamChain.policies['dev-mode']?.value === 'off')) {
     notes.push(`dev-mode expired at ${expiredDevMode.expiry ?? 'now'} for ${expiredDevMode.level}; off since`);
   }
   if (env.TEAMCLI_DEV_MODE === '1') {
-    if (!teamChain.devModeGoverned) {
+    if (machine.kind === 'refused') {
+      logLine(stateDir, 'check', caller, 'dev-mode: TEAMCLI_DEV_MODE=1 ignored because the machine setting cannot be read', now);
+    } else if (machine.kind === 'set') {
+      if (machine.record.mode !== 'local-fast') {
+        logLine(stateDir, 'check', caller, `dev-mode: TEAMCLI_DEV_MODE=1 ignored because development-mode is ${machine.record.mode} at machine level`, now);
+      }
+    } else if (!teamChain.devModeGoverned) {
       notes.push(
         'dev-mode: no policy is set yet for this entity; TEAMCLI_DEV_MODE=1 still applies until the owner sets dev-mode',
       );
@@ -1433,5 +1724,49 @@ function policyCheck(
   }
 
   return { differences, notes };
+}
+
+/**
+ * The entity's model rule over this team's file (Policies rule 10). Every breaching seat of the
+ * team this check runs in is one difference, repaired with `team swap queue <seat>`: the same
+ * breach list `team swap --rule` prints, narrowed to this team. The line names the rule, the
+ * seat's vendor and the swap proposed — or why none is. A rule that cannot be read is a note and
+ * never an empty rule: an unreadable rule must not read every seat as in rule.
+ *
+ * The repair is the lead's: `team swap queue` is queued by the orchestrator's or the operator's
+ * seat, and the command is a grant scope in the permission map, so the difference carries its
+ * actor rather than letting `whoOfDifference` read the repair as a grant holder's.
+ */
+function modelRuleCheck(
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+): { differences: Difference[]; notes: string[] } {
+  if (home === undefined || team.entity === null) return { differences: [], notes: [] };
+  let found: RuleLookup;
+  try {
+    found = listModelRuleBreaches({ home, team, root, teamId: teamIdOf(root) });
+  } catch (error) {
+    found = { ok: false, why: `the model rule cannot be read: ${(error as Error).message}` };
+  }
+  if (!found.ok) {
+    return { differences: [], notes: [`the entity model rule cannot be read, so no breach is judged: ${found.why}`] };
+  }
+  const listing = found.listing;
+  if (listing.rule === '') return { differences: [], notes: [] };
+  const here = resolve(root);
+  const differences: Difference[] = [];
+  for (const breach of listing.breaches) {
+    if (resolve(breach.root) !== here) continue;
+    const action = breach.proposal
+      ? `a swap to ${breach.proposal.recipe.cli} ${breach.proposal.recipe.model} ${breach.proposal.recipe.version} from ${breach.proposal.donor.team}/${breach.proposal.donor.seat} is proposed`
+      : (breach.reason ?? 'no recipe is available');
+    differences.push({
+      what: `${breach.seat.name}: declares vendor ${breach.seat.vendor}, which the entity model rule ${listing.rule} refuses; ${action}`,
+      repair: `team swap queue ${breach.seat.name}`,
+      who: "the team's lead",
+    });
+  }
+  return { differences, notes: [] };
 }
 

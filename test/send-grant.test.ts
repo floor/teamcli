@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { upsertTeam } from '../src/registry/teams.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { readSendGrants } from '../src/send/grants.ts';
 import { updateState } from '../src/state.ts';
@@ -61,7 +62,32 @@ delivery_order: [mcp-inbox, typed]
 `;
 }
 
-function world(): { root: string; dir: string; sockets: string; home: string } {
+/** The one seat of another team, `native`, and the team's file: no entity line, so the two teams
+ *  share no entity and no rule pairs them — the grants folder is the only door. */
+function otherFile(root: string, lobby: string): string {
+  return `format: 1
+project: other
+coordinator: native
+operator: native
+session: else
+workspace:
+  mode: shared
+trust:
+  - ${lobby}
+  - ${root}
+seats:
+  - role: reviewer
+    name: native
+    cli: codex
+    vendor: test
+    model: Test
+    version: "1"
+    launch: codex -m test
+delivery_order: [mcp-inbox, typed]
+`;
+}
+
+function world(): { root: string; dir: string; sockets: string; home: string; otherRoot: string; otherDir: string } {
   base = realpathSync(mkdtempSync(join(tmpdir(), 'team-send-grant-')));
   const root = join(base, 'acme');
   const sockets = join(base, 'sockets');
@@ -71,7 +97,22 @@ function world(): { root: string; dir: string; sockets: string; home: string } {
   mkdirSync(lobbyDir(home), { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   writeFileSync(join(root, '.agents', 'team.yaml'), teamFile(root, lobbyDir(home)));
-  return { root, dir: join(root, '.agents'), sockets, home };
+  const otherRoot = join(base, 'other');
+  mkdirSync(join(otherRoot, '.agents'), { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: otherRoot, stdio: 'ignore' });
+  writeFileSync(join(otherRoot, '.agents', 'team.yaml'), otherFile(otherRoot, lobbyDir(home)));
+  const targetId = registerSeat('native', 'reviewer', 'w9:p1', { team: 'other', session: 'else' });
+  upsertTeam(home, 'other', {
+    project: 'other',
+    entity: null,
+    session: 'else',
+    root: otherRoot,
+    lobby: lobbyDir(home),
+    lifecycle: 'running',
+    by: 'test',
+    roster: [{ agent: targetId, seat: 'native', role: 'reviewer', leads: true }],
+  });
+  return { root, dir: join(root, '.agents'), sockets, home, otherRoot, otherDir: join(otherRoot, '.agents') };
 }
 
 function fake(sockets: string): SendHost {
@@ -99,8 +140,14 @@ function scripted(samples: string[]): NativePane {
   };
 }
 
-/** The agent record `up` writes for a launched seat, the identity admission reads. */
-function registerSeat(seat: string, role: string, pane: string): void {
+/** The agent record `up` writes for a launched seat, the identity admission reads. A seat of
+ *  another team names that team and its session; the caller's own team is the default. */
+function registerSeat(
+  seat: string,
+  role: string,
+  pane: string,
+  where: { team?: string; session?: string } = {},
+): string {
   const id = `agt_${Buffer.from(seat).toString('hex').slice(0, 12).padEnd(12, '0')}`;
   const file = join(base, 'home', '.config', 'team', 'agents', `${id}.yaml`);
   mkdirSync(dirname(file), { recursive: true });
@@ -118,9 +165,9 @@ function registerSeat(seat: string, role: string, pane: string): void {
       'launcher: null',
       'launch: "claude"',
       'reach:',
-      '  team: "acme"',
+      `  team: "${where.team ?? 'acme'}"`,
       `  seat: "${seat}"`,
-      '  session: "acme"',
+      `  session: "${where.session ?? 'acme'}"`,
       `  pane: "${pane}"`,
       '  address: null',
       'mcp: []',
@@ -133,6 +180,7 @@ function registerSeat(seat: string, role: string, pane: string): void {
       '',
     ].join('\n'),
   );
+  return id;
 }
 
 function record(dir: string, seat: string, pane: string): void {
@@ -153,35 +201,42 @@ function grantFile(home: string, stem: string, body: string): string {
 const GRANT = (from: string, to: string, expires = '2026-11-16T00:00:00Z'): string =>
   `send:\n  from: ${from}\n  to: ${to}\nexpires: "${expires}"\n`;
 
-/** The helper seat at its recorded pane, sending to the native reviewer. No listed rule reaches
- *  that pair — an implementer to a reviewer is seat to seat — so the grant folder is the only
- *  thing that can admit it. */
+/** The helper seat at its recorded pane, sending to the native reviewer of another team. No
+ *  listed rule reaches that cross-team pair, so the grant folder is the only thing that can
+ *  admit it. */
 function helperSend(root: string, sockets: string): { code: Promise<number>; err: () => string; out: () => string } {
   const io = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
-  const code = runSend(['native', 'a note'], io, fake(sockets));
+  const code = runSend(['native@other', 'a note'], io, fake(sockets));
   return { code, err: () => io.err, out: () => io.out };
 }
 
 describe('team send: the owner-signed grant on the command path', () => {
   test('a pair no rule admits reaches the drop file once the owner\'s record names it', async () => {
-    const { root, dir, sockets, home } = world();
+    const { root, dir, sockets, home, otherDir } = world();
     registerSeat('helper', 'implementer', 'w2:p1');
     record(dir, 'helper', 'w2:p1');
 
     // Without a record: refused, and nothing is written — the refusal names the rules.
     const bare = testIo(root, { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' });
-    expect(await runSend(['native', 'a note'], bare, fake(sockets))).toBe(1);
+    expect(await runSend(['native@other', 'a note'], bare, fake(sockets))).toBe(1);
     expect(bare.err).toContain('team send: refused:');
     expect(bare.err).toContain('no rule admits it');
     expect(existsSync(join(dir, 'send-drops'))).toBe(false);
+    expect(existsSync(join(otherDir, 'send-drops'))).toBe(false);
 
-    grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native'));
+    grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native@other'));
     const { code, err, out } = helperSend(root, sockets);
     expect(await code).toBe(0);
     expect(err()).toBe('');
-    expect(out()).toBe('team acme, session "acme"\nnative: delivered\n');
-    const drops = join(dir, 'send-drops', 'acme', 'native');
-    const path = join(drops, readdirSync(drops)[0] as string);
+    expect(out()).toBe(
+      'team other, session "else"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+    );
+    const drops = join(otherDir, 'send-drops', 'else', 'native');
+    const names = readdirSync(drops).filter(
+      (name) => !name.endsWith('.pending') && !name.endsWith('.fallback.json') && !name.endsWith('.meta.json'),
+    );
+    expect(names).toHaveLength(1);
+    const path = join(drops, names[0] as string);
     expect(recordBody(path)).toBe(
       'from helper — admitted by: an owner-signed grant naming send (helpers-to-reviewer)\n\na note',
     );
@@ -192,9 +247,9 @@ describe('team send: the owner-signed grant on the command path', () => {
     registerSeat('helper', 'implementer', 'w2:p1');
     record(dir, 'helper', 'w2:p1');
     // The record names the lead — a valid seat, but not the caller.
-    grantFile(home, 'lead-to-reviewer', GRANT('lead@acme', 'native'));
+    grantFile(home, 'lead-to-reviewer', GRANT('lead@acme', 'native@other'));
     // And one naming another agent id outright, the forgery a record could attempt.
-    grantFile(home, 'forged', GRANT(`agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')}`, 'native'));
+    grantFile(home, 'forged', GRANT(`agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')}`, 'native@other'));
 
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
@@ -206,10 +261,10 @@ describe('team send: the owner-signed grant on the command path', () => {
     const { root, dir, sockets, home } = world();
     registerSeat('helper', 'implementer', 'w2:p1');
     record(dir, 'helper', 'w2:p1');
-    grantFile(home, 'lapsed', GRANT('helper@acme', 'native', '2026-10-16T11:59:59Z'));
+    grantFile(home, 'lapsed', GRANT('helper@acme', 'native@other', '2026-10-16T11:59:59Z'));
     expect(await helperSend(root, sockets).code).toBe(1);
 
-    grantFile(home, 'lapsed', GRANT('helper@acme', 'native', NOW.toISOString()));
+    grantFile(home, 'lapsed', GRANT('helper@acme', 'native@other', NOW.toISOString()));
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
     expect(err()).toContain('no rule admits it');
@@ -233,7 +288,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     // The record itself is well-formed; only the link stands where the folder is read, and the
     // folder never follows one — the send is refused as if the folder were empty.
     const elsewhere = join(base, 'outside.yaml');
-    writeFileSync(elsewhere, GRANT('helper@acme', 'native'));
+    writeFileSync(elsewhere, GRANT('helper@acme', 'native@other'));
     const folder = join(home, '.config', 'team', 'grants');
     mkdirSync(folder, { recursive: true });
     symlinkSync(elsewhere, join(folder, 'linked.yaml'));
@@ -243,17 +298,14 @@ describe('team send: the owner-signed grant on the command path', () => {
     expect(err()).toContain('no rule admits it');
   });
 
-  test('a caller the store holds no record for is judged as the file\'s seat: its team\'s rules refuse it, grant or no grant', async () => {
+  test('a caller the store holds no record for is judged as the file\'s seat: cross-team stays refused, grant or no grant', async () => {
     const { root, dir, sockets, home } = world();
-    // The placement is recorded (so the caller is placed) but no agent record is registered: the
-    // live file's declared seat is the identity, a seat may not send to a fellow seat, and the
-    // store is never asked for a caller it holds no record of — the naming grant is not consulted.
     record(dir, 'helper', 'w2:p1');
-    grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native'));
+    grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native@other'));
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
-    expect(err()).toContain('may not send to native@');
-    expect(err()).toContain('no rule admits it');
+    expect(err()).toContain('sender helper has no agent record on this machine, so no rule admits the send');
+    expect(err()).toContain('an owner-signed grant naming send');
     expect(existsSync(join(dir, 'send-drops'))).toBe(false);
   });
 });

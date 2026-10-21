@@ -105,7 +105,7 @@ budgets:                      # the owner's: reserve or floor per account, marks
   the lobby the registry recorded for the session and over the defaults, and setting it records
   that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
 - `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
-  the watch's reports and nudges. `leads: true` on a seat is the same lead, spelled on the seat
+  the watch's reports. `leads: true` on a seat is the same lead, spelled on the seat
   the way `coordinator:` names it. `assistant: true` marks a seat as its entity's assistant — the
   one seat `team send` admits to its entity's main coordinator, by its place in the chain and
   never by a role's name. At most one seat of a file carries the mark, and never a seat with
@@ -403,6 +403,18 @@ waits in the drop file. `team send --wait` to such a seat writes the record on t
 nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a file that marks no seat keeps every digest
 it had.
 
+`inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
+authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let it dial — the
+explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the
+seat's own launch to declare `crossSessionInbound: accept`; with no `inbound` word, a seat
+TeamCLI launched is authorized by that launch alone (its generated settings file carries the
+attestation), while a session launched some other way is dialed only when the file says
+`accept`. A frame the receiver's box holds at its dialog is recorded once as
+`held (socket)`, and the walk falls through to the next route with the same message id; the
+socket is not dialed again until the declaration the hold sat under is re-confirmed, by its
+settings file being rewritten. The key is part of the seat's digest, and a file that writes none
+keeps every digest it had; a word other than the three is refused under the seat.
+
 `liveness` is optional on a seat: its own word on the three liveness windows —
 `idle_lead_seconds`, `idle_owner_seconds` and `blind_after_seconds`, each a positive number of
 seconds — and it applies to that seat alone. A seat tightens the windows in force and never
@@ -418,34 +430,52 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
 is an ordinary change, and a file that writes none reads as the default order.
-Omitted, the order is `mcp-inbox`, then `drop`, then `typed`; `native` is never in the default,
-and only a declared word can add it. The typed leg is terminal, so a walk reaches `drop` only
-when it comes before `typed` or `typed` is left out.
+Omitted, the general order is `mcp-inbox`, then `typed`, then `drop`; neither `native` nor
+`headless-resume` is ever in that default. A Codex receiver with no declared order has an
+implicit runtime queue first while its signed `codex-daemon` setting is on, then the typed wake,
+then the inbox and remaining default legs. If that setting is off or unavailable, the typed wake
+leads so an idle Codex inbox is not left unread. A declared `delivery_order` is followed as
+written. Only a declared word can add `native` or `headless-resume` to the general order. A typed leg
+that finds no live agent types nothing and
+hands the send to the leg behind it, recording `typed: <reason>`; a walk reaches `drop` when
+the legs before it did not take the send, or when the order puts `drop` before `typed`.
 
 ```yaml
 delivery_order: [typed]
 ```
 
-- The word is one or more of `native`, `mcp-inbox`, `typed` and `drop`, each at most once, in the
-  order a send tries them. A written key with no legs is `delivery_order needs at least one leg:
-  native, mcp-inbox, typed, drop` — the default order is the absence of the key. A word outside
-  the four is `delivery_order "<word>" must be one of: native, mcp-inbox, typed, drop`; a
+- The word is one or more of `socket`, `native`, `mcp-inbox`, `typed`, `drop` and
+  `headless-resume`, each at most once, in the order a send tries them. A written key with no
+  legs is `delivery_order needs at least one leg:
+  socket, native, mcp-inbox, typed, drop, headless-resume` — the default order is the absence of
+  the key. A word outside
+  the six is `delivery_order "<word>" must be one of: socket, native, mcp-inbox, typed, drop, headless-resume`; a
   repeated one is `delivery_order names "<word>" twice`.
-- The four legs: `native` is the frame on a Claude Code seat's cross-session socket;
+- The six legs: `socket` is this build's own frame on the receiving Claude session's
+  cross-session socket, a signed copy written first, dialed only for a seat whose launch
+  declares `crossSessionInbound: accept` — an `inbound: accept` here authorizes any launch, an
+  explicit `hold` or `refuse` opts out, and with no word a seat TeamCLI launched is authorized
+  by its launch; `native` is
+  the sender's own
+  cross-session SendMessage, recorded by the sender with `--confirm`;
   `mcp-inbox` is the seat's own MCP inbox, which takes the send only while a server serves it —
   a live `.inbox-listener` marker names the seat, session and root, and a walk with none records
   `mcp-inbox: no live inbox listener` and moves on; `typed` is the 0600 drop file and one
   composer trigger line; `drop` is the same 0600 drop file and nothing typed into the pane at
   all — no trigger line and no socket frame, its run ending `sent (unconfirmed)` until the seat's
-  own read writes the receipt. `delivery_order: [drop]` takes the drop leg alone, for a receiver
+  own read writes the receipt; `headless-resume` is the seat's own CLI resumed for one turn
+  without a TUI pane, which no default names and this build cannot take yet, so a walk that
+  reaches it records `headless-resume: this build carries no headless resume runtime` and moves
+  on. `delivery_order: [drop]` takes the drop leg alone, for a receiver
   that watches its own drop folder and for a pane that must never receive typing; a seat the
   file marks `human` walks `drop` alone, whatever its order holds.
 - The receiving seat's chain is read outermost first: the entity, the project's registry record,
   this file's key, then the seat's own key. No entity record carries an order in this build, so
   that level is always silent; the project's word is `delivery_order` beside `teams` in
   `projects.yaml`, written `[typed]` the same way. Each level may drop legs from the order in
-  force or put the legs it keeps in a different order, and may add only `native`, the sender's
-  own frame: a word naming any other leg the order in force does not have is set aside, and the
+  force or put the legs it keeps in a different order, and may add `native` or
+  `headless-resume`, or place `socket` where the order in force lacks it: a word naming any
+  other leg the order in force does not have is set aside, and the
   order in force stands. A word equal to the order in force is no word at all.
 - A seat's word is written on the seat, and is part of the seat's digest — writing or changing
   it changes the digest, like every other field of the seat:
@@ -614,9 +644,10 @@ tempo: urgent
 ```
 
 - `relaxed`, `normal` or `urgent`.
-- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait` and `unsent_after`, and doubles
-  the idle window the liveness chain resolved (`idle_first`). `urgent` halves them, to the
-  nearest second, and never below one second. `normal` leaves them as written.
+- `relaxed` doubles `idle_repeat`, `team_idle`, `nudge_wait`, `unsent_after` and
+  `unread_after`, and doubles the idle window the liveness chain resolved (`idle_first`).
+  `urgent` halves them, to the nearest second, and never below one second. `normal` leaves
+  them as written.
 - The idle window is scaled after the chain checks its word: the tempo is the owner's dial on
   the timing, so `relaxed` lengthens the resolved window without reading as a team loosening a
   liveness threshold, and `urgent` shortens it. `idle_owner` and `blind_after` are never scaled.

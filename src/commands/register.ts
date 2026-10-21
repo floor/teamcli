@@ -30,6 +30,7 @@ import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, pan
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { deliverRules } from '../launch/deliver.ts';
+import { deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -374,6 +375,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // carries `dev_mode: true` — `team check` shows it as a difference — until a run in force
   // writes the seat's record again.
   const warning: string[] = [];
+  // Whether a gate was folded this run: the caller gate below, or the delegate gate's
+  // approval precondition. The record the run writes says so, the same mark `add` keeps.
+  let devFolded = false;
   // The caller gate is the one refusal with a command of its own behind it: nothing in the file
   // changes who may run this; a seat of this team runs it from its own pane, or the owner runs it
   // in this folder from a terminal outside herdr. `up`'s sentence, for this command.
@@ -455,8 +459,22 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           flags: [...args.flags, ...Object.keys(args.values)],
           io,
           home: sources.home,
+          // Dev mode folds the delegation's approval precondition, exactly as it does for
+          // `add` and `remove`: the live file counts as approved, and the passed verdict
+          // carries the warning naming it. The evidence, the placement, the entry, its
+          // command list and the owner's flags still refuse.
+          dev,
+          file: path,
         });
   const delegated = verdict?.kind === 'passed' ? verdict.pane : null;
+  if (verdict?.kind === 'passed' && verdict.devApproval !== undefined) {
+    devFolded = true;
+    const said = plainText(verdict.devApproval);
+    if (json) out.stderr(`${said}\n`);
+    else if (dry) out.stdout(`! ${said}\n`);
+    else out.stderr(`team register: ${said}\n`);
+    if (!dry) logDevMode(dir, 'register', callerLabel(walked), verdict.devApproval, sources.now());
+  }
   // `up`'s own fallback: a delegate refusal that is not the plain "not a listed pane" is final,
   // and a file that omits `grant` does not ask.
   const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
@@ -614,9 +632,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // it left: the seat id (`team seats`' `-`, and the registry agent's missing `seat_handle`)
       // and the process identity (`team doctor`'s "launched before team recorded its process").
       // The same id chain and the same identity read the launch path below writes; a record that
-      // holds both is left byte for byte as it is.
+      // holds both is left byte for byte as it is — unless herdr reports a session id the record
+      // does not hold. That reading is measured now, and the registry write below keeps the same
+      // id, so the record takes it too rather than keeping a reading the registry no longer has.
       const seatId = held.id ?? recorded.retained_seats?.[name]?.id ?? mintSeatId();
-      if (held.id === undefined || held.launched === undefined) {
+      const liveSession = listed?.session;
+      const sessionMoved = liveSession !== undefined && held.agent_session !== liveSession;
+      if (held.id === undefined || held.launched === undefined || sessionMoved) {
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
           if (current.retained_seats?.[name]) delete current.retained_seats[name];
@@ -625,6 +647,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
             ...carried,
             id: seatId,
             ...(carried.launched === undefined ? { launched: identity } : {}),
+            ...(sessionMoved ? { agent_session: liveSession } : {}),
           };
         });
       }
@@ -636,7 +659,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // The record names the caller the run admitted, not the process the walk saw: a seat under
       // a pane override walks as unplaced and is judged as the seat its pane proves it is, and
       // `registered_by` must say the seat.
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId);
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId, listed?.session);
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -646,6 +669,34 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         if (address.note) logLine(dir, 'register', callerLabel(walked), address.note, refreshedAt);
         logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${seatId} — pane ${pane}`, refreshedAt);
         if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
+      }
+      // The general seat brief, through the one boundary every attribution path calls. This run
+      // attributed no seat — the record was already here — so the boundary writes a fresh
+      // lifetime for nobody; it delivers where a live seat's claim is missing or another build's,
+      // and an idempotent delivery leaves a current claim and its verified drop as they are. The
+      // call sits after the state record above, and a dry run never reaches this block.
+      const briefs = deliverBriefForAttribution({
+        dir,
+        root,
+        session,
+        home: sources.home,
+        now: refreshedAt,
+        team,
+        state: readState(dir).sessions[session] ?? emptySession(),
+        attributed: [],
+        broadcast: true,
+      });
+      await walkBriefDeliveries(briefs, { dir, home: sources.home });
+      for (const delivery of briefs.deliveries) {
+        if (delivery.ok) continue;
+        const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+        out.stderr(`team register: ${plainText(said)}\n`);
+        logLine(dir, 'register', callerLabel(walked), said, refreshedAt);
+      }
+      if (briefs.recording !== undefined) {
+        const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+        out.stderr(`team register: ${plainText(said)}\n`);
+        logLine(dir, 'register', callerLabel(walked), said, refreshedAt);
       }
     }
     const ended = `already registered — pane ${plainLine(pane)}`;
@@ -822,7 +873,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
 
   // The judged caller, as above: `registered_by` is the seat the admission found, never the
   // unplaced process the walk saw under a pane override.
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, id);
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, id, listed?.session);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a
@@ -830,6 +881,34 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     // The record it names is the registry's agent, the id the write above returned.
     const refreshed = (sources.refreshAddress ?? refreshAgentAddress)(sources.home, wrote.id, pane, session);
     if (refreshed.note) logLine(dir, 'register', callerLabel(walked), refreshed.note, now);
+  }
+  // The general seat brief, through the one boundary every attribution path calls: this run
+  // attributed the seat, so it gets a fresh delivery lifetime, and the broadcast reaches the rest
+  // of the team. The claim is written here, after the state record above and before any line says
+  // the seat is up; the seat itself reads the drop at its next turn. A delivery that cannot be
+  // written is said and logged, and the registration goes on; `team check` names the seat.
+  const briefs = deliverBriefForAttribution({
+    dir,
+    root,
+    session,
+    home: sources.home,
+    now,
+    team,
+    state: readState(dir).sessions[session] ?? emptySession(),
+    attributed: [name],
+    broadcast: true,
+  });
+  await walkBriefDeliveries(briefs, { dir, home: sources.home });
+  for (const delivery of briefs.deliveries) {
+    if (delivery.ok) continue;
+    const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+    out.stderr(`team register: ${plainText(said)}\n`);
+    logLine(dir, 'register', callerLabel(walked), said, now);
+  }
+  if (briefs.recording !== undefined) {
+    const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+    out.stderr(`team register: ${plainText(said)}\n`);
+    logLine(dir, 'register', callerLabel(walked), said, now);
   }
   // The seat's sidebar, painted from the file the way `up` and `add` paint it: the record above
   // makes the seat reachable; these two writes make its own lines say what the file says.

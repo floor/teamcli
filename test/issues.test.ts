@@ -12,7 +12,7 @@ import { taskPathStaysInside } from '../src/file/sections/tasks.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { emptySession } from '../src/state.ts';
 import type { TaskAdapter } from '../src/tasks/adapter.ts';
-import { newMemory, pass, RING_TEXT } from '../src/watch/pass.ts';
+import { newMemory, pass, ringText } from '../src/watch/pass.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
@@ -176,8 +176,9 @@ describe('team issues', () => {
     expect(await run()).toEqual({ code: 0, out: `${CONTEXT}0 issues\n`, err: '' });
     rmSync(join(root, '.agents', 'tasks.yaml'));
     expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: the task file is not there\n' });
+    // A team that declares no source lists its own local queue: an absent one reads empty.
     project(TEAM);
-    expect(await run()).toEqual({ code: 1, out: '', err: 'team issues: the team file declares no task source\n' });
+    expect(await run()).toEqual({ code: 0, out: `${CONTEXT}0 issues\n`, err: '' });
   });
 
   test('repos and needs mark the record blocked; --json carries both and judges neither', async () => {
@@ -206,7 +207,7 @@ describe('team issues', () => {
     return run().then((listed) => {
       expect(listed.code).toBe(0);
       expect(existsSync(join(home, '.config', 'team-key'))).toBe(false);
-      expect(RING_TEXT).toBe('Team: run team messages');
+      expect(ringText('lead', 'acme')).toBe('Team: run team drops --read --seat lead --session acme');
       const checked = validateTeamFile(TEAM);
       if (!checked.ok) throw new Error('the fixture does not validate');
       const result = pass({

@@ -59,11 +59,13 @@ until the owner trusts the lobby once in that CLI. Then it starts.
 
 Reads the team file (or the one `--file` names), this machine's approval store, the session's state
 (`.agents/team.state.json`, for each seat's stage), herdr (whether the session is up, its agents and
-workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
+workspaces), the doctor's findings, and the machine's load, free memory, free disk, free swap and
+the OS's memory-pressure level.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
 with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
-heartbeat; and, under the session's `briefs`, each seat's general-brief record id and delivery
-time), each seat's general-brief record under `.agents/send-drops/<session>/<seat>/`,
+heartbeat; and, under the session's `briefs`, each seat's general-brief claim — its record id,
+delivery time, incarnation, runtime epoch, sha256, attempt, stage and the ids it superseded), each
+seat's general-brief record under `.agents/send-drops/<session>/<seat>/`,
 `.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
 starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
 workspace and pane for the watch. A real run holds the session mutator lock
@@ -149,11 +151,15 @@ all — the project folder is home for a lead too.
 
 A ready seat whose recorded process is still in its pane, and that pane is still named as the
 seat, is read once while the plan is built. The model is taken the way `status` takes it. When
-it matches the file, or the screen names no model this version can read, the seat is left ready
+it matches the seat's record — the signed registry where there is one, the file otherwise — or
+the screen names no model this version can read, the seat is left ready
 exactly as above — an unreadable model is a note, never a cycle, the same convention as
 `<seat>: its screen doesn't show a model this version knows; not checked` on a launch. When it
 differs, and herdr reports the seat idle or done, `up` closes that workspace without input and
-launches the seat fresh at the file's line. Nothing is typed, the seat is not renamed, and it
+launches the seat again through its own `launch` line, resuming the conversation the pane's own
+agent names where the CLI has a measured resume form — `--resume <id>` for Claude Code, `codex …
+resume <id>` for Codex. A pane that names no session, or one that is not the record's, launches
+without a resume id. Nothing is typed, the seat is not renamed, and it
 keeps its name. A box that holds unsent text does not stop the close. The record stays
 `<seat>: ready`, and the detail says `  its model drifted; closed without input and launched
 again`. A seat herdr reports working, or whose screen shows a running turn, is not closed: the
@@ -176,11 +182,13 @@ without a key and without input, and the seat is launched fresh with its rules. 
 still being listed does not keep that pane. Its record is `<seat>: ready`, and the detail under it
 says `  its pane held no CLI; closed without input and launched again`.
 
-A pane that holds a program, and whose agent session is the one stored at launch, is the seat.
-Nothing is closed and nothing is typed. The record stays `<seat>: ready`, the detail says
+A pane that holds a program, and whose agent session is the one the seat's records bind (the
+signed registry's, otherwise the state's), is the seat. Nothing is closed and nothing is typed
+while it is working. The record stays `<seat>: ready`, the detail says
 `  restored; left as it is`, and the stored process ids become the ones the pane holds now. A
-model on that screen that differs from the file is named on the same detail (`its model drifted;
-left as it is`) and is not closed.
+model on that screen that differs from the seat's record is named on the same detail (`its model
+drifted; left as it is`) and is not closed — unless the seat is idle or done and not a lead, where
+the same close and relaunch as above repairs it, resuming the conversation the pane proves.
 
 A pane that holds a program the record cannot tie to the launch — no stored agent session, a
 different one, or an agent list that could not be read — is left as it is. Nothing is closed. A
@@ -244,21 +252,36 @@ relaunches, and every declared seat the session records no launch of, a human's 
 receive the general seat brief: TeamCLI's built-in default, embedded in the package (`src/launch/general-brief-text.ts`,
 generated from the accepted source by `scripts/brief.ts --write`; `brief:check` pins its bytes, and
 compares it with the source when one is given) so the package never reads a documentation checkout.
-`deliverGeneralBrief` (`src/launch/general-brief.ts`) signs one message record per seat and writes
-it into that seat's drop folder through the signed record writer; the record's id is the brief's
-sha256 read as a lowercase UUID, so a re-run leaves a verified record and its first time as they
-are, and a reworded brief is a new message. A file already at that id that is not this brief signed
-by this checkout's message key — planted, foreign, unsigned, another body — is replaced, and a link,
-a folder or a FIFO there is refused and never followed or replaced. Only a record read back and
-verified (`recordHolds`, `src/send/record.ts`) is recorded as delivered. The session's `briefs` map
-records each delivery — the record's id and its own `at` — in one locked state write, which is what
-[`team check`](check.md) verifies to name a seat the session launched without one. A seat the
+The delivery goes through `deliverBriefForAttribution` (`src/launch/general-brief.ts`), the one
+boundary every attribution path calls. A delivery is a claim and a drop: `writeClaim` records the
+seat's claim — a fresh incarnation and epoch for a seat this run attributes, the existing ones for
+a seat it only broadcasts to, the expected record id, the brief's sha256, attempt 0 and
+`stage: 'claimed'` — under the state lock before any file is written, and `deliverGeneralBrief`
+then signs the record at exactly that id, reads it back and verifies it (`recordHolds`,
+`src/send/record.ts`), and only then finalizes the claim's time and stage in the state. The id is
+derived from the incarnation and the delivered body (`briefIdOf`), so a re-run of one lifetime
+leaves a verified record and its first time as they are, and a reworded brief is a new message
+under the same lifetime. A name held at the expected id by another regular file, a link, a folder
+or a FIFO is never replaced, followed or removed: the delivery is reported and the recovery is
+`team brief rollout --apply`, which posts the record at the claim's next attempt and leaves the
+held name byte for byte. When this build's brief is ahead of any live or human seat's claim,
+every live or human declared seat is targeted, the unattributed ones without a relaunch.
+
+The claim's epoch is the runtime the launch hands the seat's reader: the launch line's
+`team drops --read --epoch <run_id>` (and `team mcp serve --epoch <run_id>`) names it through
+`currentBriefEpochs`, so a process started under an earlier runtime serves nothing until its seat
+is launched again. A launch that ends short of ready leaves its delivered record on disk and its
+seat record not ready; a receipt such a process wrote carries the pre-assigned epoch and
+[`team check`](check.md) reports it as a provisional read (`a read happened before readiness; the
+runtime is not confirmed`), never as a successful read. The session's `briefs` map is what the
+check verifies to name a seat the session launched without a current delivery. A seat the
 state records as already launched, and that this run leaves as it is, gets neither a drop nor a
-state entry. A drop that
+state entry when its claim is current. A drop that
 cannot be written is a line on stderr and in the log for that seat alone, and the launch carries
 on: the record on disk is the message, and the check names the seat. Nothing is typed for the
-brief, and `add`, `restart` and `reload` deliver through the same function, for the one seat each
-acts on — `reload` on its matching path included, so the repair `team check` names is a real one.
+brief, and `add`, `restart`, `reload`, `register` and `rename` deliver through the same boundary,
+for the seat each acts on — `reload` on its matching path included, so the repair `team check`
+names is a real one.
 
 A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file:
 `up` writes the approved rules text to `<project state folder>/rules/<seat>.md` — owner-only,
@@ -594,7 +617,7 @@ A real run stops before the first step, prints one `team up: <reason>` per reaso
 | ``approved before records were signed`` — the record was written by an earlier `team` |
 | the case a refused record names — a signed record that does not verify |
 | a `MISS` finding from [team doctor](../commands/doctor.md) — herdr or a CLI not installed, or a CLI not logged in. A launch that names another model than the file, or that names none, is a warning, so `up` still starts the seat; a seat's own launch line is not this — it leaves that seat out alone, in the lines above. After the idle wait, a screen that shows a different model leaves that seat at launched, not named |
-| `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `free swap is 1.0 GB, below 2.0 GB` |
+| `the load is 1.2 per core, above 1` / `free memory is 8%, below 25%` / `free disk is 3.0 GB, below 10.0 GB` / `memory pressure is critical` — the OS's own level, where the platform reports one; free swap is the watch's reading and never refuses a launch on its own |
 | `herdr doesn't answer` |
 | `session beacon is stopped` — herdr lists it stopped and this team's state does not record it, so `up` does not clear it |
 | `session <session> is stopped and did not clear` — herdr lists it stopped, this team's state records it, and the clear did not happen |

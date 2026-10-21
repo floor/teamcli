@@ -208,6 +208,70 @@ export function copySeat(text: string, fromName: string, toName: string): string
   return replaceLines(ready.text, insertAt, insertAt, copied);
 }
 
+/** The model fields a swap recipe moves a seat between, by their file keys. */
+export type SeatModelFields = {
+  cli: string;
+  vendor: string;
+  model: string;
+  version: string;
+  display: string;
+  launch: string;
+  modelFrom?: 'launcher';
+  effort?: string;
+  account?: string;
+};
+
+/** The parser's own key order, so an inserted field lands where the file would have written it. */
+const MODEL_FIELDS = ['cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'effort'] as const;
+
+/**
+ * Rewrites the model fields of `name`'s entry in place: the five every recipe names, and the
+ * optional ones — a recipe without `account`, `model_from` or `effort` removes that line, so an
+ * account never outlives the vendor it paid. A field the entry does not write is inserted after
+ * the last model field it does, in the parser's order. A counted entry is split first.
+ */
+export function rewriteSeatModel(text: string, name: string, fields: SeatModelFields): string {
+  const ready = prepared(text, name);
+  if (!ready) return text;
+  const lines = body(ready.text, ready.block);
+  const values = new Map<string, string | undefined>([
+    ['cli', fields.cli],
+    ['vendor', fields.vendor],
+    ['account', fields.account],
+    ['model_from', fields.modelFrom],
+    ['model', fields.model],
+    ['version', fields.version],
+    ['display', fields.display],
+    ['launch', fields.launch],
+    ['effort', fields.effort],
+  ]);
+  const nested = lines.find((line) => /^\s+[A-Za-z0-9_-]+:/.test(line));
+  const pad = ' '.repeat(nested ? indent(nested) : indent(lines[0] ?? '') + 2);
+  for (const key of MODEL_FIELDS) {
+    const value = values.get(key);
+    const at = lines.findIndex((line) => new RegExp(`^\\s*(?:-\\s+)?${key}:`).test(line));
+    if (value === undefined) {
+      if (at >= 0) lines.splice(at, 1);
+      continue;
+    }
+    if (at >= 0) {
+      lines[at] = setValue(lines[at] ?? '', value);
+      continue;
+    }
+    let insertAt = -1;
+    for (const earlier of MODEL_FIELDS.slice(0, MODEL_FIELDS.indexOf(key))) {
+      const found = lines.findIndex((line) => new RegExp(`^\\s*(?:-\\s+)?${earlier}:`).test(line));
+      if (found > insertAt) insertAt = found;
+    }
+    if (insertAt < 0) {
+      const named = lines.findIndex((line) => /^\s*(?:-\s+)?name:/.test(line));
+      insertAt = named >= 0 ? named : 0;
+    }
+    lines.splice(insertAt + 1, 0, `${pad}${key}: ${value}`);
+  }
+  return replaceLines(ready.text, ready.block.start, ready.block.end, lines);
+}
+
 /** Leaves `name` in the file with `stopped: true`. A counted entry is split first. */
 export function markStopped(text: string, name: string): string {
   const ready = prepared(text, name);

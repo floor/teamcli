@@ -1129,6 +1129,47 @@ describe('the lobby gate and the files a shipped CLI reads at start', () => {
     expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual(['lead']);
   });
 
+  test('a refused up keeps the state entry a seat already had, the binding and every field with it', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    // The seat was recorded by an earlier run and holds the binding that run launched it with.
+    // This run plans its launch afresh and is refused by the lobby before the line runs: the
+    // record it already had is the record it keeps, field for field.
+    updateState(dir, (st) => {
+      st.sessions['acme'] = {
+        seats: {
+          worker: { stage: 'launched', presence_binding: 'prs_aaaaaaaaaaaa', watcher: 'hook' },
+        },
+        worktrees: {},
+      };
+    });
+
+    const made = world();
+    const run = await runUpCmd([], made, { fs: plantClaudeAt(2) });
+    expect(run.code).toBe(1);
+    expect(made.typed).toEqual([]);
+    const after = readState(dir).sessions['acme']?.seats.worker;
+    expect(after).toEqual({ stage: 'launched', presence_binding: 'prs_aaaaaaaaaaaa', watcher: 'hook' });
+    expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {}).sort()).toEqual(['lead', 'worker']);
+  });
+
+  test('a launched up keeps the binding its install minted for the seat, named in its settings file', async () => {
+    approveYaml(migratedTeamYaml());
+    makeLobby();
+    const made = world();
+    const run = await runUpCmd([], made);
+    expect(run.code).toBe(0);
+    const after = readState(dir).sessions['acme']?.seats.worker;
+    expect(after?.presence_binding).toMatch(/^prs_[0-9a-f]{12}$/);
+    // The settings file the launch line carries names the binding the state records: the
+    // successor the install minted is the one the launched process runs with.
+    const settings = made.runs
+      .map((command) => /--settings ([^ ]+)/.exec(command)?.[1])
+      .filter((path): path is string => path !== undefined);
+    expect(settings.length).toBeGreaterThan(0);
+    expect(settings.some((path) => readFileSync(path, 'utf8').includes(after!.presence_binding!))).toBe(true);
+  });
+
   // Each shipped startup-read path, and the CLIs whose field matches it at any depth, in ship order.
   const plants: readonly [string, string][] = [
     ['CLAUDE.md', 'claude-code, cursor and grok'],
@@ -3072,6 +3113,46 @@ describe('the gate fails closed and the launch uses the path it verified', () =>
     expect(log).toContain('worker: left out: the lobby: it is not the folder the gate read');
     expect(log).not.toContain(lobby);
     expect(Object.keys(readState(dir).sessions['acme']?.seats ?? {})).toEqual(['lead']);
+  });
+
+  test('a launch that ran but never read idle keeps the binding its settings file names', async () => {
+    approveYaml(migratedTeamYaml());
+    const made = world();
+    // The worker's launch line runs, and its pane never reads the idle prompt, so the seat is
+    // left at launched after its line — the settings file the line carried is what its process
+    // loaded, and the successor binding the install recorded is the one the record must keep.
+    const workerPane = (): string => {
+      const at = made.workspaces.findIndex((workspace) => workspace.label === 'worker');
+      return at < 0 ? '' : `w${at + 1}:p1`;
+    };
+    const launch = {
+      ...made.launch,
+      paneText: (_session: string, pane: string) => (pane === workerPane() ? 'nothing this version knows' : IDLE),
+    };
+    // The owner's terminal is handed end-of-input: the idle wait runs out and the seat is left
+    // exactly as it is, so the test never waits at the pause's prompt.
+    const io = testIo(root, OWNER);
+    const sources: UpSources = {
+      sessionRunning: () => made.session === 'running',
+      sessionState: () => made.session,
+      agents: () => [],
+      home,
+      doctor: runDoctorCmdSources(),
+      launch,
+      terminal: () => ({ key: async () => 'eof' as const, drain: () => {} }),
+      now: () => NOW,
+    };
+    const code = await runUp([...FILE], io, sources);
+    expect(code).toBe(1);
+    expect(io.out).toContain('worker: left out: its input ended; left as it is\n');
+    const worker = readState(dir).sessions['acme']?.seats.worker;
+    expect(worker?.stage).toBe('launched');
+    expect(worker?.presence_binding).toMatch(/^prs_[0-9a-f]{12}$/);
+    const line = made.runs.find((command) => command.includes('/worker.json'));
+    expect(line).toBeDefined();
+    const settings = /--settings (\S+)/.exec(line!)?.[1];
+    expect(settings).toBeDefined();
+    expect(readFileSync(settings!, 'utf8')).toContain(worker!.presence_binding!);
   });
 
   test('add creates nothing for the same swap, and leaves the folder it names unchanged: the log holds no folder', async () => {

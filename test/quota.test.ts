@@ -190,6 +190,43 @@ describe('quota reads only the composer\'s own status row', () => {
     ]);
   });
 
+  test('the wide no-chrome row carries its figure, warning tail and all', () => {
+    // Floor supplied this sanitized 8-line frame from a wide-pane build: the
+    // account's warning is right-aligned on the status row itself and no chrome row sits under
+    // it. Read before the fix: null — the row's place expects an ellipsis row below, and the
+    // alignment gap before the warning is no ellipsis.
+    const captured = readFileSync(new URL('./fixtures/codex/0.161.0/idle-wide-warning.txt', import.meta.url), 'utf8');
+    const row = captured.trimEnd().split('\n').at(-1) ?? '';
+    expect(row.endsWith('⚠ 1 warning · f2 to view')).toBe(true);
+    expect(statusRow('codex', captured)).toBe(row);
+    expect(figuresOf(patterns, statusRow('codex', captured))).toEqual([
+      { account: 'openai', window: 'weekly', left: 94, used: 6, resets: null },
+    ]);
+    // The row as the report drew it, with ASCII dots in place of the alignment gap: the gap is
+    // the pane's, the tail's words are the row's own.
+    const dotted = captured.replace(/(% left) +⚠/, '$1 ... ⚠');
+    expect(dotted).not.toBe(captured);
+    expect(statusRow('codex', dotted)).toBe(dotted.trimEnd().split('\n').at(-1) ?? '');
+    expect(figuresOf(patterns, statusRow('codex', dotted))).toEqual([
+      { account: 'openai', window: 'weekly', left: 94, used: 6, resets: null },
+    ]);
+  });
+
+  test('a warning tail does not open the row to text under it', () => {
+    // The tail joins the row only as the pane's last line, or with the captured chrome under
+    // it. Arbitrary text under the row is still not chrome, so the row is still not read.
+    const base = '• Working (2m 10s • esc to interrupt)\n\n  GPT-6.1-Sol ultra · Context 100% left · weekly 94% left';
+    const tail = '      ⚠ 1 warning · f2 to view';
+    const printed = `${base}${tail}\n  (the seat keeps printing)\n`;
+    expect(statusRow('codex', printed)).toBeNull();
+    expect(figuresOf(patterns, statusRow('codex', printed))).toEqual([]);
+    const chrome = `${base}${tail}\n  ← for agents · ? for shortcuts\n`;
+    expect(statusRow('codex', chrome)).toBe(`${base.split('\n').at(-1) ?? ''}${tail}`);
+    expect(figuresOf(patterns, statusRow('codex', chrome))).toEqual([
+      { account: 'openai', window: 'weekly', left: 94, used: 6, resets: null },
+    ]);
+  });
+
   test('a line the seat prints under the status row is not chrome, so nothing reads', () => {
     // The one trailing row must be the captured chrome: status-then-one may not accept arbitrary
     // text under a status-shaped line, or a seat could print a status row and a line below it and

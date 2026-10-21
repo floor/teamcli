@@ -22,8 +22,14 @@ const LAUNCHER_LINE = 'its launch line starts a launcher, and the process in its
 describe('the status page restored-pane sentences', () => {
   test('the pane-again rule stands, verbatim, as the section opens', () => {
     expect(prose(PAGE)).toContain(
-      'A pane that no longer holds the process `team` launched is not by itself a difference: when a program `team` did not launch is in front and the agent session stored at its launch is the session the pane reports now — a herdr restart brings the pane back under a new shell pid — the row is the ordinary one.',
+      'A pane that no longer holds the process `team` launched is not by itself a difference: when a program `team` did not launch is in front and the agent session the seat\'s records bind — its registry record where one exists, the copy stored with its launch where none does — is the session the pane reports now — a herdr restart brings the pane back under a new shell pid — the row is the ordinary one.',
     );
+    // The proof is the registry's own binding, refused rather than overruled: both sentences are
+    // on the page, and the source reads the binding through the one shared helper.
+    expect(prose(PAGE)).toContain(
+      'The two records must agree: a record for another team, seat, CLI or herdr session, or a state naming another session than the record, binds nothing, and a state\'s copy never overrules a record it disagrees with.',
+    );
+    expect(prose(COMPARE)).toContain('continuitySessionOf(continuityIds, declared.name, recorded?.agent_session)');
   });
 
   test('the two states and the model rule stand, verbatim', () => {
@@ -47,8 +53,12 @@ describe('the status page restored-pane sentences', () => {
   test('the repair forms and the no-start rule stand, verbatim', () => {
     const page = prose(PAGE);
     expect(page).toContain(
-      'repaired the same way — `team restart <seat>` for a seat that is not a lead, or, for a lead\'s own seat, a note naming what the pane runs and no difference at all',
+      'repaired the same way — `team restart <seat> --abandon` for a seat that is not a lead while herdr still names that seat on the pane the state recorded, `look at the pane` where it does not, and, for a lead\'s own seat, a note naming what the pane runs and no difference at all',
     );
-    expect(page).toContain('a pane it can say nothing about is repaired by looking at it. Nothing either report says starts a seat.');
+    expect(page).toContain(
+      'The flag is named in the repair, never assumed: a plain restart only leaves that pane as it is, and `--abandon` is what takes the process in front.',
+    );
+    expect(page).toContain('a pane it can say nothing about is repaired by looking at it.');
+    expect(page).toContain('Nothing either report says starts a seat.');
   });
 });

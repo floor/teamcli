@@ -58,7 +58,7 @@ describe('the feed page’s outcome list', () => {
   test('the send page carries the outcomes the feed list belongs to', () => {
     // The README's `team send` row names no outcome; this page is where the full list lives, so
     // the list is held here.
-    const outcomes = '`delivered` (or `delivered (read)`), `sent (unconfirmed)`, `answered`, `held`, `not-submitted`, `timeout`, `unreachable` or `refused`';
+    const outcomes = '`delivered` (or `delivered (read)`), `sent (unconfirmed)`, `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`, `unreachable` or `refused`';
     expect(SEND_PAGE.includes(`one of ${outcomes}`), 'send.md lost the outcome sentence').toBe(true);
   });
 });

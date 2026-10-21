@@ -341,7 +341,8 @@ describe('the project lead reaches the leads of its teams — by admission alone
         'seats crossing teams within one project, where the project allows it; the owner; ' +
         "an orchestrator to another orchestrator; an orchestrator or operator to a seat of its own team; " +
         "an operator to another operator of its own team; " +
-        "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send)\n",
+        "an assistant seat to its entity's coordinator; a seat to its own team's orchestrator; an owner-signed grant naming send; " +
+        "a seat to a declared seat of its own team)\n",
     );
     expect(code).toBe(1);
   });

@@ -141,7 +141,7 @@
     "codex": {
       "idle": {
         "real": 6,
-        "constructed": 2,
+        "constructed": 5,
         "undocumented": 0
       },
       "working": {
@@ -151,7 +151,7 @@
       },
       "unsent": {
         "real": 16,
-        "constructed": 0,
+        "constructed": 1,
         "undocumented": 0
       },
       "permission": {
@@ -191,7 +191,7 @@
       },
       "unknown": {
         "real": 10,
-        "constructed": 2,
+        "constructed": 4,
         "undocumented": 0
       }
     },
@@ -1345,16 +1345,52 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/idle-wide-warning.txt",
+      "cli": "codex",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/idle.txt",
       "cli": "codex",
       "kind": "idle",
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/near-context-used-follower.txt",
+      "cli": "codex",
+      "kind": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/near-context-used-nostatus.txt",
+      "cli": "codex",
+      "kind": "unknown",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/near-context-used-typed.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "constructed"
+    },
+    {
       "file": "codex/0.161.0/permission.txt",
       "cli": "codex",
       "kind": "permission",
       "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/ready-context-used-bare.txt",
+      "cli": "codex",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "codex/0.161.0/ready-context-used.txt",
+      "cli": "codex",
+      "kind": "idle",
+      "provenance": "constructed"
     },
     {
       "file": "codex/0.161.0/trust.txt",

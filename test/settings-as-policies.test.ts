@@ -52,14 +52,14 @@ describe('the settings are catalogue policies', () => {
     }
   });
 
-  test('the delivery order ships mcp-inbox, then drop, then typed', () => {
+  test('the delivery order ships mcp-inbox, then typed, then drop', () => {
     // The literal the release ships. The catalogue default and the setting's fallback are both
     // this value, so comparing them to each other would pin nothing.
-    expect(DELIVERY_ORDER.fallback).toEqual(['mcp-inbox', 'drop', 'typed']);
+    expect(DELIVERY_ORDER.fallback).toEqual(['mcp-inbox', 'typed', 'drop']);
   });
 
   test('the delivery legs are the full vocabulary, wider than the default order', () => {
-    expect(DELIVERY_LEGS).toEqual(['native', 'mcp-inbox', 'typed', 'drop']);
+    expect(DELIVERY_LEGS).toEqual(['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume']);
     for (const leg of DELIVERY_ORDER.fallback) expect(DELIVERY_LEGS).toContain(leg);
   });
 

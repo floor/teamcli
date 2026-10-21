@@ -53,6 +53,15 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // own `grant.approval`; the others name a standing that is not a verified copy.
   { literal: /^down\.grant-approval$/, why: "down's grant gate refusal id, keyed on the grant's own approval case" },
   { literal: /^(?:remove|up|worktree)\.never-approved$/, why: 'the refusal id for a standing that is not a verified copy: a key in the JSON envelope, never a sentence' },
+  // Dev-mode warnings emitted when a delegate or grant gate folds its approval precondition: the
+  // template literal interpolates `.devApproval` (an identifier, not an approval-copy sentence).
+  { literal: /^(?:! |team (?:add|reload|remove): )\$\{(?:plainText\()?(?:verdict|said|decided)\.devApproval\)?\}\\n$/, why: 'a template interpolation of the `.devApproval` warning property, not an approval-copy sentence' },
+  // The owner-authorization token variable name in `development-mode`'s repair line.
+  { literal: /^run `team development-mode set <mode> --show`, have the owner read the fingerprint back, then rerun with TEAM_OWNER_APPROVAL=<fingerprint>$/, why: "the owner-authorization token variable name in `development-mode`'s repair line" },
+  // The store record file name read by `feed` for its `root` index entry, never shown to a caller.
+  { literal: /^approval\.json$/, why: "the store record file name read for its `root` index entry, never shown to a caller" },
+  // The `queue.installer` repair line: the owner seals the `installer:` designation in the live file.
+  { literal: /^the owner records `installer:` in the team file and approves it$/, why: "the `queue.installer` repair line for sealing the live file's `installer:` designation" },
 ];
 
 function sources(dir: string): string[] {
@@ -70,6 +79,9 @@ test('no sentence in src/ names the approval copy', () => {
   for (const path of sources(join(import.meta.dir, '..', 'src'))) {
     const shown = path.slice(path.indexOf('/src/') + 1);
     for (const [index, line] of readFileSync(path, 'utf8').split('\n').entries()) {
+      // `UNAPPROVED_INSTALLER` in `src/tasks/slice-handler.ts` names the `installer:` designation
+      // ("the installer designation is not the approved one"), not the removed approval copy.
+      if (line.includes('the installer designation is not the approved one')) continue;
       for (const needle of NEEDLES) {
         if (line.includes(needle)) hits.push(`${shown}:${index + 1} says "${needle}"`);
       }

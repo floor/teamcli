@@ -416,6 +416,11 @@
           "type": "string",
           "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$"
         },
+        "unread_after": {
+          "type": "string",
+          "pattern": "^[0-9]+(?:\\.[0-9]+)?(s|m|h)$",
+          "description": "how long a message may go without the seat's read receipt before the watch retries it once; the report to the sender and the lead follows at twice this window"
+        },
         "nudge": {
           "type": "string",
           "minLength": 1,
@@ -452,7 +457,7 @@
           "additionalProperties": {
             "const": "off"
           },
-          "$comment": "the five that always run (attention, missing, model-drift, prompt-escalation, approval) are refused here too"
+          "$comment": "the six that always run (attention, missing, model-drift, model-rule, prompt-escalation, approval) are refused here too"
         }
       }
     },
@@ -537,10 +542,12 @@
             "uniqueItems": true,
             "items": {
               "enum": [
+                "socket",
                 "native",
                 "mcp-inbox",
                 "typed",
-                "drop"
+                "drop",
+                "headless-resume"
               ]
             },
             "$comment": "the legs a send to this seat may walk, in order; it drops or reorders the order in force and may add only native, the sender's own frame"
@@ -599,6 +606,14 @@
           "human": {
             "type": "boolean",
             "$comment": "the pane is a person's: a send walks the drop leg alone, every other leg skipped, and the watch types no retry or nudge there"
+          },
+          "inbound": {
+            "enum": [
+              "accept",
+              "hold",
+              "refuse"
+            ],
+            "$comment": "the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch's crossSessionInbound accept, and any other launch still needs accept here"
           },
           "count": {
             "type": "integer",
@@ -663,13 +678,15 @@
       "uniqueItems": true,
       "items": {
         "enum": [
+          "socket",
           "native",
           "mcp-inbox",
           "typed",
-          "drop"
+          "drop",
+          "headless-resume"
         ]
       },
-      "$comment": "the legs a send may walk: native, mcp-inbox, typed, drop; the order in force when nothing declares one is mcp-inbox, drop, typed, and a level may drop or reorder those legs and may add only native"
+      "$comment": "the legs a send may walk: socket, native, mcp-inbox, typed, drop, headless-resume; the order in force when nothing declares one is mcp-inbox, typed, drop, and a level may drop or reorder those legs and may add native, headless-resume, or place socket anywhere"
     },
     "sender_name": {
       "enum": [
@@ -906,6 +923,11 @@
         "normal",
         "urgent"
       ]
+    },
+    "installer": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "the seat that records green-slice installs beside the owner: must name a declared seat, without count, and neither parked nor stopped. omitted means none, and only the owner records an install"
     },
     "grant": {
       "type": "object",

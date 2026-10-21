@@ -32,6 +32,7 @@ export type HistoryOutcome =
   | 'delivered (read)'
   | 'sent (unconfirmed)'
   | 'held'
+  | 'queued (receiver busy)'
   | 'not-submitted'
   | 'unreachable'
   | 'answered'
@@ -94,9 +95,9 @@ export type HistoryEntry = {
    *  order they were tried; absent when the walk had none to pass on — the leg that carried the
    *  send was reached without a failure behind it, or there was no walk at all. */
   failed?: string[];
-  /** One short qualifier the outcome word cannot carry alone: `taken, not yet confirmed` on a
-   *  delivered send whose box cleared before herdr's status or the transcript showed the seat act,
-   *  and `taken but never acted on` when the watch's later look found no sign either. */
+  /** One short qualifier the outcome word cannot carry alone: `trigger taken, no read receipt yet`
+   *  on a typed send whose trigger left the composer, and `taken but never acted on` when the
+   *  watch's later look found no sign either. */
   note?: string;
   /** The thread the message belongs to: the first message's id, on every line a send writes. */
   thread?: string;

@@ -300,7 +300,7 @@ The machine's own swap is read for one case only: the check in force — the 2GB
 file's own `swap_free_min` — asks for more free swap than this reading says the machine has in
 total. One warning names both figures and the repair, the key to write and the approval a change
 needs, and it speaks of the reading it was made from: on macOS the total moves with pressure, so a
-later `up` can meet a different one:
+later reading can show a different one:
 
 ```console machine="small-swap"
 $ team doctor ; echo "exit $?"
@@ -314,7 +314,7 @@ ok    claude 2.1.288
 ok    claude-code: logged in
 ok    the watch is running
 ok    the lobby ~/.config/team/lobby: will be created at the first launch
-warn  the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so `team up` would refuse now; set `machine.swap_free_min` to a figure this machine can keep
+warn  the machine check asks for 2.0 GB free swap; at this reading the machine has 1.0 GB in total, so this reading cannot meet it; set `machine.swap_free_min` to a figure this machine can keep
 team doctor: nothing missing, 3 warnings
 what 0.5.0 must not pretend:
   The checks in 0.5.0 — including the owner check — stop mistakes by agents in herdr panes, not a process running as the same OS user that sets out to get around those checks.
@@ -326,13 +326,12 @@ exit 0
 ```
 
 A check that merely fails right now — the machine has the swap in total, and not enough of it
-free at this moment — prints nothing of this: `up`'s refusal names it when the owner runs it,
-and the watch's `swap-free` check reports it as its own finding. The line above is only for the
-case the file can fix, and it describes the reading it came from: on macOS the total moves with
-pressure, so it promises nothing about a later `up`. The total is read on macOS from
-`sysctl -n vm.swapusage`, and on Linux from `/proc/meminfo`'s `SwapTotal`; a machine with no swap
-at all is not this case — `up` does not refuse a swap check it cannot read, and nothing here
-guesses one.
+free at this moment — prints nothing of this: the watch's `swap-free` check reports it as its own
+finding. The line above is only for the case the file can fix, and it describes the reading it
+came from: on macOS the total moves with pressure, so it promises nothing about a later reading.
+The total is read on macOS from `sysctl -n vm.swapusage`, and on Linux from `/proc/meminfo`'s
+`SwapTotal`; a machine with no swap at all is not this case — nothing here guesses one, and free
+swap does not refuse a launch.
 
 A CLI outside the range this version was tested with keeps its warning and says what that means —
 herdr's own version line says only where it sits, for the same reason:
