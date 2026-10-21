@@ -324,8 +324,8 @@ describe('the authority under the hosted watch', () => {
       (state.sessions.crew ??= emptySession()).watchdog = { file: other };
     });
     const host = machine(build, clock);
-    // The run drains on its own before any beat. The host counts that exit as a fault but holds
-    // the restart for a beat that renews authority, which this binding never does.
+    // The run drains on its own; no beat has occurred, so the host has counted the fault and its
+    // restart still waits for the next beat.
     await waitUntil(() => host.state().phase === 'failed');
     expect(host.state().failures).toBe(1);
     expect(pushes.length).toBe(0);
@@ -381,8 +381,8 @@ describe('the authority under the hosted watch', () => {
       },
     });
     const host = machine(build, clock);
-    // The run drains on its own at the refused effect; the host counts the exit and waits for a
-    // beat that would renew authority before starting anything new.
+    // The run drains on its own at the refused effect; no beat has occurred, so the host has
+    // counted the fault and its restart still waits for the next beat.
     await waitUntil(() => host.state().phase === 'failed');
     expect(host.state().failures).toBe(1);
     expect(pushes.length).toBe(0);
