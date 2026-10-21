@@ -503,8 +503,19 @@ return.
 `held` is nothing sent: the message is safely on disk — or, on the socket's path, in the frame the
 receiving session's held-message dialog keeps for a person to let through — the run exits 1, and
 the reason it prints says what held it. A socket write the dialog keeps is `held (socket)`, and
-nothing is typed into the blocked box while the dialog stands. Unsent text does not hold the
-delivery. When the CLI's profile carries a measured `input` surface — clear keys, an optional
+nothing is typed into the blocked box while the dialog stands.
+
+One hold writes nothing at all. When the recipient has a signed registry record and its pane
+names a model or version other than the record's, the run is `held` before the body is read and
+before any leg is walked, with `model drift: <recorded> vs <running>`: nothing is written on
+either side — no signed record, marker, drop or draft — and nothing is typed or dialed; the hold
+itself is one `team.log` line. No watch retry owns it, because there is no drop to retry. The way
+out is to repair the seat: `team restart <seat>` relaunches it through the launch line its
+registry record keeps, under the restart's own rules (a seat mid-turn is not interrupted, and a
+lead's seat is restarted by a lead or the owner), and the sender sends again.
+
+Unsent text does not hold the delivery. When the CLI's profile carries a measured `input`
+surface — clear keys, an optional
 mid-turn key, bracketed paste — the text is copied beside the drop file (`<drop>.draft`), the box
 is cleared with the profile's keys (the mid-turn key while the seat is working, never the
 interrupt key), the trigger is typed and pressed Enter, and the text is pasted back exactly, its
