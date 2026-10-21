@@ -70,6 +70,7 @@ import {
 } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
+import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
@@ -340,6 +341,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // reported as a note rather than silently replaced.
   const watchPace = watchPaceOf({ team, root, home: sources.home, now: sources.now(), standing });
   const inForce = watchInForceWithPace(standing, team, watchPace);
+  // The registry's own continuity per declared seat, read once: the check's process gate and
+  // `compare()` must decide a restored pane the same way `up` and `status` do.
+  const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
+    home: sources.home,
+    root,
+    herdrSession: session,
+    seats: team.seats,
+    states: state.seats,
+  });
   const comparison = compare(
     team,
     session,
@@ -349,6 +359,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     inForce,
     undefined,
     dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()),
+    undefined,
+    continuityIds,
   );
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
@@ -368,7 +380,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     quiet,
   );
   const provenance = devModeDifferences(team, root, sources.home, quiet);
-  const attention = attentionDifferences(team, state, live, sources.now());
+  const attention = attentionDifferences(team, state, live, sources.now(), continuityIds);
   const briefs = generalBriefDifferences(team, state, root, sources.home, session);
   comparison.differences = orderAndAnnotateDifferences([
     // A seat the check names itself in its own stuck-prompt line is not named again in
@@ -1080,6 +1092,7 @@ function attentionDifferences(
   state: SessionState,
   live: Live,
   now: Date,
+  continuityIds?: ReadonlyMap<string, string | null>,
 ): { differences: Difference[]; named: Set<string> } {
   const differences: Difference[] = [];
   const named = new Set<string>();
@@ -1110,7 +1123,7 @@ function attentionDifferences(
     // and its scrollback is not read for a prompt — a dialog the CLI drew before it exited is not
     // a seat held at one. A record with no identity whose pane holds a bare shell reads no prompt
     // either.
-    if (!paneShowsSeat(read.recorded, agent, live)) continue;
+    if (!paneShowsSeat(read.recorded, agent, live, continuitySessionOf(continuityIds, read.name, read.recorded?.agent_session))) continue;
     const text = live.screens[pane];
     const screen = readScreen(read.cli, text);
     // A launch's own waiting record already names the seat and the dialog it stopped at, with

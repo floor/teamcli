@@ -103,6 +103,67 @@ export function recordedSeatContinuity(input: {
   return { kind: 'bound', recorded: recordedOf(read) };
 }
 
+/**
+ * The id a pane may be compared with, for continuity: the registry's bound id when the record is
+ * this seat's own, the state's copy when there is no record at all, and nothing when a record
+ * exists but is not this seat's — a record naming another session than the state does, another
+ * herdr session, another CLI, or an orphaned one is a doubt, and the state's copy is not allowed
+ * to overrule it. `null` is a refusal: the caller treats the pane as not tied to the launch.
+ */
+export function continuityIdOf(read: RecordedSeatSessionRead, state: SeatState | undefined): string | null {
+  if (read.kind === 'bound') return read.recorded.sessionId;
+  if (read.kind === 'refused') return null;
+  const own = state?.agent_session;
+  return own === undefined || own === '' ? null : own;
+}
+
+/** One continuity id per declared seat, read the way `up`, `status` and the watch read a pane:
+ *  the registry's binding where it exists, the state's own copy where no record does. */
+export function continuityIdOfSeat(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seat: { name: string; cli: string };
+  state: SeatState | undefined;
+}): string | null {
+  return continuityIdOf(recordedSeatContinuity(input), input.state);
+}
+
+/** {@link continuityIdOfSeat} for every declared seat of one session's state. */
+export function continuityIdsOf(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seats: readonly { name: string; cli: string }[];
+  states: Readonly<Record<string, SeatState | undefined>>;
+}): Map<string, string | null> {
+  const ids = new Map<string, string | null>();
+  for (const seat of input.seats) {
+    ids.set(seat.name, continuityIdOfSeat({
+      home: input.home,
+      root: input.root,
+      herdrSession: input.herdrSession,
+      seat,
+      state: input.states[seat.name],
+    }));
+  }
+  return ids;
+}
+
+/** The session one seat's pane may be compared with: the map's own verdict when the seat is in
+ *  it (`null`: the records refuse), else the caller's fallback — a temporary seat's state copy,
+ *  or a run that read no registry. */
+export function continuitySessionOf(
+  ids: ReadonlyMap<string, string | null> | undefined,
+  seat: string,
+  fallback: string | undefined,
+): string | undefined {
+  if (ids === undefined) return fallback;
+  const id = ids.get(seat);
+  if (id === null) return undefined;
+  return id ?? fallback;
+}
+
 /** The binding both readers agree on, with the state's own copy still undecided. */
 type SeatBindingRead =
   | { kind: 'bound'; agent: Agent; id: string; stateAgrees: boolean }

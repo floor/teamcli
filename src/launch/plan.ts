@@ -264,7 +264,7 @@ export interface UpSeat {
    */
   restored?: { launched: LaunchedIdentity; session: string; detail: string };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
-  registry?: { launch: string; model: string; version: string; sessionId: string };
+  registry?: { launch: string; model: string; version: string; sessionId?: string };
   /**
    * The pane holds a program this record cannot tie to the launch. Nothing is closed and
    * the stored process is left as it is.

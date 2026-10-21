@@ -78,7 +78,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
-import { recordedSeatSession } from '../registry/resume.ts';
+import { continuityIdOf, continuityIdsOf, recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -423,9 +423,18 @@ function seatPlan(
   const binding = recorded
     ? recordedSeatSession({ home, root, herdrSession: session, seat, state: recorded })
     : { kind: 'none' as const, why: 'no state record' };
-  const registry = binding.kind === 'bound' && binding.recorded.launch && binding.recorded.model && binding.recorded.version
-    ? binding.recorded as typeof binding.recorded & { launch: string; model: string; version: string }
+  // The registry's own binding, for recognition and for the recipe a relaunch runs: a state
+  // copy that names no session does not withhold it, so a restored seat a CLI without a resume
+  // flag left behind is still proven by the record. The resume id above stays the one the
+  // state agrees with; this read never resumes by itself.
+  const bound = recorded
+    ? recordedSeatContinuity({ home, root, herdrSession: session, seat, state: recorded })
+    : { kind: 'none' as const, why: 'no state record' };
+  const registry = bound.kind === 'bound' && bound.recorded.launch && bound.recorded.model && bound.recorded.version
+    ? bound.recorded as typeof bound.recorded & { launch: string; model: string; version: string }
     : undefined;
+  const continuitySession = continuityIdOf(bound, recorded);
+  const resumeSession = binding.kind === 'bound' ? binding.recorded.sessionId : undefined;
   const planned: UpSeat = {
     name: seat.name,
     cli: seat.cli,
@@ -435,7 +444,9 @@ function seatPlan(
     displayAgent: displayAgent(seat),
     model: registry?.model ?? seat.model,
     version: registry?.version ?? seat.version,
-    ...(registry ? { registry: { launch: registry.launch, model: registry.model, version: registry.version, sessionId: registry.sessionId } } : {}),
+    // `sessionId` is the resume id, and only the state-agreeing reader offers one: a restored
+    // seat's record can prove the pane without the launch line resuming anything.
+    ...(registry ? { registry: { launch: registry.launch, model: registry.model, version: registry.version, ...(resumeSession === undefined ? {} : { sessionId: resumeSession }) } } : {}),
     ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
@@ -510,12 +521,13 @@ function seatPlan(
   const continuity = replacedSeat(verdict, {
     asked,
     namedOnPane: Boolean(onRecordedPane),
-    recordedSession: registry?.sessionId,
+    recordedSession: continuitySession ?? undefined,
     liveSession: onRecordedPane?.session,
   });
-  // A program is in front and its agent session is the one stored at launch. The pids changed;
+  const restoredSession = continuity === 'restored' ? continuitySession : null;
+  // A program is in front and its agent session is the one the records bind. The pids changed;
   // the seat did not. Nothing is closed, and the record takes the pids the pane holds now.
-  if (continuity === 'restored' && recorded.agent_session && recorded.pane && recorded.workspace && recorded.launched) {
+  if (restoredSession !== null && recorded.pane && recorded.workspace && recorded.launched) {
     const next = launchedIdentity(processes[seat.name] ?? null);
     if (next) {
       const drift = registry
@@ -539,7 +551,7 @@ function seatPlan(
         stage: 'ready',
         restored: {
           launched: next,
-          session: recorded.agent_session,
+          session: restoredSession,
           detail: restoredDetail({ ...seat, model: registry?.model ?? seat.model, version: registry?.version ?? seat.version }, recorded, screenOf),
         },
       };
@@ -1988,7 +2000,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       polled: dialogsTrustInForce(sources.home, root, now()) && input.classification === 'trust',
     });
 
-    const report = await executePlan(plan, session, host, { concurrency });
+    // The continuity the plan read, in one map for the close path: execute re-reads the pane and
+    // must decide the same way this plan did, including a seat whose state copy names no session.
+    const continuityIds = continuityIdsOf({
+      home: sources.home,
+      root,
+      herdrSession: session,
+      seats: team.seats,
+      states: recorded?.seats ?? {},
+    });
+    const report = await executePlan(plan, session, host, { concurrency, continuityIds });
     // The reach projection, after the plan's effects and outside the lobby's identity rechecks
     // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
     // the bridge and the seat-shuttle daemon read them. A skip — no lobby, a lobby not 0700,

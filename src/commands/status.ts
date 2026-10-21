@@ -56,6 +56,7 @@ import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { findAgent } from '../registry/agents.ts';
+import { continuityIdsOf } from '../registry/resume.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
@@ -367,6 +368,15 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // one that has lapsed. Read before the comparison below, whose held seats it marks.
   const hold = liveHold(whole, now);
   const budgets = budgetTable(budgetsInForceOf(standing, team), recall(whole.budgets), now.getTime());
+  // The registry's binding per declared seat, read once for the comparison: a restored process
+  // is proven by the record where one exists, and by the state's own copy where none does.
+  const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
+    home: sources.home,
+    root,
+    herdrSession: session,
+    seats: team.seats,
+    states: state.seats,
+  });
   const comparison = compare(
     team, session, state, live, now,
     watchInForceOf(standing, team),
@@ -378,6 +388,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
       return agent ? [[seat.name, agent.signing] as const] : [];
     })),
+    continuityIds,
   );
   const all = args.flags.has('all');
   // One probe of the machine daemon for the whole run: the line below, the document's `daemon`

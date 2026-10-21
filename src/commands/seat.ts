@@ -25,6 +25,7 @@ import {
 import { hasJsonFlag, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import { supportsCliHook } from '../profiles/profile.ts';
 import { mayReadTeam } from '../read-gate.ts';
+import { continuityIdsOf } from '../registry/resume.ts';
 import { runRemove } from './remove.ts';
 import { runRename } from './rename.ts';
 import { runRestart } from './restart.ts';
@@ -200,7 +201,14 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
     // exit: seat.herdr
     return 2;
   }
-  const comparison = compare(team, session, state, live, now, watchInForceOf(sources.standing(root), team));
+  const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
+    home: sources.home,
+    root,
+    herdrSession: session,
+    seats: team.seats,
+    states: state.seats,
+  });
+  const comparison = compare(team, session, state, live, now, watchInForceOf(sources.standing(root), team), undefined, false, undefined, continuityIds);
   // One fresh daemon health probe for this display: its route verdict is the only thing that
   // makes a projection live. Default closed, never a persisted status word.
   const health = sources.daemonHealth === undefined || sources.home === undefined
