@@ -50,7 +50,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
-import { executePlan } from '../launch/execute.ts';
+import { executePlan, type Report } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
@@ -84,7 +84,7 @@ import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
+import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -904,7 +904,26 @@ function uniqueRefusals(refusals: readonly UpRefusal[]): UpRefusal[] {
   });
 }
 
-export async function runUp(argv: string[], io: Io, sources: UpSources): Promise<number> {
+/** The daemon's own entry into this run: the restore sweep calls `runUp` with the run lock
+ *  already held and the caller it is judged as. No CLI dispatch passes these. */
+export type UpInternal = {
+  /** Who the run is judged as. The daemon sweeps a route as its owner; without this the
+   *  daemon's own process places as no caller and every admission path would refuse it. */
+  caller?: Caller;
+  /** The caller holds the session's run lock and releases it; this run neither takes nor
+   *  releases it. */
+  lockHeld?: boolean;
+  /** The run's report, before it returns. The restore sweep folds it into its summary. */
+  onReport?(report: Report): void;
+  /** The host is closing: stop between seat steps, leaving no seat half-made. */
+  isClosing?(): boolean;
+  /** No terminal is reading this run: a dialog found at a seat is recorded as waiting for the
+   *  owner, neither prompted nor closed. The daemon's restore sweep runs detached and passes
+   *  this. */
+  nonInteractive?: boolean;
+};
+
+export async function runUp(argv: string[], io: Io, sources: UpSources, internal?: UpInternal): Promise<number> {
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(io);
@@ -945,7 +964,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // own words. This folder's own file, with no `--session`, continues below. The path comparison
   // is the resolved spelling: a link, or a differently-cased spelling of this folder's own team
   // file, is not that file, and is refused here before it is opened.
-  const walked = walkCaller(io);
+  const walked = internal?.caller ?? walkCaller(io);
   // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
   // or the token. The refusal is one sentence, on the dry run and the real run.
   const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
@@ -1092,7 +1111,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     rule = verdictOf(judged.caller, standingOf(gateDir, judged.session, judged.caller));
   }
   const ordinaryAdmitted = mayLaunchSeats(walked) || rule?.kind === 'ok';
-  const caller = judged?.caller ?? callerOf(io);
+  const caller = internal?.caller ?? judged?.caller ?? callerOf(io);
   // The two fallbacks are used only where the map refused. A gate refusal replaces the ordinary
   // caller refusal; a passed one makes the run the gate's, and its audit line is written where
   // the run has effects — never beside the map's own admission.
@@ -1720,8 +1739,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // take the same `.run` before their own first effect (`launch/run-lock.ts`). A dry run and a
   // refused run returned above and never take it, and a lock left by a killed run is taken over
   // by the next one (`launch/seat-lock.ts`).
-  const runLock = acquireRunLock(dir, session);
-  if ('held' in runLock) {
+  // A caller that already holds the session's run lock (the daemon's restore sweep) passed it
+  // in: this run neither takes nor releases it, and the sweep's own release is the one that
+  // ends the hold.
+  const runLock = internal?.lockHeld === true ? null : acquireRunLock(dir, session);
+  if (runLock !== null && 'held' in runLock) {
     refuse(io, json, 'up', {
       id: 'up.run-lock',
       message: plainText(runLockText(runLock.held, session, dir)),
@@ -1880,6 +1902,27 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       const promise = rawSleep(ms).finally(() => sleepAt.delete(key));
       sleepAt.set(key, promise);
       return promise;
+    };
+    /** Writes a seat's waiting record, with the process identity read in the same write. The
+     *  pause's own `[s]` and a run with no terminal (the daemon's restore sweep, a `keep` dialog)
+     *  both leave a seat this way: the next `up` reads it as a waiting seat, not an idle pane. */
+    const writeWaiting = (name: string, waiting: WaitingRecord, pane: string, workspace?: string): void => {
+      updateState(dir, (file) => {
+        const current = (file.sessions[session] ??= emptySession());
+        const prior = current.seats[name] ?? { stage: 'launched' as const };
+        const retained = current.retained_seats?.[name];
+        if (current.retained_seats?.[name]) delete current.retained_seats[name];
+        const id = prior.id ?? retained?.id ?? mintSeatId();
+        const identity = launchedIdentity(launch.processInfo?.(session, pane) ?? null);
+        current.seats[name] = {
+          ...prior,
+          id,
+          waiting,
+          pane,
+          ...(workspace ? { workspace } : {}),
+          ...(identity ? { launched: identity } : {}),
+        };
+      });
     };
     const host: Host = {
       startServer: launch.startServer,
@@ -2050,6 +2093,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           noteLaunchedPane(sources.home, loaded.path, patch.pane, session);
         }
       },
+      // A seat found at a dialog by a run with no terminal (`keep`): the wait is recorded and
+      // the seat left for a lead to finish, exactly as `team restart` and `team add` leave one.
+      recordWaiting(name, waiting, pane, workspace) {
+        writeWaiting(name, waiting, pane, workspace);
+      },
       // The session registry records the launch itself, with the id TeamCLI set where the CLI
       // takes one; a registry that cannot be written is a note in the run's log, never a refusal.
       sessionStarted(name, started) {
@@ -2140,14 +2188,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
        * reads it — the workspace is closed without input and the record says so (§2). A delegated
        * run takes that no-terminal path whatever its stdin: it never prompts, never focuses a pane,
        * never sends a key or a text, and its idle wait's timeout is a dialog like any other stop —
-       * closed without input, not left at launched.
+       * closed without input, not left at launched. A run the daemon drives (the restore sweep)
+       * has no terminal to close a workspace for and no owner to read the seat: it records the
+       * wait and leaves the seat out, exactly as `team restart` and `team add` do.
        */
       dialog:
-        delegated !== null
-          ? { mode: 'close-no-terminal', timeoutIsDialog: true }
-          : caller.kind === 'owner'
-            ? { mode: 'prompt', run: (input: PauseInput) => runPause(input, pauseHostFor(input)) }
-            : { mode: 'close-no-terminal' },
+        internal?.nonInteractive === true
+          ? { mode: 'keep' }
+          : delegated !== null
+            ? { mode: 'close-no-terminal', timeoutIsDialog: true }
+            : caller.kind === 'owner'
+              ? { mode: 'prompt', run: (input: PauseInput) => runPause(input, pauseHostFor(input)) }
+              : { mode: 'close-no-terminal' },
       clearWaiting(name) {
         updateState(dir, (file) => {
           const seatState = file.sessions[session]?.seats[name];
@@ -2240,7 +2292,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       seats: team.seats,
       states: recorded?.seats ?? {},
     });
-    const report = await executePlan(plan, session, host, { concurrency, continuityIds, restoreSeats: seats });
+    const report = await executePlan(plan, session, host, {
+      concurrency,
+      continuityIds,
+      restoreSeats: seats,
+      ...(internal?.isClosing ? { isClosing: internal.isClosing } : {}),
+    });
+    internal?.onReport?.(report);
     // A fresh install minted a binding for every seat this run planned to launch. A seat whose
     // line ran keeps the successor `sessionStarted` wrote back. A seat whose line never ran —
     // refused before it, or its step left out — never loaded the settings file that names the
@@ -2338,6 +2396,6 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // exit: up.watch
     return failed ? 1 : 0;
   } finally {
-    runLock.release();
+    if (runLock !== null && 'release' in runLock) runLock.release();
   }
 }

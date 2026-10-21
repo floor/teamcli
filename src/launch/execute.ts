@@ -418,6 +418,9 @@ export type ExecuteOptions = {
   /** The plan's seats, in the team file's order, when this run is a restore pass (or an `up`
    *  that a restore summary will read). The run's buckets are decided from these at the end. */
   restoreSeats?: readonly UpSeat[];
+  /** The host is closing: stop between seat steps, and let the stop pass finish what this run
+   *  made. The daemon's restore sweep passes its closing flag here. */
+  isClosing?: () => boolean;
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
@@ -429,6 +432,7 @@ export async function executePlan(
 ): Promise<Report> {
   const concurrency = Math.max(1, options?.concurrency ?? 1);
   const parallel = concurrency > 1;
+  const closing = options?.isClosing ?? (() => false);
   const places = new Map<string, Place>();
   const dropped = new Set<string>();
   const logged = new Set<string>();
@@ -873,6 +877,13 @@ export async function executePlan(
     const seat = op && 'seat' in op ? op.seat : undefined;
     if (stopped) return;
     if (!parallel && abort) return;
+    // The host is closing: no further seat is started. The stop pass below closes what this run
+    // made and leaves every seat without a final record one of its own.
+    if (closing()) {
+      stopped = true;
+      abort = true;
+      return;
+    }
     if (seat && dropped.has(seat)) return;
     // A seat settled ready during its idle wait — the owner answered its prompt with
     // `team answer` — has nothing left in the plan: a rename would overwrite the ready stage,
@@ -938,8 +949,15 @@ export async function executePlan(
         break;
       }
       case 'wait-session': {
-        const up = await until(op.seconds, 1000, host, () => host.sessionUp(op.session) === true, sharedSleep, () => stopped);
+        const up = await until(op.seconds, 1000, host, () => host.sessionUp(op.session) === true, sharedSleep, () => stopped || closing());
         if (!up) {
+          // A closing host cancelled the wait: the session was simply not read again, and the
+          // stop pass owns what this run made. It is not a server failure.
+          if (closing()) {
+            stopped = true;
+            abort = true;
+            break;
+          }
           serverFailed = true;
           abort = true;
           host.say(`session ${op.session}: it was not running within ${op.seconds} s\n`);
@@ -1219,7 +1237,7 @@ export async function executePlan(
         // restart the count the message states.
         let shellBackFirst: number | null = null;
         for (;;) {
-          if (stopped) break;
+          if (stopped || closing()) break;
           if (parallel && !identities.has(op.seat)) {
             const live = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
             if (live) identities.set(op.seat, live);
@@ -1258,10 +1276,16 @@ export async function executePlan(
           if (host.now() >= deadline) break;
           const before = host.now();
           await sharedSleep(pollMs);
-          if (stopped) break;
+          if (stopped || closing()) break;
           if (host.now() <= before) break;
         }
-        if (stopped) break;
+        if (stopped || closing()) {
+          // A closing host cancelled the idle wait: the seat is left at the stage it had, and the
+          // stop pass owns what this run made. It is not a timeout and not a dialog.
+          stopped = true;
+          abort = true;
+          break;
+        }
         if (outcome === 'idle') {
           idleOnwards();
           break;
@@ -1363,9 +1387,15 @@ export async function executePlan(
           host,
           () => listed() || runsCli(),
           sharedSleep,
-          () => stopped,
+          () => stopped || closing(),
         );
-        if (stopped) break;
+        if (stopped || closing()) {
+          // A closing host cancelled the wait: the pane exists but was never read into the agent
+          // list, which is not the same as it never appearing. The seat keeps the stage it had.
+          stopped = true;
+          abort = true;
+          break;
+        }
         if (!seen) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'was not in the agent list in time; left at launched' });
@@ -1529,9 +1559,16 @@ export async function executePlan(
             return !reportedLiveAgent(foreground, processNames);
           },
           sharedSleep,
-          () => stopped,
+          () => stopped || closing(),
         );
         if (!gone) {
+          // A closing host cancelled the wait: the pane was not read again, which is not a
+          // timeout. Nothing is finished or closed for it here; the stop pass owns the seat.
+          if (closing()) {
+            stopped = true;
+            abort = true;
+            break;
+          }
           if (op.closeUnasked && op.workspace) {
             if (!host.closeWorkspace(session, op.workspace)) {
               held = true;
