@@ -511,8 +511,8 @@ before any leg is walked, with `model drift: <recorded> vs <running>`: nothing i
 either side — no signed record, marker, drop or draft — and nothing is typed or dialed; the hold
 itself is one `team.log` line. No watch retry owns it, because there is no drop to retry. The way
 out is to repair the seat: `team restart <seat>` relaunches it through the launch line its
-registry record keeps, under the restart's own rules (a seat mid-turn is not interrupted, and a
-lead's seat is restarted by a lead or the owner), and the sender sends again.
+registry record keeps, under the restart's own rules (the restart is the owner's or a lead's to
+run, and a seat mid-turn is not interrupted), and the sender sends again.
 
 Unsent text does not hold the delivery. When the CLI's profile carries a measured `input`
 surface — clear keys, an optional
