@@ -23,7 +23,10 @@ import { findAgent } from '../src/registry/agents.ts';
 import { testIo, gitEnv } from './helpers.ts';
 
 const NOW = new Date('2026-10-21T07:45:00Z');
-const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8');
+// The captured idle screen, with the banner naming the model this scene's file declares.
+const IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8')
+  .replace('gpt-5.6-terra', 'gpt-6.1-sol')
+  .replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
 const EXIT_TYPED = readFileSync(new URL('./fixtures/codex/0.161.0/exit-typed.txt', import.meta.url), 'utf8');
 
 const TEAM_YAML = `format: 1
@@ -47,9 +50,9 @@ seats:
     label: worker
     cli: codex
     vendor: openai
-    model: GPT-5.6-Terra
-    version: "5.6"
-    launch: codex -m gpt-5.6-terra
+    model: GPT Sol
+    version: "6.1"
+    launch: codex -m gpt-6.1-sol
 `;
 
 type Fixture = { base: string; root: string; home: string; file: string; dir: string; yaml: string };
@@ -167,7 +170,9 @@ function makeHarness(
       did.pasted.push(text);
       const slot = newPanes.get(pane);
       const pasted = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
-      if (slot && pasted) slot.text = IDLE.replace('› Ask Codex to do anything', `› ${pasted[1] ?? ''}`);
+      // This CLI takes the rules as a plain line, as `-a never` launches it here: the composer
+      // draws the text with or without the bracketed-paste markers.
+      if (slot) slot.text = IDLE.replace('› Ask Codex to do anything', `› ${pasted ? (pasted[1] ?? '') : text}`);
       return true;
     },
     pressEnter(_session, pane) {
@@ -234,11 +239,11 @@ function restored(liveSession = 'ses_codex') {
   });
   registerAgent(fixture.home, {
     name: 'worker',
-    signing: { model: 'GPT-5.6-Terra', version: '5.6', role: 'implementer' },
+    signing: { model: 'GPT Sol', version: '6.1', role: 'implementer' },
     lab: 'openai',
     cli: 'codex',
     launcher: null,
-    launch: 'codex -m gpt-5.6-terra',
+    launch: 'codex -m gpt-6.1-sol',
     reach: {
       team: teamIdOf(fixture.root),
       seat: 'worker',
@@ -267,7 +272,7 @@ describe('a host-restored Codex seat keeps its registry conversation', () => {
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.created).toBe(1);
-    expect(run.did.runs.join('\n')).toContain('codex -m gpt-5.6-terra');
+    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
     // Codex has no resume flag: the conversation stays the registry's, and the launch is bare.
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toBe('');
@@ -298,7 +303,7 @@ describe('a host-restored Codex seat keeps its registry conversation', () => {
     expect(run.did.typed).toEqual([]);
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.created).toBe(1);
-    expect(run.did.runs.join('\n')).toContain('codex -m gpt-5.6-terra');
+    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
     expect(io.err).toBe('');
   });
 
