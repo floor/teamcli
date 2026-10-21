@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { runReload, USAGE, type ReloadSources } from '../src/commands/reload.ts';
+import { generalBriefId } from '../src/launch/general-brief.ts';
 import { RELOAD_OUTPUT_SCHEMA } from '../src/output/schema.ts';
+import { readRecord } from '../src/send/record.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -244,6 +246,20 @@ describe('team reload', () => {
     expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
   });
 
+  test("a human seat is refused before anything is read, closed or launched", async () => {
+    remember('worker', 'low');
+    approve(teamYaml(['reload']).replace('    name: worker\n', '    name: worker\n    human: true\n'));
+    const { sources, closed, commands } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code).toBe(1);
+    expect(io.err).toContain("worker is a human's pane: nothing is typed into it or launched over it; left as it is");
+    expect(closed).toEqual([]);
+    expect(commands).toEqual([]);
+    // The record is untouched: no close, no relaunch, and the file's drift stays unread.
+    expect(readState(dir).sessions.alpha?.seats.worker?.effort).toBe('low');
+  });
+
   test('an installed version outside the tested range closes nothing', async () => {
     remember('worker', 'low');
     const { sources, closed, commands } = harness();
@@ -441,6 +457,22 @@ describe('team reload', () => {
     expect(logText()).toContain('grant [grant] lead reload: worker model');
   });
 
+  test('a relaunch names the seat\'s claude session the way up, add and restart do', async () => {
+    remember('worker', 'low');
+    const { sources, closed, commands } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker'], io, sources);
+    expect(code, io.err).toBe(0);
+    expect(closed).toEqual(['worker-ws']);
+    expect(commands).toHaveLength(1);
+    // The file's own launch line, with the seat's readable name appended: a session reloaded by
+    // this command shows the same name in its prompt box and on the messages it receives that a
+    // fresh `up` would have given it. The fixture's seat writes no nickname, so `auto` reads the
+    // seat name.
+    expect(commands[0]).toContain('--model claude-opus-5-5');
+    expect(commands[0]).toContain('--name worker');
+  });
+
   test('a granted reload of another seat logs the grant and the difference', async () => {
     remember('lead', 'low');
     remember('worker', 'low');
@@ -539,6 +571,42 @@ describe('team reload', () => {
     const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
     expect(doc).toMatchObject({ status: 'same', seat: 'worker', pane: 'worker-pane' });
     expect(doc.action_summary).toBe('team reload: worker is already running what the file declares');
+  });
+
+  test('--json: a matching seat is still a repair: the general brief is delivered and recorded', async () => {
+    remember('worker', 'high');
+    const { sources } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker', '--json'], io, sources);
+    expect(code, io.out + io.err).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({ status: 'same', seat: 'worker' });
+    expect(doc).not.toHaveProperty('notes');
+    // The drop is on disk and the session records the delivery: `team check`'s repair works
+    // on a seat whose model, version and effort already match the file.
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
+    const looked = readRecord(path, generalBriefId());
+    expect(looked.ok && looked.record?.payload).toMatchObject({ to: 'worker', session: 'alpha' });
+    expect(readState(dir).sessions.alpha?.briefs?.worker).toEqual({ id: generalBriefId(), at: NOW.toISOString() });
+  });
+
+  test('--json: a brief that cannot be written is a note in the document', async () => {
+    remember('worker', 'high');
+    const path = join(root, '.agents', 'send-drops', 'alpha', 'worker', generalBriefId());
+    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(path);
+    const { sources } = harness();
+    const io = testIo(root, OWNER);
+    const code = await runReload(['worker', '--json'], io, sources);
+    expect(code, io.out + io.err).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<Record<string, unknown>>(io.out, RELOAD_OUTPUT_SCHEMA);
+    expect(doc).toMatchObject({ status: 'same', seat: 'worker' });
+    expect(doc.notes).toEqual([
+      'worker: the general seat brief was not delivered (the record path is a folder)',
+    ]);
+    expect(logText()).toContain('worker: the general seat brief was not delivered');
   });
 
   test('--json: a refusal writes the team.error envelope on stdout, stderr empty', async () => {

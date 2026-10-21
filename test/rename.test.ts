@@ -82,6 +82,9 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+# The send scenes here walk the typed trigger: the inbox is tried and skipped for want of a
+# listener, then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 
 type Fixture = {
@@ -225,7 +228,7 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
     // Seat grant still covers builder-01
     const decision = resolveCaller(
       { kind: 'seat', name: 'builder-01', pane: 'w1:p4', session: 'acme' },
-      { id: teamId, orchestrator: loadedAfter.team.orchestrator, seats: loadedAfter.team.seats },
+      { id: teamId, orchestrator: loadedAfter.team.orchestrator, operator: loadedAfter.team.operator, seats: loadedAfter.team.seats },
       fx.root,
       fx.home,
       'merge',

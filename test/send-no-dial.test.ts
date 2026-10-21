@@ -25,7 +25,7 @@ import { triggerLine } from '../src/send/native.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { claudeBox, testIo } from './helpers.ts';
+import { claudeBox, recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T05:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -75,6 +75,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -172,16 +175,16 @@ describe('the sending paths never dial while the socket is off', () => {
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
     const path = dropped(w.root, 'lead');
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
     const trigger = triggerLine(path);
     if (trigger === null) throw new Error('the drop path did not fit a trigger line');
     expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);
     expect(host.enters).toEqual(['pane-lead']);
   });
 
-  test('--wait is refused before anything is typed, dropped or dialed', async () => {
+  test('--wait walks the typed leg without dialing and times out with the thread open', async () => {
     const w = world();
-    const host = dialer(w);
+    const host = { ...dialer(w), waitMs: 0 };
     const io = owner(w.root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
@@ -189,13 +192,16 @@ describe('the sending paths never dial while the socket is off', () => {
     expect(code).toBe(1);
     expect(io.out).toBe('');
     expect(io.err).toBe(
-      'team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n',
+      'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n',
     );
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    expect(existsSync(join(w.dir, 'send-drops'))).toBe(false);
+    const path = dropped(w.root, 'lead');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
+    const trigger = triggerLine(path);
+    if (trigger === null) throw new Error('the drop path did not fit a trigger line');
+    expect(host.typed).toEqual([{ pane: 'pane-lead', text: trigger }]);
+    expect(host.enters).toEqual(['pane-lead']);
   });
 
   test('the daemon refuses a waited request and types a plain one, dialing nothing either way', async () => {

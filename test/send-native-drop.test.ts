@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { dropMessage, triggerLine } from '../src/send/native.ts';
+import { recordBody } from './helpers.ts';
 import { dropDir, filed, nativeHost, owner, world, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
@@ -79,7 +80,7 @@ test('the pane is given the drop path only once that file holds the whole body',
     const line = triggerLine(path);
     if (line === null) throw new Error(`no trigger for ${path}`);
     expect(text).toBe(line);
-    expect(readFileSync(path, 'utf8')).toBe(filed(body));
+    expect(recordBody(path)).toBe(filed(body));
     expect(statSync(path).mode & 0o777).toBe(0o600);
     seen = true;
     return typeText(session, paneId, text);

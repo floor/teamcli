@@ -63,10 +63,10 @@ function confirmOne(scene: RetryScene, pane: string | undefined, dropDir: string
       note: NEVER_ACTED_ON,
     });
   }
-  // The drop is still the message: name it when it is there, so it can be read by hand or sent
-  // again — the one thing this pass never does is type the line.
+  // The drop is still the message: name the record when it is there, so it can be read by hand
+  // or sent again — the one thing this pass never does is type the line.
   const path = join(dropDir, drop.id);
-  const tail = existsSync(path) ? `; the drop file is at ${path}` : '';
+  const tail = existsSync(path) ? `; the record is at ${path}` : '';
   scene.say(`${drop.to}: a send from ${drop.from} was ${NEVER_ACTED_ON}${tail}`, true);
 }
 

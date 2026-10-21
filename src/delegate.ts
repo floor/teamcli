@@ -92,7 +92,7 @@ export const DELEGATE_EXIT_IDS: readonly string[] = [
 const PROHIBITED: Record<ActingCommand, readonly string[]> = {
   up: ['session', 'file'],
   down: ['abandon', 'session', 'file'],
-  add: ['temporary', 'like', 'until', 'worktree', 'session', 'file'],
+  add: ['temporary', 'until', 'worktree', 'session', 'file'],
   remove: ['keep', 'abandon', 'session', 'file'],
   approve: ['file'],
 };

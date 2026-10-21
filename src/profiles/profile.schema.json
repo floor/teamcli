@@ -69,6 +69,40 @@
       "enum": ["enter"],
       "description": "optional: the one key that confirms the CLI's own exit question, sent by a stop on a screen the profile reads as an exit question; absent, a seat that asks the question cannot be stopped by asking"
     },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clear", "paste"],
+      "description": "optional: the measured way into this CLI's input box — its clear keys and paste surface; absent, a delivery that finds unsent text holds it untouched, and a restart refuses",
+      "properties": {
+        "clear": {
+          "type": "array",
+          "items": { "enum": ["ctrl+c", "ctrl+u", "ctrl+k", "escape", "backspace"] },
+          "minItems": 1,
+          "description": "the keys that empty the box on an idle screen, sent in order and repeated until the box reads empty"
+        },
+        "clear_working": {
+          "type": "array",
+          "items": { "enum": ["ctrl+c", "ctrl+u", "ctrl+k", "escape", "backspace"] },
+          "minItems": 1,
+          "description": "the keys that empty the box during a running turn, measured on a CLI that takes text there"
+        },
+        "paste": {
+          "const": "bracketed",
+          "description": "how text is put back into the box: bracketed paste"
+        },
+        "mid_turn": {
+          "type": "boolean",
+          "description": "whether this CLI takes text into its box while a turn runs; true requires clear_working, and false leaves a draft found on a working screen held"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mid_turn": { "const": true } }, "required": ["mid_turn"] },
+          "then": { "required": ["clear_working"] }
+        }
+      ]
+    },
     "lobby_files": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
@@ -78,6 +112,45 @@
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
       "description": "optional: paths this CLI reads at start in its working folder; a trailing slash names a directory and every file under it, and the lobby gate refuses each of these at any depth"
+    },
+    "mcp_inbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "optional: the team inbox's measured registration for this CLI; absent, its seats stay on the drop and typed legs",
+      "properties": {
+        "launch_args": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "arguments appended to the launch line; {seat}, {session}, {command} and {entry} are filled from the launch; {command_json}, {entry_json} and {seat_json} are the same values escaped for a double-quoted string inside a structured word; {file_args} is the server's --file pair as array elements when the launch named the team file, nothing otherwise"
+        },
+        "add": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "the CLI's own project-scope mcp add subcommand arguments, run in the seat's folder at launch; {seat}, {session}, {command} and {entry} are filled from the launch, and a whole {file} word is the launch's --file pair when it names the team file, nothing otherwise"
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "description": "the file add writes, relative to the seat's folder"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "a config file team writes itself, relative to the seat's folder"
+        }
+      },
+      "anyOf": [
+        { "required": ["launch_args"] },
+        { "required": ["add"] },
+        { "required": ["file"] }
+      ],
+      "allOf": [
+        { "not": { "required": ["add", "file"] } },
+        { "if": { "required": ["add"] }, "then": { "required": ["target"] } },
+        { "if": { "required": ["target"] }, "then": { "required": ["add"] } }
+      ]
     },
     "timeouts": {
       "type": "object",

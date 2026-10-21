@@ -1,9 +1,10 @@
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, versionVerdict } from '../profiles/profile.ts';
+import { profileFor, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
+import type { CliWatcher } from './cli-hook.ts';
 import { IDLE_POLL_MS, type Step } from './plan.ts';
 import {
   closeTarget,
@@ -18,8 +19,10 @@ import { plainPaneText } from './plain.ts';
 import { unreadIdle } from './unread.ts';
 import { recordWhat, cleanRecord, classificationOf, type Classification, type FinalRecord, type ProgressState } from './progress.ts';
 import type { LobbyRefusal } from '../lobby/gate.ts';
+import type { InboxRegistration } from '../mcp/register.ts';
 import type { SeatState, WaitingRecord } from '../state.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
+import type { SessionEndReason } from '../sessions/registry.ts';
 
 export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'provider error' | 'rate limit' | 'unsent' | 'unknown';
 
@@ -49,6 +52,14 @@ export type Host = {
   confirmLobby?(): LobbyRefusal | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /**
+   * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
+   * launch command. `teamFile` is the team file the launch read: the seat's folder may be a
+   * lobby with none. Null when the profile carries no file route, and absent on a host whose
+   * commands never launch. A refusal is said in one line under the seat's record, and the seat
+   * still launches: the inbox is one delivery leg, not the launch.
+   */
+  registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent. False is reported in one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title. False is reported in one line and does not leave the seat out. */
@@ -128,6 +139,24 @@ export type Host = {
       launch_line?: string;
       /** A waiting record to write, or null to remove the seat's waiting field. */
       waiting?: WaitingRecord | null;
+      /** How this launch leaves the seat watching for drops (`CliWatcher`). */
+      watcher?: CliWatcher;
+    },
+  ): void;
+  /**
+   * A seat's launch command has started in `pane`: the session registry records the session's
+   * start, with the id TeamCLI set where the CLI takes one. Called after the pane run succeeded
+   * and before the seat is counted running; a command that did not run starts no session.
+   */
+  sessionStarted?(
+    seat: string,
+    started: {
+      pane: string;
+      workspace?: string;
+      command: string;
+      cli_session?: string;
+      /** Why the open session this launch replaces ended, when this run closed it on purpose. */
+      replaces?: SessionEndReason;
     },
   ): void;
   /** The seat is really running, so the next seat's ceiling check counts it. */
@@ -819,6 +848,7 @@ export async function executePlan(
             workspace: made.workspace,
             createdWorkspace: true,
             waiting: null,
+            ...(op.watcher ? { watcher: op.watcher } : {}),
           });
           host.running(op.seat);
         }
@@ -833,13 +863,36 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: why });
           break;
         }
+        // The seat's inbox is registered before its command runs, in the folder the command
+        // starts in, from the team file this launch read (a lobby folder holds none). A refusal
+        // costs the seat its inbox leg and nothing else.
+        if (op.cli !== undefined && op.cwd !== undefined) {
+          const inbox = host.registerInbox?.(op.cli, op.seat, op.cwd, op.teamFile);
+          if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
+        }
         const here = place(op.seat, op.pane);
-        if (!here || !host.paneRun(session, here.pane, op.command)) {
+        // The session id is minted here, not in the plan: the plan's command stays the
+        // deterministic line a dry run prints, and each launch gets its own id.
+        const launch = withLaunchSession(op.cli ?? '', op.command);
+        if (!here || !host.paneRun(session, here.pane, launch.command)) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
           break;
         }
+        host.sessionStarted?.(op.seat, {
+          pane: here.pane,
+          ...(here.workspace === undefined ? {} : { workspace: here.workspace }),
+          command: launch.command,
+          ...(launch.sessionId === undefined ? {} : { cli_session: launch.sessionId }),
+          // A launch that follows a repair this run made on purpose replaces a session it chose
+          // to close: its record ends as a swap, never as a crash, and the new one links to it.
+          ...(relaunched.get(op.seat) === 'drift' ? { replaces: 'swap' as const } : {}),
+        });
         host.running(op.seat);
+        // The watcher is what this run left beside the seat: a hook the map installed, an MCP
+        // inbox the launch registered, or nothing. Written even when the launch path had no
+        // created workspace to record it with.
+        if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
         break;
       }
       case 'idle': {
@@ -870,6 +923,9 @@ export async function executePlan(
         // process read sits after it and before the comparison: a model the CLI is not running
         // still leaves a `launched` identity, and the read stays ahead of the process read.
         const idleOnwards = (): void => {
+          // What this run leaves watching for a drop is recorded before the screen is read, so
+          // a seat whose identity cannot be read still carries the truth beside it.
+          if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
           const model = op.model;
           const version = op.version;
           const screen = model !== undefined && version !== undefined

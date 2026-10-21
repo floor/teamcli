@@ -62,6 +62,11 @@ export type Difference = {
   needs?: 'approve';
   owner?: true;
   approval?: true;
+  /** The seat this row's prompt belongs to. `team check` names that seat itself — one line with
+   *  the prompt's kind, the command the screen shows and its age — and drops this row for it, so
+   *  a held seat is named once. `status` prints the row as it stands, and nothing serializes the
+   *  mark. */
+  promptSeat?: string;
 };
 
 export type Comparison = { rows: Row[]; differences: Difference[]; notes: string[] };
@@ -135,6 +140,28 @@ function limitMark(seat: Seat | undefined, screen: Screen): string | null {
   const account = accountOf(seat);
   const on = account === null ? '' : ` on ${account}`;
   return screen.reset === null ? ` (rate limit${on})` : ` (rate limit${on}, resets at ${screen.reset})`;
+}
+
+/**
+ * Whether the process in a seat's pane is still the seat's, before a screen read is believed: the
+ * gate `compare()` applies to a declared seat, in one place for the temporary branch and the
+ * check's own reading. A pane back at its shell, or one running a process the record does not
+ * name with no stored session showing continuity, is not the seat; a record with no identity
+ * whose pane holds a bare shell is not either. Herdr unable to tell (`processes` null) keeps the
+ * reading: there is no verdict to act on.
+ */
+export function paneShowsSeat(recorded: SeatState | undefined, agent: HerdrAgent, live: Live): boolean {
+  const processes = live.processes?.[agent.pane] ?? null;
+  const verdict = seatProcessVerdict(recorded?.launched, processes);
+  const continuity = replacedSeat(verdict, {
+    asked: true,
+    namedOnPane: recorded?.pane === agent.pane,
+    recordedSession: recorded?.agent_session,
+    liveSession: agent.session,
+  });
+  if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) return false;
+  if (recorded !== undefined && !recorded.launched && paneHoldsShell(processes)) return false;
+  return true;
 }
 
 // Compares the file and the state with the live session. Pure over what is handed in, but for
@@ -329,11 +356,13 @@ export function compare(
           ? {
               what: `${seat.name} waits at a permission prompt: its lead's to answer, or its owner's`,
               repair: 'its lead answers it in the pane',
+              promptSeat: seat.name,
             }
           : {
               what: `${seat.name} waits at a trust prompt: the owner's to answer`,
               repair: 'the owner answers it in the pane',
               owner: true,
+              promptSeat: seat.name,
             });
       }
       if (recorded?.rules === 'undelivered') {
@@ -489,16 +518,22 @@ export function compare(
         pane: agent.pane,
         ...(recorded.start_cwd ? { start_cwd: recorded.start_cwd } : {}),
       });
-      if (tempScreen.kind === 'permission' || tempScreen.kind === 'trust') {
+      // A dialog the pane's scrollback still shows is not a prompt while the pane no longer
+      // holds the seat's process: the same gate a declared seat's prompt row answers to. The
+      // row's word above is unchanged — this decides only whether the screen is read as a
+      // prompt the seat waits at.
+      if (paneShowsSeat(recorded, agent, live) && (tempScreen.kind === 'permission' || tempScreen.kind === 'trust')) {
         differences.push(tempScreen.kind === 'permission'
           ? {
               what: `${name} waits at a permission prompt: its lead's to answer, or its owner's`,
               repair: 'its lead answers it in the pane',
+              promptSeat: name,
             }
           : {
               what: `${name} waits at a trust prompt: the owner's to answer`,
               repair: 'the owner answers it in the pane',
               owner: true,
+              promptSeat: name,
             });
       }
       notes.push(`${name} is temporary, until ${recorded.temporary.until}`);

@@ -242,16 +242,30 @@ describe('team init', () => {
     // while it runs — the patterns the start protocol names in its write inventory.
     writeFileSync(join(project, '.agents', 'broker.sock.lock.takeover'), '');
     writeFileSync(join(project, '.agents', 'broker.sock.lock.1234.new'), '');
+    // The bus binds its own socket under its own start lock, with the same takeover claim and
+    // temp beside it; its event log and segments live in the project store, not the checkout.
+    writeFileSync(join(project, '.agents', 'bus.sock'), '');
+    writeFileSync(join(project, '.agents', 'bus.sock.lock'), '');
+    writeFileSync(join(project, '.agents', 'bus.sock.lock.takeover'), '');
+    writeFileSync(join(project, '.agents', 'bus.sock.lock.1234.new'), '');
     // The per-launch hook settings and the state files their hooks write: runtime files of this
     // clone's launches, never the project's to commit.
     mkdirSync(join(project, '.agents', 'hooks'));
     mkdirSync(join(project, '.agents', 'seat-state'));
     writeFileSync(join(project, '.agents', 'hooks', 'worker.json'), '{}');
     writeFileSync(join(project, '.agents', 'seat-state', 'worker.json'), '{}');
+    // The transport tree: one signed record per message a send writes, its read receipt, and
+    // the inbox server's listener marker. The drop folder belongs to the session, under the
+    // seat the message is addressed to.
+    mkdirSync(join(project, '.agents', 'send-drops', 'acme', 'worker'), { recursive: true });
+    writeFileSync(join(project, '.agents', 'send-drops', 'acme', 'worker', '11111111-1111-4111-8111-111111111111'), '{"payload":{}}');
+    writeFileSync(join(project, '.agents', 'send-drops', 'acme', 'worker', '11111111-1111-4111-8111-111111111111.read.json'), '{}');
+    writeFileSync(join(project, '.agents', 'send-drops', 'acme', 'worker', '.inbox-listener'), '{}');
     expect(git(project, 'status', '--porcelain')).toBe('');
     expect(existsSync(join(project, '.gitignore'))).toBe(false);
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/team.yaml\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/messages/\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/send-drops/\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/leases/\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/hooks/\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/seat-state/\n');
@@ -259,6 +273,10 @@ describe('team init', () => {
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock.takeover\n');
     expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/broker.sock.lock.*.new\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock.lock\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock.lock.takeover\n');
+    expect(readFileSync(join(project, '.git', 'info', 'exclude'), 'utf8')).toContain('.agents/bus.sock.lock.*.new\n');
   });
 
   test('a linked worktree shares the exclusion', async () => {

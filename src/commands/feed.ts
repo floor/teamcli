@@ -6,12 +6,15 @@ import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { lobbyDir } from '../lobby/gate.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { namingAcross, namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
 import { contextLine, hasJsonFlag, pluralCount, renderTable, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
 import {
   parseHistoryLine,
   readAllHistories,
   readHistory,
   readNoFollow,
+  statusOfOutcome,
   type HistoryEntry,
 } from '../send/history.ts';
 import { storePath } from '../store/store.ts';
@@ -31,7 +34,7 @@ Options:
   --audit <path>   include Desk or bridge audit JSONL lines from <path>
   --briefs <dir>   include <from>-to-<to>.md brief files from <dir>
   --follow         keep reading as new lines arrive, across log rotations
-  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, spec?, resolved?, ms?, via?, failed?}]})
+  --json           one team.feed document ({..., events: [{ts, from, to, body, id, outcome, status, thread?, in_reply_to?, spec?, resolved?, from_team?, ms?, via?, failed?}]})
 
 Exits 0 when the feed is printed, 1 when the history log can't be read, 2 when the invocation or team file can't be read.
 `;
@@ -520,7 +523,7 @@ function collectEntries(
   if (seatFilter !== undefined) {
     all = all.filter((entry) => entry.from === seatFilter || entry.to === seatFilter);
   }
-  return { ok: true, entries: all };
+  return { ok: true, entries: oneOutcomePerId(all) };
 }
 
 function timeOf(ts: string): string {
@@ -528,6 +531,38 @@ function timeOf(ts: string): string {
     return ts.slice(11, 19);
   }
   return ts;
+}
+
+/**
+ * One message, one row. A send whose seat had not read it when the command printed is filed as
+ * `sent (unconfirmed)`; a later line for the same id — the watch's receipt promotion
+ * (`delivered (read)`), its typed fallback, or a taken delivery's later report — is the same
+ * message's outcome moving. The feed shows the latest line once, in its chronological place,
+ * and keeps the address the send recorded (`spec`, `resolved`) when the later line has none.
+ * The measured time is not carried over: it timed the send, not the outcome that followed it.
+ */
+function oneOutcomePerId(entries: readonly HistoryEntry[]): HistoryEntry[] {
+  const latest = new Map<string, HistoryEntry>();
+  const order: string[] = [];
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!;
+    const kept = latest.get(entry.id);
+    if (kept === undefined) {
+      latest.set(entry.id, { ...entry });
+      order.push(entry.id);
+      continue;
+    }
+    if (kept.spec === undefined && entry.spec !== undefined) kept.spec = entry.spec;
+    if (kept.resolved === undefined && entry.resolved !== undefined) kept.resolved = entry.resolved;
+    // A receipt line follows the send's own and carries no sender team of its own; the send's
+    // line for the same id is where the team it was written from lives.
+    if (kept.from_team === undefined && entry.from_team !== undefined) kept.from_team = entry.from_team;
+    // The thread and the record a reply answers are on every line the send of this version
+    // writes; an older line for the same id carries neither, and the newer line's values stand.
+    if (kept.thread === undefined && entry.thread !== undefined) kept.thread = entry.thread;
+    if (kept.in_reply_to === undefined && entry.in_reply_to !== undefined) kept.in_reply_to = entry.in_reply_to;
+  }
+  return order.reverse().map((id) => latest.get(id)!);
 }
 
 /** The KIND cell: the entry's outcome, with the path and the milliseconds when the send
@@ -550,25 +585,46 @@ function eventJson(entry: HistoryEntry): Record<string, unknown> {
     body: entry.body,
     id: entry.id,
     outcome: entry.outcome,
+    // The line's derived status (§3.3): the outcome folded into the one scale a message moves
+    // along. Attempt outcomes — `timeout`, `not-submitted`, `unreachable` — fold to `sent`.
+    status: statusOfOutcome(entry.outcome),
   };
   // Present only when the send recorded them, so older readers see the same object.
   if (entry.spec !== undefined) obj.spec = entry.spec;
   if (entry.resolved !== undefined) obj.resolved = entry.resolved;
+  if (entry.from_team !== undefined) obj.from_team = entry.from_team;
   if (entry.ms !== undefined) obj.ms = entry.ms;
   if (entry.via !== undefined) obj.via = entry.via;
   if (entry.failed !== undefined) obj.failed = entry.failed;
   if (entry.note !== undefined) obj.note = entry.note;
+  if (entry.thread !== undefined) obj.thread = entry.thread;
+  if (entry.in_reply_to !== undefined) obj.in_reply_to = entry.in_reply_to;
   return obj;
 }
 
 /** The context line opens a run once; null when the run is not team-scoped (`--all` or
  *  outside a checkout), and a follow that starts empty prints nothing until its first event. */
-type Scope = { context: string | null; printed: boolean };
+type Scope = { context: string | null; printed: boolean; naming: SenderNaming };
 
 function printContext(io: Io, scope: Scope): void {
   if (scope.printed || scope.context === null) return;
   io.stdout(`${scope.context}\n`);
   scope.printed = true;
+}
+
+/** The DETAIL cell: a reply says which record it answers before its body, so a thread reads as
+ *  one conversation even where its lines are pages apart. */
+function detailOf(entry: HistoryEntry): string {
+  return entry.in_reply_to === undefined ? entry.body : `re ${entry.in_reply_to}: ${entry.body}`;
+}
+
+/** The SEAT cell's sender: a line that recorded the team it was written from resolves like the
+ *  drop and the mailbox do — the same rule, the same registry rosters. A line without it (one an
+ *  older build wrote, or a brief or audit line) reads as its plain seat name: guessing a team
+ *  from the reader's own roster would print a local nickname for another team's sender. */
+function readableFrom(entry: HistoryEntry, naming: SenderNaming): string {
+  if (entry.from_team === undefined) return entry.from;
+  return senderDisplayName({ seat: entry.from, team: entry.from_team }, naming);
 }
 
 /** One batch of events: the context line when it has not opened the run yet, the four-column
@@ -577,7 +633,14 @@ function printBatch(io: Io, scope: Scope, entries: readonly HistoryEntry[]): voi
   printContext(io, scope);
   const lines = renderTable({
     headers: ['TIME', 'KIND', 'SEAT', 'DETAIL'],
-    rows: entries.map((entry) => [timeOf(entry.ts), kindOf(entry), `${entry.from} -> ${entry.to}`, entry.body]),
+    // The SEAT cell carries the readable sender name the project's `sender_name` asks for; the
+    // line's own `from` — the seat name history records — is what `--json` carries.
+    rows: entries.map((entry) => [
+      timeOf(entry.ts),
+      kindOf(entry),
+      `${readableFrom(entry, scope.naming)} -> ${entry.to}`,
+      detailOf(entry),
+    ]),
     indent: scope.context === null ? '' : '  ',
     style: ttyStyle(io, { json: false }),
   });
@@ -682,6 +745,11 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
   const scope: Scope = {
     context: project !== null && session !== null ? contextLine(project, session) : null,
     printed: false,
+    // A feed run outside a checkout (`--all`, or the lobby) has no project word and no own team
+    // to compare against: its senders read across the registry.
+    naming: root !== null && loaded.ok
+      ? namingFor({ home: sources.home, root, viewerTeam: teamIdOf(root), file: loaded.team })
+      : namingAcross(sources.home),
   };
   if (json) {
     writeJson(io, 'team.feed', {

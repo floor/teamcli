@@ -134,3 +134,24 @@ test('what ships today: a pack of the tree as it is lists README.md and not npm-
     rmSync(home, { recursive: true, force: true });
   }
 }, 30_000);
+
+test('no tracked file in the packed set holds a merge conflict marker', () => {
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')) as { files?: string[] };
+  const roots = ['package.json', 'npm-readme.md', ...(pkg.files ?? [])];
+  const listed = spawnSync('git', ['-C', repo, 'ls-files', '--', ...roots], { encoding: 'utf8' });
+  expect(listed.status).toBe(0);
+  const paths = listed.stdout.trim().split('\n').filter((line) => line !== '');
+  expect(paths.length).toBeGreaterThan(0);
+
+  const marker = /^(?:<<<<<<< |=======$|>>>>>>> )/;
+  const hits: string[] = [];
+  for (const rel of paths) {
+    const lines = readFileSync(join(repo, rel), 'utf8').split(/\r?\n/);
+    for (let i = 0; i < lines.length; i += 1) {
+      if (marker.test(lines[i] ?? '')) {
+        hits.push(`${rel}:${String(i + 1)}: ${lines[i]}`);
+      }
+    }
+  }
+  expect(hits).toEqual([]);
+});

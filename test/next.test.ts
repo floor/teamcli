@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -162,6 +162,27 @@ describe('team next', () => {
         '  m1  open   -         the task title\n' +
         '1 issue\n',
     );
+  });
+
+  test('a folder that is not a checkout reads the team root it holds', async () => {
+    project();
+    // The team root is this folder itself: no checkout names it, and the lease the claim writes
+    // lands under that folder's own `.agents`, so the run proves the root it resolved.
+    mkdirSync(join(base, 'plain'), { recursive: true });
+    const plain = realpathSync(join(base, 'plain'));
+    mkdirSync(join(plain, '.agents'), { recursive: true });
+    writeFileSync(join(plain, '.agents', 'team.yaml'), WITH);
+    writeFileSync(join(plain, '.agents', 'tasks.yaml'), '- id: m1\n  title: the task title\n');
+    updateState(join(plain, '.agents'), (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.lead = { stage: 'ready', pane: 'w1:p1' };
+    });
+    expect(await run([], lead, undefined, plain)).toEqual({
+      code: 0,
+      out: `${CTX}m1  the task title\nteam next: claimed m1\n`,
+      err: '',
+    });
+    expect(existsSync(join(plain, '.agents', 'leases', 'm1.json'))).toBe(true);
   });
 
   test('team plan is a command, and the owner is refused', async () => {
@@ -479,6 +500,23 @@ describe('team next', () => {
     expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
     expect(await run(['--release'], worker)).toEqual({ code: 0, out: `${CTX}team next: nothing is held\n`, err: '' });
     expect(lease().seat).toBe('lead');
+  });
+
+  test('a pause refuses a take and still lets the seat release what it holds', async () => {
+    ready(WITH);
+    expect((await run()).out).toBe(`${CTX}m1  the task title\nteam next: claimed m1\n`);
+    const at = new Date(now).toISOString();
+    updateState(join(root, '.agents'), (state) => {
+      state.pause = { by: 'owner', at, stops: [] };
+    });
+    const refused = await run();
+    expect(refused.code).toBe(1);
+    expect(refused.err).toBe(
+      `team next: the team is paused (paused since ${at} by owner); nothing new is claimed until \`team resume\`\n`,
+    );
+    expect(lease().seat).toBe('lead');
+    expect(await run(['--release'])).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });
+    expect(existsSync(join(root, '.agents', 'leases', 'm1.json'))).toBe(false);
   });
 
   test('the ring and the key stay put, and the issues page no longer says team next is not a command', async () => {

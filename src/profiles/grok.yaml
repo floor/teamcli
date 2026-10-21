@@ -61,6 +61,33 @@ startup_reads:
   - CLAUDE.local.md
   - .claude/CLAUDE.md
   - .claude/rules/
+# The team inbox registers through Grok's own project-scope add. Measured in a scratch
+# folder on 1.0.60: `grok mcp add -s project team-inbox <command> -- <entry> mcp serve
+# --seat helper --session acme` exited 0, printed
+# `Added stdio MCP server 'team-inbox' ... to project config` and `File modified:
+# <folder>/.grok/config.toml`, and wrote that file with `[mcp_servers.team-inbox]`, the
+# command, the args array exactly as given, and `enabled = true`. `grok mcp list` in the
+# same folder printed the server with that command and args, marked `(project)`. The
+# command is this install's runner, so the server starts whether or not `team` is on the
+# PATH, and the launch refuses to write the file where the project does not ignore it.
+mcp_inbox:
+  add:
+    - mcp
+    - add
+    - -s
+    - project
+    - team-inbox
+    - '{command}'
+    - '--'
+    - '{entry}'
+    - mcp
+    - serve
+    - --seat
+    - '{seat}'
+    - --session
+    - '{session}'
+    - '{file}'
+  target: .grok/config.toml
 models:
   option:
     - --model

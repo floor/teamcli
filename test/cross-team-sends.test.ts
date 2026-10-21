@@ -395,6 +395,9 @@ describe('cross-team --record', () => {
     expect(written).toContain('"from":"web-lead"');
     expect(written).toContain('"to":"api-lead"');
     expect(written).toContain('"via":"native"');
+    // The sender's own team rides the line, so a reader in the receiving team resolves it by its
+    // address rather than by a local seat name it might share.
+    expect(written).toContain(`"from_team":"${teamIdOf(world.roots.web as string)}"`);
   });
 
   test('the history line keeps the address as written and the id it resolved to', async () => {

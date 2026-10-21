@@ -21,6 +21,7 @@
 import type { Agent } from '../registry/agents.ts';
 import { declarationsOf, type SettingLevel, type SettingSpec } from '../settings/inherit.ts';
 import { resolveSetting, seatsCrossTeams } from '../settings/resolve.ts';
+import { defaultNaming, senderDisplayName, type SenderIdentity, type SenderNaming } from './names.ts';
 
 /** What admission needs of a team: its identity and its roster. The team registry's own record
  *  is wider, and satisfies this shape as it stands. */
@@ -64,6 +65,12 @@ export type AdmitProjects = Record<string, AdmitProject>;
 export type AdmitContext = {
   projects: AdmitProjects;
   crossTeams?: Partial<Record<SettingLevel, boolean | undefined>>;
+  /**
+   * Set to `open-thread` by a reply alone, and only after the caller has verified the record it
+   * answers and the thread it sits on: the rule `reply-on-open-thread` then admits the pair when
+   * no other rule does. A send never sets it.
+   */
+  reply?: 'open-thread';
 };
 
 export type SendVerdict = { ok: true; rule: string } | { ok: false; why: string };
@@ -105,11 +112,21 @@ export type SendSide = Agent | SendSeat | DeclaredSender;
 export const RULE_SUMMARY = [
   'the owner',
   'an orchestrator to another orchestrator',
-  "an orchestrator or operator to a seat of its own team",
+  'an orchestrator or operator to a seat of its own team',
+  'an operator to another operator of its own team',
   "an assistant seat to its entity's coordinator",
   "a seat to its own team's orchestrator",
   'an owner-signed grant naming send',
 ].join('; ');
+
+/**
+ * The rule a reply is admitted by when no rule above admits its pair — draft 3 §7's
+ * `reply-on-open-thread`: the reply's record verified, its thread open, neither seat removed and
+ * no revocation or deny on the pair, all of which the caller checked before handing in the
+ * context. Named in the same words as the rules above, so the record, the refusal and the docs
+ * read alike.
+ */
+export const REPLY_RULE = 'a reply to the sender of a record on an open thread';
 
 /** The project rules, in the order they are asked — ahead of the team rules above — and each
  *  names itself in the verdict as those do. All three are decided by the project record and the
@@ -122,22 +139,37 @@ export const PROJECT_RULES = [
 
 export const PROJECT_RULE_SUMMARY = PROJECT_RULES.join('; ');
 
+/** The one role word admission reads, and the only pair it decides: two seats of one team whose
+ *  roster lines carry `role: operator` write to each other. Every other role word still names
+ *  nothing — a seat called `operator`, or one whose file marks the operator place, is not reached
+ *  by this word — and the pair never crosses teams. */
+export const OPERATOR_ROLE = 'operator';
+
 /**
  * The verdict for one send. `caller` is the sender's registry record, or the literal `owner`;
- * `target` is the receiver's record, or the seat it resolved to; `teams` is the team registry.
+ * `target` is the receiver's record, the seat it resolved to, or the literal `owner` on a reply
+ * whose answer goes back to the owner; `teams` is the team registry.
  * `grant` is given only after the caller has verified an owner-signed grant naming `send`:
  * admission never reads the grant store itself, it names the grant in the rule it returns.
  * `context` is the project level: given when the caller's records know their projects, absent
- * when they do not — and the project rules are then simply not in play.
+ * when they do not — and the project rules are then simply not in play. Its `reply` field is a
+ * reply's own word that its record and thread were verified; only then is the reply rule asked.
  */
 export function admitSend(
   caller: SendSide | 'owner',
-  target: SendSide,
+  target: SendSide | 'owner',
   teams: AdmitTeams,
   grant?: SendGrant,
   context?: AdmitContext,
 ): SendVerdict {
   if (caller === 'owner') return { ok: true, rule: 'the owner' };
+  // The owner as the receiver is admitted by the reply rule alone: a message to the owner is
+  // delivered by the runtime, not by a seat's write into a folder, and this rule is the one
+  // pair whose answer comes back on the thread it was asked on.
+  if (target === 'owner') {
+    if (context?.reply === 'open-thread') return { ok: true, rule: REPLY_RULE };
+    return { ok: false, why: `${seatAt(caller)} may not send to the owner: no rule admits it (${summaryFor(context)})` };
+  }
 
   const callerTeamId = teamOf(caller);
   const callerTeam = teams[callerTeamId];
@@ -188,6 +220,14 @@ export function admitSend(
   if (callerTeam !== undefined && targetTeam === callerTeam && leadsOwnTeam) {
     return { ok: true, rule: 'an orchestrator or operator to a seat of its own team' };
   }
+  // Two seats the file writes the role word `operator` on, in one team, write to each other: the
+  // operators of a team coordinate, and neither sits in the file's operator place. It is the one
+  // rule that reads a role's word — the owner asked for the word itself — and only for this pair:
+  // the same word is no lead, no assistant and no other reach, and the pair never leaves the team,
+  // so another team's operator is still reached through its orchestrator or a grant.
+  if (callerTeam !== undefined && targetTeam === callerTeam && roleOf(caller, callerTeam) === OPERATOR_ROLE && roleOf(target, targetTeam) === OPERATOR_ROLE) {
+    return { ok: true, rule: 'an operator to another operator of its own team' };
+  }
   // The entity's assistant writes to the coordinator of its own entity: the seat above the
   // entity's teams. Which seat that is, is a place in the chain and the capability the file
   // marks — the entity's first assistant — never the word in a role.
@@ -203,12 +243,21 @@ export function admitSend(
     return { ok: true, rule: "a seat to its own team's orchestrator" };
   }
   if (grant !== undefined) return { ok: true, rule: `an owner-signed grant naming send (${grant.name})` };
+  // Asked last: a reply to a record on an open thread, when every rule above leaves the pair
+  // unadmitted. The caller has already verified the record and the thread.
+  if (context?.reply === 'open-thread') return { ok: true, rule: REPLY_RULE };
 
-  const summary = context === undefined ? RULE_SUMMARY : `${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY}`;
   return {
     ok: false,
-    why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${summary})`,
+    why: `${seatAt(caller)} may not send to ${seatAt(target)}: no rule admits it (${summaryFor(context)})`,
   };
+}
+
+/** The rules a refusal names, in the order they were asked: every rule above, and the reply rule
+ *  only when the context asked it. A send's refusal names exactly the rules a send is judged by. */
+function summaryFor(context: AdmitContext | undefined): string {
+  const summary = context === undefined ? RULE_SUMMARY : `${PROJECT_RULE_SUMMARY}; ${RULE_SUMMARY}`;
+  return context?.reply === undefined ? summary : `${summary}; ${REPLY_RULE}`;
 }
 
 /**
@@ -277,20 +326,29 @@ function teamSpelled(id: string, spelled: string, teams: AdmitTeams): boolean {
 }
 
 /**
- * The drop file's first line: who wrote it, and the rule or grant that admitted the write. The
- * body follows one empty line under it, so a reader sees the sender before the message.
+ * The line a message's body opens with: who wrote it, and the rule or grant that admitted the
+ * write. The body follows one empty line under it, so a reader sees the sender before the message;
+ * the signed record carries the same facts in its payload — the seat's name and the registry id —
+ * which is what a reader verifies. The headline itself carries no id: it reads the project's
+ * `sender_name` word (`src/send/names.ts`), so a person sees a nickname or `seat@team` where an
+ * earlier build printed `agt_…`.
  */
-export function senderHeader(caller: SendSide | 'owner', rule: string): string {
+export function senderHeader(caller: SendSide | 'owner', rule: string, naming: SenderNaming = defaultNaming()): string {
   if (caller === 'owner') return `from the owner — admitted by: ${rule}\n`;
+  const readable = senderDisplayName(senderIdentityOf(caller), naming);
   // A declared seat: the id the receiver would judge by is the one the registry has not written
   // yet, so the header says whose seat it is instead of an id.
   if ('declared' in caller && caller.declared) {
-    return `from the file's seat ${caller.seat} (no registry record yet) — admitted by: ${rule}\n`;
+    return `from the file's seat ${readable} (no registry record yet) — admitted by: ${rule}\n`;
   }
-  const id = 'reach' in caller ? caller.id : '';
-  const name = 'reach' in caller ? caller.name : caller.seat;
-  const who = id === '' ? `${name}, ${seatAt(caller)}` : `${id} (${name}, ${seatAt(caller)})`;
-  return `from ${who} — admitted by: ${rule}\n`;
+  return `from ${readable} — admitted by: ${rule}\n`;
+}
+
+/** A side as the naming rule reads it: the seat, the team, and the registry id when one is held. */
+function senderIdentityOf(side: SendSide): SenderIdentity {
+  return 'reach' in side
+    ? { seat: side.reach.seat, team: side.reach.team, id: side.id }
+    : { seat: side.seat, team: side.team };
 }
 
 /** The seat a side sits in. */
@@ -323,6 +381,21 @@ function leadSeat(team: AdmitTeam | undefined): string | null {
  *  the file's lead. A role word named `operator` is no place at all. */
 function operatorSeat(team: AdmitTeam | undefined): string | null {
   return team?.operator ?? null;
+}
+
+/** The role word a side's own line carries in its team's roster: a side a command already placed
+ *  carries its role as it stands; a registry record is named by its agent id first, and by its
+ *  seat when the roster holds no line for the id, which is the file's own seat behind the store's.
+ *  Null when the team or the line is not there — the word then decides nothing. */
+function roleOf(side: SendSide, team: AdmitTeam | undefined): string | null {
+  if (team === undefined) return null;
+  if (!('reach' in side) && side.role !== undefined) return side.role;
+  const id = idOf(side);
+  if (id !== '') {
+    const byId = team.roster.find((entry) => entry.agent === id);
+    if (byId !== undefined) return byId.role;
+  }
+  return team.roster.find((entry) => entry.seat === seatOf(side))?.role ?? null;
 }
 
 /**

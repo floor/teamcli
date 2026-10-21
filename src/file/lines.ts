@@ -177,6 +177,37 @@ export function takeOut(text: string, name: string): string {
   return replaceLines(ready.text, ready.block.start, ready.block.start + fieldEnd(lines), []);
 }
 
+/**
+ * Copies `fromName`'s entry as a new entry named `toName`. A counted source is split first. The
+ * copy carries the entry's fields and no comments or blank lines — a note written beside the
+ * source stays with it — drops `count:` and `stopped: true` (it is one seat that starts now),
+ * and is named and titled `toName`; a source with no `label:` gains one. It sits directly under
+ * the source's last field, so the source's trailing blank lines and comments stay where they
+ * were and `takeOut(text, toName)` gives back `text`.
+ */
+export function copySeat(text: string, fromName: string, toName: string): string {
+  const ready = prepared(text, fromName);
+  if (!ready) return text;
+  const lines = body(ready.text, ready.block);
+  const end = fieldEnd(lines);
+  const copied = lines.slice(0, end).flatMap((line) => {
+    if (line.trim() === '' || /^\s*#/.test(line)) return [];
+    if (/^\s*count:/.test(line)) return [];
+    if (/^\s*(?:-\s+)?name:/.test(line)) return [setValue(line, toName)];
+    if (/^\s*label:/.test(line)) return [setValue(line, toName)];
+    if (/^\s*stopped:\s*(?:true|yes)\s*(?:#.*)?$/.test(line)) return [];
+    return [line];
+  });
+  if (!copied.some((line) => /^\s*label:/.test(line))) {
+    const nested = copied.find((line) => /^\s+[A-Za-z0-9_-]+:/.test(line));
+    const pad = ' '.repeat(nested ? indent(nested) : indent(copied[0] ?? '') + 2);
+    const at = copied.findIndex((line) => /^\s*(?:-\s+)?name:/.test(line));
+    copied.splice(at + 1, 0, `${pad}label: ${toName}`);
+  }
+  const insertAt = ready.block.start + end;
+  return replaceLines(ready.text, insertAt, insertAt, copied);
+}
+
 /** Leaves `name` in the file with `stopped: true`. A counted entry is split first. */
 export function markStopped(text: string, name: string): string {
   const ready = prepared(text, name);

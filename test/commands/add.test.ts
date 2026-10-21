@@ -7,6 +7,7 @@ import { runAdd, type AddSources } from '../../src/commands/add.ts';
 import { delegateGate } from '../../src/delegate.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
+import { runDoctor } from '../../src/commands/doctor.ts';
 import type { Launch } from '../../src/commands/up.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
@@ -16,8 +17,9 @@ import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { rulesFilePath } from '../../src/launch/rules-file.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
+import { seatIsStopped, takeOut } from '../../src/file/lines.ts';
 import { writePolicySet } from '../../src/policy/index.ts';
-import { CLAUDE_IDLE, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, gitEnv, testIo } from '../helpers.ts';
 import type { Machine } from '../../src/watch/machine.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride, withLaunchOverrides } from '../../src/profiles/profile.ts';
 
@@ -239,6 +241,80 @@ describe('team add', () => {
     expect(readState(join(project, '.agents')).sessions.acme?.seats.worker?.stage).toBe('ready');
     const loaded = loadTeamFile(project, { home });
     expect(loaded.ok && approvalDifferences(loaded.team, project, home)).toEqual([]);
+  });
+
+  test('adds a declared copy of a seat and starts it under the new name', async () => {
+    const before = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    const record = readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['helper', '--like', 'worker'], io, sources(made))).toBe(0);
+    // The new seat is launched and titled under its own name, not the source's.
+    expect(made.creates).toEqual(['helper']);
+    expect(made.renames).toEqual(['helper']);
+    const text = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    expect(text).toContain('    name: helper\n    label: helper\n');
+    // The copy is the only change: taking it back out gives the file the run started from.
+    expect(takeOut(text, 'helper')).toBe(before);
+    // The copy starts now and the source keeps its stopped line.
+    expect(seatIsStopped(text, 'worker')).toBe(true);
+    expect(seatIsStopped(text, 'helper')).toBe(false);
+    // The roster edit is not approval's: the record is the owner's, byte for byte.
+    expect(readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8')).toBe(record);
+    // The written file loads and validates: the new entry is a declared seat.
+    expect(loadTeamFile(project, { home }).ok).toBe(true);
+  });
+
+  test('the file a copy writes is doctor-clean', async () => {
+    const io = testIo(project, owner);
+    expect(await runAdd(['helper', '--like', 'worker'], io, sources(world()))).toBe(0);
+    const after = testIo(project, owner);
+    const code = await runDoctor(['--file', join(project, '.agents', 'team.yaml')], after, doctor());
+    // The new entry is the roster's; doctor reads the live file as the record and finds
+    // nothing missing on it.
+    expect(code).toBe(0);
+  });
+
+  test('a copy onto a name the file already declares is refused before any write', async () => {
+    const before = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['worker', '--like', 'lead'], io, sources(made))).toBe(1);
+    expect(io.err).toBe('team add: the file already declares "worker"; --like adds a copy under a new name\n');
+    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(before);
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a copy names a source seat the file declares', async () => {
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['helper', '--like', 'missing'], io, sources(made))).toBe(1);
+    expect(io.err).toBe('team add: the file has no seat "missing"\n');
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a copy of a human seat is refused: nothing is launched over a person', async () => {
+    approve(FILE.replace('    launch: codex -m gpt-6-sol\n', '    launch: codex -m gpt-6-sol\n    human: true\n'));
+    const before = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['helper', '--like', 'scribe'], io, sources(made))).toBe(1);
+    expect(io.err).toBe("team add: scribe is a human's pane: nothing is typed into it or launched over it; left as it is\n");
+    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(before);
+    expect(made.creates).toEqual([]);
+  });
+
+  test('a copy the file would refuse is refused before the write', async () => {
+    // The source carries `assistant`, which only one seat may hold: the copy would be the
+    // second, so the file's own validation refuses the edit and nothing is written.
+    approve(FILE.replace('    launch: codex -m gpt-6-sol\n', '    launch: codex -m gpt-6-sol\n    assistant: true\n'));
+    const before = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    const made = world();
+    const io = testIo(project, owner);
+    expect(await runAdd(['helper', '--like', 'scribe'], io, sources(made))).toBe(2);
+    expect(io.err).toContain('`assistant` is on more than one seat');
+    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(before);
+    expect(made.creates).toEqual([]);
   });
 
   test('a file where builder-1 and builder-01 are one number is refused at load, before anything starts', async () => {
@@ -1056,6 +1132,8 @@ describe('team add', () => {
         session.seats.worker = { stage: 'ready', workspace: 'w9', pane: 'w9:p1', launched: { shell: 400, cli: [401] } };
         state.sessions.acme = session;
       });
+      // The launch delivered the general brief before it typed: the seat's record and its state entry.
+      deliverBriefs({ dir: join(project, '.agents'), root: project, session: 'acme', seats: ['worker'], home, at: NOW.toISOString() });
       const before = readFileSync(join(project, '.agents/team.state.json'), 'utf8');
       const made = world();
       const closes: string[] = [];
@@ -1400,6 +1478,51 @@ describe('team add delegated', () => {
     expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8').startsWith(
       `${NOW.toISOString()} delegate [delegate] main/w1:p1 add\n`,
     )).toBe(true);
+  });
+
+  test('a delegated copy adds the approved source\'s entry and starts it, and signs no approval', async () => {
+    approve(DELEGATE_FILE);
+    const made = world();
+    const before = readFileSync(join(project, '.agents/team.yaml'), 'utf8');
+    const record = readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8');
+    const io = testIo(project, pilot);
+    const code = await runAdd(['helper', '--like', 'lead'], io, sources(made, { delegateGate: () => passed }));
+    expect(code).toBe(0);
+    expect(made.creates).toEqual(['helper']);
+    const text = readFileSync(join(project, '.agents/team.yaml'), 'utf8');
+    expect(text).toContain('    name: helper\n    label: helper\n');
+    // The copy is the one edit the delegate's run writes; the record keeps its bytes.
+    expect(takeOut(text, 'helper')).toBe(before);
+    expect(readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8')).toBe(record);
+    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8').startsWith(
+      `${NOW.toISOString()} delegate [delegate] main/w1:p1 add\n`,
+    )).toBe(true);
+  });
+
+  test('a delegated copy of a source the record does not hold, or holds differently, is the owner\'s', async () => {
+    // The live file's seats are what the record was signed over; a live source the record does
+    // not hold leaves nothing to compare, and one it holds differently is drift. Either way the
+    // copy would write an entry the owner has not approved, so it is refused before any write.
+    const added = '  - role: implementer\n    name: helper\n    label: helper\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n';
+    for (const drift of ['changed', 'added'] as const) {
+      approve(DELEGATE_FILE);
+      const path = join(project, '.agents/team.yaml');
+      const live = readFileSync(path, 'utf8');
+      const text = drift === 'changed'
+        ? live.replace('launch: claude --model claude-opus-5-5', 'launch: claude --model claude-opus-5-5 --fast')
+        : live.replace('delegates:\n', `${added}delegates:\n`);
+      writeFileSync(path, text);
+      const made = world();
+      const record = readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8');
+      const io = testIo(project, pilot);
+      const code = await runAdd(['copy', '--like', drift === 'changed' ? 'lead' : 'helper'], io, sources(made, { delegateGate: () => passed }));
+      expect(code).toBe(1);
+      expect(io.err).toBe(EDIT_REFUSAL);
+      expect(readFileSync(path, 'utf8')).toBe(text);
+      expect(readFileSync(join(storePath('acme', project, home), 'approval.json'), 'utf8')).toBe(record);
+      expect(made.creates).toEqual([]);
+      expect(existsSync(join(project, '.agents', 'team.log'))).toBe(false);
+    }
   });
 
   test('a delegated dry run plans and never logs the delegate line', async () => {

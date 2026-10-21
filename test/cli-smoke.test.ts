@@ -48,7 +48,11 @@ const allCommandNames = Array.from(
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   answer: 'types an answer into a live herdr pane dialog',
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
+  bus: 'starts a long-running local event bus server on .agents/bus.sock',
   hold: 'mutates .agents/state.json to place or clear a team hold',
+  pause: 'writes pause state for one or more teams',
+  resume: 'clears pause state for one or more teams',
+  raise: "writes one signed owner mailbox record and one event, and rings the owner's notification",
   init: 'writes .agents/team.yaml and registers the project on disk',
   lock: 'mutates project lock state to acquire a named lock',
   next: 'claims the next open task and writes a local lease at .agents/leases/<id>.json',
@@ -57,6 +61,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   reload: 'sends reload instructions to a live seat pane',
   remove: 'closes a live seat pane and removes its state entry',
   rename: 'mutates .agents/team.yaml, .agents/team.state.json, and registry records to rename a seat',
+  reply: "writes one signed reply record into the answered record's sender's folder",
   restart: 'restarts a live seat CLI process in its herdr pane',
   tempo: 'mutates .agents/state.json to change the watch tempo',
   unlock: 'mutates project lock state to release a named lock',
@@ -75,6 +80,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: '--about', args: ['--about'], schemaKey: 'team.about' },
   { command: 'status', args: ['status'], schemaKey: 'team.status' },
   { command: 'seats', args: ['seats'], schemaKey: 'team.seats' },
+  { command: 'sessions', args: ['sessions'], schemaKey: 'team.sessions' },
   { command: 'doctor', args: ['doctor'], schemaKey: 'team.doctor' },
   { command: 'check', args: ['check'], schemaKey: 'team.check' },
   { command: 'list', args: ['list'], schemaKey: 'team.list' },
@@ -99,6 +105,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'route', args: ['route', 'claude-keeper', '--dry-run'], schemaKey: 'team.route' },
   { command: 'up', args: ['up', '--dry-run'], schemaKey: 'team.up' },
   { command: 'down', args: ['down', '--dry-run'], schemaKey: 'team.down' },
+  { command: 'drops', args: ['drops'], schemaKey: 'team.drops', asSeat: true },
   { command: 'add', args: ['add', 'claude-helper', '--dry-run'], schemaKey: 'team.add' },
   { command: 'grant', args: ['grant', 'claude-keeper', '--scope', 'up', '--dry-run'], schemaKey: 'team.grant' },
   { command: 'delegate', args: ['delegate', 'ext/w1:p1', '--commands', 'add', '--dry-run'], schemaKey: 'team.delegate' },
@@ -461,4 +468,3 @@ process.stdout.write(JSON.stringify(out));
     }
   }, 15_000);
 });
-

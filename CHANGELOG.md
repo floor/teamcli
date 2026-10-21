@@ -5,7 +5,578 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.2] - 2026-10-19
+
+### Added
+
+- **`team pause` and `team resume`.** A pause lives in the team state, never in the team file —
+  the file waits for the owner's approval, and a stop that waits is no stop. While it stands the
+  team takes no new work: `team next` claims nothing and names the pause with its repair, and the
+  watch's work nudges become one notice per non-human seat, at its first quiet prompt after the
+  pause landed and never twice for the same pause, saying to finish the step in hand, take nothing
+  new and hold no lock. `team status` and `team seats` print the pause above their rows, and a
+  human seat is never touched. The pause records a stop point for every declared seat that is not
+  a human's: the stage and last activity its record held, and the worktree it was given, branch
+  and folder. `team resume` deletes the record, restarts claims and nudges, and prints the stop
+  points it held — for one team, `resumed <project> (<pause line>)` then one `stop <seat>: …` line
+  each — so the lead can restart every seat from the place the tool holds; a resume with no pause
+  standing is refused. Both act on the team file of the folder when no name is given, on a
+  registered `<team>` by its name, project or id, or on every team in the machine's registry with
+  `--all` (an unreadable team is named on stderr and left as it is), and both judge every target's
+  caller before any state is written. The caller is the owner at a terminal outside herdr, or the
+  team's own orchestrator on the pane the state records for it. `--json` emits `team.pause` /
+  `team.resume` and is refused with `--all`.
+- **Operators of one team may message each other.** Two seats of the same team whose file lines
+  both write `role: operator` may send to each other; the pair rule admits that direction alone,
+  and it is the one decision a role's own word makes. It reads the word the live file writes
+  today — a seat the file no longer declares falls back to the role it was registered under —
+  and it is not the team's operator place, which already reaches every seat of its team. The word
+  grants no other reach: it makes no lead and no assistant, and the pair never crosses teams, so
+  another team's operator is reached through that team's orchestrator or an owner-signed grant.
+  A send the pair admits is written, delivered and logged like any other: its header names the
+  rule and its history line lands in the receiving team's store. `team send --list` shows both
+  seats with their role, and a refusal for an unknown name lists them among the file's seats.
+- **`team usage` reports each seat's spend.** Under each team's seat table, `--tree` now prints
+  the seats' own figures: one line per window — left, used, resets, margin — and one spend line
+  per seat. A figure is `measured` when the run read the seat's own screen, `estimated` from the
+  watch's per-seat record when the live read did not answer, and a seat with neither prints
+  `unknown` with its reason. The spend line is the seat's own money figure, read from the amount
+  a Claude Code status row prints in its `S:` field; any other CLI, an unread pane or a row
+  without the field prints `cost unknown` with one sentence, never `0`. Figures belong to the
+  seat and the run (herdr session) their pane was read in, so two teams' same-named seats never
+  borrow each other's numbers. `--json` carries the same facts under `teams[].seats`, with the
+  session registry's own `measured` / `estimated` / `unknown` word, so every surface prints the
+  same mark for the same figure.
+- **`team check` names a seat held at a prompt.** The pass that reads the team's differences now
+  names each seat that sits at a prompt on the pane the state records for it, one line per seat,
+  read through the watch's own screen reader and only while that pane still holds the process team
+  launched: a pane back at its shell, one running a process the record does not name with no
+  stored session showing continuity, or a record with no identity whose pane holds a bare shell is
+  not read for a prompt at all, so a dialog left in a dead or replaced pane's scrollback is not a
+  seat held at one. The line gives the seat, the prompt's kind — a permission prompt, a trust
+  prompt, a quota prompt with the reset time the screen shows, the CLI's own exit question, or an
+  unrecognised screen that quotes the safety floor's row — the command the screen shows when the
+  profile's trace reader finds one, and the record's `last active` age: that age dates the
+  record, and the line never claims the prompt itself has waited that long. A permission prompt is
+  its lead's to answer; a trust prompt, a quota screen, a confirm prompt or an unrecognised one is
+  the owner's, and a confirm prompt also closes with `team down --abandon`, a quota screen with
+  the reset it names. The check answers nothing, types nothing and writes nothing: the pane's own
+  reader takes the act. Where `status`'s plain permission or trust row would name the same seat
+  the check replaces it, so a held seat is named once, and `status` itself now reads a prompt only
+  where the seat's process runs, for a declared seat and a temporary one alike. A temporary seat
+  is read the same way from its record, with its like-seat's CLI. `--json` renders each line's
+  `what` as it stands, cleaned with the report's own plain-line reader.
+- **The event thresholds are the owner's to set.** Seven `event-*` policies join the release
+  catalogue: how long an unanswered thread stays open (`event-thread-ttl-seconds`, 72 hours by
+  default), how many records a thread may hold (`event-thread-cap`, 50), how many days the event
+  log keeps (`event-retention-days`, 30), when a held record reaches the lead
+  (`event-held-threshold-seconds`, 600), when a seat that watches nothing reads `unreachable`
+  (`event-unreachable-threshold-seconds`, 600), when an idle seat's lead is told
+  (`event-idle-threshold-seconds`, 300), and how often the bus reconciles
+  (`event-reconcile-interval-seconds`, 120). Each takes a whole number — seconds, days for
+  retention, records for the cap — and a seconds value may carry an `s` suffix; the shorter field
+  spellings are accepted and written back under the canonical name. The three delay thresholds may
+  only be shortened: a value above the release default is refused, and so is a level's word that
+  lengthens the one above it. `team bus` reads the held, retention and reconcile numbers when it
+  starts and refuses to start on a signed policy source it cannot read or verify, with the
+  problem on stderr and exit 2, and `team reply` reads the thread life and cap from the caller's
+  chain.
+- **Seat status comes from herdr as events.** One `herdr wait agent-status` waiter per eligible
+  seat turns herdr's status transitions into signed event records, replacing screen polling where
+  herdr's status is reliable: `blocked` raises `seat.at-prompt` — the screen is read once to
+  classify the prompt — `done` raises `seat.done`, `idle` past the idle-lead threshold raises
+  `seat.idle` once per idle stretch, and `working` after `blocked` raises the new
+  `seat.unblocked`, which closes the open prompt notice and cancels its climb clock; `unknown`
+  raises no event, and a `blocked -> working -> blocked` flicker within the one-pass grace window
+  does not emit `seat.at-prompt` twice. Profiles whose herdr status is unreliable keep the screen
+  module, `human: true` seats are never waited on and their screens are never read, and a status
+  waiter never types or sends keys.
+- **`team sessions` lists the session records TeamCLI keeps.** Every launch and stop command now
+  writes an append-only registry, one event per line, in the project's machine state folder —
+  never from an agent's word. `up` and `add` write a `start` when a pane takes the launch line;
+  `restart` closes a record with reason `restart`, `reload` with `swap`, and `down` or `remove`
+  with `owner-stop`; a `start` that finds a session still open for the same team, herdr session
+  and seat closes it as `crash`, and a launch after a drift repair or a reload closes the old
+  record as `swap` and links the new one. A record holds what the launching command knew — seat,
+  team and entity, CLI and lab, declared model, version and effort, account, herdr session, pane
+  and workspace, the previous session of the seat, and the CLI session id where the CLI takes one
+  — and a field no command wrote is absent. `team sessions [<seat>] [--by model|team|entity]
+  [--json]` lists them from every state folder on the machine, so it runs anywhere and needs no
+  team file: SESSION, SEAT, TEAM, MODEL, STARTED, ENDED, WHY (`swap`, `restart`, `crash`,
+  `owner-stop`; `quota` is in the vocabulary with no writer yet) and COST, which prints `unknown`
+  — never `0` — until a command measures it. `--by` groups the listing under one heading per
+  value, and `--json` carries each record whole, absent keys absent. A Claude Code launch line
+  that chooses no session gets `--session-id <uuid>` appended; one that already carries
+  `--session-id`, `--resume`/`-r` or `--continue`/`-c` is left as the owner wrote it, and an id
+  the line spells is recorded. The id is the one TeamCLI set — it never reads the CLI's own
+  session files — and reading a record back into a launch is not part of this release.
+- **`team add <name> --like <seat>` copies a declared seat.** Without `--temporary`, `--like` now
+  writes a new entry directly under the source's last field: the source's fields and the title
+  `<name>`, with its `stopped` mark and `count:` dropped (a counted source is split first) and its
+  comments and blank lines left where they are. The source's own entry is untouched, and the new
+  seat starts now where `up` would start it, and the entry is written before the launch, so a
+  launch that fails leaves the declared seat in the file for a retry. A `human: true` source is
+  refused before anything is written or launched. The name must be one the file does not declare (refused as
+  `add.like-exists`) and the source one it does; a copy the file's own validation refuses — a
+  second `leads`, `assistant` or nickname — stops before anything is written or launched. The new
+  entry is not added to the approval record, so the roster change is the owner's to approve; a
+  delegate's standing grant admits a copy only when the record holds the source seat just as the
+  live file writes it and the run writes that one entry, and a source the record does not hold, or
+  holds differently, stays the owner's. `--until` and `--worktree` still need `--temporary`;
+  `--like` alone is now a declared copy.
+- **A one-row unsent draft no longer holds a delivery.** A profile may now carry an `input`
+  block, declaring the measured way into its CLI's input box: the keys that empty an idle box
+  (`clear`), optionally the keys that empty it mid-turn (`clear_working`), the paste surface
+  (`paste: bracketed`, the one measured), and whether the CLI takes text while a turn runs
+  (`mid_turn`). claude-code, codex and cursor carry one, each from a run recorded over its own
+  pane; every other profile carries none, and a delivery that finds unsent text there holds as
+  it did. A typed delivery that finds a one-row draft copies it beside the drop file
+  (`<drop>.draft`), clears the box with the profile's keys — the mid-turn key while the seat is
+  working, never the interrupt key — types the trigger and presses Enter, then pastes the text
+  back exactly as it was read and removes the copy only once the box reads that text back. A
+  copy already beside the drop holding different text is never overwritten: the run holds and
+  names it. The direct leg, the daemon queue, the watch's held-send retry and the native
+  handoff all carry the same keys, so every route makes the same delivery, while the watch's
+  own nudge still types only into an empty idle box. The receipt says where the text went (`the
+  unsent text was pasted back`, or `…; its copy is at <path>`); a delivered exit restores the
+  draft after a late clear or a read that fails, a box that reads other text keeps its copy,
+  and a not-submitted run puts the text back before saying so. `restart` restarts an idle seat
+  holding one row of unsent text instead of leaving it: it copies that row to
+  `restart-drafts/<session>/<seat>.draft` under the session lock, prints the copy's path in the
+  pre-close facts, closes the pane without typing over the text, and pastes it back into the
+  new pane once herdr reports it idle or done, removing the copy only after the box reads it
+  back; a different copy at the path refuses the restart and is never overwritten.
+  A box drawn over more than one row is never copied — the composer word-wraps a long line over
+  the same continuation rows a person's Enters draw, so a soft wrap cannot come back as a line
+  break nobody typed — and that box, a profile with no measured keys, a missing mid-turn key, a
+  paste chip and rows the reader cannot read each keep the old hold on send or the old refusal
+  on restart, with the box's own reason. `--abandon` still closes the workspace without a copy.
+- **Every command states who may run it.** The generated CLI contract now carries a `who` row for
+  every command and subcommand — the gate kind and the command map's own sentence, plus the
+  detached route (who and where) where the module refuses a run with no terminal — and
+  `docs/reference/cli.md` prints it under each command's `Who may run it` heading. The rows are
+  copied from `COMMAND_GATES` (`src/permissions/map.ts`) as they stand, never reworded, and
+  generation stops on a word the map does not name: the map is closed, so its silence is not an
+  admission and no unlisted word reaches the adapter. The 0.5.2 kinds `any-caller`, `seat-only`,
+  `leads-only`, `team-change`, `team-pause` and `team-read` join the map, `error.rule` carries
+  `team-change`, `team-read` and `terminal`, and a difference repair names the actor it named
+  before: a lead for `team-change`, `team-pause`, `any-caller`, `seat-only` and `leads-only`, any
+  seat for `team-read`.
+
+### Changed
+
+- **The bus verifies only what was appended.** A reconciliation pass or a subscription now
+  verifies the event records appended since the last verified sequence and trusts the prefix its
+  checkpoint pins: the highest sequence it has verified and a SHA-256 over the raw lines of every
+  retained record at or below it, in retained order. A read with no checkpoint, a different
+  message key, or a digest that does not match — a segment trimmed, a file rewritten, a record
+  altered in place — verifies the whole retained log again and rebuilds the checkpoint, so a
+  record altered earlier is still caught: it changes the digest, and the read that sees the
+  change falls back to the full verify that finds it. File boundaries are not part of the digest,
+  so a rotation that keeps every byte keeps the checkpoint while a trim does not, and the
+  checkpoint lives in the bus process's memory, so a restart or a read from another process
+  starts from a full verify. The bus's plain output and exit codes are unchanged.
+
+### Fixed
+
+- **A seat launched into a lobby keeps its inbox.** The launch now carries the team file it read
+  into the plan and the seat-inbox registration, and the registration names that file to
+  `team mcp serve` with `--file`: the server resolves the team from it instead of the folder it
+  started in, which a seat launched into a lobby does not have. With no file named, the folder's
+  team file is the fallback, and a team that cannot be read is still refused. `restart`'s real
+  launch registers the inbox like `up`, `add` and `reload` already do. The codex launch-line route
+  writes no config file of its own, so its two `-c` values now carry the `--file` pair, with the
+  path escaped as a JSON string inside the structured value so a path with spaces or quotes stays
+  one argument; the cursor route's written JSON names the launch file, and gemini's and grok's
+  `mcp add` argv carries the path byte for byte. A named file is read and only that file: an empty
+  name, a missing file, a folder or an unreadable file is a refusal that writes nothing, though
+  the folder holds a valid team of its own, and `team mcp serve` exits 2 with the loader's message
+  before it makes a listener or an inbox folder. `--file ''` is refused by the parser with
+  `team mcp: --file needs a value`.
+- **`team usage` tells a file it cannot read from one that does not load.** The team-file loader
+  returns its refusal for an unreadable file instead of throwing it, and marks that refusal
+  `unreadable`, so `team usage` keeps the two faces the case had: the owner reads the loader's
+  own sentence, the file named once; a caller who is not the owner reads the fixed sentence
+  `cannot be read: the owner reads the reason`, prefixed by the team file path — never `does not
+  load` for a file that never loaded. A file that loads and still has a problem keeps its load
+  sentence, with the line and the loader's reason for the owner.
+
+## [0.5.1] - 2026-10-19
+
+### Added
+
+- **The `drop` leg, and human seats.** A receiving seat's delivery order may name `drop`: the walk
+  writes the record as the typed leg's own 0600 drop file and types nothing at all — no trigger
+  line, no socket frame, no daemon round trip, no pane read — so a receiver that watches its own
+  drop folder finds the message there. Its console line is `<seat>: sent (unconfirmed) (drop,
+  <n> ms)`, exit 0: the record is the message, safely on disk, and no signed receipt has come
+  back yet. Beside it the send leaves the marker `<id>.pending`; the seat's own watcher reads the
+  drop and writes the signed `<id>.read.json` receipt, and a running watch promotes it once — one
+  `delivered (read)` history line, the marker cleared, nothing typed. A drop no watcher read
+  thirty minutes after the send is given up on with the file's path: the marker is cleared, the
+  record stays in the folder, and it is never typed and never called lost. The history line says
+  `via: drop` and the JSON channel is `drop`; the leg sits in the default order between the
+  seat's own MCP inbox and the typed trigger. The typed leg stays terminal, and a drop-leg marker
+  is never typed or retried; `team drops` reads the receiver's own folder, and its `--follow`
+  prints each drop that arrives. A dry run names only the legs it can
+  reach: the phrase stops at the first terminal typed leg, and names only the drop channel when
+  `drop` leads. A seat the team file marks `human: true` walks the drop leg alone, whatever its
+  order or the default says: the typed trigger, the native frame and the seat's own inbox are
+  kept out, the reason for each leg the order holds recorded on the history line, so the message
+  arrives in the drop file and nothing reaches a pane or an inbox; a `delivery_order` written on
+  such a seat is not a `team check` difference, because the seat walks `drop` alone whatever the
+  word says. A person reads the drop and writes no receipt, so no marker waits there, and an
+  expired handoff's fallback walks the same one leg. `--wait` is
+  allowed for such a seat: the record is written on its `drop` leg, nothing is typed, and the run
+  awaits a reply record on the thread. The watch types no retry, nudge, work drop or ring there,
+  giving a held drop up with the reason instead.
+
+- **`team drops`.** The receiving seat reads its own folder under
+  `.agents/send-drops/<session>/<seat>`: one row per waiting drop, the sender the record's payload
+  names — `the owner`, a seat's name, or a registered name — or, in a raw body file an earlier
+  build wrote, the sender its first line names; `unknown` when there is neither, and when a record
+  does not verify against the message key. A drop with the signed `<id>.read.json` receipt beside
+  it is read, and is not listed — a receipt the key did not sign, or one naming another message,
+  seat, checkout or session, proves nothing and the drop is still listed; a name with a dot in it
+  is a sidecar, never a drop. Apart from `--read`'s receipt, the command only reads: it moves,
+  deletes and marks nothing, and a folder that does not exist yet is an empty one. Only the seat
+  itself, on the pane the state records for it, may run it; the owner,
+  another seat and a seat on another pane are refused. `--follow` prints
+  `from <sender> — <path>` for each drop that appears while it runs — the drops already on disk
+  are waiting, not new — flushed per line for a Monitor in the receiving seat, and Ctrl-C stops it
+  with exit 0. `--json` prints one `team.drops` document; it and `--follow` cannot be combined,
+  and `--read` combines with neither. `--read --seat <seat> [--session <session>]` is the
+  launch's own turn-start read: it verifies each waiting record with the checkout's message key,
+  writes the signed `<id>.read.json` receipt beside it before printing its body, hands over at
+  most ten records a run, and asks for no placed caller, because a CLI's hook runs outside any
+  pane. The team file must declare the seat, and a session it is given must be the team file's
+  own; a record it cannot verify or receipt is a refusal and its body is not printed. `--read` is
+  the one mode that writes, and it writes only the receipt (mode 0600): the drop itself is never
+  moved, deleted or marked. `--seat` or `--session` without `--read` is an invocation error.
+
+- **The message record, threads, and `team reply`.** A plain send writes the message whole as one
+  signed record — the body, the sender, the rule that admitted the send, and the thread — into
+  the recipient's folder at `.agents/send-drops/<session>/<seat>/<id>`, mode 0600, by renaming a
+  temporary file into place, in the leg that takes the send and before that leg delivers it; a
+  walk no leg takes writes no record. The record is the message, and the typed, drop and
+  mcp-inbox legs all carry it. `team messages` reads every record still waiting,
+  verifies its signature with the checkout's message key, prints the body and writes the signed
+  read receipt `<id>.read.json` in that one step; the seat's inbox server writes the same receipt
+  for each message it returns, and verifies the record before anything is shown, so an unsigned
+  or tampered file prints no body and leaves no receipt. The history keeps the conversation:
+  every line carries `thread`, the first message's id, a reply also carries `in_reply_to`, the
+  feed's DETAIL opens a reply with `re <id>: `, and its `--json` event carries a `status` derived
+  from the outcome — `sent`, `held`, `delivered`, `read` or `replied` — never a stored one.
+  `team reply <id> <text>` answers the sender of a record on its thread: one signed reply record,
+  delivered as the drop leg delivers — left in the sender's folder, nothing typed, no frame sent
+  — and the signed `<id>.replied.json` receipt beside the record it answers. `team reply <id>
+  --close` writes a signed `<id>.closed.json` instead; a thread also ends when its newest record
+  is 72 hours old or when it reaches 50 records, and a reply on a closed thread opens a new
+  thread that cites the record it answers. A reply goes only to the sender, admitted by
+  `reply-on-open-thread`; a record the owner sent has no seat to answer, so a reply to it is
+  refused before anything is written.
+
+- **A waited send.** `team send --wait` writes the signed record through the receiving seat's
+  delivery walk — `mcp-inbox`, `drop` or `typed`, or `drop` alone when the seat's file marks it
+  `human: true`, so nothing is typed into a person's pane — then waits on the thread for the first
+  verified reply record until the `--timeout` window (120 seconds by default) closes. A reply makes
+  the run `answered` (exit 0); a window that closes with no reply makes it `timeout` (exit 1) and
+  leaves the thread open, so a late `team reply` still lands on it, and an answered `--json`
+  document carries the thread id.
+
+- **The native leg, as a handoff.** When the recipient's CLI carries the cross-session channel and
+  the sender's own file declares `cli: claude-code`, a send to the native leg becomes a handoff:
+  the run resolves the recipient live, admits the pair, writes one pending record (0600, a
+  temporary file renamed into place), and prints the exact `to:` target, the body and the
+  `team send --confirm <id>` line, exiting 0 with status `native`. The sender makes the call;
+  `--confirm` takes the record by rename before it writes the one history line (`delivered`,
+  `via: native`, the span from the handoff to the confirm) and clears it, so a second confirm
+  finds none. The confirm reads the recipient's visible 40 lines for the handoff's nonce
+  (`nv-<8 hex>`): the window that shows it records `delivered`, and its absence — or a nonce
+  already scrolled off — records `sent (unconfirmed)`. An unconfirmed handoff past ten minutes is
+  claimed by a running watch on the sender's team, recorded `native: unconfirmed after 10m`, and
+  handed to the remaining legs of the recipient's order — a live inbox takes the body, the drop
+  leg leaves it in the drop file, or the typed leg types its trigger — so a late `--confirm`
+  finds no record and nothing is delivered twice. A handoff that cannot resolve the recipient's
+  live pane or its socket hands the send to the next leg the recipient's order holds, and a
+  record that cannot be written refuses. Without a running watch, an unconfirmed record does not
+  fall back, and no timer sweeps it: the folder is pruned only when another pending record is
+  written or a confirm next reads it, so a record nobody touches again outlives the 24 hours.
+
+- **`team mcp serve`, and the `mcp-inbox` leg.** `team mcp serve --seat <seat>` runs the MCP server
+  a seat's launch line starts: two tools over that seat's own drop folder, the seat and session
+  fixed at launch, an id a lowercase UUID only, and a receipt written before the body leaves; a
+  folder path that is a link at any step refuses service rather than being followed, and the
+  listener marker carries the server's pid while it runs, removed at exit only while it still
+  names that pid. A send to a seat whose listener is live takes the `mcp-inbox` leg: it writes the
+  same 0600 drop file into the seat's inbox and types nothing; the receipt its `inbox_read`
+  leaves makes the outcome `delivered (read)` — the seat read the message, never a claim that it
+  acted on it — and a wait that ends without one records `sent (unconfirmed)`, exit 0, the file
+  being the message safely on disk. A marker absent, malformed, dead or naming another seat,
+  session or root is `mcp-inbox: no live inbox listener`, and the walk moves on. A receipt that
+  lands after the sender has gone is promoted by the watch — one `delivered (read)` history line,
+  nothing typed — and a message still unread ten minutes after the send is handed to the retry,
+  which types its trigger once and records `mcp-inbox: no receipt within 10m`; a typed record
+  always goes before an inbox one, so an inbox message never delays a held send's retry.
+  `team feed` shows one row per message when its outcome moves: the latest line once, in its
+  chronological place, keeping the address the send recorded when the later line has none, and a
+  `--follow` pass still prints the update.
+
+- **The inbox registered with each CLI, and read each turn.** A seat's launch registers the server
+  where a measured route exists: a codex launch line carries the registration itself, with no
+  file written into the seat's folder; a gemini or grok seat's launch runs that CLI's own
+  `mcp add -s project`, the file it writes being the CLI's own project settings; and a cursor
+  seat's launch merges the server into its project MCP config and carries the approval flag, so
+  the CLI loads what team registered for it. The server names the seat it launched for, and the
+  session it serves is the team file's in the seat's folder. Where that folder is a git work tree
+  that does not ignore a file the registration would write, registration is refused, the seat
+  still launches on its drop and typed legs, and its line carries the reason. A seat whose CLI
+  carries the server is asked, in its rules, to call `inbox_check` at the start of each turn and
+  `inbox_read` for each message, then act on what it read.
+
+- **`team bus`, and the project event log.** The owner starts `team bus` in a foreground terminal
+  outside herdr, one per clone: it owns the project's event log (`events.jsonl`), appends each
+  event as a signed record, runs the reconciliation pass over durable message and seat records
+  when it starts and every two minutes after, and serves `publish` and `subscribe` on
+  `.agents/bus.sock`; Ctrl-C removes the socket and exits 0. A segment rotates at 100 MB, and
+  when the bus starts an idle live file is sealed and the oldest sealed segments are dropped
+  whole once their last write is thirty days old or the retained files together pass 100 MB; one
+  signed `team.event-log-dropped` record names the dropped sequence range and whether the age
+  window or a size bound dropped it, so a reader and a gap-resync see a declared hole rather than
+  an unexplained one. Nothing starts it for you in 0.5.1.
+  It refuses to start when the caller is not the owner, when a bus is already answering, when
+  another start holds the socket lock, or when the socket cannot be bound, and exits 2 on a bad
+  invocation or a team file it cannot read. With a bus answering, `team watch` reads new events
+  in sequence order and publishes the events its reports imply — `seat.unreachable`,
+  `seat.at-prompt`, `seat.prompt-escalated` and `seat.blocked` — to the log, and after a sequence
+  gap re-announces the reports that are still true; with no bus running it polls exactly as
+  before. The reconciliation pass appends only the events the on-disk records imply and the log
+  is missing, keyed by kind,
+  record and session, so a pass over unchanged records adds no second
+  event. A seat that is not a default recipient may not subscribe itself to a privileged kind —
+  a grant, a policy, `seat.at-prompt`, or one the owner has named — and the bus refuses it with
+  `privileged-self-subscription`, logs the refusal, and raises `team.policy-refused` to the
+  owner.
+
+- **Routing, and the owner's own delivery.** An event's recipients come from its kind's release
+  defaults, folded through the routing words in force: a word may add a recipient for a kind,
+  and cannot remove one it did not add, and a privileged kind keeps its default owner. A
+  recipient may name a seat by its plain name or by the agent registry id that holds it — a
+  claimed pane must match the one the registry holds, a retired agent's id names nobody, and an
+  id the registry does not know is left as written. An event routed or addressed to `owner`
+  reaches the owner with no seat in the path: the machine notification the watch raises and a
+  signed record in the owner's mailbox, the list `team messages` reads, so a held or unreachable
+  seat silences neither, and the watch's owner report merges with the operator's copy of the
+  same observation, so the owner's list holds it once. A kind on the owner's immediacy list —
+  `owner-at-once`, an owner-sovereign setting whose release default holds `seat.at-prompt` only
+  at a permission, trust, login, vendor-notice or rate-limit prompt, `seat.prompt-escalated` at
+  every climb, and `seat.unreachable` and `seat.done` only for the team's lead, plus every
+  roster, grant and policy event, both raise kinds and both refusals — rings and lands as its
+  own record; everything else collects in the pass and lands as one digest record at its flush,
+  and both ids are deterministic, so a watch restarted from cursor 0 rings and writes nothing
+  again. `--no-notify` never silences an owner push.
+
+- **The watcher each launch leaves.** The launch plan reads, once per seat, how the seat's CLI
+  will learn that a drop is waiting — the turn-start hook the launch installs, the MCP inbox
+  server its profile registers, or nothing — carries it through the launch's steps, and stores
+  it in the seat's record; `team up --dry-run` names it under the launch line it would type:
+  `reads its drops at each turn start`, `reads its drops through its MCP inbox`, or `watches
+  nothing: a drop sent here is never read`.
+
+- **A general seat brief, delivered first.** `up` writes TeamCLI's built-in general brief into
+  every declared seat's drop folder as one signed message record before the plan types a rules
+  line into any pane, human seats included; `add`, `restart` and `reload` write it to the one seat
+  they act on and refuse a human pane, so a human seat's record comes from `up` alone. Nothing is
+  typed into any pane. The text is the package's own, embedded from its accepted source; the
+  record's id is derived from the text, so the same brief has one id in every seat's folder and a
+  second run leaves a verified record and its time as they are. A file already at that id that
+  does not verify is replaced through the signed record writer, and a link, a folder or a FIFO
+  there is refused, never followed. The session's state records each delivery, and `team check`
+  opens and verifies the delivered record, naming a launched seat whose record is missing or does
+  not verify, with its repair.
+  `bun run brief:check` fails unless the embedded text still hashes to its pinned value, and given
+  the source it compares the two byte for byte and names the first line that differs; CI runs the
+  pin.
+
+- **The command guard a `claude-code` seat carries.** The per-launch settings file a claude-code
+  seat loads now carries a shipped `PreToolUse` hook, run by this install's own interpreter
+  before every `Bash` tool call, that denies a conservative set of commands and hands the model
+  one line of guidance back instead: `chmod` and `chown`, `sudo`, a recursive `rm`, `pkill`,
+  `killall` and a `kill` that asks for `SIGKILL`, a `curl` or `wget` download piped into a shell,
+  a forced git push (`--force`, `-f`, a `+` refspec), `git reset --hard`, a destructive `git
+  clean` (`-f` with `-x` or `-d`), a forced branch deletion (`-D`, or `-d -f`), `dd` and `mkfs`,
+  `shutdown`, `reboot`, `launchctl`, `crontab` and `npm publish`. It judges commands, never
+  words: a sentence in a quote, a heredoc body and a send body are arguments to the command that
+  carries them, while unquoted `;`, `&`, newlines and pipes separate a line into commands judged
+  one by one; a leading assignment and the prefixes that run another command (`env`, `command`,
+  `exec`, `nohup`, `nice`, `time`, `timeout`, `stdbuf`) are read through to it, and `xargs` and
+  `find -exec` are judged as the command they carry. `command -v` asks where a name is and
+  passes, and a payload the hook cannot read is left to the CLI, so a CLI that changes its
+  payload never freezes a seat. The hook never asks — it allows a command or denies it — and a
+  deny wins over the owner's user-wide ask, measured on Claude Code 2.1.302, so an unattended
+  seat does not freeze at a permission prompt it cannot answer. A human seat carries no guard,
+  because a human's pane is never launched into, and neither does a seat whose launch line names
+  its own settings file: the guard rides the one TeamCLI writes. Each deny raises
+  `security.refused` with the command's class as the rule and the seat as the object, never the
+  command line, which may hold a secret. It is a best-effort net against an unattended prompt,
+  not a sandbox: a shell can always reach a command another way, deliberate evasions are out of
+  scope, and the climb of an unanswered prompt to the lead and the owner is the backstop.
+
+- **Readable sender names.** A team file or a seat may write `sender_name` — `auto`, `nickname`,
+  `seat` or `seat@team` — and every sender headline TeamCLI prints by hand reads by the word in
+  force: the first line of a drop file, the FROM cell of `team drops` and `team messages`, the
+  SEAT cell of `team feed`, and the display name a claude-code seat's session is launched with
+  (`--name`). The default, `auto`, reads a sender inside its own team as its nickname (the seat
+  name when the file writes none) and one from another team as `seat@team`, because a nickname is
+  unique only inside one team; `nickname` always reads the nickname, `seat` always the seat name,
+  and `seat@team` always the address. The word is read nearest first — the reading seat's own
+  word, then the team file's, then the project's registry record, then `auto` — so one team's
+  file decides how senders read to it. It changes presentation only: every signed record keeps
+  the seat in `from` and the registry id in `from_id`, and the `--json` readings keep the
+  record's own fields. A feed line records the sender's team with the send, so a sender from
+  another team reads by its address and never as a local nickname of the same name; a line
+  written before that field reads as the plain seat name. A registry that cannot answer is no
+  answer: the seat name stands.
+
+### Changed
+
+- **The default delivery order, and the words a level may add.** A send whose receiving seat
+  declares no order walks `mcp-inbox`, then `drop`, then `typed`: the seat's own inbox when a
+  server serves it, the 0600 drop file with nothing typed into the pane when one does not, and
+  the typed trigger line last. `native` is never in the default — the sender chooses it and
+  records the delivery itself — and it is the one leg a declared word may add to the order in
+  force; a word naming any other leg the order does not have is still set aside. A seat whose
+  file declares no word takes the one its shape implies: a pane marked `human` walks `drop`
+  alone, and a CLI whose launch installs no watcher — no turn-start hook and no MCP inbox —
+  leaves `drop` out, because nothing on its side would read the file.
+
+- **A human seat's pane is never touched, whichever command reaches it.** `up` skips the seat in
+  its plan — no workspace, no launch line, no key — says why, and does not count it short of
+  ready; `down` leaves it running, types no exit line and closes no workspace, even with
+  `--abandon`; `add` and `restart` name one seat and refuse with that reason. `remove` takes the
+  seat out of the file (or marks it stopped under `--keep`) without typing the exit line,
+  pressing a key or closing the pane, which keeps running, and its closing line says why in
+  `down`'s words. `reload` refuses with the reason before the launch record is read; `answer`
+  refuses after the caller admission and before the seat's lock, state or screen is read, and
+  names the spare; `register` adopts the pane as before but writes no rules file and types no
+  rules line, even when a record written before the mark says a trust dialog is waiting. The
+  send daemon refuses a human seat at its own queue — the CLI's walk takes the drop leg alone
+  earlier — so no trigger is typed, no frame is sent and no worker is started.
+
+- **`team raise`, and two owner events.** `team raise <kind> <text>` carries one line from the
+  team's lead to the owner at once: a signed record in the owner's mailbox, the matching
+  `release.ready` or `decision.needed` event, and the machine notification. Both kinds are routed
+  to `owner` alone and stand in the owner-at-once list, so the watch rings them instead of
+  batching them into the pass's digest, and the record is written under the id the event's own
+  delivery would use, so the watch finds it already there and does not deliver it twice. The
+  orchestrator's seat, or a seat the file marks `leads`, may raise; the owner and every other seat
+  are refused by name, and a lead's seat must be on the pane the state records for it. The same
+  kind and line from the same seat within the hour is one record, rewritten as `<line> (×N)` and
+  adds no event, and ten raises reach the owner per team per UTC day, an eleventh refused with the
+  reason. `--dry-run` reads the log and the record, says what would happen, and writes nothing.
+
+- **Two refusal events reach the owner.** A record or receipt that fails verification — in the
+  seat's inbox server, in `team drops --read`, or in the message list — raises `record.invalid`,
+  and an identity or admission the send and reply rules deny raises `security.refused`. Both
+  kinds are privileged, routed to `owner` alone and on the owner-at-once list, so the watch rings
+  them and writes the owner's record at once, never into a person's pane; each event carries the
+  refusal's rule and object (a record id, a seat, a path) and never the refused content, and one
+  event stands per rule and object in an hour with every occurrence counted in
+  `.agents/team.log`, so a refusal loop counts instead of flooding.
+
+- **A prompt that is not cleared climbs.** A seat held at a permission, vendor-notice or
+  rate-limit prompt starts a clock, and one still held after `prompt_escalation_seconds` — five
+  minutes in this release — reports `<seat> is still at a <prompt> prompt after <n> minutes: the
+  team's lead has not cleared it, and the entity's lead and the owner are told` and raises
+  `seat.prompt-escalated`, once for that prompt spell; a prompt that clears before the window is
+  the lead acting, and its clock goes. The kind is privileged and on the owner-at-once list, and
+  its release routing is the entity's own lead and the owner; the owner stands even when the
+  registry names no entity lead, so a climb is never silent. The entity's lead is the
+  lead-marked seat of the team whose project is the entity — that team's roster, root and
+  session — and the climb is left there as one signed runtime record in that lead's mailbox,
+  where that team's watch rings it as a message. The team's own orchestrator keeps no clock: its
+  `seat.at-prompt` reaches the routing table's lead and operator, and because the prompted seat is
+  the lead, it also reaches the entity's lead and the owner; the same mailbox record is left. A
+  watch that restarts mid-spell starts the clock again, so a prompt held
+  across a restart can climb once more. Nothing is typed into any pane — a climb is an event
+  and a record, never a keystroke — so a human seat's prompt climbs the same way. The check is
+  one of the five the watch file cannot turn off.
+
+- The Antigravity profile is tested with CLI 1.2.16 to 1.4.2: the 1.4.2 screens — trust, idle,
+  unsent, working, question, permission and exit — are captured as fixtures, the trust dialog is
+  unchanged, its fresh idle footer carries no model row again as on 1.4.0 — the row appears under
+  the box once a turn has run — and the launch test's boundary moves to 1.4.3.
+
+- The Cursor profile is tested with CLI 2026.10.01 to 2026.10.16: the 2026.10.16 screens — trust,
+  idle, unsent, working, question, permission and exit — are captured as fixtures, the trust
+  dialog still marks `[a] Trust this workspace` with the same key, so that build gets its own
+  trust record beside the two earlier ones, and the launch test's boundary moves to 2026.10.17.
+
+### Fixed
+
+- **A receipt file that proves nothing is replaced, not trusted.** The signed read receipt is
+  write-once per status for the message and context it verifies for: a signed receipt already at
+  `<id>.<status>.json` that names this message, seat, checkout and session is left untouched, so
+  a second read adds nothing. A regular file at that name that does not verify — unsigned,
+  unreadable, another message's, or signed for another seat, session or checkout — is replaced
+  by the signed receipt, so a planted or stale file cannot keep a message waiting forever; a
+  name held by a link, a folder or a FIFO is refused, and nothing is written through it.
+
+- `team doctor` names a launch record that carries the pane's process identity and no seat id —
+  the one `team seats` shows as `-` in its ID column — with the sibling note and the same repair
+  as the process note (`team register <seat>`), and a lead's own seat draws neither note.
+
+- A watch retry never types a held line into a pane back at its shell: it reads the pane's process
+  identity under the seat's lock and refuses the same state the typed leg and the daemon refuse —
+  no line typed, no Enter, the reason said — and the drop file stays for a person to send again.
+
+- `team reload` says and logs a seat it leaves out. A close re-read that refuses the seat (moved,
+  working, replaced process, unsent box) and a rules line whose read-back fails each print
+  `<seat>: left out: <reason>` in `up`'s words and write the same line to the log, where the run
+  used to say nothing; a rules line this run typed that cannot be read back is cleared with the
+  profile's clearing key, the key `up` sends, and its record says the line was cleared and names
+  `run up again`. A ready seat still prints only the run's one success line.
+
+- `team drops`, `team messages`, `team next`, `team plan`, `team issues`, `team bus` and
+  `team broker` work at a team root that is not a git repository. Each resolved its root through
+  git before reading the team file, so a folder holding `.agents/team.yaml` outside any checkout
+  was refused with the no-repository sentence; each now takes the shared resolution — the
+  enclosing checkout, or the plain root in this folder. A folder that is neither a checkout nor a
+  team root keeps the no-repository refusal and exit 2, and an unreadable or invalid team file
+  keeps its own exit.
+
+- `team reply` admits a placed seat in its own session. A seat a real launch placed carries its
+  session in the session-aware reading only, and the command judged the sessionless one, so the
+  seat's own reply — and its own `--close` — was refused as `a caller of another session is not
+  that seat`; it now judges the same session-aware placement `team send` does.
+
+- `team init` keeps `.agents/send-drops/` out of git. The exclude list it writes to
+  `.git/info/exclude` — never `.gitignore` — names the drop folder beside `.agents/messages/`, so
+  the records a send leaves in a seat's folder never show up as untracked changes.
+
+- **`team init` keeps the bus's start files out of git.** The exclude list now also names
+  `.agents/bus.sock`, `.agents/bus.sock.lock`, the lock's takeover claim and the private temp an
+  atomic create keeps, beside the broker's own entries, so a running bus no longer leaves an
+  untracked socket and lock in the checkout. The bus's event log and its sealed segments live in
+  the project store, not in the checkout, so nothing else under `.agents` is missing.
+
+- **A running seat's draft is never typed over by a direct send.** The direct typed leg read a
+  running turn as an empty box — the caution stages run before the composer stage — so a send
+  typed its trigger into a draft a person had written during the turn, and the first Enter
+  submitted both. The composer below a working screen is now read too: when it holds unsent
+  text, nothing is typed and the send is `held` with the box's text, the record and the pending
+  marker are kept, and a running watch retries it when the seat is idle; a clear composer on a
+  working screen still takes the line. The same read backs the one guard the daemon, the retry
+  and the nudge share, so every typed path judges a working screen by its composer.
+
+### Known limits
+
+- The event thresholds ship as fixed defaults; an owner-only `team policy set` for them comes in
+  0.5.2.
+
+- No team can override the general seat brief yet: it is TeamCLI's built-in default, shipped in
+  the package, and every team receives that text. A registry-held definition, overridable by an
+  entity or a project, is deferred to 0.5.2.
 
 ## [0.5.0] - 2026-10-18
 
@@ -51,16 +622,15 @@ commands read them.
   or `refused`. A send walks the receiving seat's delivery order — `native`, `mcp-inbox`, then
   `typed` when no level of the seat's chain changes it: the entity, the project's registry
   record, the team file's `delivery_order` and the seat's own each may drop a leg or reorder the
-  ones it keeps, never add one — and this build carries no `mcp-inbox` leg and opens no socket,
-  so every delivery it makes goes by the typed leg, and each leg the walk could not take is
+  ones it keeps, never add one — and 0.5.0 carried no `mcp-inbox` leg and opened no socket, so
+  every delivery it made went by the typed leg, and each leg the walk could not take was
   recorded `unavailable` on the history line. A plain send gives the seat the body whole in a
   mode-0600 drop file and types one short trigger line naming it — the body is never typed, and
   never split — for every seat, Claude Code's included: a socket write to a busy session can land
   at its held-message dialog, where the box is blocked, so no path opens a cross-session socket
-  at all. `--wait`, which would ride one, is refused for every seat — a Claude Code seat's
-  refusal names the native leg
-  (`team route` and the caller's own `SendMessage`) that will carry a waited send, and any other
-  seat gets its own reason — and nothing is written. A seat the receiving team file marks
+  at all. A waited send walks the same delivery order — `--wait` writes the record as a plain
+  send does and then waits on the thread for the first verified reply record (see the waited
+  send above). A seat the receiving team file marks
   `stopped: true` is not addressed at all: the send, its dry run and `team route` refuse it as
   stopped, with its own exit id, before a drop file exists, a leg is walked or a history line is
   written.

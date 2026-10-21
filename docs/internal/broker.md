@@ -45,13 +45,14 @@ testable at all.
 
 ## What it reads and writes
 
-Reads the git checkout (`findRoot`), the team file, and the Keychain service the file names
+Reads the team root (`loadTeamFile`: the checkout, or the folder holding `.agents/team.yaml`),
+the team file, and the Keychain service the file names
 (`tasks.linear.keychainService`) once at start, through the facility above. Per request it makes
 one bounded read-only Linear query under `tasks.linear.project`, from this process, and applies
 the `tasks.policy` before the answer is serialized: a field the policy leaves out is absent from
 the record, never blank.
 
-Binds the unix socket `.agents/broker.sock` in this clone. The socket file, the start lock
+Binds the unix socket `.agents/broker.sock` at that root. The socket file, the start lock
 beside it, and the takeover claim beside that (`.agents/broker.sock.lock.takeover`, which
 removes a dead start's lock; a killed claim-holder can leave it, and the next start clears it)
 are the files it writes — the lock and the claim each created through a private temp that names

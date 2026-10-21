@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { JsonSchema } from '../file/sections/section.ts';
-import { DELIVERY_LEGS } from '../settings/inherit.ts';
+import { DELIVERY_LEGS, SENDER_NAME_MODES } from '../settings/inherit.ts';
 import { DIFFERENCE_WHO_VALUES, SEVERITY_LABELS, SEVERITY_LEVELS } from './text.ts';
 
 export interface CommandSchemaSpec {
@@ -258,6 +258,9 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
         hold: {
           type: 'object',
         },
+        pause: {
+          type: 'object',
+        },
         procs: {
           type: 'array',
           items: { type: 'object' },
@@ -302,6 +305,9 @@ export const SEATS_OUTPUT_SCHEMA: CommandSchemaSpec = {
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
     notice: { type: ['string', 'null'] },
+    pause: {
+      type: 'object',
+    },
     seats: {
       type: 'array',
       items: {
@@ -371,6 +377,7 @@ export const PROJECTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
             type: 'array',
             items: { type: 'string', enum: [...DELIVERY_LEGS] },
           },
+          senderName: { type: 'string', enum: [...SENDER_NAME_MODES] },
           provenance: {
             type: 'object',
             additionalProperties: false,
@@ -498,6 +505,7 @@ export const RELOAD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   properties: {
     seat: { type: 'string', minLength: 1 },
     pane: { type: ['string', 'null'] },
+    notes: { type: 'array', items: { type: 'string' } },
   },
 });
 
@@ -676,6 +684,89 @@ export const HOLD_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   },
 });
 
+/** One stop point a pause records: the seat, and what its record and worktree held when the
+ *  pause was written. Every field but the seat is absent when the tool held nothing for it. */
+const PAUSE_STOP_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['seat'],
+  properties: {
+    seat: { type: 'string', minLength: 1 },
+    stage: { type: 'string', enum: ['launched', 'named', 'ready'] },
+    branch: { type: 'string', minLength: 1 },
+    path: { type: 'string', minLength: 1 },
+    last_active: { type: 'string', minLength: 1 },
+  },
+};
+
+/** Published `--json` output schema for `team pause` (`schema/pause.schema.json`). */
+export const PAUSE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.pause',
+  fileName: 'pause.schema.json',
+  title: 'team pause --json output',
+  statuses: ['paused'],
+  required: ['project', 'session', 'target', 'value', 'pause'],
+  properties: {
+    target: { type: 'string', const: 'team' },
+    value: { type: ['string', 'null'] },
+    pause: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at', 'stops'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+        reason: { type: 'string', minLength: 1 },
+        stops: { type: 'array', items: PAUSE_STOP_SCHEMA_FRAGMENT },
+      },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team resume` (`schema/resume.schema.json`): the record
+ *  that was cleared, stop points and all, so the caller keeps what the pause held. */
+export const RESUME_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.resume',
+  fileName: 'resume.schema.json',
+  title: 'team resume --json output',
+  statuses: ['resumed'],
+  required: ['project', 'session', 'target', 'value', 'resumed'],
+  properties: {
+    target: { type: 'string', const: 'team' },
+    value: { type: 'null' },
+    resumed: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['by', 'at', 'stops'],
+      properties: {
+        by: { type: 'string', minLength: 1 },
+        at: { type: 'string', minLength: 1 },
+        reason: { type: 'string', minLength: 1 },
+        stops: { type: 'array', items: PAUSE_STOP_SCHEMA_FRAGMENT },
+      },
+    },
+  },
+});
+
+/** Published `--json` output schema for `team raise` (`schema/raise.schema.json`). `record` is the
+ *  owner mailbox record's id, null on a dry run; `count` is the record's reading after this call,
+ *  so a merge shows the running total. */
+export const RAISE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
+  name: 'team.raise',
+  fileName: 'raise.schema.json',
+  title: 'team raise --json output',
+  statuses: ['raised', 'merged', 'dry-run'],
+  required: ['project', 'session', 'kind', 'text', 'route', 'at', 'record', 'count'],
+  properties: {
+    kind: { type: 'string', enum: ['release.ready', 'decision.needed'] },
+    text: { type: 'string', minLength: 1 },
+    route: { type: 'string', const: 'owner' },
+    record: { type: ['string', 'null'] },
+    count: { type: 'integer', minimum: 1 },
+    at: { type: 'string', minLength: 1 },
+  },
+});
+
 /** Published `--json` output schema for `team lock` (`schema/lock.schema.json`). */
 export const LOCK_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.lock',
@@ -746,6 +837,87 @@ export const ISSUES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team sessions` (`schema/sessions.schema.json`). */
+export const SESSIONS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.sessions',
+  fileName: 'sessions.schema.json',
+  title: 'team sessions --json output',
+  required: ['format', 'by', 'seat', 'sessions'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    by: { type: ['string', 'null'], enum: ['model', 'team', 'entity', null] },
+    seat: { type: ['string', 'null'] },
+    sessions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'seat', 'team', 'project', 'cli', 'lab', 'account', 'herdr_session', 'started', 'ended', 'reason'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          seat: { type: 'string', minLength: 1 },
+          nickname: { type: 'string', minLength: 1 },
+          team: { type: 'string', minLength: 1 },
+          project: { type: 'string', minLength: 1 },
+          entity: { type: 'string', minLength: 1 },
+          cli: { type: 'string', minLength: 1 },
+          lab: { type: 'string', minLength: 1 },
+          model: { type: 'string', minLength: 1 },
+          version: { type: 'string', minLength: 1 },
+          effort: { type: 'string', minLength: 1 },
+          account: { type: 'string', minLength: 1 },
+          herdr_session: { type: 'string', minLength: 1 },
+          pane: { type: 'string', minLength: 1 },
+          workspace: { type: 'string', minLength: 1 },
+          cli_session: { type: 'string', minLength: 1 },
+          resumable: { type: 'boolean' },
+          resume_until: { type: 'string', minLength: 1 },
+          handover: { type: 'string', minLength: 1 },
+          previous: { type: 'string', minLength: 1 },
+          next: { type: 'string', minLength: 1 },
+          started: { type: 'string', minLength: 1 },
+          ended: { type: ['string', 'null'] },
+          reason: {
+            type: ['string', 'null'],
+            enum: ['swap', 'restart', 'crash', 'owner-stop', 'quota', null],
+          },
+          note: { type: 'string', minLength: 1 },
+          tokens: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['source'],
+            properties: {
+              in: { type: 'integer', minimum: 0 },
+              out: { type: 'integer', minimum: 0 },
+              cached: { type: 'integer', minimum: 0 },
+              source: { type: 'string', enum: ['measured', 'estimated'] },
+            },
+          },
+          cost: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['amount', 'currency', 'source'],
+            properties: {
+              amount: { type: 'number', minimum: 0 },
+              currency: { type: 'string', minLength: 1 },
+              source: { type: 'string', enum: ['measured', 'estimated'] },
+            },
+          },
+          links: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              commits: { type: 'array', items: { type: 'string', minLength: 1 } },
+              prs: { type: 'array', items: { type: 'string', minLength: 1 } },
+              releases: { type: 'array', items: { type: 'string', minLength: 1 } },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team plan` (`schema/plan.schema.json`). */
 export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.plan',
@@ -794,7 +966,7 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['ts', 'from', 'to', 'body', 'id', 'outcome'],
+        required: ['ts', 'from', 'to', 'body', 'id', 'outcome', 'status'],
         properties: {
           ts: { type: 'string' },
           from: { type: 'string' },
@@ -802,6 +974,18 @@ export const FEED_OUTPUT_SCHEMA: CommandSchemaSpec = {
           body: { type: 'string' },
           id: { type: 'string' },
           outcome: { type: 'string' },
+          // The status the line's outcome derives (§3.3): `sent`, `held`, `delivered`, `read` or
+          // `replied`. An attempt outcome the history records — `timeout`, `not-submitted`,
+          // `unreachable` — folds to `sent`: it moved no status on the record.
+          status: { type: 'string' },
+          // The thread the message belongs to (the first message's id), and — on a reply — the
+          // record it answers. Present on every line a send of this version writes.
+          thread: { type: 'string' },
+          in_reply_to: { type: 'string' },
+          // The team the sender stood in, by team id, on a line a send of this version wrote: the
+          // feed reads a cross-team sender by its address from it, and prints the plain seat name
+          // for a line without one.
+          from_team: { type: 'string' },
           // Present only on a line the sender measured, as the history log writes it.
           ms: { type: 'number' },
           via: { type: 'string' },
@@ -1101,6 +1285,69 @@ export const MESSAGES_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team drops` (`schema/drops.schema.json`). */
+export const DROPS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.drops',
+  fileName: 'drops.schema.json',
+  title: 'team drops --json output',
+  required: ['format', 'project', 'session', 'seat', 'drops', 'counts'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    drops: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['from', 'received', 'path'],
+        properties: {
+          // The sender the record's payload names — or, in a raw file an earlier build wrote, its
+          // first line; null when neither names one.
+          from: { type: ['string', 'null'] },
+          received: { type: 'string', minLength: 1 },
+          path: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['drops'],
+      properties: {
+        drops: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
+/** Published `--json` output schema for `team reply` (`schema/reply.schema.json`): one record
+ *  written on a thread (`replied`), or a close beside the record it ends (`closed`). */
+export const REPLY_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.reply',
+  fileName: 'reply.schema.json',
+  title: 'team reply --json output',
+  required: ['format', 'status', 'action_summary', 'project', 'session', 'record', 'thread', 'in_reply_to', 'to', 'rule', 'reply', 'at'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    status: { type: 'string', enum: ['replied', 'closed'] },
+    action_summary: { type: 'string', minLength: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    // The reply record's id; null on a close, which writes no record.
+    record: { type: ['string', 'null'] },
+    thread: { type: 'string', minLength: 1 },
+    in_reply_to: { type: 'string', minLength: 1 },
+    // The seat a reply goes to; null on a close.
+    to: { type: ['string', 'null'] },
+    // The rule that admitted the reply; null on a close.
+    rule: { type: ['string', 'null'] },
+    reply: { type: ['string', 'null'] },
+    at: { type: 'string', minLength: 1 },
+  },
+};
+
 /** Published `--json` output schema for `team route` (`schema/route.schema.json`): the action
  *  surface, then the answered address. `session` is the caller's team session; the recipient's
  *  session travels as `recipient_session`. */
@@ -1141,12 +1388,15 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         schema: schemaTagFragment('team.send', 1),
         format: { type: 'integer', const: 1 },
         dry_run: { type: 'boolean' },
-        status: { type: 'string', enum: ['delivered', 'answered', 'recorded', 'dry-run'] },
+        status: { type: 'string', enum: ['delivered', 'delivered (read)', 'sent (unconfirmed)', 'answered', 'recorded', 'native', 'dry-run'] },
         action_summary: { type: 'string', minLength: 1 },
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },
         seat: { type: 'string', minLength: 1 },
-        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'native', null] },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', null] },
+        to: { type: 'string', minLength: 1 },
+        confirm: { type: 'string', minLength: 1 },
+        message: { type: 'string' },
         ids: {
           type: 'object',
           additionalProperties: false,
@@ -1156,6 +1406,7 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
             reply: { type: ['string', 'null'] },
           },
         },
+        thread: { type: ['string', 'null'] },
         reply: { type: 'string' },
         address: { type: ['string', 'null'] },
         plan: { type: 'array', items: PLAN_STEP_SCHEMA_FRAGMENT },
@@ -1675,11 +1926,15 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   DELEGATE_OUTPUT_SCHEMA,
   REVOKE_OUTPUT_SCHEMA,
   HOLD_OUTPUT_SCHEMA,
+  PAUSE_OUTPUT_SCHEMA,
+  RESUME_OUTPUT_SCHEMA,
+  RAISE_OUTPUT_SCHEMA,
   LOCK_OUTPUT_SCHEMA,
   UNLOCK_OUTPUT_SCHEMA,
   RELEASE_OUTPUT_SCHEMA,
   POLICY_OUTPUT_SCHEMA,
   ISSUES_OUTPUT_SCHEMA,
+  SESSIONS_OUTPUT_SCHEMA,
   FEED_OUTPUT_SCHEMA,
   PLAN_OUTPUT_SCHEMA,
   NEXT_OUTPUT_SCHEMA,
@@ -1693,8 +1948,10 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   REGISTER_OUTPUT_SCHEMA,
   ASK_SHOW_OUTPUT_SCHEMA,
   MESSAGES_OUTPUT_SCHEMA,
+  DROPS_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
+  REPLY_OUTPUT_SCHEMA,
   ANSWER_OUTPUT_SCHEMA,
   MCP_OUTPUT_SCHEMA,
   TEMPO_OUTPUT_SCHEMA,

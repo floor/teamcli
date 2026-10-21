@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { type KeyObject } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readEvents } from '../src/bus/log.ts';
 import { findRoot } from '../src/file/load.ts';
-import { messageFile, plantMessage, receiptFile, runMessages, type MessagePayload } from '../src/commands/messages.ts';
-import { keyFingerprint, keyOf, MESSAGE_DOMAIN, messageKeyOf, messageKeyPath, signDomain } from '../src/store/keys.ts';
+import { messageFile, plantMessage, plantRecord, receiptFile, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
+import { listUnread, readMessage } from '../src/mcp/inbox.ts';
+import { receiptFile as recordReceiptFile, signReceiptPayload, statusOf, writeReceipt } from '../src/send/record.ts';
+import { keyFingerprint, keyOf, MESSAGE_DOMAIN, messageKeyOf, messageKeyPath, messageKeyState, signDomain } from '../src/store/keys.ts';
 import { MESSAGES_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -150,6 +154,23 @@ describe('team messages', () => {
     expect(readFileSync(receiptFile(record.root, 'lead', 'm1'), 'utf8')).toBe(receipt);
   });
 
+  test('a folder that is not a checkout reads the team root it holds', async () => {
+    project();
+    // The team root is this folder itself: no checkout names it, and the owner's mailbox is
+    // `.agents/team.yaml` beside the process. The record binds to that root, so the read proves
+    // the root the command resolved is the plain one, not a checkout found somewhere above.
+    mkdirSync(join(base, 'plain'), { recursive: true });
+    const plain = realpathSync(join(base, 'plain'));
+    mkdirSync(join(plain, '.agents'), { recursive: true });
+    writeFileSync(join(plain, '.agents', 'team.yaml'), TEAM);
+    plantRecord(home, plain, 'acme', 'lead', 'm1', BODY, { from: 'harness', at: '2026-10-04T09:00:00.000Z' });
+    const io = testIo(plain, { kind: 'owner' });
+    expect(await runMessages([], io, { home, now: () => NOW })).toBe(0);
+    expect(io.out).toBe(SHOWN);
+    expect(io.err).toBe('');
+    expect(existsSync(join(recordDir(plain, 'acme', 'lead'), 'm1.read.json'))).toBe(true);
+  });
+
   test('a bad signature prints no body and writes no receipt', async () => {
     project();
     const record = payload();
@@ -169,6 +190,32 @@ difference: lead/m1 does not verify: the signature is not the message key's
     expect(result.err).toBe('');
     expect(existsSync(receiptFile(record.root, 'lead', 'm1'))).toBe(false);
     expect(existsSync(messageFile(record.root, 'lead', 'm1'))).toBe(true);
+
+    // The owner hears the refusal as its rule and object — the record's id, its seat and its
+    // mailbox path — and never the body the bad record holds.
+    const events = readEvents('acme', root, home);
+    expect(events.ok).toBe(true);
+    if (!events.ok) return;
+    const refused = events.events.filter((event) => event.payload.kind === 'record.invalid');
+    expect(refused).toHaveLength(1);
+    expect(refused[0]!.payload).toMatchObject({
+      session: 'acme',
+      rule: 'signature',
+      seat: 'lead',
+      subject: 'm1',
+      reason: '.agents/messages/lead/m1.json',
+    });
+    expect(JSON.stringify(refused[0]!.payload)).not.toContain(BODY);
+
+    // The same refusal in the same window is counted in the log, not raised again.
+    const again = await run();
+    expect(again.code).toBe(1);
+    const later = readEvents('acme', root, home);
+    expect(later.ok).toBe(true);
+    if (!later.ok) return;
+    expect(later.events.filter((event) => event.payload.kind === 'record.invalid')).toHaveLength(1);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log.split('\n').filter((line) => line.includes('refusal [lead] record.invalid signature')).length).toBe(2);
   });
 
   test('a copy under a new id does not verify', async () => {
@@ -425,5 +472,101 @@ difference: lead/m1 does not verify: the record is not a message
     expect(result.code).toBe(1);
     expect(result.err).toBe('');
     assertJsonErrorShape(result.out, { id: 'messages.key', messageContains: 'no message key' });
+  });
+
+  // One receipt shape, whichever reader comes first: `inbox_read` and `team messages` both write
+  // the signed `read` status receipt at `<id>.read.json`, and both know a message is read only
+  // when that receipt verifies. The three orders below are the ones a seat can produce, and the
+  // status can only move forward: a late reader never undoes a receipt already on disk.
+  const ID = '7a6b5c4d-3e2f-418a-9b7c-6d5e4f3a2b1c';
+
+  /** One transport-tree record and the inbox that serves it. */
+  function recordScene(): { found: string; dropDir: string; context: { to: string; root: string; session: string } } {
+    project();
+    const found = findRoot(root);
+    if (!found) throw new Error('not a checkout');
+    plantRecord(home, found, 'acme', 'lead', ID, BODY, { at: '2026-10-04T09:00:00.000Z' });
+    return {
+      found,
+      dropDir: recordDir(found, 'acme', 'lead'),
+      context: { to: 'lead', root: found, session: 'acme' },
+    };
+  }
+
+  function messageKey(): KeyObject {
+    const state = messageKeyState(home);
+    if (state.kind !== 'key') throw new Error('the fixture wrote no message key');
+    return state.key;
+  }
+
+  test('an inbox read then team messages: the same signed receipt answers both', async () => {
+    const scene = recordScene();
+    const key = messageKey();
+
+    const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
+    expect(read).toEqual({ ok: true, body: BODY });
+    const receiptPath = recordReceiptFile(scene.dropDir, ID, 'read');
+    const receipt = readFileSync(receiptPath, 'utf8');
+    expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
+
+    // `team messages` sees the inbox's receipt and finds nothing waiting: it never shows the
+    // message as `sent` again, and it does not rewrite the receipt.
+    const result = await run();
+    expect(result.code).toBe(0);
+    expect(result.out).toBe('team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n');
+    expect(readFileSync(receiptPath, 'utf8')).toBe(receipt);
+    expect(listUnread(scene.dropDir, scene.context, home)).toEqual([]);
+  });
+
+  test('team messages first, then an inbox read: the inbox adds nothing and the status stays read', async () => {
+    const scene = recordScene();
+    const key = messageKey();
+
+    const result = await run();
+    expect(result.code).toBe(0);
+    expect(result.out).toContain(BODY);
+    const receiptPath = recordReceiptFile(scene.dropDir, ID, 'read');
+    const receipt = readFileSync(receiptPath, 'utf8');
+    expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
+
+    const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
+    expect(read).toEqual({ ok: true, body: BODY });
+    expect(readFileSync(receiptPath, 'utf8')).toBe(receipt);
+    expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('read');
+    expect(listUnread(scene.dropDir, scene.context, home)).toEqual([]);
+
+    // A second `team messages` has nothing left to show either.
+    const again = await run();
+    expect(again.out).toBe('team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n');
+  });
+
+  test('a read after a receipt already exists never lowers it', async () => {
+    const scene = recordScene();
+    const key = messageKey();
+
+    // A `replied` receipt is the highest status; a read that arrives late must not move it back.
+    const replied = writeReceipt(scene.dropDir, signReceiptPayload({
+      kind: 'receipt',
+      status: 'replied',
+      id: ID,
+      to: 'lead',
+      root: scene.found,
+      session: 'acme',
+      at: '2026-10-04T09:05:00.000Z',
+    }, home), home);
+    expect(replied.ok).toBe(true);
+    expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('replied');
+
+    const read = readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home);
+    expect(read).toEqual({ ok: true, body: BODY });
+    expect(statusOf(scene.dropDir, ID, scene.context, key)).toBe('replied');
+    expect(existsSync(recordReceiptFile(scene.dropDir, ID, 'read'))).toBe(true);
+    expect(listUnread(scene.dropDir, scene.context, home)).toEqual([]);
+
+    // Write-once: a second read leaves the receipt exactly as the first wrote it.
+    const receiptPath = recordReceiptFile(scene.dropDir, ID, 'read');
+    const receipt = readFileSync(receiptPath, 'utf8');
+    expect(readMessage({ dropDir: scene.dropDir, root: scene.found, seat: 'lead', session: 'acme' }, ID, home)).toEqual({ ok: true, body: BODY });
+    expect(readFileSync(receiptPath, 'utf8')).toBe(receipt);
   });
 });

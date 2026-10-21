@@ -51,6 +51,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { executePlan } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
@@ -73,8 +74,10 @@ import { shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
+import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
@@ -88,6 +91,7 @@ import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
 import { watchLabel, watchRunning } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
+import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
@@ -134,6 +138,11 @@ export type Launch = {
   sessionUp(session: string): boolean | null;
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
+  /** Registers the seat's team inbox with its CLI, in the seat's folder, before its launch
+   *  command. `teamFile` is the team file the run read; the seat's folder may be a lobby with
+   *  none. Null when the profile carries no file route; a refusal leaves the seat on its drop
+   *  and typed legs. Absent on a world that registers nothing: fake launches and reads. */
+  registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
   /** Sets the workspace title of a seat already running. False is one line and does not leave it out. */
@@ -203,6 +212,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  registerInbox: (cli, seat, cwd, teamFile) =>
+    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameWorkspace: (session, workspace, label) => workspaceRename(workspace, label, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
@@ -405,9 +416,18 @@ function seatPlan(
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: seat.stopped,
+    // A human's pane: no launch, no key, no line. The plan skips it before any of that.
+    ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live
     // file. A stored copy is not the text a seat is told to obey.
     rules: rulesOf(team, seat, root),
+    sessionName: sessionDisplayName({
+      seat: seat.name,
+      nickname: seat.nickname ?? null,
+      team: teamIdOf(root),
+      teamName: team.project,
+      mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+    }),
     ...seatDeliveryOf(standing, team, seat, root, home, liveRules),
   };
   const known = agents ?? [];
@@ -1154,9 +1174,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       });
       continue;
     }
-    // A stopped seat, one without a profile, and one already ready are left out of the budget.
-    // A seat resumed into a live workspace starts nowhere new, but its reading is still said.
-    if (planned.unidentifiedHold || planned.sessionDoubt || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
+    // A stopped seat, a human's pane, one without a profile, and one already ready are left out
+    // of the budget. A seat resumed into a live workspace starts nowhere new, but its reading is
+    // still said.
+    if (planned.human || planned.unidentifiedHold || planned.sessionDoubt || planned.stopped || !profileFor(seat.cli) || planned.stage === 'ready') {
       seats.push(planned);
       continue;
     }
@@ -1279,7 +1300,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // The seats' own state hooks: a settings file per seat, named at the end of its launch line.
   // A dry run plans the map it would write; the real run writes the files below, before the
   // plan is built, and a seat whose file did not land launches exactly as the file declares.
-  const hookSeats = () => seats.map(({ name, cli, launch }) => ({ name, cli, launch }));
+  const hookSeats = () => seats.map(({ name, cli, launch, human }) => ({ name, cli, launch, ...(human ? { human: true as const } : {}) }));
   let cliHooks = plannedCliHooks(dir, session, hookSeats());
   // Built where it is needed: on a dry run, just below, before anything is made; on a real run,
   // after the lock, so the lobby made there under it is already every lobby seat's `cwd`.
@@ -1294,6 +1315,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     watchAlive,
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
+    teamFile: loaded.path,
     cliHooks,
   });
 
@@ -1475,7 +1497,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     stampGrantedTrust();
     // The settings files land before the plan types a line, so every launch carries its flag. A
     // seat whose file did not land is said once, in the log, and its launch is the plain line.
-    const installed = installCliHooks(dir, session, hookSeats());
+    const installed = installCliHooks(dir, session, hookSeats(), { project: team.project, root, home: sources.home });
     for (const name of Object.keys(cliHooks)) {
       if (installed[name] === undefined) {
         logLine(dir, 'up', callerLabel(caller), `${name}: no state hook written; its launch line is the file's own`, sources.now?.() ?? new Date());
@@ -1483,9 +1505,37 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     }
     cliHooks = installed;
     const plan = buildPlan();
+    // The general seat brief goes first: one signed drop in the folder of every seat this plan
+    // launches or relaunches, and of every declared seat the session records no launch of. A seat
+    // the state records as already launched, which this run leaves as it is, is left exactly so:
+    // no drop and no state entry. A delivery that cannot be written is said and logged, and the
+    // launch goes on; `team check` names the seat with no record.
+    const launchedSeats = plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : []));
+    const briefSeats = team.seats
+      .filter((seat) => launchedSeats.includes(seat.name) || recorded?.seats[seat.name] === undefined)
+      .map((seat) => seat.name);
+    const briefs = deliverGeneralBrief({
+      dir,
+      root,
+      session,
+      seats: briefSeats,
+      home: sources.home,
+      at: (sources.now?.() ?? new Date()).toISOString(),
+    });
+    for (const delivery of briefs.deliveries) {
+      if (delivery.ok) continue;
+      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+      stderrLine(`team up: ${said}\n`);
+      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+    }
+    if (briefs.recording !== undefined) {
+      const said = `the general seat briefs were written and not recorded (${briefs.recording})`;
+      stderrLine(`team up: ${said}\n`);
+      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+    }
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
-    resetCliHookState(dir, session, plan.flatMap((step) => (step.do !== undefined && step.do.do === 'launch' ? [step.do.seat] : [])));
+    resetCliHookState(dir, session, launchedSeats);
 
     // Every launch uses the limits declared in the live file, with or without a stored approval.
     const ceilings = ceilingsOf(team);
@@ -1527,6 +1577,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      ...(launch.registerInbox
+        ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+        : {}),
       ...(launch.reportDisplayAgent
         ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
         : {}),
@@ -1674,6 +1727,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           if (replaced) forgetLaunchedPane(sources.home, replaced, session);
           noteLaunchedPane(sources.home, loaded.path, patch.pane, session);
         }
+      },
+      // The session registry records the launch itself, with the id TeamCLI set where the CLI
+      // takes one; a registry that cannot be written is a note in the run's log, never a refusal.
+      sessionStarted(name, started) {
+        const seat = team.seats.find((item) => item.name === name);
+        if (!seat) return;
+        const began = beginSession({
+          home: sources.home,
+          root,
+          team,
+          session,
+          seat,
+          pane: started.pane,
+          ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
+          ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+          ...(started.replaces === undefined ? {} : { replaces: started.replaces }),
+          now: now(),
+        });
+        if ('note' in began) logLine(dir, 'up', callerLabel(caller), `${name}: ${began.note}`, now());
       },
       running(name) {
         if (running.some((item) => item.name === name)) return;
@@ -1857,7 +1929,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       if (refreshed.note) logLine(dir, 'up', callerLabel(caller), refreshed.note, now());
     }
     const pending = team.seats.filter((seat) => {
-      if (seat.stopped || !profileFor(seat.cli)) return false;
+      // A human's pane is left as it is: nothing this run could have made ready, nothing pending.
+      if (seat.stopped || seat.human || !profileFor(seat.cli)) return false;
       return afterwards[seat.name]?.stage !== 'ready';
     });
     // A seat the plan left behind (a repair it would not close, a dialog it timed out at) is a

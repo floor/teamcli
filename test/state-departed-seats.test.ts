@@ -17,7 +17,7 @@ import { findAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, LOG_FILE, readState, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T10:00:00Z');
 const OWNER = { kind: 'owner' as const };
@@ -83,6 +83,8 @@ function seed(w: World): void {
     state.sessions['gone-one'] = { seats: {}, worktrees: {} };
     state.sessions['gone-two'] = { seats: {}, worktrees: {} };
   });
+  // The launch delivered the general brief before it typed: the file's lead seat's record and entry.
+  deliverBriefs({ dir: w.dir, root: w.root, session: 'acme', seats: ['lead'], home: w.home, at: NOW.toISOString() });
 }
 
 /** The agent herdr reports for the lead: its own pane, running a program in front of its shell. */

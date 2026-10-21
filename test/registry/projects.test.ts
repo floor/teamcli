@@ -321,7 +321,7 @@ describe('delivery_order', () => {
     writeProjects(record('delivery_order: typed'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" must be a list of legs/);
     writeProjects(record('delivery_order: [telepathy]'));
-    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: native, mcp-inbox, typed/);
+    expect(() => readProjects(home)).toThrow(/project teamcli: delivery_order line 1 must be one of: native, mcp-inbox, typed, drop/);
     writeProjects(record('delivery_order: [typed, typed]'));
     expect(() => readProjects(home)).toThrow(/project teamcli: "delivery_order" names a leg twice/);
   });
@@ -350,7 +350,7 @@ describe('delivery_order', () => {
     upsertProject(home, 'teamcli', { name: 'TeamCLI', at: AT });
     const before = readFileSync(projectsFile(home), 'utf8');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: [] })).toThrow('"delivery_order" must name at least one leg');
-    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: native, mcp-inbox, typed');
+    expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['telepathy'] as never })).toThrow('a "delivery_order" leg must be one of: native, mcp-inbox, typed, drop');
     expect(() => upsertProject(home, 'teamcli', { deliveryOrder: ['typed', 'typed'] })).toThrow('"delivery_order" names a leg twice');
     expect(readFileSync(projectsFile(home), 'utf8')).toBe(before);
   });

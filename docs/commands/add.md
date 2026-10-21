@@ -3,7 +3,13 @@
 Starts one seat of a running team: a seat the file declares but nothing runs for — `team up` started
 the others — or a temporary seat beside the team, which the file does not declare at all. A declared
 seat the file marks `stopped: true` starts again, its mark cleared first. It never touches the seats
-that are already running.
+that are already running. A seat the file marks `human: true` is refused before anything is
+launched or typed: nothing is typed into it or launched over it; left as it is.
+
+A declared seat can be copied too: `team add <name> --like <seat>` writes a new entry under the
+source in the file, with the source's fields and titled `<name>`, and starts it now. The source's
+own entry is left as it is. A source marked `human: true` is refused the same way. The new entry is
+not added to the approval record: the roster change is the owner's to approve, like any other.
 
 The one seat starts where `up` would start it: the orchestrator's and the operator's seat starts in
 the project folder, every other seat in the team's lobby outside repositories, verified by the
@@ -12,7 +18,7 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
 
 ## Synopsis
 
-    team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>]
              [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
@@ -56,12 +62,13 @@ owner named in that section as `<session>/<pane id>`, outside the team. When the
 every seat it does — and the file names a delegate, the delegate gate decides — it re-reads the
 live file and the record in force, never a remembered copy, and proves the caller stands on the
 delegate pane, and only that pane — and a caller it passes runs this command as that delegate. The
-delegated `add` is a same-copy seat and nothing else: the one seat it may start is a seat the record
-already holds, its stanza hash for hash as the live file writes it, so the add writes neither the
-file nor the record. `--temporary`, `--like`, `--until`, `--worktree`, `--session`
-and `--file` stay the owner's, and so does any add that would edit the file or the record —
-clearing `stopped: true`, or naming a stanza the record does not hold, which would extend or
-change the file. A `--file` or `--session`
+delegated `add` starts one seat and nothing else. A restart of a seat the record already holds is
+admitted when its stanza is hash for hash the live file's: that add writes neither the file nor the
+record. A declared copy, `<name> --like <seat>`, is admitted when the record holds the source seat
+just as the live file writes it, and the run writes that one entry — never the record. `--temporary`,
+`--until`, `--worktree`, `--session` and `--file` stay the owner's, and so does a copy of a source
+the record does not hold or holds differently; clearing `stopped: true` and restoring a missing
+seat are the owner's too. A `--file` or `--session`
 a non-owner aims is the gate's too, once the file names a delegate: the gate refuses it before the
 flagged file or the flag's session is read, on the eligibility of the default live file alone —
 the flagged file is never opened. With no `delegates` section the run is refused by the rule
@@ -76,7 +83,7 @@ that proceeds is attributed in the log before its effects, as
 | `--model <model>` | override the seat's model for this launch (CLI model id or `<model> <version>`); on a declared seat the owner's alone |
 | `--effort <effort>` | override the seat's reasoning effort for this launch; on a declared seat the owner's alone |
 | `--temporary` | start a seat the file does not declare, beside the team |
-| `--like <seat>` | the declared seat a temporary seat is a copy of: its CLI, model and launch |
+| `--like <seat>` | the seat to copy: with `--temporary`, the source of a temporary seat (its CLI, model and launch); alone, the source of a new declared seat named `<name>`, whose entry is written to the file before it starts |
 | `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
 | `--worktree <task>` | the worktree the temporary seat is started in, instead of the seat's own `cwd` |
 | `--session <name>` | the herdr session, instead of `team.session`; the owner's alone |
@@ -90,6 +97,14 @@ number is written in the width and separator the advised `seat-numbering` settin
 team — two digits and `-` by default (`worker-tmp-01`), or a width of 1 to 4 digits, or `auto` for
 the number's own digits, with the separator the setting names. Numbers are compared as numbers, so
 a name from an older width still holds its place: 9 is followed by 10, and 99 by 100.
+
+With no `--temporary`, `--like` writes a declared seat instead: the new entry sits directly under the
+source's last field, takes the source's fields and the title `<name>`, drops its `stopped` mark and
+`count:` (a counted source is split first), and leaves the source's comments and blank lines where
+they are. The name must be one the file does not declare, and the source one it does. A copy the
+file's own validation refuses — one that repeats the source's `leads`, `assistant` or nickname —
+stops before anything is written or launched. The record keeps its own bytes: the new entry is the
+owner's to approve.
 
 `--until` accepts one of two ends, and nothing else.
 
@@ -166,7 +181,7 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | Message | Exit |
 | --- | --- |
 | `team add: unknown option --x` / `team add: a seat name is required` / `team add: --like needs a value` (each with the usage) | 2 |
-| `team add: --like, --until and --worktree are for --temporary` | 2 |
+| `team add: --until and --worktree are for --temporary` | 2 |
 | `team add: "lead" is reserved: lead@<team> addresses the team's lead, so no new seat takes it as a name` — the file declares no seat of the name; a file written before 0.5.0 that already declares one still starts it | 2 |
 | `team add: line <n>: <message>` / `team add: <message>` | 2 |
 | `team add: only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is <caller>` | 1 |
@@ -174,14 +189,15 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | ``team add: delegation cannot verify its placement or seats: <reason>`` | 1 |
 | `team add: the approved delegate must be an external non-seat pane` | 1 |
 | ``team add: the approved delegate <session>/<pane id> may not run `add`; its approved commands are <list>`` | 1 |
-| `team add: --<flag> is the owner's; the approved delegate cannot use it` — `--temporary`, `--like`, `--until`, `--worktree`, `--session` or `--file` | 1 |
-| `team add: the approved delegate adds only a same-copy seat: the live file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — any add that would edit the file or the record, also on `--dry-run` | 1 |
+| `team add: --<flag> is the owner's; the approved delegate cannot use it` — `--temporary`, `--until`, `--worktree`, `--session` or `--file` | 1 |
+| `team add: the approved delegate adds only a same-copy seat: the live file's own stanza, hash for hash; a missing, stopped or changed seat is the owner's` — clearing `stopped: true`, restoring a missing seat, or copying a source the record does not hold or holds differently; also on `--dry-run` | 1 |
 | `team add: --file is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team add: --model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat` — any caller but the owner; a temporary seat takes them from any caller | 1 |
 | `team add: <name>: its pane holds a process this record cannot tie to the launch` — the record holds the pane's own shell pid and the CLI's pids, read when the seat was launched; the pane is running neither, and the agent session herdr shows there is not the stored one. Nothing is closed and no second CLI is started in it | 1 |
 | ``team add: approved before records were signed`` — the record was written by an earlier `team`; the same line, with the case, for a record that does not verify. A missing record is not a refusal, and neither is a file that differs from a stored copy | 1 |
 | `team add: the file has no seat "<name>"` | 1 |
+| `team add: the file already declares "<name>"; --like adds a copy under a new name` — the source of a `--like` copy is a seat the file holds; the new name must not be one it declares | 1 |
 | `team add: <name> is already running`. When that seat's screen is one the profile does not recognise, the owner is also told `team remove <name> --abandon closes its workspace without typing`; anyone else is told `the owner runs team remove <name> --abandon, which closes its workspace without typing` | 1 |
 | `team add: no launch profile for \`<cli>\` in this version` | 1 |
 | `team add: the file allows <n> seats; <m> would be running` / `… <n> temporary seats; …` / `… <n> <vendor> seats; …` | 1 |
@@ -338,12 +354,12 @@ The flags that describe a temporary seat are refused without `--temporary`, and 
 outside it. Both stop at the usage line, before the file is read:
 
 ```console
-$ team add claude-keeper --like claude-beacon ; echo "exit $?"
-team add: --like, --until and --worktree are for --temporary
+$ team add claude-keeper --until result:notes/result.md ; echo "exit $?"
+team add: --until and --worktree are for --temporary
 exit 2
 $ team add ; echo "exit $?"
 team add: a seat name is required
-Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.

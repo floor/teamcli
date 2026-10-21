@@ -12,7 +12,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
@@ -27,8 +27,9 @@ import { notify } from '../watch/notify.ts';
 import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
-import { newMemory, ownUnsent, pass, type MailboxWaiting } from '../watch/pass.ts';
-import { retryHeldDrops } from '../watch/retry.ts';
+import { newMemory, NUDGE_TEXT, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
+import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { readScreen } from '../watch/screen.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
@@ -46,8 +47,62 @@ import type { StateThresholds } from '../settings/inherit.ts';
 import { machineLiveness, watchWords } from '../settings/declared.ts';
 import { entityLiveness } from '../entities.ts';
 import { defaultWatch } from '../file/validate.ts';
+import { createSequenceTracker, type EventAppendInput, type SignedEventRecord, type SequenceTracker } from '../bus/log.ts';
+import { OwnerDelivery, writeRuntimeMailboxRecord } from '../bus/owner.ts';
+import { readEntityOrchestrator } from '../bus/seats.ts';
+import {
+  publishToBus,
+  subscribeBusOnce,
+  type BusPublishOutcome,
+  type BusSubscribeOutcome,
+} from '../bus/server.ts';
 import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
+import {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isScreenVerifiedStatusCli,
+  isStatusWaiterSeat,
+  reconcileStatusWithScreen,
+  seatHasAssignedWorkOnDisk,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+} from '../watch/status-events.ts';
+
+export {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isScreenVerifiedStatusCli,
+  isStatusWaiterSeat,
+  reconcileStatusWithScreen,
+  seatHasAssignedWorkOnDisk,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+};
 
 // What the watch reads and does outside its own process, so tests can stand in for it.
 export type WatchSources = {
@@ -71,6 +126,9 @@ export type WatchSources = {
   processes?(pane: string, session: string): PaneProcesses | null;
   typeText(pane: string, text: string, session: string): boolean;
   pressEnter(pane: string, session: string): boolean;
+  /** One key, spelled as herdr spells it: a delivery that meets unsent text clears the box with
+   *  the profile's measured keys and pastes the text back. Absent, such a delivery holds. */
+  sendKey?(pane: string, key: string, session: string): boolean;
   // Sleeps between the typing of the nudge and the read-back that decides the Enter — the
   // bounded draw wait the exit typing and delivery make (settleScreen). Required: a watch whose
   // delivery reads back the instant it typed, with nothing to wait on, is the fault itself.
@@ -108,6 +166,18 @@ export type WatchSources = {
   closeWorkspace?(session: string, workspace: string): boolean;
   /** The command a watch pane runs: the one `up` starts. Defaults to `up`'s own. */
   watchCommand?(session: string): string;
+  /** Subscribes to `.agents/bus.sock` from `cursor` when a bus is running; falls back to polling when unavailable. */
+  busSubscribe?(root: string, cursor: number): Promise<BusSubscribeOutcome>;
+  /** Publishes an event (e.g. `seat.unreachable` or `seat.at-prompt`) to `.agents/bus.sock` when a bus is running. */
+  busPublish?(root: string, event: EventAppendInput): Promise<BusPublishOutcome>;
+  /** Optional listener invoked for each verified event received from the bus in sequence order. */
+  onBusEvent?(event: SignedEventRecord): void;
+  /** Optional listener invoked when the bus reports a sequence gap (`cursor + 1 < oldest_seq`)
+   *  and watch resyncs from records. `reason` is `'retention'` when retained drop records declare
+   *  the missing window. */
+  onBusGap?(oldestSeq: number, newestSeq: number, reason?: 'retention'): void;
+  /** Optional herdr status-event source (`herdr wait agent-status` per seat). */
+  statusSource?: StatusSource;
 };
 
 export const realWatchSources: WatchSources = {
@@ -124,6 +194,7 @@ export const realWatchSources: WatchSources = {
   processes: (pane, session) => paneProcesses(pane, session),
   typeText,
   pressEnter,
+  sendKey: (pane, key, session) => herdrSendKey(pane, key, session),
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   notify,
   now: () => new Date(),
@@ -145,6 +216,11 @@ export const realWatchSources: WatchSources = {
   paneRun: (session, pane, command) => paneRun(pane, command, session === 'default' ? undefined : session),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, session === 'default' ? undefined : session),
   watchCommand,
+  // The bus identity of the owner's delivery path (§4.5): the watch reads what the policy routes
+  // to `owner` and what the raising side addresses to `owner`. It is never a seat name.
+  busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'owner', cursor }, { deadlineMs: 500 }),
+  busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
+  statusSource: herdrStatusSource(),
 };
 
 export const watch: Command = (argv, io) => runWatch(argv, io, realWatchSources);
@@ -163,8 +239,9 @@ the invocation or team file can't be read.
 `;
 
 /** The file `up` recorded for this session's watch, or a refusal for any other non-owner.
- *  Absent when this folder records none: a flagless watch then reads what it always did.
- *  `'wait'` is a file recorded and a pid not written yet: the process `up` just spawned. */
+ *  Absent when neither folder a team file can sit in records one: a flagless watch then reads
+ *  what it always did. `'wait'` is a file recorded and a pid not written yet: the process `up`
+ *  spawned. */
 function watchdogGrant(
   cwd: string, session: string | undefined, caller: ReturnType<typeof callerOf>,
 ): { file: string } | { refuse: string } | { wait: true } | undefined {
@@ -173,7 +250,9 @@ function watchdogGrant(
   if (!recorded) return undefined;
   if (recorded.pane && caller.kind === 'pane' && caller.pane === recorded.pane) return { file: recorded.file };
   if (isOwner(caller)) return undefined;
-  const watchPid = readState(cwd).sessions[name]?.watch?.pid;
+  // The pid that owns the record is read from the record's own state: the team file's folder,
+  // never this process's start folder when the two differ.
+  const watchPid = readState(recorded.dir).sessions[name]?.watch?.pid;
   if (watchPid === process.pid) return { file: recorded.file };
   if (watchPid === undefined && !recorded.pane) return { wait: true };
   // The hand-over window: the file and the pane are recorded, and the watch's first pass — the
@@ -188,8 +267,23 @@ function watchdogGrant(
   };
 }
 
-function recordedWatchdog(cwd: string, session: string): { file: string; pane?: string } | undefined {
-  return readState(cwd).sessions[session]?.watchdog;
+/** The folders a team file can sit in, seen from the folder the watch starts in: this one (a
+ *  team file named directly there) and its `.agents` folder (the layout `up` starts the watch
+ *  from). `up` writes `team.state.json` beside the file it loaded, so the record, its pane and
+ *  its pid are read from the team file's folder — the same state `up` wrote — whichever of the
+ *  two it is. */
+function stateDirsOf(cwd: string): string[] {
+  return [cwd, join(cwd, '.agents')];
+}
+
+function recordedWatchdog(
+  cwd: string, session: string,
+): { file: string; pane?: string; dir: string } | undefined {
+  for (const dir of stateDirsOf(cwd)) {
+    const recorded = readState(dir).sessions[session]?.watchdog;
+    if (recorded) return { ...recorded, dir };
+  }
+  return undefined;
 }
 
 /** The grant, waiting out the moment between spawn and the pid landing in the state. */
@@ -287,6 +381,13 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   const { dir } = first;
 
   const placed = callerOf(io, session);
+
+  // Owner delivery (§4.5) is the owner's own path. This process is that path when the owner
+  // check that admits owner-only actions admits it, when it runs in an agentless pane — the
+  // pane `up` starts the watch in — or when it is the watch this session recorded. A watch a
+  // seat started in its own pane runs its passes and polls; it never subscribes with the
+  // owner's identity.
+  const ownerPath = isOwner(placed) || placed.kind === 'pane' || grant !== undefined;
 
   // A seat that starts the session's only watch must not be able to drop the operator's nudge
   // or the operator's desktop notices. The owner's own `--no-notify` still cannot silence a
@@ -391,6 +492,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
 
   const memory = newMemory();
   const told = new Set<string>();
+  // The owner-addressed texts this process has already told: an event raised from one of them
+  // must not be a second notice for the same words.
+  const ownerTold = new Set<string>();
+  const busTracker: SequenceTracker = createSequenceTracker(0);
   let outcomes: CheckOutcome[] = [];
   let checksAt: number | null = null;
   let readingsAt: number | null = null;
@@ -403,6 +508,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
   let paneGoneOnce = false;
   // The agents and panes of the last whole read: what the label sweep between passes works on.
   let lastLive: Live | null = null;
+  let statusEngine: SeatStatusEngine | undefined;
+  let statusWaiters: { stop(): void; done: Promise<void> } | undefined;
+  let statusWaitersKey = '';
   try {
     for (;;) {
       // The file is read again on every pass, so a seat parked or stopped since is seen.
@@ -451,6 +559,35 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         say(`the session "${session}" is not this file's "${team.session}": its readings are not saved`, false);
       }
 
+      // Subscribe-first, poll-second (RFC 002 Amendment 01 §4.2): when the bus is running on
+      // `.agents/bus.sock`, read unseen events from `busTracker.cursor` and apply them in sequence
+      // order; on `gap`, reset the cursor and clear `memory.active` so this pass re-announces any
+      // still-true reports; when no bus is running, fall back cleanly to the poll path.
+      // Owner delivery (§4.5): the Runtime reaches the owner itself — the notice and the owner's
+      // own inbox — for every event the policy routes to `owner` or the raising side addresses to
+      // `owner`. No seat is in the path, so a held or unreachable liaison silences neither. The
+      // subscription is the owner's delivery path's own, so a watch that is not that path stays a
+      // reader of the file and the pass, and publishes what its checks see.
+      const owner = sources.home === undefined || foreign
+        ? undefined
+        : new OwnerDelivery({
+            root,
+            session,
+            team,
+            home: sources.home,
+            notify: (text) => tell(text, true),
+            now: sources.now,
+            alreadyTold: (text) => ownerTold.has(text),
+          });
+      if (!foreign && ownerPath && sources.busSubscribe !== undefined) {
+        await syncWatchBus(root, busTracker, sources, memory, owner === undefined ? undefined : (record) => {
+          const outcome = owner.onEvent(record.payload);
+          if (outcome.error !== undefined) {
+            tellOnce(told, 'owner-record', `the owner's inbox was not written: ${outcome.error}`, tell);
+          }
+        });
+      }
+
       // The values in force, from the pass's own snapshot: until the owner approves an edit to
       // `watch` or `tempo`, the watch keeps the waits that were approved, or the defaults.
       const inForce = watchInForceOf(standing, team);
@@ -468,9 +605,71 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         silent = true;
       } else {
         silent = false;
+        // `human: true` seats have zero screen reads and zero keys typed (`workspace-adapters` §6).
+        for (const seat of team.seats) {
+          if (seat.human !== true) continue;
+          const humanAgent = live.agents.find((candidate) => candidate.name === seat.name);
+          if (humanAgent) delete live.screens[humanAgent.pane];
+        }
         noteWorked(dir, session, live, sources.now());
-        const state = readState(dir).sessions[session] ?? emptySession();
+        const whole = readState(dir);
+        const state = whole.sessions[session] ?? emptySession();
         const now = sources.now().getTime();
+        if (!foreign && sources.statusSource !== undefined) {
+          statusEngine ??= createSeatStatusEngine({
+            team,
+            session,
+            root,
+            home: sources.home,
+            source: sources.statusSource,
+            now: () => sources.now().getTime(),
+            graceMs: inForce.interval * 1000,
+            publish: sources.busPublish,
+          });
+          const panesBySeat: Record<string, string> = {};
+          for (const seat of team.seats) {
+            if (seat.human === true || seat.stopped === true) continue;
+            const agent = live.agents.find((candidate) => candidate.name === seat.name);
+            if (!agent) continue;
+            panesBySeat[seat.name] = agent.pane;
+            const hasSidebarLabel = Boolean(memory.seatLabels[seat.name]?.title);
+            const readScreenNow = shouldReadScreenForStatus(seat, agent.status, hasSidebarLabel);
+            const liveScreen = live.screens[agent.pane];
+            const rawScreen = readScreenNow
+              ? (liveScreen !== undefined && liveScreen !== '' ? liveScreen : (sources.screen(agent.pane, session) ?? liveScreen))
+              : undefined;
+            if (rawScreen !== undefined && rawScreen !== '') {
+              live.screens[agent.pane] = rawScreen;
+            }
+            if (herdrUnreliable(seat.cli)) {
+              await statusEngine.pollUnreliableSeat(seat.name, rawScreen ?? liveScreen, now, agent.pane);
+            } else if (
+              agent.status === 'idle'
+              || agent.status === 'working'
+              || agent.status === 'blocked'
+              || agent.status === 'done'
+              || agent.status === 'unknown'
+            ) {
+              const verifyScreen = isScreenVerifiedStatusCli(seat.cli) || agent.status === 'blocked'
+                ? rawScreen
+                : undefined;
+              await statusEngine.observe(seat.name, agent.status, now, agent.pane, verifyScreen);
+            }
+          }
+          await statusEngine.tick(now);
+          const nextPanesKey = Object.entries(panesBySeat)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, v]) => `${k}=${v}`)
+            .join(',');
+          if (nextPanesKey !== statusWaitersKey) {
+            statusWaiters?.stop();
+            await statusWaiters?.done;
+            statusWaitersKey = nextPanesKey;
+            statusWaiters = nextPanesKey === ''
+              ? undefined
+              : statusEngine.startWaiters(panesBySeat, { timeoutMs: Math.min(9_000, inForce.interval * 1000) });
+          }
+        }
         // The check commands run here, outside the pass, at most every `check_every` (§ 5): the
         // pass reads what they read, and nothing else. Only their state is ever said — a
         // contract failure or a timeout says `unreadable`, never a line of what they printed.
@@ -518,6 +717,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
           team, state, live, machine, now, memory,
+          // The team's pause is the project's, not this session's: every watch of the project
+          // stops nudging, and a foreign watch's notice is dropped where every other work drop
+          // of that watch is.
+          pause: whole.pause ?? null,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
           liveness: {
             machine: machineLiveness(sources.home),
@@ -554,7 +757,30 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           told.add(key);
           say(refusal.text, false);
         }
-        for (const report of result.reports) tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        // The watch's own reports ring as they always have: an owner-addressed one is a decision
+        // moment (a prompt, a floor, a screen nobody knows), and `--no-notify` silences operator
+        // notices, never an owner push. The owner's immediacy list batches what arrives on the
+        // bus (`OwnerDelivery`), not these; a report that is also published as an event is
+        // recorded once there and not rung a second time.
+        const reportTs = sources.now().toISOString();
+        for (const report of result.reports) {
+          if (report.to === 'owner') ownerTold.add(report.text);
+          tell(report.text, report.to === 'owner' || !args.flags.has('no-notify'));
+        }
+        // What the pass saw goes on the bus whatever started this watch: a report is the watch's
+        // contribution, not a privileged delivery, and a bus that is not running answers
+        // `unavailable` without making the pass wait.
+        if (!foreign && sources.busPublish !== undefined) {
+          await publishWatchReportsToBus(root, session, result.reports, reportTs, sources.busPublish);
+        }
+        // A prompt that is the lead's own, or one the lead has not cleared in time, climbs to the
+        // entity's lead in that team's own mailbox. The registry names no entity lead: the climb
+        // is still the event the line above published, whose routing always carries the owner.
+        if (!foreign && sources.home) {
+          for (const line of escalatePromptReports(
+            sources.home, root, team, session, result.reports, reportTs,
+          ).failed) tell(line, true);
+        }
         for (const label of result.labels) {
           const slot = (memory.seatLabels[label.name] ??= {});
           if (label.title && sources.renameWorkspace) {
@@ -564,6 +790,21 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           if (label.displayAgent && sources.reportDisplayAgent) {
             if (sources.reportDisplayAgent(session, label.pane, label.displayAgent)) slot.line = label.displayAgent;
             else say(`${label.name}: its display was not reported`, false);
+          }
+        }
+        if (!foreign && statusEngine !== undefined) {
+          for (const nudgedSeat of statusEngine.drainNudges()) {
+            if (result.work.some((item) => item.seat === nudgedSeat)) continue;
+            const fileSeat = team.seats.find((item) => item.name === nudgedSeat);
+            const agent = live.agents.find((item) => item.name === nudgedSeat);
+            if (!fileSeat || !agent || fileSeat.human === true || fileSeat.parked || fileSeat.stopped) continue;
+            const body = (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', nudgedSeat);
+            result.work.push({
+              pane: agent.pane,
+              seat: nudgedSeat,
+              cli: fileSeat.cli,
+              body,
+            });
           }
         }
         const delivered = new Set<string>();
@@ -598,6 +839,14 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             ring: { to: result.ring.to },
           }, team, session, sources, memory, say, tell, told);
         }
+        // An inbox send the seat's client has read since the last pass is promoted here: the
+        // receipt is that client's own word, and the history records `delivered (read)` once. It
+        // types nothing and needs no pane, so a watch without nudges promotes it just the same.
+        if (!foreign) {
+          promoteInboxDrops({
+            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+          });
+        }
         // A send held while a pane was busy leaves its drop and a record beside it: the pass
         // delivers one per seat once the box is free, bounded, and says the drop's path when it
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
@@ -610,12 +859,20 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // own: this pass looks for the sign and, past the window, says so once. It types nothing,
         // so a watch without nudges still keeps that word for the sender.
         if (!foreign) {
+          await expirePendingNative(
+            { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
+            { noNudge: args.flags.has('no-nudge') },
+          );
           confirmTakenDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
           });
         }
         if (result.mailboxNote) tell(result.mailboxNote, true);
         await closeEnded({ team, root, dir, session, live, sources, say, io, told });
+      }
+      const flushed = owner?.flush();
+      if (flushed?.error !== undefined) {
+        tellOnce(told, 'owner-record', `the owner's inbox was not written: ${flushed.error}`, tell);
       }
       const place = placedWatch(dir, session, sources.pid, sources.ownPane ? () => own ?? null : undefined);
       if (place === 'end' && paneGoneOnce) {
@@ -632,7 +889,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const last = lastLive;
         if (last === null) return;
         const { failed } = labelSweep({
-          seats: team.seats,
+          seats: team.seats.filter((seat) => seat.human !== true),
           agents: last.agents,
           memory,
           read: (pane) => sources.screen(pane, session),
@@ -643,6 +900,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
       if (!(await sources.wait(inForce.interval, sweep))) break;
     }
   } finally {
+    statusWaiters?.stop();
+    await statusWaiters?.done;
     updateState(dir, (state) => {
       const record = state.sessions[session];
       if (record?.watch?.pid === sources.pid) delete record.watch;
@@ -659,7 +918,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
 function writeWorkDrop(
   dir: string, session: string, seat: string, body: string,
 ): { trigger: string } | { error: string } {
-  const id = randomUUID();
+  // A work nudge is not a message: its name says so, and the receive side reads only records.
+  const id = `work-${randomUUID()}`;
   const dropDir = join(dir, 'send-drops', session, seat);
   // Checked before the write, as `team send` does: a path that will not fit is not written.
   if (triggerLine(join(dropDir, id)) === null) {
@@ -702,7 +962,9 @@ function spendOf(outcomes: readonly CheckOutcome[]): SpendReading[] {
 // line this same process typed itself and never sent is sent instead of typed into; anything
 // else — another person's or agent's text, or the same text found after a restart — stays.
 function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string): MailboxWaiting[] {
-  return listUnacked(root, team.session, home).map((record) => {
+  // The owner's inbox is delivered by the Runtime, not a seat's message: a record there never
+  // counts as mail waiting in a pane.
+  return listUnacked(root, team.session, home).filter((record) => record.to !== 'owner').map((record) => {
     const named = live.agents.filter((agent) => agent.name === record.to);
     const agent = named.length === 1 ? named[0] : undefined;
     const seat = team.seats.find((item) => item.name === record.to);
@@ -725,6 +987,13 @@ async function deliver(
 ): Promise<void> {
   const who = nudge.ring?.to ?? nudge.seat ?? 'the seat';
   const cli = nudge.cli ?? team.seats.find((seat) => seat.name === who)?.cli ?? '';
+  // A pane the team file marks as a human's is never typed into, and a nudge is typing: the
+  // line is not typed, and the report says whose pane was spared. A ring's record stays
+  // unacked, so the message waits for the person rather than being lost.
+  if (team.seats.some((seat) => seat.name === who && seat.human === true)) {
+    tellOnce(told, 'nudge:human', `a nudge was not typed: ${who} is a human's pane`, tell);
+    return;
+  }
   const look = () => readScreen(cli, sources.screen(nudge.pane, session) ?? undefined).kind;
   const holds = () => boxHoldsText(cli, nudge.text, sources.screen(nudge.pane, session) ?? undefined);
   const status = sources.status(nudge.pane, session);
@@ -949,4 +1218,219 @@ async function closeEnded(input: {
       : removeWorktree(io, false, { home: homedir(), now: sources.now }, team, root, dir, session, task, undefined, 'watch');
     if (code !== 0) say(`worktree ${task} was not removed`, true);
   }
+}
+
+/**
+ * Reads unseen bus events from `tracker.cursor` and forwards each accepted event to `onBusEvent`.
+ * Each accepted event also reaches `deliver`, when given: the owner's delivery path (§4.5) is
+ * built there. On a sequence `gap`, resets `tracker` to `newest_seq`, clears `memory.active` so
+ * the next pass re-announces any still-true screen/team reports (`pass()` derives `memory.grace`
+ * from `memory.active` each pass), and calls `onBusGap` so a subscriber maintaining a message
+ * projection can rebuild it from the durable records on disk.
+ */
+export async function syncWatchBus(
+  root: string,
+  tracker: SequenceTracker,
+  sources: Pick<WatchSources, 'busSubscribe' | 'onBusEvent' | 'onBusGap'>,
+  memory?: Pick<Memory, 'active'>,
+  deliver?: (event: SignedEventRecord) => void,
+): Promise<boolean> {
+  if (sources.busSubscribe === undefined) return false;
+  try {
+    const outcome = await sources.busSubscribe(root, tracker.cursor);
+    if (outcome.kind === 'events') {
+      for (const event of outcome.events) {
+        if (tracker.accept(event)) {
+          sources.onBusEvent?.(event);
+          deliver?.(event);
+        }
+      }
+      if (outcome.cursor > tracker.cursor) {
+        tracker.reset(outcome.cursor);
+      }
+      return true;
+    }
+    if (outcome.kind === 'gap') {
+      tracker.reset(outcome.newest_seq);
+      memory?.active.clear();
+      sources.onBusGap?.(outcome.oldest_seq, outcome.newest_seq, outcome.reason);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** The event one check report raises: the single place the report keys map to §4.3 kinds. Null
+ *  for a key this build does not map. The event carries no addressing; the caller sets it. */
+export function watchReportEvent(
+  report: { key: string; text: string },
+  session: string,
+  ts: string,
+): EventAppendInput | null {
+  const colon = report.key.indexOf(':');
+  if (colon < 0) return null;
+  const prefix = report.key.slice(0, colon);
+  const rawSeat = report.key.slice(colon + 1);
+  const seat = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
+  if (seat === '') return null;
+
+  if (prefix === 'missing' || prefix === 'never-started' || prefix === 'gone') {
+    return {
+      ts,
+      kind: 'seat.unreachable',
+      session,
+      record_id: `watch:${prefix}:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
+  if (prefix === 'permission' || (prefix === 'blocked' && report.text.includes('permission prompt'))) {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:permission:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: 'permission',
+      reason: report.text,
+    };
+  }
+  if (prefix === 'blocked' || prefix === 'question') {
+    return {
+      ts,
+      kind: 'seat.blocked',
+      session,
+      record_id: `watch:${prefix}:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
+  if (prefix === 'vendor notice' || prefix === 'vendor') {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:vendor-notice:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: 'vendor notice',
+      reason: report.text,
+    };
+  }
+  if (prefix === 'rate-limit') {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:rate-limit:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: 'rate limit',
+      reason: report.text,
+    };
+  }
+  if (prefix === 'prompt-escalated') {
+    return {
+      ts,
+      kind: 'seat.prompt-escalated',
+      session,
+      record_id: `watch:prompt-escalated:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
+  if (prefix === 'provider-error') {
+    return {
+      ts,
+      kind: 'seat.blocked',
+      session,
+      record_id: `watch:provider-error:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      reason: report.text,
+    };
+  }
+  return null;
+}
+
+/** Publishes one event per observation, even when a check emits an operator line and an owner
+ *  line for it: both lines share a record id, and an owner-addressed copy marks the event
+ *  addressed to `owner` (§4.5), so the watch's owner reports reach the owner's list as events,
+ *  one list with the rest. */
+export async function publishWatchReportsToBus(
+  root: string,
+  session: string,
+  reports: readonly { key: string; text: string; to: string }[],
+  ts: string,
+  publish: (root: string, event: EventAppendInput) => Promise<BusPublishOutcome>,
+): Promise<void> {
+  const events = new Map<string, EventAppendInput>();
+  for (const report of reports) {
+    const event = watchReportEvent(report, session, ts);
+    if (event === null) continue;
+    const existing = events.get(event.record_id);
+    if (existing !== undefined) {
+      if (report.to === 'owner') existing.to = 'owner';
+      continue;
+    }
+    if (report.to === 'owner') event.to = 'owner';
+    events.set(event.record_id, event);
+  }
+  for (const event of events.values()) await publish(root, event).catch(() => {});
+}
+
+/** The climb: the one place the watch leaves an escalation in another team's mailbox. A team's
+ *  lead at a prompt (the first rung skipped) and a prompt the lead has not cleared within
+ *  `prompt_escalation_seconds` are written as signed runtime messages to the entity's own lead,
+ *  in the entity team's root, where that team's watch rings them. Nothing is typed into a pane:
+ *  a climb is a mailbox record and an event, never a keystroke. A registry that names no entity
+ *  lead writes nothing here; the event's own routing still carries the owner, so a climb is
+ *  never silent. A seat at a prompt is not told about its own prompt: it cannot clear it by
+ *  reading a message, and the owner's copy carries it. */
+export function escalatePromptReports(
+  home: string,
+  root: string,
+  team: TeamFile,
+  session: string,
+  reports: readonly { key: string; text: string; to: string }[],
+  ts: string,
+): { written: string[]; failed: string[] } {
+  const target = readEntityOrchestrator(home, teamIdOf(root));
+  if (target === null) return { written: [], failed: [] };
+  const leads = new Set<string>();
+  if (team.orchestrator !== '') leads.add(team.orchestrator);
+  const stamp = ts.replace(/[^0-9A-Za-z]/g, '');
+  const written: string[] = [];
+  const failed: string[] = [];
+  const seen = new Set<string>();
+  for (const report of reports) {
+    const event = watchReportEvent(report, session, ts);
+    if (event === null || event.seat === undefined) continue;
+    const climbed = event.kind === 'seat.prompt-escalated';
+    if (!climbed && !(event.kind === 'seat.at-prompt' && leads.has(event.seat))) continue;
+    // One climb per seat per pass: the operator and owner copies of one report share a seat.
+    if (event.seat === target.seat || seen.has(event.seat)) continue;
+    seen.add(event.seat);
+    const why = climbed
+      ? report.text
+      : `${report.text} — its lead is the seat at the prompt, so the climb starts above it`;
+    const outcome = writeRuntimeMailboxRecord({
+      root: target.root,
+      home,
+      to: target.seat,
+      id: `evt-prompt-${climbed ? 'climb' : 'lead'}-${event.seat}-${stamp}`,
+      text: `${team.project}: ${why}`,
+      session: target.session,
+      at: ts,
+    });
+    if (outcome.ok) written.push(outcome.path);
+    else failed.push(`${target.seat} was not told of ${event.seat}'s prompt: ${outcome.error}`);
+  }
+  return { written, failed };
 }

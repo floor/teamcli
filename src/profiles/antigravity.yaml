@@ -7,7 +7,7 @@ process_names:
   - agy
 tested:
   from: '1.2.16'
-  to: '1.4.1'
+  to: '1.4.2'
 unattended:
   - --dangerously-skip-permissions
 rules: first-message
@@ -63,6 +63,19 @@ trust_answer:
     footer: 'enter Confirm'
     action: '0d'
     capture: antigravity/1.4.1/trust.txt
+    extract:
+      after: 'Accessing workspace:'
+      before: 'Do you trust the contents of this project?'
+  # The same dialog again on 1.4.2 (`antigravity/1.4.2/trust.txt`): the marked row, the footer
+  # and the path's place between `Accessing workspace:` and the question are unchanged. The model
+  # row 1.4.1 drew under the footer is gone again, as it was on 1.4.0.
+  - from: '1.4.2'
+    to: '1.4.2'
+    label: 'Yes, I trust this folder'
+    mark: '>'
+    footer: 'enter Confirm'
+    action: '0d'
+    capture: antigravity/1.4.2/trust.txt
     extract:
       after: 'Accessing workspace:'
       before: 'Do you trust the contents of this project?'

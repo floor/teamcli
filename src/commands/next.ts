@@ -7,7 +7,7 @@
 // and this build does not write to a tracker. `team plan` prints the takeable queue and claims
 // nothing. `--wait` re-reads the source at `tasks.cadence` while a pass finds nothing takeable;
 // without the key it refuses, and a stop ends the wait with one line.
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
 import type { BrokerRequest } from '../broker/protocol.ts';
@@ -19,14 +19,16 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
+import { plainText } from '../launch/plain.ts';
 import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
 import { claimLocal, releaseLocal } from '../tasks/lease.ts';
+import { pauseText, readState, type PauseRecord } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 
 export const USAGE = `Usage: team next [--mine | --release] [--wait] [--json]
@@ -36,7 +38,7 @@ without one takeable it stands down. --release unlinks the caller's own lease. -
 the source every tasks.cadence while a pass finds nothing takeable, and cannot be read as one
 --json document. A claim is a local lease: the tracker is never written.
 
-Exits 0 when a task is claimed, released, or none is open, 1 when the caller, policy, broker, or file is refused, 2 when the invocation can't be read or this folder is not a git repository.
+Exits 0 when a task is claimed, released, or none is open, 1 when the caller, policy, broker, or file is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
 
 export type NextSources = {
@@ -95,16 +97,24 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
   if (args.error || args.rest.length) {
     return invocation(io, args.error ?? `unexpected "${args.rest[0]}"`, true, json);
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    // `team next` takes no `--file`, so the no-repository refusal must not offer one.
-    if (json) writeJsonError(io, 'next.not-a-repo', NOT_A_REPO_NO_FILE, 'run team next from inside the git checkout');
-    else io.stderr(`team next: ${NOT_A_REPO_NO_FILE}\n`);
-    // exit: next.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team next` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
-  if (!loaded.ok) return file(io, loaded.errors[0]?.message ?? 'the team file can\'t be read', json);
+  if (!loaded.ok) {
+    const problem = loaded.errors[0];
+    const message = problem?.message ?? 'the team file can\'t be read';
+    if (problem !== undefined && isNoRepository(problem)) {
+      const shown = withoutFileOffer(message);
+      if (json) writeJsonError(io, 'next.not-a-repo', shown, 'run team next from inside a checkout, or from the folder that holds .agents/team.yaml');
+      else io.stderr(`team next: ${shown}\n`);
+      // exit: next.not-a-repo
+      return 2;
+    }
+    return file(io, message, json);
+  }
   const tasks = loaded.team.tasks;
   if (!tasks) return file(io, 'the team file declares no task source', json);
   const emit: Emit = {
@@ -140,7 +150,7 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
  * `undefined`, and its empty answer stays the one stand-down answer.
  */
 type Hold = {
-  loaded: { team: TeamFile; root: string };
+  loaded: { team: TeamFile; root: string; path: string };
   tasks: NonNullable<TeamFile['tasks']>;
   sources: NextSources;
   mine: boolean;
@@ -157,7 +167,7 @@ type Hold = {
  */
 async function pass(
   io: Io,
-  loaded: { team: TeamFile; root: string },
+  loaded: { team: TeamFile; root: string; path: string },
   tasks: NonNullable<TeamFile['tasks']>,
   sources: NextSources,
   mine: boolean,
@@ -166,6 +176,24 @@ async function pass(
   emit: Emit,
   hold: Hold | undefined,
 ): Promise<number> {
+  // The team's pause stops every claim; `--release` still runs, because unlinking the lease a
+  // seat holds is how a paused seat lets go. A state that can't be read claims nothing either:
+  // the pause is unknown, and an unknown stop is not an absent one.
+  if (!release) {
+    let standing: PauseRecord | undefined;
+    try {
+      standing = readState(dirname(loaded.path)).pause;
+    } catch (error) {
+      return file(io, plainText(error instanceof Error ? error.message : String(error)), emit.json);
+    }
+    if (standing !== undefined) {
+      const message = `the team is paused (${pauseText(standing)}); nothing new is claimed until \`team resume\``;
+      if (emit.json) writeJsonError(io, 'next.paused', message, 'team resume');
+      else io.stderr(`team next: ${message}\n`);
+      // exit: next.paused
+      return 1;
+    }
+  }
   if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold);
   const registry = sources.registry ?? fileRegistry;
   const adapter = registry[tasks.source];

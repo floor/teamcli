@@ -1,4 +1,4 @@
-// The output contract for `team broker` (`docs/reference/output.md` row 36): a daemon surface
+// The output contract for `team broker` (`docs/reference/output.md` row 42): a daemon surface
 // with no `--json` on the loop — an unknown option is an invocation refusal on stderr, with the
 // usage and exit 2 — every startup and refusal line on stderr and nothing on stdout, and a usage
 // that closes with the matrix footer sentence.
@@ -49,7 +49,7 @@ ${SEATS}tasks:
   path: .agents/tasks.yaml
 `;
 
-const FOOTER = "Exits 0 when it stopped, 1 when it refused to start or lost its socket, 2 when the\ninvocation can't be read or this folder is not a git checkout.\n";
+const FOOTER = "Exits 0 when it stopped, 1 when it refused to start or lost its socket, 2 when the\ninvocation can't be read or this folder is neither a checkout nor a team root.\n";
 
 let repo: Repository;
 let home: string;

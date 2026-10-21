@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
-import { exitClearKey, launchCommand, lobbyFilesList, startupReadsList } from '../src/profiles/profile.ts';
+import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, startupReadsList } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
@@ -290,6 +290,31 @@ describe('the startup_reads a profile may name', () => {
     }
   });
 
+  // The session's own display name: a Claude Code launch carries `--name <display>` so a person
+  // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
+  // readable name. The flag is appended after the unattended options, before the rules; a launch
+  // line that writes `--name` or `-n` itself is the file's own word and is left alone; a CLI
+  // whose help has not shown the flag takes none, and an empty name adds nothing.
+  test('a claude-code launch carries the display name, and only where the CLI takes one', () => {
+    const claude = profileFor('claude-code');
+    const codex = profileFor('codex');
+    if (!claude || !codex) throw new Error('the shipped profiles are missing');
+    expect(launchCommand(claude, 'claude --model claude-opus-5-5', 'Rules.', undefined, undefined, 'Ada')).toBe(
+      "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --name Ada --append-system-prompt Rules.",
+    );
+    expect(launchCommand(claude, 'claude --model claude-opus-5-5', 'Rules.', undefined, undefined, 'builder@floor')).toBe(
+      "AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --name builder@floor --append-system-prompt Rules.",
+    );
+    // The line's own `--name`, in either spelling, is what the file chose; an empty name adds none.
+    expect(launchCommand(claude, 'claude --model claude-opus-5-5 --name mine', 'Rules.', undefined, undefined, 'Ada')).not.toContain('--name Ada');
+    expect(launchCommand(claude, 'claude --model claude-opus-5-5 -n mine', 'Rules.', undefined, undefined, 'Ada')).not.toContain('--name Ada');
+    expect(launchCommand(claude, 'claude', 'Rules.', undefined, undefined, '')).toBe(
+      "AGENT_UNATTENDED=1 claude --dangerously-skip-permissions --append-system-prompt Rules.",
+    );
+    // No measured flag on the other CLIs: the name is not passed to one that has no such word.
+    expect(launchCommand(codex, 'codex -m gpt-6-sol', 'Rules.', undefined, undefined, 'Ada')).not.toContain('--name');
+  });
+
   test('the shipped profiles name the files a working-folder run showed each CLI reading at start', () => {
     expect(shippedStartupReads()).toEqual([
       { path: 'CLAUDE.md', directory: false, clis: ['claude-code', 'cursor', 'grok'] },
@@ -304,5 +329,84 @@ describe('the startup_reads a profile may name', () => {
       { path: 'GEMINI.md', directory: false, clis: ['antigravity', 'gemini'] },
       { path: '.gemini/settings.json', directory: false, clis: ['gemini'] },
     ]);
+  });
+});
+
+describe('the input block a profile may name', () => {
+  // The measured way into a CLI's box: the keys that empty it on an idle screen and mid-turn,
+  // the paste surface, and whether the CLI takes text at all while a turn runs. Only the CLIs a
+  // run measured carry it; every other profile reads null, and a delivery that meets unsent text
+  // there holds instead of touching the box.
+  test('an absent block reads as null', () => {
+    expect(inputBlockOf('exit: /exit')).toBe(null);
+  });
+
+  test('the shipped profiles carry the keys their runs measured', () => {
+    expect(profileFor('claude-code')?.input).toEqual({
+      clear: ['ctrl+c'],
+      clearWorking: ['ctrl+u'],
+      paste: 'bracketed',
+      midTurn: true,
+    });
+    expect(profileFor('codex')?.input).toEqual({
+      clear: ['ctrl+u', 'ctrl+k'],
+      clearWorking: null,
+      paste: 'bracketed',
+      midTurn: false,
+    });
+    expect(profileFor('cursor')?.input).toEqual({
+      clear: ['ctrl+u'],
+      clearWorking: null,
+      paste: 'bracketed',
+      midTurn: false,
+    });
+  });
+
+  test('no other shipped profile claims one', () => {
+    for (const cli of ['gemini', 'grok', 'antigravity', 'muse', 'jules']) {
+      expect([cli, profileFor(cli)?.input]).toEqual([cli, null]);
+    }
+  });
+
+  test('the block loads as the loader reads it, and mid_turn defaults to false', () => {
+    expect(inputBlockOf(`exit: /exit
+input:
+  clear:
+    - ctrl+u
+    - ctrl+k
+  paste: bracketed`)).toEqual({ clear: ['ctrl+u', 'ctrl+k'], clearWorking: null, paste: 'bracketed', midTurn: false });
+    expect(inputBlockOf(`exit: /exit
+input:
+  clear:
+    - ctrl+c
+  clear_working:
+    - ctrl+u
+  paste: bracketed
+  mid_turn: true`)).toEqual({ clear: ['ctrl+c'], clearWorking: ['ctrl+u'], paste: 'bracketed', midTurn: true });
+  });
+
+  test('a key no run measured, a shape that is not a list, an unknown paste surface or key is refused', () => {
+    const block = (body: string): string => `exit: /exit\ninput:\n${body}`;
+    expect(() => inputBlockOf(block('  clear:\n    - enter\n  paste: bracketed'))).toThrow(
+      '"input.clear" must hold keys among: ctrl+c, ctrl+u, ctrl+k, escape, backspace',
+    );
+    expect(() => inputBlockOf(block('  clear: not-a-list\n  paste: bracketed'))).toThrow(
+      '"input.clear" must be a non-empty list of keys',
+    );
+    expect(() => inputBlockOf(block('  clear:\n    - ctrl+u\n  paste: clipboard'))).toThrow(
+      '"input.paste" must be one of: bracketed',
+    );
+    expect(() => inputBlockOf(block('  clear:\n    - ctrl+u\n  paste: bracketed\n  keys:\n    - ctrl+u'))).toThrow(
+      'unknown key "keys"',
+    );
+  });
+
+  test('mid_turn without clear_working is refused: the idle keys could end the turn', () => {
+    expect(() => inputBlockOf(`exit: /exit
+input:
+  clear:
+    - ctrl+c
+  paste: bracketed
+  mid_turn: true`)).toThrow('"input.clear_working" is required when "input.mid_turn" is true');
   });
 });

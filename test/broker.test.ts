@@ -9,7 +9,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, connect, type Socket } from 'node:net';
-import { tmpdir } from 'node:os';
+import { cpus, loadavg, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { anotherPaneRefusal, noPaneRefusal, type Caller } from '../src/caller.ts';
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
@@ -64,10 +64,24 @@ let base: string;
 let root: string;
 let home: string;
 
+/** The runner's 5000 ms default is not a budget this file chose: every scene calls `project()`,
+ *  whose single `git init` outlived five seconds under the suite's ambient load, and the start
+ *  protocol's scenes spawn starter processes, then poll for locks and sockets. One explicit
+ *  bound per scene — three minutes, inside which the load-scaled waits below still fail first
+ *  with their own sentence — keeps a loaded machine's scene alive while a real hang still
+ *  fails; the sized pins pass their own larger budgets. */
+const SCENE_BUDGET_MS = 180_000;
+const scene = (name: string, fn: () => void | Promise<void>, budgetMs: number = SCENE_BUDGET_MS): void => {
+  test(name, fn, budgetMs);
+};
+
+/** The hook's own budget: it closes the scene's handles and removes its temp tree, which for a
+ *  sized pin can hold hundreds of round folders; the runner's five-second default is not a
+ *  bound this file chose. */
 afterEach(async () => {
   for (const handle of openHandles.splice(0)) await handle.close();
   if (base) rmSync(base, { recursive: true, force: true });
-});
+}, 60_000);
 
 const openHandles: { close(): Promise<void> }[] = [];
 
@@ -127,7 +141,7 @@ function send(line: string): Promise<string> {
     const socket = connect(brokerSocket(root));
     let buffer = '';
     socket.setEncoding('utf8');
-    socket.setTimeout(2000, () => {
+    socket.setTimeout(loadBoundedMs(2_000, 30_000), () => {
       socket.destroy();
       fail(new Error('the broker did not answer'));
     });
@@ -158,8 +172,14 @@ async function rawServer(handler: (socket: Socket) => void): Promise<() => Promi
   };
 }
 
+/** A predicate polled until it holds: ten milliseconds between reads, inside a flat two seconds
+ *  raised by the machine's bounded load term and capped at half a minute. The flat two seconds
+ *  was itself a loaded-machine failure — a start's lock write landed after the poll gave up —
+ *  and the load term is the same one every other wait here uses, so a hang still fails inside
+ *  the cap. */
 async function waitFor(check: () => boolean): Promise<void> {
-  for (let tries = 0; tries < 200; tries++) {
+  const until = Date.now() + loadBoundedMs(2_000, 30_000);
+  while (Date.now() < until) {
     if (check()) return;
     await new Promise((tick) => setTimeout(tick, 10));
   }
@@ -194,17 +214,22 @@ function leaveStaleSocket(at: string = brokerSocket(root)): void {
  *  serialized start must prevent is a second start taking a path this one is still on its way
  *  to; a second start arriving after the file exists reads a live socket and is refused busy
  *  either way.
- *  It prints `ready` with a raw write — out before the hold can block the loop — then one JSON
- *  line with the outcome. A serving child stays alive; anything else runs out of work and
- *  exits on its own. */
-const FIXTURE = `import { lstatSync, readFileSync, writeSync } from 'node:fs';
+ *  It prints `ready` with a raw write — out before the hold can block the loop — then, given a
+ *  go file, parks until it appears before starting: a scene can pay this child's boot (bun +
+ *  imports, seconds under heavy load) before the holder's clock starts and keep only its
+ *  in-process start path inside the holder's fixed window. Entering the hold it says `paused`,
+ *  before the busy-wait, so a scene can anchor its own step on the holder being mid-window.
+ *  Then one JSON line with the outcome. A serving child stays alive; anything else runs out of
+ *  work and exits on its own. */
+const FIXTURE = `import { existsSync, lstatSync, readFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
-const [root, delay, repo] = process.argv.slice(2);
+const [root, delay, repo, go] = process.argv.slice(2);
 const real = net.Server.prototype.listen;
 net.Server.prototype.listen = function (...args) {
+  writeSync(1, 'paused\\n');
   const end = Date.now() + Number(delay);
   while (Date.now() < end) {}
   return real.apply(this, args);
@@ -219,6 +244,7 @@ if (!checked.ok) {
   process.exit(2);
 }
 writeSync(1, 'ready\\n');
+if (go !== undefined) while (!existsSync(go)) await new Promise((tick) => setTimeout(tick, 1));
 const result = await startBroker({
   root,
   team: checked.team,
@@ -362,6 +388,15 @@ function startFixture(delayMs: number): FixtureChild {
   const script = join(base, `start-${delayMs}.mjs`);
   writeFileSync(script, FIXTURE);
   return spawnFixture(script, [root, String(delayMs), join(import.meta.dir, '..')]);
+}
+
+/** The same fixture, booted now and released when `go` appears: its boot (bun + imports) lands
+ *  while the scene is still setting up, so only the in-process start path runs inside a
+ *  holder's fixed window — the fixed cost a loaded machine used to stretch past that window. */
+function startAtGoFixture(delayMs: number, go: string): FixtureChild {
+  const script = join(base, `start-at-go-${delayMs}.mjs`);
+  writeFileSync(script, FIXTURE);
+  return spawnFixture(script, [root, String(delayMs), join(import.meta.dir, '..'), go]);
 }
 
 /** One burst child for a per-round root: it waits for that round's go file. */
@@ -561,10 +596,12 @@ function spawnClaimKid(args: string[], extraEnv: Record<string, string>): ClaimC
 }
 
 /** The detector's selftest for one route: a child that installs the wrap, fires it through a
- *  canary import's own call, and answers `ok` only when the event was logged. */
+ *  canary import's own call, and answers `ok` only when the event was logged. The wait is ten
+ *  seconds raised by the bounded load term: a loaded machine's fork+import can overrun a flat
+ *  ten, and a false "no route fired" would silently skip the unlink assertion. */
 async function claimSelftest(candidate: string): Promise<{ ok: boolean; line: string }> {
   const kid = spawnClaimKid(['selftest', 'x', 'x', join(import.meta.dir, '..')], { DS_ROUTE: candidate, DS_PARENT: String(process.pid) });
-  const until = Date.now() + 10_000;
+  const until = Date.now() + loadBoundedMs(10_000, 60_000);
   while (Date.now() < until) {
     const verdict = kid.selftest();
     if (verdict !== undefined) { kid.kill(); await kid.exited; return { ok: verdict.includes('"ok"'), line: verdict }; }
@@ -575,13 +612,44 @@ async function claimSelftest(candidate: string): Promise<{ ok: boolean; line: st
   return { ok: false, line: 'no selftest line' };
 }
 
+/** A child fixture's boot is the one wait a memory-starved machine stretches without bound:
+ *  measured here at a 1-minute load of ≈16–17 per ten cores, a fixture stayed alive and silent
+ *  past twenty seconds and six claim children past sixty, with no output at all. Boot waits are
+ *  floored at thirty seconds and capped at two minutes, raised by the same bounded load term as
+ *  every other wait here; every fixture prints `ready` before any broker work, so a boot wait
+ *  can never hide a slow broker. */
+const BOOT_WAIT_FLOOR_MS = 30_000;
+const BOOT_WAIT_CAP_MS = 120_000;
+/** How many times one round whose starts never booted may be handed back. A boot that never
+ *  said `ready` measured nothing about the broker; each hand-back is logged as unscored, never
+ *  silently skipped, and a run whose unscored boot steps pass a third of its rounds fails — a
+ *  machine that cannot boot the starts cannot pass itself off as a broker that answered. */
+const READY_RETRIES_PER_ROUND = 2;
+
 /** The claim pin's rounds: the pre-registered 413 (ceil(ln 0.01 / ln(1 − p̂)) on the pooled
  *  1.111%/round) — never resized after seeing a result. */
 const CLAIM_ROUNDS = 413;
-/** The pin's own budget floor, from CI's ≈0.23 s/round pace. */
-const CLAIM_STEP_FLOOR_MS = 10_000;
+/** The ready step's floor. The pin's own pace is ≈0.23 s/round on CI, but the step waits on
+ *  six child fixtures' BOOT, and a memory-starved machine stretches that alone past ten
+ *  seconds (measured here at load ≈1.6 per core: a claim round's six starts stayed alive and
+ *  silent past 25 s). The shared boot floor applies; the bounded load term raises it. The
+ *  release step is untouched — it stays fixed at ten seconds. */
+const CLAIM_STEP_FLOOR_MS = BOOT_WAIT_FLOOR_MS;
+/** The ready step's ceiling: even an overloaded machine may not stretch one round's boot step
+ *  further than the shared boot cap. The release step stays fixed, so a broker that is slow
+ *  where the claim path runs still fails there. */
+const CLAIM_STEP_CAP_MS = BOOT_WAIT_CAP_MS;
+/** The load term's own bound, shared by every budget below: a run queue eight deep per core is
+ *  already an overloaded machine, and a budget stops growing there rather than tracking an
+ *  unbounded average. */
+const LOAD_CAP = 8;
 const CLAIM_RUN_FLOOR_MS = 300_000;
+/** The unloaded run cap, forty minutes; the load term raises it toward the hard cap. */
 const CLAIM_RUN_CAP_MS = 2_400_000;
+/** The hard run cap, kept under this scene's own timeout so a budget failure still reaps its
+ *  starts rather than leaving the body to be killed mid-flight (bun does not cancel a timed-out
+ *  test body). */
+const CLAIM_RUN_HARD_CAP_MS = 4_500_000;
 /** The outcomes step is fixed, never scaled: released together on a dead start's lock, the six
  *  starts' whole release path measured 130–260 ms at load 9–14, so ten seconds is two orders of
  *  magnitude of headroom — and a broker that regressed must fail it, not inherit a budget its
@@ -592,47 +660,82 @@ const CLAIM_OUTCOMES_STEP_MS = 10_000;
  *  per-round step round after round, without failing a merely loaded machine. */
 const CLAIM_OUTCOMES_TOTAL_MS = CLAIM_ROUNDS * 2_000;
 
-/** The budgets, computed from the BOOT pace alone — round start → every start's `ready`, plus
- *  its reap — never from the release window where `startBroker` runs: a broker that slowed
- *  would inflate a pace that included it and scale the very budget meant to catch it. The step
- *  deadline is twice the boot pace (never under the pin's original ten seconds); the run budget
- *  is twice the extrapolated 413-round total, floored at the pin's original five minutes and
- *  capped at forty. */
-function claimBudgets(bootPaceMs: number): { stepMs: number; runBudgetMs: number } {
-  return {
-    stepMs: Math.max(CLAIM_STEP_FLOOR_MS, Math.ceil(bootPaceMs * 2)),
-    runBudgetMs: Math.min(CLAIM_RUN_CAP_MS, Math.max(CLAIM_RUN_FLOOR_MS, Math.ceil(bootPaceMs * CLAIM_ROUNDS * 2))),
-  };
+/** The 1-minute run-queue length per core: the load term's measure, taken from the machine's
+ *  other load rather than this scene's own work. */
+function loadPerCore(): number {
+  return Math.max(0, loadavg()[0] ?? 0) / Math.max(1, cpus().length);
+}
+
+/** A flat budget raised by the load term — 1 + the load per core, bounded at LOAD_CAP — and
+ *  never past the cap: a wait a loaded machine needs a moment longer for still holds, while one
+ *  that never holds fails inside the cap. */
+function loadBoundedMs(floorMs: number, capMs: number, load = loadPerCore()): number {
+  return Math.min(capMs, Math.ceil(floorMs * (1 + Math.min(load, LOAD_CAP))));
+}
+
+/** A step budget for one round: the greater of twice the measured BOOT pace (round start →
+ *  every start's `ready`, plus its reap) and the floor raised by the load term, never past the
+ *  step cap. Sampled at the round's start, before its starts exist, so the term is the
+ *  machine's other load. The release window feeds neither term, so a broker that regressed
+ *  cannot inflate the budget meant to catch it. The load is a parameter so a scene isolating
+ *  the pace term can pass zero. */
+function loadedStepMs(floorMs: number, capMs: number, bootPaceMs: number, load = loadPerCore()): number {
+  return Math.min(capMs, Math.max(floorMs, Math.ceil(bootPaceMs * 2), loadBoundedMs(floorMs, capMs, load)));
+}
+
+/** The run cap for one round's load: the unloaded cap raised by the same bounded term, never
+ *  past the scene's hard cap. A sibling heavy run that lands after the warm-up must not be
+ *  reported as a broker that cannot finish. */
+function loadedRunCapMs(capMs: number, hardCapMs: number, load = loadPerCore()): number {
+  return loadBoundedMs(capMs, hardCapMs, load);
+}
+
+/** The run budget, computed from the BOOT pace alone, never from the release window: twice the
+ *  extrapolated total, floored, scaled by the same bounded load term, and capped by the
+ *  load-scaled cap above. The step and outcomes walls prove the broker; this budget only stops
+ *  a machine that cannot finish at all, and it is sampled per round so load that arrives late
+ *  gets room instead of a false failure. */
+function loadedRunBudgetMs(rounds: number, floorMs: number, capMs: number, hardCapMs: number, bootPaceMs: number, load = loadPerCore()): number {
+  const paceTerm = Math.ceil(bootPaceMs * rounds * 2);
+  return Math.min(loadedRunCapMs(capMs, hardCapMs, load), Math.max(floorMs, loadBoundedMs(paceTerm, hardCapMs, load)));
+}
+
+/** A fixture's own answer deadline behind a fixed release step: the step must fire first and
+ *  name itself, so the child's wait sits past it by a slack the load term raises — a delayed
+ *  event loop can run the step timer late, and the pin judges the step, never the child. */
+function outcomesFallbackMs(stepMs: number): number {
+  return stepMs + loadBoundedMs(5_000, 30_000);
 }
 
 /** The two burst scenes' budgets, from the same BOOT pace the claim lane uses — round start →
  *  every start's `ready`, plus its reap — never from the release window, so a regressed broker
- *  cannot inflate the budget meant to catch it. The ready step is twice the pace, never under
- *  the pin's ten seconds and never past its two-minute cap; the release step stays fixed at
- *  ten seconds; the run budget is twice the extrapolated total, floored and capped. The cap's
+ *  cannot inflate the budget meant to catch it. The ready step is the greater of twice the pace
+ *  and the shared thirty-second boot floor raised by the bounded load term, never past its
+ *  two-minute cap, sampled at each round's start; a round whose starts never said `ready` may
+ *  be handed back READY_RETRIES_PER_ROUND times, logged as unscored, and a run with more than
+ *  a third of its boot steps unscored fails; the release step stays fixed at ten seconds (the
+ *  claim lane's stall scene pins that the release path cannot raise any budget); the run budget
+ *  is twice the extrapolated total, floored, raised by the same load term and capped by a cap
+ *  that is itself raised by it between the unloaded cap and the scene's hard cap. The cap's
  *  margin is not decoration: bun 1.4.2 does not cancel a timed-out test body, so a body that
- *  outlived its test runs on against the fixture world the after-each has already removed, and
- *  its later rejection surfaces as an unhandled error between tests (probe on bun 1.4.2: a
- *  100 ms test whose body awaits a waiter that throws at 650 ms, with a later test holding the
- *  runner open, prints "# Unhandled error between tests"; an internal catch on the awaited
- *  waiter changes nothing — the rejection reported is the body's own). Four starts: fifteen
- *  minutes of run inside a thirty-minute test; six: forty inside fifty, the claim lane's own
- *  margins. Each body therefore ends inside its timeout by construction, and a machine that
- *  cannot finish stops first, naming its round and step — never at the timeout with no name. */
-const BURST_STEP_FLOOR_MS = 10_000;
-const BURST_STEP_CAP_MS = 120_000;
+ *  outlived its
+ *  test runs on against the fixture world the after-each has already removed, and its later
+ *  rejection surfaces as an unhandled error between tests (probe on bun 1.4.2: a 100 ms test
+ *  whose body awaits a waiter that throws at 650 ms, with a later test holding the runner open,
+ *  prints "# Unhandled error between tests"; an internal catch on the awaited waiter changes
+ *  nothing — the rejection reported is the body's own). Four starts: twenty-five minutes of run
+ *  inside a thirty-minute test; six: forty-five inside fifty — the claim lane's own margins.
+ *  Each body therefore ends inside its timeout by construction, and a machine that cannot
+ *  finish stops first, naming its round and step — never at the timeout with no name. */
+const BURST_STEP_FLOOR_MS = BOOT_WAIT_FLOOR_MS;
+const BURST_STEP_CAP_MS = BOOT_WAIT_CAP_MS;
 const BURST_OUTCOMES_STEP_MS = 10_000;
 const BURST4_RUN_FLOOR_MS = 120_000;
 const BURST4_RUN_CAP_MS = 900_000;
+const BURST4_RUN_HARD_CAP_MS = 1_500_000;
 const BURST6_RUN_FLOOR_MS = 300_000;
 const BURST6_RUN_CAP_MS = 2_400_000;
-
-function burstBudgets(rounds: number, bootPaceMs: number, runFloorMs: number, runCapMs: number): { stepMs: number; runBudgetMs: number } {
-  return {
-    stepMs: Math.min(BURST_STEP_CAP_MS, Math.max(BURST_STEP_FLOOR_MS, Math.ceil(bootPaceMs * 2))),
-    runBudgetMs: Math.min(runCapMs, Math.max(runFloorMs, Math.ceil(bootPaceMs * rounds * 2))),
-  };
-}
+const BURST6_RUN_HARD_CAP_MS = 2_700_000;
 
 /** One step of a round, bounded by its own budget: a step that runs out kills and reaps its
  *  round's starts at once and fails naming the step and the budget it overran, never the child
@@ -654,6 +757,13 @@ async function withinStep<T>(label: string, roundKids: FixtureChild[], budgetMs:
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The one failure a sized round may hand back: its ready step outlived its budget. A fixture
+ *  prints `ready` before any broker work begins, so a timeout here measured the machine's boot
+ *  and nothing about the broker; every other failure is the run's own and is rethrown. */
+function readyStepTimedOut(error: unknown): boolean {
+  return /^step "[^"]+: ready" outlived its \d+ ms budget/.test(String((error as Error | undefined)?.message ?? ''));
 }
 
 /** While a writer holds inside its create, watch one path: every sighting of the file present
@@ -691,8 +801,11 @@ function newResidue(): string[] {
 }
 
 /** A fixture's `ready`, with the deadline failing the pin on what the child has said so far
- *  instead of hanging the suite. */
-async function readyOf(fixture: FixtureChild, deadlineMs = 8000): Promise<void> {
+ *  instead of hanging the suite. The default is the shared boot floor raised by the bounded
+ *  load term — a fixture child boots in well under a second unloaded, but a memory-starved
+ *  machine's fork+exec was measured silent past twenty seconds — and a caller with its own
+ *  step budget passes a larger deadline. */
+async function readyOf(fixture: FixtureChild, deadlineMs = loadBoundedMs(BOOT_WAIT_FLOOR_MS, BOOT_WAIT_CAP_MS)): Promise<void> {
   const until = Date.now() + deadlineMs;
   while (Date.now() < until) {
     if (fixture.said.includes('ready')) return;
@@ -703,7 +816,7 @@ async function readyOf(fixture: FixtureChild, deadlineMs = 8000): Promise<void> 
 }
 
 /** A fixture's outcome line, with the same deadline and the same failure message. */
-async function outcomeOf(fixture: FixtureChild, deadlineMs = 8000): Promise<FixtureOutcome> {
+async function outcomeOf(fixture: FixtureChild, deadlineMs = loadBoundedMs(BOOT_WAIT_FLOOR_MS, BOOT_WAIT_CAP_MS)): Promise<FixtureOutcome> {
   const until = Date.now() + deadlineMs;
   while (Date.now() < until) {
     if (fixture.outcome) return fixture.outcome;
@@ -778,7 +891,7 @@ async function startCommand(seams: BrokerSources = {}): Promise<{ running: Promi
 }
 
 describe('the broker wire protocol', () => {
-  test('a request is exactly the three keys this build writes', () => {
+  scene('a request is exactly the three keys this build writes', () => {
     expect(parseRequest(JSON.stringify({ op: 'read', seat: 'lead', pane: 'w1:p1' }))).toEqual(leadSeat);
     for (const line of [
       'not json',
@@ -794,7 +907,7 @@ describe('the broker wire protocol', () => {
     }
   });
 
-  test('an answer this build did not write is refused, never half-read', () => {
+  scene('an answer this build did not write is refused, never half-read', () => {
     const read: BrokerAnswer = { ok: true, read: { kind: 'records', records: [{ id: 'm1', title: 't', priority: 1 }], refusals: [{ index: 2, id: 'm2', reason: 'title is required' }] } };
     expect(parseAnswer(encodeLine(read).trimEnd())).toEqual(read);
     const withNotice: BrokerAnswer = { ...read, notice: 'more' };
@@ -819,7 +932,7 @@ describe('the broker wire protocol', () => {
     }
   });
 
-  test('a line over the cap without its newline is refused, not buffered forever', async () => {
+  scene('a line over the cap without its newline is refused, not buffered forever', async () => {
     project();
     record();
     await serving(async () => records([{ id: 'm1', title: 't' }]));
@@ -830,20 +943,20 @@ describe('the broker wire protocol', () => {
 });
 
 describe('the seat\'s client outcomes', () => {
-  test('the sentences are bytes, and the deadline is the release check\'s', () => {
+  scene('the sentences are bytes, and the deadline is the release check\'s', () => {
     expect(NOT_RUNNING).toBe('the broker is not running; the owner starts it with `team broker`');
     expect(WRONG_ANSWER).toBe("the broker's answer is not one this build knows; the owner restarts it");
     expect(DEADLINE).toBe('the broker accepted the request and did not answer; nothing is claimed');
     expect(BROKER_DEADLINE_MS).toBe(5000);
   });
 
-  test('no broker, no socket file: unavailable', async () => {
+  scene('no broker, no socket file: unavailable', async () => {
     project();
     record();
     expect(await ask(leadSeat)).toEqual({ kind: 'unavailable' });
   });
 
-  test('an answer line this build does not know is wrong, never half-read', async () => {
+  scene('an answer line this build does not know is wrong, never half-read', async () => {
     project();
     record();
     const lines = ['not json\n', '{"ok":true,"read":{"kind":"records","records":[{"id":"m1"}],"refusals":[]}}\n'];
@@ -857,7 +970,7 @@ describe('the seat\'s client outcomes', () => {
     }
   });
 
-  test('a broker that accepts and never answers is a deadline, and nothing is claimed', async () => {
+  scene('a broker that accepts and never answers is a deadline, and nothing is claimed', async () => {
     project();
     record();
     const close = await rawServer(() => {});
@@ -870,7 +983,7 @@ describe('the seat\'s client outcomes', () => {
 });
 
 describe('the start protocol', () => {
-  test('a call that is not the owner is refused before the keychain and before any bind', async () => {
+  scene('a call that is not the owner is refused before the keychain and before any bind', async () => {
     // The gate is the first thing after the invocation: no team file, no Keychain — the key
     // reader below must never be called — and no socket file. A pane run counts too: an agent
     // creates panes, so a pane is never the owner's terminal, TTY or not.
@@ -899,7 +1012,20 @@ describe('the start protocol', () => {
     }
   });
 
-  test('a second broker refuses as busy, through the module and through the command', async () => {
+  scene('a folder that is not a checkout reads the team root it holds', async () => {
+    project();
+    record();
+    // The team root is this folder itself: no checkout names it, and the broker binds its socket
+    // under that folder's own `.agents`. It starts and stops cleanly, the same as in a clone.
+    rmSync(join(root, '.git'), { recursive: true, force: true });
+    const { running, io, finish } = await startCommand();
+    expect(io.err).toContain('team broker: answering on .agents/broker.sock\n');
+    finish();
+    expect(await running).toBe(0);
+    expect(existsSync(brokerSocket(root))).toBe(false);
+  });
+
+  scene('a second broker refuses as busy, through the module and through the command', async () => {
     project();
     record();
     await serving(async () => records([{ id: 'm1', title: 't' }]));
@@ -909,7 +1035,7 @@ describe('the start protocol', () => {
     expect(io.err).toContain('team broker: a broker is already answering on .agents/broker.sock\n');
   });
 
-  test('a socket file left by a SIGKILL is cleared and bound', async () => {
+  scene('a socket file left by a SIGKILL is cleared and bound', async () => {
     project();
     record();
     leaveStaleSocket();
@@ -924,7 +1050,7 @@ describe('the start protocol', () => {
     expect(existsSync(path)).toBe(false);
   });
 
-  test('two concurrent starts against one stale socket leave one serving and one busy', async () => {
+  scene('two concurrent starts against one stale socket leave one serving and one busy', async () => {
     // Base: both starts probed the same stale file and both cleared and bound — two live handles
     // on one path (rehearsed 20/20 rounds). The clear then followed the identity of the entry
     // the probe saw (dev+ino from the gate's lstat), which held on macOS but not on CI's ubuntu
@@ -950,7 +1076,7 @@ describe('the start protocol', () => {
     expect(existsSync(path)).toBe(false);
   });
 
-  test('a second start cannot take the path from a start that is still starting', async () => {
+  scene('a second start cannot take the path from a start that is still starting', async () => {
     // The window the walk alone cannot close: a start is not instantaneous, and this owner —
     // the real start path in a real process — has its listen call deliberately held back a
     // fixed 1500ms by the fixture. The second start is a real start too, spawned the moment
@@ -994,32 +1120,47 @@ describe('the start protocol', () => {
     }
   });
 
-  test('a start\'s release leaves a lock a second start holds', async () => {
+  scene('a start\'s release leaves a lock a second start holds', async () => {
     // The release-identity shape, deterministic: A is a real start held pre-listen by the
     // fixture's listen hold (1500ms). Once A holds the lock, the same-principal removal the
-    // finding's own step uses drops that entry, and B — a real start, held the same way —
-    // creates its own lock in the free name. A's walk then lands and A's release runs while B
+    // finding's own step uses drops that entry, and B — a real start, held the same way, its
+    // hold outlasting A's by the margin the post-release check needs — creates its own lock in
+    // the free name. A's walk then lands and A's release runs while B
     // is alive and still mid-section: the release must unlink only the entry A created, so B's
     // lock survives A's exit — bytes and inode both. A release that unlinks the path
     // unconditionally removes a live replacement's lock; this pin is red until the release is
     // identity-bound. B's own walk, arriving after A bound, answers the pinned bind sentence;
-    // B's release then removes its own lock.
+    // B's release then removes its own lock. The window A holds is the only fixed cost left:
+    // it is load-scaled (nothing bounds A's listen above — it is outside the lock's deadline),
+    // B's boot is paid before the window opens, and the go file releases B only once A is
+    // observed inside its hold — a loaded child's boot used to outlast a flat 1500ms and B then
+    // probed a socket A had already bound, answering busy.
     project();
     record();
     const path = brokerSocket(root);
     const lockPath = `${path}.lock`;
-    const a = startFixture(1500);
+    const holdMs = loadBoundedMs(1_500, 20_000);
+    // B holds past A's release by a margin the test's own poll cannot eat: B's bind follows
+    // A's by only its in-process start path now that its boot is pre-paid, and the check that
+    // B's entry survived A's release lands after outcomeOf(A) wakes — up to a poll late — so
+    // without the margin B could be done and released before that check reads the lock.
+    const bHoldMs = holdMs + loadBoundedMs(1_000, 10_000);
+    const go = join(base, 'go-release');
+    const b = startAtGoFixture(bHoldMs, go);
     try {
-      await readyOf(a);
-      if (a.pid === undefined) throw new Error('the fixture has no pid');
-      // The lock naming A itself, not mere existence: the file exists a beat before its pid
-      // lands, and this pin needs A's section begun — the lock observably A's own.
-      await lockedBy(a);
-      expect(Number(readFileSync(lockPath, 'utf8').trim())).toBe(a.pid);
-      unlinkSync(lockPath);
-      const b = startFixture(1500);
+      await readyOf(b); // B is booted and parked: only its start path runs in A's window
+      const a = startFixture(holdMs);
       try {
-        await readyOf(b);
+        await readyOf(a);
+        if (a.pid === undefined) throw new Error('the fixture has no pid');
+        // The lock naming A itself, not mere existence, and A inside its hold: the file exists
+        // a beat before its pid lands, and this pin needs A's section begun — the lock
+        // observably A's own — before the same-principal removal below.
+        await lockedBy(a);
+        await waitFor(() => a.said.includes('paused'));
+        expect(Number(readFileSync(lockPath, 'utf8').trim())).toBe(a.pid);
+        unlinkSync(lockPath);
+        writeFileSync(go, ''); // B starts into the free name while A is still mid-section
         if (b.pid === undefined) throw new Error('the fixture has no pid');
         await lockedBy(b);
         expect(Number(readFileSync(lockPath, 'utf8').trim())).toBe(b.pid);
@@ -1035,15 +1176,15 @@ describe('the start protocol', () => {
         }
         expect((await outcomeOf(b)).kind).toBe('bind-failed');
       } finally {
-        b.kill();
+        a.kill();
       }
     } finally {
-      a.kill();
+      b.kill();
     }
     expect(existsSync(lockPath)).toBe(false); // B's own release removed its own entry
-  }, 15000);
+  });
 
-  test('a start lock a killed start left behind is taken over', async () => {
+  scene('a start lock a killed start left behind is taken over', async () => {
     // A start killed mid-section — the fixture SIGKILLed while it holds the lock and is still
     // on its way to binding — leaves the lock file with its dead pid. The next start must not
     // wedge on it: `withLock`'s discipline, the dead file taken over under a takeover claim,
@@ -1078,7 +1219,7 @@ describe('the start protocol', () => {
     }
   });
 
-  test('an empty lock file is waited on, not taken over', async () => {
+  scene('an empty lock file is waited on, not taken over', async () => {
     // The create→write gap, made observable: the lock exists the instant `openSync(path,'wx')`
     // returns, its pid one beat later — an empty read is what a sibling lands on in that gap,
     // and what a writer killed exactly there leaves behind. The too-young guard was written for
@@ -1106,7 +1247,7 @@ describe('the start protocol', () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
-  test('an interrupted writer\'s empty lock is waited on, then taken over', async () => {
+  scene('an interrupted writer\'s empty lock is waited on, then taken over', async () => {
     // The create→write gap with a real writer killed inside it (the review's C2 shape): a
     // child exclusive-creates the lock and SIGKILLs itself before writing its pid. The empty
     // file is now a dead writer's, and the second start is a real start: it must not take the
@@ -1136,7 +1277,7 @@ describe('the start protocol', () => {
     expect(existsSync(lockPath)).toBe(false);
   });
 
-  test('a live writer paused in the lock\'s create is never evicted', async () => {
+  scene('a live writer paused in the lock\'s create is never evicted', async () => {
     // The finding, against real processes: a writer alive and inside its own create — the
     // fixture's pid getter holds the real start path for 1500ms, a watched window an order of
     // magnitude past LOCK_YOUNG_MS — is not dead, and a second real start arriving mid-hold
@@ -1150,20 +1291,29 @@ describe('the start protocol', () => {
     // — an entry is published whole — and at rest no start serves through the other: the
     // second serves, the writer resumes into its own section and answers busy, and no lock, no
     // claim, no private temp is left. The outcome pair is the same on both heads; the empty
-    // sighting is the discriminator.
+    // sighting is the discriminator. The hold is the window, not a wait to scale: the second
+    // is booted before the writer's clock starts and parked on a go file, so only its
+    // in-process start path runs inside the hold — a loaded child's boot used to outlast the
+    // fixed 1500ms and the second then probed a socket the writer had already bound, answering
+    // busy. The hold is not scaled: it is the protocol window under test, and the same fixture
+    // is pinned by the claim scene, where the writer's whole acquire runs against
+    // LOCK_WAIT_MS (2000).
     project();
     record();
     const path = brokerSocket(root);
     const lockPath = `${path}.lock`;
-    const writer = gapFixture(1500);
-    const watcher = watchNoPid(lockPath);
+    const go = join(base, 'go-release');
+    const second = startAtGoFixture(0, go);
     try {
-      await readyOf(writer);
-      await waitFor(() => writer.said.includes('paused')); // the writer is in its create's gap
-      const second = startFixture(0);
+      await readyOf(second); // booted and parked before the writer's clock starts
+      const writer = gapFixture(1500);
+      const watcher = watchNoPid(lockPath);
       try {
-        const secondOutcome = await outcomeOf(second, 15000);
-        const writerOutcome = await outcomeOf(writer, 15000);
+        await readyOf(writer);
+        await waitFor(() => writer.said.includes('paused')); // the writer is in its create's gap
+        writeFileSync(go, ''); // release the second into the live writer's window
+        const secondOutcome = await outcomeOf(second, loadBoundedMs(15_000, 60_000));
+        const writerOutcome = await outcomeOf(writer, loadBoundedMs(15_000, 60_000));
         await watcher.stop();
         expect(watcher.empty).toEqual({ count: 0, firstMs: 0, lastMs: 0 });
         expect(secondOutcome.kind).toBe('serving');
@@ -1173,15 +1323,15 @@ describe('the start protocol', () => {
         expect(existsSync(`${lockPath}.takeover`)).toBe(false);
         expect(newResidue()).toEqual([]);
       } finally {
-        second.kill();
+        writer.kill();
+        await watcher.stop();
       }
     } finally {
-      writer.kill();
-      await watcher.stop();
+      second.kill();
     }
-  }, 15000);
+  });
 
-  test('a live writer paused in the takeover claim\'s create is never evicted', async () => {
+  scene('a live writer paused in the takeover claim\'s create is never evicted', async () => {
     // The claim's own create→write gap, the same finding one file over: a start arriving at a
     // dead pid's lock enters `takeOver`, and its claim — `.agents/broker.sock.lock.takeover` —
     // is created empty, its pid one beat behind; the fixture holds exactly there for 1500ms.
@@ -1192,7 +1342,12 @@ describe('the start protocol', () => {
     // defect the lock's own gap was. The same watch applies — the claim must never exist
     // without its pid — and the same resting shape: the second serves (nothing to clear; the
     // dead start left no socket), the writer answers busy, and lock, claim and temps all end
-    // absent.
+    // absent. The hold is the window, not a wait to scale: LOCK_WAIT_MS (2000) bounds the
+    // writer's whole acquire, so stretching the hold eats the writer's own margin — a live
+    // rival's lock at resume then answers the deadline's `locked`, not `busy` (measured here
+    // before it was written down: hold 2500, second's listen held 3000, writer answered
+    // locked). The second's boot is paid before the window opens (as in the lock scene), so
+    // only its in-process start path runs inside the hold.
     project();
     record();
     const path = brokerSocket(root);
@@ -1201,15 +1356,18 @@ describe('the start protocol', () => {
     const dead = spawnSync(process.execPath, ['-e', '']);
     if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
     writeFileSync(lockPath, `${dead.pid}\n`); // a dead start's lock: the takeover path at once
-    const writer = gapFixture(1500);
-    const watcher = watchNoPid(claimPath);
+    const go = join(base, 'go-release');
+    const second = startAtGoFixture(0, go);
     try {
-      await readyOf(writer);
-      await waitFor(() => writer.said.includes('paused')); // inside the claim's create
-      const second = startFixture(0);
+      await readyOf(second); // booted and parked before the writer's clock starts
+      const writer = gapFixture(1500);
+      const watcher = watchNoPid(claimPath);
       try {
-        const secondOutcome = await outcomeOf(second, 15000);
-        const writerOutcome = await outcomeOf(writer, 15000);
+        await readyOf(writer);
+        await waitFor(() => writer.said.includes('paused')); // inside the claim's create
+        writeFileSync(go, ''); // release the second into the wait's window
+        const secondOutcome = await outcomeOf(second, loadBoundedMs(15_000, 60_000));
+        const writerOutcome = await outcomeOf(writer, loadBoundedMs(15_000, 60_000));
         await watcher.stop();
         expect(watcher.empty).toEqual({ count: 0, firstMs: 0, lastMs: 0 });
         expect(secondOutcome.kind).toBe('serving');
@@ -1219,15 +1377,15 @@ describe('the start protocol', () => {
         expect(existsSync(claimPath)).toBe(false);
         expect(newResidue()).toEqual([]);
       } finally {
-        second.kill();
+        writer.kill();
+        await watcher.stop();
       }
     } finally {
-      writer.kill();
-      await watcher.stop();
+      second.kill();
     }
-  }, 15000);
+  });
 
-  test('a killed create\'s private temp is cleared by the next start, a live one kept', async () => {
+  scene('a killed create\'s private temp is cleared by the next start, a live one kept', async () => {
     // The one residue an atomic create can leave: a start killed between its private temp's
     // create and its removal leaves `<lock>.<pid>.new` — and, for the claim, the same pattern
     // one segment further. The temp names its writer, so the next start clears the dead ones
@@ -1253,7 +1411,7 @@ describe('the start protocol', () => {
     await started.handle.close();
   });
 
-  test('starts released together onto a dead start\'s lock serialize: one serves, every other busy', async () => {
+  scene('starts released together onto a dead start\'s lock serialize: one serves, every other busy', async () => {
     // The crash-recovery burst, four starts to a round: a start SIGKILLed mid-section leaves
     // the lock naming its dead pid, and a broker SIGKILLed leaves its socket file (the h9
     // shape); four real starts are spawned, held at a go file, and released together. The advertised
@@ -1269,8 +1427,11 @@ describe('the start protocol', () => {
     // breach this pin names.
     //
     // The body is bounded the way the claim lane's below is: each round is two steps with
-    // their own budgets (the ready step scaled from the measured boot pace, the release step
-    // fixed at ten seconds), its starts are killed and reaped before the next round begins,
+    // their own budgets (the ready step twice the measured boot pace or the shared boot floor
+    // raised by the machine's bounded 1-minute load per core, sampled at each round's start; a
+    // round whose starts never booted is handed back within the same logged, bounded contract
+    // the claim lane states; the release step fixed at ten seconds), its starts are killed and
+    // reaped before the next round begins,
     // the live set never passes the four a round holds, and the run's own budget stops a
     // machine that cannot finish with the round and step named. The test timeout's margin
     // over the run cap is the other half of that bound: a body bun abandons at the timeout
@@ -1295,35 +1456,62 @@ describe('the start protocol', () => {
       for (const kid of roundKids) kid.kill();
       await Promise.all(roundKids.map((kid) => kid.exited));
     };
-    let stepMs = BURST_STEP_FLOOR_MS;
+    let warmupPaceMs = 0;
     let runBudgetMs = BURST4_RUN_FLOOR_MS;
     let warmupBootMs = 0;
+    const unscoredCap = Math.floor(ROUNDS / 3);
+    let unscored = 0;
     let failure: unknown;
     const runStart = Date.now();
     try {
       for (let round = 0; round < ROUNDS; round++) {
-        if (Date.now() - runStart > runBudgetMs) {
+        // Checked from the first post-warm-up round: before the warm-up's pace is measured there
+        // is no run budget to check, and each warm-up round still carries its own step.
+        if (round >= WARMUP_ROUNDS && Date.now() - runStart > runBudgetMs) {
           throw new Error(`the four-start burst: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
         }
-        const bootStart = Date.now();
-        const roundRoot = join(base, `burst-${round}`);
-        mkdirSync(join(roundRoot, '.agents'), { recursive: true });
-        writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
-        const at = brokerSocket(roundRoot);
-        leaveStaleSocket(at);
-        const dead = spawnSync(process.execPath, ['-e', '']);
-        if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
-        writeFileSync(`${at}.lock`, `${dead.pid}\n`);
-        const go = join(base, `go-${round}`);
-        const roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
-        if (live.size > ROUND_SIZE) {
-          throw new Error(`the four-start burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        // Sampled before this round's starts exist, so the load term is the machine's other
+        // load; the warm-up rounds run on the load-scaled floor alone.
+        const stepMs = loadedStepMs(BURST_STEP_FLOOR_MS, BURST_STEP_CAP_MS, warmupPaceMs);
+        let roundKids: FixtureChild[] = [];
+        let go = '';
+        let bootStart = 0;
+        for (let attempt = 0; ; attempt++) {
+          // Same contract as the other sized pins: a round whose starts never said `ready`
+          // measured nothing about the broker, so a machine stall hands it back — logged as
+          // unscored, never silently skipped — up to READY_RETRIES_PER_ROUND times; past that,
+          // or past a third of the rounds, the run fails.
+          const roundRoot = join(base, `burst-${round}-${attempt}`);
+          mkdirSync(join(roundRoot, '.agents'), { recursive: true });
+          writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
+          const at = brokerSocket(roundRoot);
+          leaveStaleSocket(at);
+          const dead = spawnSync(process.execPath, ['-e', '']);
+          if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
+          writeFileSync(`${at}.lock`, `${dead.pid}\n`);
+          go = join(base, `go-${round}-${attempt}`);
+          roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
+          if (live.size > ROUND_SIZE) {
+            throw new Error(`the four-start burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+          }
+          bootStart = Date.now();
+          try {
+            await withinStep(`the four-start burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+            break;
+          } catch (error) {
+            if (attempt >= READY_RETRIES_PER_ROUND || !readyStepTimedOut(error)) throw error;
+            unscored += 1;
+            console.log(`the four-start burst: round ${round}: boot step unscored (${String((error as Error).message)}); retry ${attempt + 1}/${READY_RETRIES_PER_ROUND}`);
+            if (unscored > unscoredCap) {
+              throw new Error(`the four-start burst: ${unscored} boot steps unscored, past the ${unscoredCap} a run may hand back (a third of ${ROUNDS}); the machine is not booting the starts`);
+            }
+            rmSync(roundRoot, { recursive: true, force: true });
+          }
         }
-        await withinStep(`the four-start burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
         const outcomes = await withinStep(`the four-start burst: round ${round}: outcomes`, roundKids, BURST_OUTCOMES_STEP_MS, () =>
-          Promise.all(roundKids.map((kid) => outcomeOf(kid, BURST_OUTCOMES_STEP_MS + 5_000))),
+          Promise.all(roundKids.map((kid) => outcomeOf(kid, outcomesFallbackMs(BURST_OUTCOMES_STEP_MS)))),
         );
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
@@ -1333,7 +1521,12 @@ describe('the start protocol', () => {
         const reapStart = Date.now();
         await reap(roundKids);
         if (round < WARMUP_ROUNDS) warmupBootMs += bootMs + (Date.now() - reapStart);
-        if (round === WARMUP_ROUNDS - 1) ({ stepMs, runBudgetMs } = burstBudgets(ROUNDS, warmupBootMs / WARMUP_ROUNDS, BURST4_RUN_FLOOR_MS, BURST4_RUN_CAP_MS));
+        if (round === WARMUP_ROUNDS - 1) warmupPaceMs = warmupBootMs / WARMUP_ROUNDS;
+        if (round >= WARMUP_ROUNDS - 1) {
+          // Sampled per round, and the budget only grows: load that arrives late raises it, and
+          // load that leaves cannot fail a run an earlier budget already allowed.
+          runBudgetMs = Math.max(runBudgetMs, loadedRunBudgetMs(ROUNDS, BURST4_RUN_FLOOR_MS, BURST4_RUN_CAP_MS, BURST4_RUN_HARD_CAP_MS, warmupPaceMs));
+        }
       }
     } catch (error) {
       failure = error;
@@ -1351,7 +1544,7 @@ describe('the start protocol', () => {
     expect(breaches).toEqual([]);
   }, 1_800_000);
 
-  test('the dead-lock burst, sized: six starts released together onto a dead start\'s lock, one serves and every other busy', async () => {
+  scene('the dead-lock burst, sized: six starts released together onto a dead start\'s lock, one serves and every other busy', async () => {
     // The sized twin of the corpse burst above, on the dead-lock shape alone — sized from a
     // measurement, not picked: the race it guards is the takeover reading an already-gone lock
     // path (a NaN read, ENOENT), judging it like aged junk, and unlinking a rival's fresh
@@ -1369,11 +1562,13 @@ describe('the start protocol', () => {
     // that cleared nothing — a `bind-failed` at any seat, a second serving, a cleared loser,
     // is the breach this pin names.
     //
-    // The body is bounded like the four-start scene's above: each round's ready step is scaled
-    // from the measured boot pace (the release step fixed at ten seconds), its starts are
-    // killed and reaped before the next round begins — never 275 rounds of survivors — and the
-    // run's own budget stops a machine that cannot finish with the round and step named, inside
-    // a test timeout whose margin over the cap is what keeps bun from ever abandoning the body.
+    // The body is bounded like the four-start scene's above: each round's ready step is twice
+    // the measured boot pace or the floor raised by the machine's bounded 1-minute load per
+    // core, sampled at the round's start (the release step fixed at ten seconds), its starts
+    // are killed and reaped before the next round begins — never 275 rounds of survivors — and
+    // the run's own budget stops a machine that cannot finish with the round and step named,
+    // inside a test timeout whose margin over the cap is what keeps bun from ever abandoning the
+    // body.
     project();
     record();
     const ROUNDS = 275;
@@ -1392,34 +1587,62 @@ describe('the start protocol', () => {
       for (const kid of roundKids) kid.kill();
       await Promise.all(roundKids.map((kid) => kid.exited));
     };
-    let stepMs = BURST_STEP_FLOOR_MS;
+    let warmupPaceMs = 0;
     let runBudgetMs = BURST6_RUN_FLOOR_MS;
     let warmupBootMs = 0;
+    const unscoredCap = Math.floor(ROUNDS / 3);
+    let unscored = 0;
     let failure: unknown;
     const runStart = Date.now();
     try {
       for (let round = 0; round < ROUNDS; round++) {
-        if (Date.now() - runStart > runBudgetMs) {
+        // Checked from the first post-warm-up round: before the warm-up's pace is measured there
+        // is no run budget to check, and each warm-up round still carries its own step.
+        if (round >= WARMUP_ROUNDS && Date.now() - runStart > runBudgetMs) {
           throw new Error(`the dead-lock burst: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
         }
-        const bootStart = Date.now();
-        const roundRoot = join(base, `lockburst-${round}`);
-        mkdirSync(join(roundRoot, '.agents'), { recursive: true });
-        writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
-        const at = brokerSocket(roundRoot);
-        const dead = spawnSync(process.execPath, ['-e', '']);
-        if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
-        writeFileSync(`${at}.lock`, `${dead.pid}\n`);
-        const go = join(base, `lockgo-${round}`);
-        const roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
-        if (live.size > ROUND_SIZE) {
-          throw new Error(`the dead-lock burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        // Sampled before this round's starts exist, so the load term is the machine's other
+        // load; the warm-up rounds run on the load-scaled floor alone.
+        const stepMs = loadedStepMs(BURST_STEP_FLOOR_MS, BURST_STEP_CAP_MS, warmupPaceMs);
+        let roundKids: FixtureChild[] = [];
+        let go = '';
+        let bootStart = 0;
+        for (let attempt = 0; ; attempt++) {
+          // A round whose starts never said `ready` measured nothing about the broker (the
+          // fixture prints `ready` before startBroker runs), so a machine stall hands the round
+          // back — logged as unscored, never silently skipped — up to READY_RETRIES_PER_ROUND
+          // times. Past that, or past a third of the rounds, the run fails, so a machine that
+          // cannot boot the starts cannot pass as a broker that answered.
+          const roundRoot = join(base, `lockburst-${round}-${attempt}`);
+          mkdirSync(join(roundRoot, '.agents'), { recursive: true });
+          writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
+          const at = brokerSocket(roundRoot);
+          const dead = spawnSync(process.execPath, ['-e', '']);
+          if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
+          writeFileSync(`${at}.lock`, `${dead.pid}\n`);
+          go = join(base, `lockgo-${round}-${attempt}`);
+          roundKids = Array.from({ length: ROUND_SIZE }, () => track(burstFixture(roundRoot, go)));
+          if (live.size > ROUND_SIZE) {
+            throw new Error(`the dead-lock burst: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+          }
+          bootStart = Date.now();
+          try {
+            await withinStep(`the dead-lock burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+            break;
+          } catch (error) {
+            if (attempt >= READY_RETRIES_PER_ROUND || !readyStepTimedOut(error)) throw error;
+            unscored += 1;
+            console.log(`the dead-lock burst: round ${round}: boot step unscored (${String((error as Error).message)}); retry ${attempt + 1}/${READY_RETRIES_PER_ROUND}`);
+            if (unscored > unscoredCap) {
+              throw new Error(`the dead-lock burst: ${unscored} boot steps unscored, past the ${unscoredCap} a run may hand back (a third of ${ROUNDS}); the machine is not booting the starts`);
+            }
+            rmSync(roundRoot, { recursive: true, force: true });
+          }
         }
-        await withinStep(`the dead-lock burst: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
         const outcomes = await withinStep(`the dead-lock burst: round ${round}: outcomes`, roundKids, BURST_OUTCOMES_STEP_MS, () =>
-          Promise.all(roundKids.map((kid) => outcomeOf(kid, BURST_OUTCOMES_STEP_MS + 5_000))),
+          Promise.all(roundKids.map((kid) => outcomeOf(kid, outcomesFallbackMs(BURST_OUTCOMES_STEP_MS)))),
         );
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && !outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
@@ -1429,7 +1652,12 @@ describe('the start protocol', () => {
         const reapStart = Date.now();
         await reap(roundKids);
         if (round < WARMUP_ROUNDS) warmupBootMs += bootMs + (Date.now() - reapStart);
-        if (round === WARMUP_ROUNDS - 1) ({ stepMs, runBudgetMs } = burstBudgets(ROUNDS, warmupBootMs / WARMUP_ROUNDS, BURST6_RUN_FLOOR_MS, BURST6_RUN_CAP_MS));
+        if (round === WARMUP_ROUNDS - 1) warmupPaceMs = warmupBootMs / WARMUP_ROUNDS;
+        if (round >= WARMUP_ROUNDS - 1) {
+          // Sampled per round, and the budget only grows: load that arrives late raises it, and
+          // load that leaves cannot fail a run an earlier budget already allowed.
+          runBudgetMs = Math.max(runBudgetMs, loadedRunBudgetMs(ROUNDS, BURST6_RUN_FLOOR_MS, BURST6_RUN_CAP_MS, BURST6_RUN_HARD_CAP_MS, warmupPaceMs));
+        }
       }
     } catch (error) {
       failure = error;
@@ -1447,7 +1675,7 @@ describe('the start protocol', () => {
     expect(breaches).toEqual([]);
   }, 3_000_000);
 
-  test('the claim lane, sized and instrumented: six starts released together onto a dead start\'s lock never unlink a live lock or claim', async () => {
+  scene('the claim lane, sized and instrumented: six starts released together onto a dead start\'s lock never unlink a live lock or claim', async () => {
     // The pin for the claim path's own residual, carrying the delta-2 lab's finding instrument:
     // a wrap of `node:fs`'s `unlinkSync` that logs, one buffered line at the child's outcome,
     // every unlink of a `*.lock` / `*.lock.takeover` path whose bytes named a live pid other
@@ -1472,11 +1700,12 @@ describe('the start protocol', () => {
     // `touched ≥ rounds` carries the zero. The detector rides the first route that proves
     // itself on this runner (a canary import's own call must fire the wrap before any round is
     // scored); where no route arms, the tuples are pinned and the unlink event is unasserted,
-    // loudly. The timeout is the pin's own: 413 rounds of six real processes, with the step
-    // and run budgets scaled from a warm-up's measured BOOT pace (on a loaded laptop the six
-    // child boots, not the broker, set that pace; the release window is excluded so a
-    // regressed broker cannot inflate the budget meant to catch it) and the outcomes step
-    // fixed at ten seconds. Each round is a bounded step: its six starts are
+    // loudly. The timeout is the pin's own: 413 rounds of six real processes, with the run
+    // budget scaled from a warm-up's measured BOOT pace and the ready step from that pace or
+    // the live 1-minute load per core, whichever is greater (on a loaded laptop the six child
+    // boots, not the broker, set that pace; the release window is excluded so a regressed
+    // broker cannot inflate the budget meant to catch it) and the outcomes step fixed at ten
+    // seconds. Each round is a bounded step: its six starts are
     // killed and reaped before the next round begins, the live set may never pass the six a
     // round holds, and a step that outlives its budget tears its own round down at once and
     // fails naming the step. A run that cannot finish inside its budget stops with the round
@@ -1498,16 +1727,22 @@ describe('the start protocol', () => {
     // so the budgets come from the pace the run actually finds — the BOOT pace alone, round
     // start to every start's `ready` plus its reap, never the release window where
     // `startBroker` runs: a broker that regressed must not inflate the budget meant to catch
-    // it. The first ten rounds are a warm-up; after them the step deadline is twice the boot
-    // pace (never under the pin's original ten seconds), the run budget is twice the
-    // extrapolated total from that same pace (between the pin's original five minutes and a
-    // forty-minute cap), and the outcomes step stays a fixed ten seconds. A machine that
-    // cannot finish 413 rounds inside the cap still stops with the round and step named and
-    // every start reaped; what the budgets never do is let a slow machine pass as a broken
-    // broker.
+    // it. The first ten rounds are a warm-up; after them the run budget is twice the
+    // extrapolated total from that same pace, floored at the pin's original five minutes,
+    // scaled by the same bounded load term and capped by a cap that is itself scaled by load
+    // between forty minutes and a hard cap under this scene's own timeout. The ready step is
+    // twice the boot pace or the pin's ten-second floor scaled by 1 + the 1-minute load per
+    // core, sampled at each round's start (so a sibling heavy run's load gets a matching budget
+    // instead of the warm-up's stale estimate), never past two minutes; the outcomes step
+    // stays a fixed ten seconds. The budget only grows, so load that leaves cannot fail a run
+    // an earlier budget allowed. A machine that cannot finish 413 rounds inside the cap still
+    // stops with the round and step named and every start reaped; what the budgets never do is
+    // let a slow machine pass as a broken broker.
     const WARMUP_ROUNDS = 10;
-    let stepMs = CLAIM_STEP_FLOOR_MS;
+    let warmupPaceMs = 0;
     let runBudgetMs = CLAIM_RUN_FLOOR_MS;
+    const unscoredCap = Math.floor(CLAIM_ROUNDS / 3);
+    let unscored = 0;
     const breaches: string[] = [];
     const live = new Set<ClaimChild>();
     /** A start joins the live set on spawn and leaves it when it is reaped. */
@@ -1530,29 +1765,53 @@ describe('the start protocol', () => {
     const runStart = Date.now();
     try {
       for (let round = 0; round < CLAIM_ROUNDS; round++) {
-        if (Date.now() - runStart > runBudgetMs) {
+        // Checked from the first post-warm-up round: before the warm-up's pace is measured there
+        // is no run budget to check, and each warm-up round still carries its own step.
+        if (round >= WARMUP_ROUNDS && Date.now() - runStart > runBudgetMs) {
           throw new Error(`the claim lane: the run outlived its ${runBudgetMs / 1000} s budget before round ${round} (step: start); its starts were killed and reaped`);
         }
-        const bootStart = Date.now();
-        const roundRoot = join(base, `claimburst-${round}`);
-        mkdirSync(join(roundRoot, '.agents'), { recursive: true });
-        writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
-        const at = brokerSocket(roundRoot);
-        const dead = spawnSync(process.execPath, ['-e', '']);
-        if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
-        writeFileSync(`${at}.lock`, `${dead.pid}\n`);
-        const go = join(base, `claimgo-${round}`);
-        const roundKids = Array.from({ length: ROUND_SIZE }, () =>
-          track(spawnClaimKid(['run', roundRoot, go, join(import.meta.dir, '..')], route ? { DS_DETECT: '1', DS_ROUTE: route, DS_PARENT: String(process.pid) } : {})),
-        );
-        if (live.size > ROUND_SIZE) {
-          throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+        // Sampled before this round's six starts exist, so the term is the machine's other load.
+        const stepMs = loadedStepMs(CLAIM_STEP_FLOOR_MS, CLAIM_STEP_CAP_MS, warmupPaceMs);
+        let roundKids: ClaimChild[] = [];
+        let go = '';
+        let bootStart = 0;
+        for (let attempt = 0; ; attempt++) {
+          // Same contract as the burst above: a round whose starts never said `ready` measured
+          // nothing about the broker, so a machine stall hands it back, logged as unscored, up
+          // to READY_RETRIES_PER_ROUND times; past that, or past a third of the rounds, the run
+          // fails rather than let a machine pass as a broker that answered.
+          const roundRoot = join(base, `claimburst-${round}-${attempt}`);
+          mkdirSync(join(roundRoot, '.agents'), { recursive: true });
+          writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
+          const at = brokerSocket(roundRoot);
+          const dead = spawnSync(process.execPath, ['-e', '']);
+          if (dead.pid === undefined) throw new Error('the dead-pid fixture has no pid');
+          writeFileSync(`${at}.lock`, `${dead.pid}\n`);
+          go = join(base, `claimgo-${round}-${attempt}`);
+          roundKids = Array.from({ length: ROUND_SIZE }, () =>
+            track(spawnClaimKid(['run', roundRoot, go, join(import.meta.dir, '..')], route ? { DS_DETECT: '1', DS_ROUTE: route, DS_PARENT: String(process.pid) } : {})),
+          );
+          if (live.size > ROUND_SIZE) {
+            throw new Error(`the claim lane: round ${round} held ${live.size} live starts, past the ${ROUND_SIZE}-start cap: an earlier round was not reaped`);
+          }
+          bootStart = Date.now();
+          try {
+            await withinStep(`the claim lane: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
+            break;
+          } catch (error) {
+            if (attempt >= READY_RETRIES_PER_ROUND || !readyStepTimedOut(error)) throw error;
+            unscored += 1;
+            console.log(`the claim lane: round ${round}: boot step unscored (${String((error as Error).message)}); retry ${attempt + 1}/${READY_RETRIES_PER_ROUND}`);
+            if (unscored > unscoredCap) {
+              throw new Error(`the claim lane: ${unscored} boot steps unscored, past the ${unscoredCap} a run may hand back (a third of ${CLAIM_ROUNDS}); the machine is not booting the starts`);
+            }
+            rmSync(roundRoot, { recursive: true, force: true });
+          }
         }
-        await withinStep(`the claim lane: round ${round}: ready`, roundKids, stepMs, () => Promise.all(roundKids.map((kid) => readyOf(kid, stepMs + 10_000))));
         const bootMs = Date.now() - bootStart;
         writeFileSync(go, 'go\n');
         const outcomesStart = Date.now();
-        const outcomes = await withinStep(`the claim lane: round ${round}: outcomes`, roundKids, CLAIM_OUTCOMES_STEP_MS, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, CLAIM_OUTCOMES_STEP_MS + 5_000))));
+        const outcomes = await withinStep(`the claim lane: round ${round}: outcomes`, roundKids, CLAIM_OUTCOMES_STEP_MS, () => Promise.all(roundKids.map((kid) => outcomeOf(kid, outcomesFallbackMs(CLAIM_OUTCOMES_STEP_MS)))));
         outcomesTotalMs += Date.now() - outcomesStart;
         const serving = outcomes.filter((outcome) => outcome.kind === 'serving' && !outcome.cleared);
         const busy = outcomes.filter((outcome) => outcome.kind === 'busy' && !outcome.cleared);
@@ -1571,7 +1830,12 @@ describe('the start protocol', () => {
         const reapStart = Date.now();
         await reap(roundKids);
         if (round < WARMUP_ROUNDS) warmupBootMs += bootMs + (Date.now() - reapStart);
-        if (round === WARMUP_ROUNDS - 1) ({ stepMs, runBudgetMs } = claimBudgets(warmupBootMs / WARMUP_ROUNDS));
+        if (round === WARMUP_ROUNDS - 1) warmupPaceMs = warmupBootMs / WARMUP_ROUNDS;
+        if (round >= WARMUP_ROUNDS - 1) {
+          // Sampled per round, and the budget only grows: load that arrives late raises it,
+          // and load that leaves cannot fail a run an earlier budget already allowed.
+          runBudgetMs = Math.max(runBudgetMs, loadedRunBudgetMs(CLAIM_ROUNDS, CLAIM_RUN_FLOOR_MS, CLAIM_RUN_CAP_MS, CLAIM_RUN_HARD_CAP_MS, warmupPaceMs));
+        }
       }
     } catch (error) {
       failure = error;
@@ -1598,20 +1862,27 @@ describe('the start protocol', () => {
     expect(touched).toBeGreaterThanOrEqual(CLAIM_ROUNDS);
     expect(breaches).toEqual([]);
     expect(events).toBe(0);
-  }, 3_000_000);
+  }, 4_800_000);
 
-  test('the claim lane, a stalled broker: a release stalled past the fixed outcomes step fails, and the boot pace never scales that step', async () => {
+  scene('the claim lane, a stalled broker: a release stalled past the fixed outcomes step fails, and the boot pace never scales that step', async () => {
     // The regression the budgets must not hide: a broker whose start path slows down. The pin
-    // measures its budgets from the BOOT pace (round start → every start's `ready`, plus reap)
-    // and holds the outcomes step fixed at ten seconds — the release path measured 130–260 ms
-    // at load 9–14 — so a stalled release fails the step instead of inflating a budget scaled
-    // from it. This scene stubs exactly that: six real starts on the dead-lock shape, released
-    // together, each sitting STALL_MS before it answers. The step must fail at ten seconds
-    // naming itself, and the budgets from this round's boot pace must stay far under the
-    // stall — proof the slower release never entered them.
+    // measures its run budget from the BOOT pace (round start → every start's `ready`, plus
+    // reap) and holds the outcomes step fixed at ten seconds — the release path measured
+    // 130–260 ms at load 9–14 — so a stalled release fails the step instead of inflating a
+    // budget scaled from it. The ready step's other term is the machine's 1-minute load, which
+    // the release cannot inflate either; passing zero load isolates the pace term here. This
+    // scene stubs exactly that: six real starts on the dead-lock shape, released together, each
+    // sitting STALL_MS before it answers. The step must fail at ten seconds naming itself, and
+    // the pace term from this round's boot pace must stay far under the stall — proof the
+    // slower release never entered it.
     project();
     record();
-    const STALL_MS = 12_000;
+    // The stall stands far above twice the boot wait's cap (2 × 120 s < 600 s), so the
+    // discriminator holds even when a memory-starved machine stretches the six boots to that
+    // cap: the boot pace derived from the wave must stay under the stall, and the fixed
+    // ten-second outcomes step it must overrun is never scaled. The stall itself never
+    // elapses — the step fires at ten seconds and kills the starts there.
+    const STALL_MS = 600_000;
     const roundRoot = join(base, 'claimstall-0');
     mkdirSync(join(roundRoot, '.agents'), { recursive: true });
     writeFileSync(join(roundRoot, '.agents', 'team.yaml'), LINEAR);
@@ -1625,18 +1896,18 @@ describe('the start protocol', () => {
     );
     try {
       const bootStart = Date.now();
-      await Promise.all(kids.map((kid) => readyOf(kid, 60_000)));
+      await Promise.all(kids.map((kid) => readyOf(kid, loadBoundedMs(BOOT_WAIT_FLOOR_MS, BOOT_WAIT_CAP_MS))));
       const bootPaceMs = Date.now() - bootStart;
-      const budgets = claimBudgets(bootPaceMs);
+      const pacedStepMs = loadedStepMs(CLAIM_STEP_FLOOR_MS, CLAIM_STEP_CAP_MS, bootPaceMs, 0);
       // The pace the budgets are taken from is the boot alone, and it sits under the stall; the
       // old whole-round pace included the release by construction, so it would have measured at
       // least the stall and doubled it into the step — the regression scaling its own budget.
       expect(bootPaceMs).toBeLessThan(STALL_MS);
-      expect(budgets.stepMs).toBeLessThan(STALL_MS);
+      expect(pacedStepMs).toBeLessThan(STALL_MS);
       writeFileSync(go, 'go\n');
       const releaseStart = Date.now();
       const failure = await withinStep('the claim lane: round stall: outcomes', kids, CLAIM_OUTCOMES_STEP_MS, () =>
-        Promise.all(kids.map((kid) => outcomeOf(kid, CLAIM_OUTCOMES_STEP_MS + 5_000))),
+        Promise.all(kids.map((kid) => outcomeOf(kid, outcomesFallbackMs(CLAIM_OUTCOMES_STEP_MS)))),
       ).then(
         () => undefined,
         (error: unknown) => error,
@@ -1645,14 +1916,14 @@ describe('the start protocol', () => {
       expect(failure).toBeInstanceOf(Error);
       expect(String((failure as Error).message)).toContain(`step "the claim lane: round stall: outcomes" outlived its ${CLAIM_OUTCOMES_STEP_MS} ms budget`);
       expect(elapsed).toBeGreaterThanOrEqual(CLAIM_OUTCOMES_STEP_MS);
-      expect(elapsed).toBeLessThan(CLAIM_OUTCOMES_STEP_MS + 5_000);
+      expect(elapsed).toBeLessThan(outcomesFallbackMs(CLAIM_OUTCOMES_STEP_MS));
     } finally {
       for (const kid of kids) kid.kill();
       await Promise.all(kids.map((kid) => kid.exited));
     }
-  }, 120_000);
+  }, 360_000);
 
-  test('a start that waits out the lock deadline refuses with the one line and touches nothing', async () => {
+  scene('a start that waits out the lock deadline refuses with the one line and touches nothing', async () => {
     // A live holder — a real start, held pre-listen for a minute — keeps the lock past every
     // waiter's deadline. The module and the command both wait it out and then fail closed: the
     // pinned line, exit 1, the socket path exactly as the holder left it (nothing yet: the
@@ -1682,7 +1953,7 @@ describe('the start protocol', () => {
     }
   });
 
-  test('a path that cannot bind is a line and exit 1, not a crash, and the file stays', async () => {
+  scene('a path that cannot bind is a line and exit 1, not a crash, and the file stays', async () => {
     // A regular file where the socket belongs: the lstat gate refuses the entry before any
     // probe, with the pinned bare sentence and the file untouched. The errno story is why the
     // gate has no errno: macOS reads the file ENOTSOCK (myself: bun 1.4.2 + node v26.8.1),
@@ -1706,7 +1977,7 @@ describe('the start protocol', () => {
     expect(existsSync(`${path}.lock`)).toBe(false);
   });
 
-  test('the walk clears only a socket: a symlink to a dead broker is left where it is', async () => {
+  scene('the walk clears only a socket: a symlink to a dead broker is left where it is', async () => {
     // The non-socket fork proved without an errno: connect would answer ECONNREFUSED (the link
     // resolves to a dead socket — a SIGKILLed child left it) and pre-gate the walk cleared the
     // link and served (probed: pre-fix head 8f9ddb2, outcome serving, cleared true, the path a
@@ -1730,7 +2001,7 @@ describe('the start protocol', () => {
 });
 
 describe('the per-request check', () => {
-  test('every request is held to the recorded state, with the S2 sentences', async () => {
+  scene('every request is held to the recorded state, with the S2 sentences', async () => {
     project();
     record();
     await serving(async () => records([{ id: 'm1', title: 'the task title' }]));
@@ -1752,7 +2023,7 @@ describe('the per-request check', () => {
     expect(await ask(workerSeat)).toMatchObject({ kind: 'read' });
   });
 
-  test('a request line that is not one this build wrote is a refusal, never a crash', async () => {
+  scene('a request line that is not one this build wrote is a refusal, never a crash', async () => {
     project();
     record();
     await serving(async () => records([{ id: 'm1', title: 'the task title' }]));
@@ -1777,7 +2048,7 @@ describe('the per-field policy', () => {
     description: 'the body',
   };
 
-  test('with no policy the nine typed fields cross and the description does not', () => {
+  scene('with no policy the nine typed fields cross and the description does not', () => {
     const out = applyPolicy(full);
     expect(out).toEqual({
       id: 'ACME-1',
@@ -1793,14 +2064,14 @@ describe('the per-field policy', () => {
     expect('description' in out).toBe(false);
   });
 
-  test('an omitted field is absent from the record, never blank', () => {
+  scene('an omitted field is absent from the record, never blank', () => {
     const out = applyPolicy(full, { omit: ['assignee', 'description'] });
     expect('assignee' in out).toBe(false);
     expect('description' in out).toBe(false);
     expect(out.deadline).toBe('2026-10-31');
   });
 
-  test('allow names the set, and id and title stay the record itself', () => {
+  scene('allow names the set, and id and title stay the record itself', () => {
     expect(applyPolicy(full, { allow: ['id', 'title'] })).toEqual({ id: 'ACME-1', title: 'a task' });
     expect(applyPolicy(full, { allow: ['id', 'title', 'description'] })).toEqual({ id: 'ACME-1', title: 'a task', description: 'the body' });
     // The invariant holds whichever way the policy is called, even bypassing the validator.
@@ -1812,13 +2083,13 @@ describe('the per-field policy', () => {
     expect('description' in omitted).toBe(false);
   });
 
-  test('id: bare keeps the last URL segment', () => {
+  scene('id: bare keeps the last URL segment', () => {
     const url = { ...full, id: 'https://linear.app/acme/issue/ACME-1/a-title' };
     expect(applyPolicy(url, { transform: { id: 'bare' } }).id).toBe('a-title');
     expect(applyPolicy({ ...full, id: 'ACME-1' }, { transform: { id: 'bare' } }).id).toBe('ACME-1');
   });
 
-  test('the policy is applied before the answer is serialized, not by the seat', async () => {
+  scene('the policy is applied before the answer is serialized, not by the seat', async () => {
     project();
     record();
     await serving(async () => records([{ id: 'ACME-1', title: 'a task', description: 'the body', priority: 1 }]), { allow: ['id', 'title'] });
@@ -1829,7 +2100,7 @@ describe('the per-field policy', () => {
     expect(answer).toEqual({ ok: true, read: { kind: 'records', records: [{ id: 'ACME-1', title: 'a task' }], refusals: [] } });
   });
 
-  test('a record whose final id is not a task id is refused on the broker\'s side, at today\'s exact bytes', async () => {
+  scene('a record whose final id is not a task id is refused on the broker\'s side, at today\'s exact bytes', async () => {
     project();
     record();
     await serving(async () => records([{ id: 'https://linear.app/acme/issue/ACME-1', title: 'a task' }]));
@@ -1839,7 +2110,7 @@ describe('the per-field policy', () => {
     expect(line).toBe('{"ok":true,"read":{"kind":"records","records":[],"refusals":[{"index":1,"reason":"its id is not a task id"}]}}');
   });
 
-  test('a converted refusal takes the source position of its record, the list staying in order', async () => {
+  scene('a converted refusal takes the source position of its record, the list staying in order', async () => {
     project();
     record();
     await serving(async () =>
@@ -1869,7 +2140,7 @@ describe('the per-field policy', () => {
     });
   });
 
-  test('a record whose final id repeats an earlier one is refused, at the adapter\'s sentence and keys', async () => {
+  scene('a record whose final id repeats an earlier one is refused, at the adapter\'s sentence and keys', async () => {
     project();
     record();
     await serving(
@@ -1889,7 +2160,7 @@ describe('the per-field policy', () => {
     );
   });
 
-  test('a repeated final id takes the source position of its record, the list staying in order', async () => {
+  scene('a repeated final id takes the source position of its record, the list staying in order', async () => {
     project();
     record();
     await serving(
@@ -1921,7 +2192,7 @@ describe('the per-field policy', () => {
     });
   });
 
-  test('id: bare governs a refusal\'s id too, and an id with no segment is omitted', async () => {
+  scene('id: bare governs a refusal\'s id too, and an id with no segment is omitted', async () => {
     project();
     record();
     await serving(
@@ -1945,7 +2216,7 @@ describe('the per-field policy', () => {
     );
   });
 
-  test('id: bare lets a source URL cross as its last segment', async () => {
+  scene('id: bare lets a source URL cross as its last segment', async () => {
     project();
     record();
     await serving(async () => records([{ id: 'https://linear.app/acme/issue/ACME-1', title: 'a task' }]), { transform: { id: 'bare' } });
@@ -1953,7 +2224,7 @@ describe('the per-field policy', () => {
     expect(answer).toEqual({ ok: true, read: { kind: 'records', records: [{ id: 'ACME-1', title: 'a task' }], refusals: [] } });
   });
 
-  test('a failed read keeps its detail on the broker\'s terminal and tells the seat the one line', async () => {
+  scene('a failed read keeps its detail on the broker\'s terminal and tells the seat the one line', async () => {
     project();
     record();
     let call = 0;
@@ -1971,7 +2242,7 @@ describe('the per-field policy', () => {
 describe('the tasks section under the broker source', () => {
   const of = (extra: string): string => `${LINEAR}${extra}`;
 
-  test('source: linear validates with its block, and omitted keys stay absent', () => {
+  scene('source: linear validates with its block, and omitted keys stay absent', () => {
     const plain = validateTeamFile(LINEAR);
     if (!plain.ok) throw new Error('the fixture does not validate');
     expect(plain.team.tasks).toEqual({ source: 'linear', linear: { project: PROJECT, keychainService: 'team.linear.acme' } });
@@ -1984,7 +2255,7 @@ describe('the tasks section under the broker source', () => {
     });
   });
 
-  test('every refusal sentence of the table is a byte', () => {
+  scene('every refusal sentence of the table is a byte', () => {
     const fileWithPolicy = `${FILE_SOURCE}  policy:\n    omit: [description]\n`;
     expect(refusals(fileWithPolicy)).toContain('tasks.policy is for a broker source; source: file has no broker');
     const fileWithLinear = `${FILE_SOURCE}  linear:\n    project: x\n    keychainService: y\n`;
@@ -2018,7 +2289,7 @@ describe('the tasks section under the broker source', () => {
 });
 
 describe('the credential never crosses to the seat', () => {
-  test('a full take over the socket: one keychain read, one request, one header, the policy applied', async () => {
+  scene('a full take over the socket: one keychain read, one request, one header, the policy applied', async () => {
     project();
     record();
     let keyReads = 0;
@@ -2030,7 +2301,7 @@ describe('the credential never crosses to the seat', () => {
       },
       fetch: world.fetch,
     });
-    const outcome = await ask(leadSeat, 3000);
+    const outcome = await ask(leadSeat, loadBoundedMs(3_000, 60_000));
     finish();
     expect(await running).toBe(0);
     if (outcome.kind !== 'read' || outcome.read.kind !== 'records') throw new Error(`the read did not arrive: ${JSON.stringify(outcome)}`);
@@ -2048,7 +2319,7 @@ describe('the credential never crosses to the seat', () => {
     expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).not.toContain(KEY);
   });
 
-  test('without the facility the broker refuses to start, forms no request, and binds nothing', async () => {
+  scene('without the facility the broker refuses to start, forms no request, and binds nothing', async () => {
     project();
     record();
     let fetched = false;
@@ -2073,7 +2344,7 @@ describe('the credential never crosses to the seat', () => {
     expect(existsSync(brokerSocket(root))).toBe(false);
   });
 
-  test('the command refuses a file source, a missing source, and a bad invocation', async () => {
+  scene('the command refuses a file source, a missing source, and a bad invocation', async () => {
     project(FILE_SOURCE);
     record();
     const io = testIo(root, { kind: 'owner' });
@@ -2092,7 +2363,7 @@ describe('the credential never crosses to the seat', () => {
     expect(extra.err.startsWith('team broker: unexpected "extra"\nUsage: team broker\n')).toBe(true);
   });
 
-  test('the seat\'s own modules reach no keychain, no network wiring, no child process', () => {
+  scene('the seat\'s own modules reach no keychain, no network wiring, no child process', () => {
     const read = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
     const client = read('src/broker/client.ts');
     const command = read('src/commands/next.ts');

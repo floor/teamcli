@@ -3,7 +3,8 @@
 Presses the one recorded key of a folder-trust dialog, and only that key. Every check has to pass on
 two fresh reads of the pane, and the folder must be the lobby on three readings at once: the path
 the screen shows, the folder the pane itself reports working in, and the lobby's parent directory.
-Anything else sends nothing.
+Anything else sends nothing. A seat the file marks `human: true` never takes a dialog key or a
+rules line: no dialog key is pressed and no rules line is typed; left as it is.
 
 ## Synopsis
 

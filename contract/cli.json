@@ -86,9 +86,13 @@
       ],
       "subcommands": [],
       "usage": [
-        "team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
+        "team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "adding a seat is the owner's in 0.5.0, where no `agree` or `grant` holders stand"
+      }
     },
     {
       "flags": [
@@ -138,7 +142,11 @@
       "subcommands": [],
       "usage": [
         "team answer <seat> trust [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "pane-authority",
+        "why": "a key into another agent's pane belongs to the pane's lead, a seat above it, or the owner's word for that case; trust, login and security prompts to the owner's alone — pane authority is its own gate, and this map admits no one to it"
+      }
     },
     {
       "flags": [
@@ -191,7 +199,11 @@
       "subcommands": [],
       "usage": [
         "team ask-show <request_id> --ask <path> --marker <path> --key <path> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read"
+      }
     },
     {
       "flags": [
@@ -214,7 +226,38 @@
       "subcommands": [],
       "usage": [
         "team broker"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "the broker reads the tracker credential from the owner's keychain, one per clone, from a terminal outside herdr"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "bus",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team bus"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "the bus reconciles the project's event log, and the owner runs it, one per clone, from a terminal outside herdr"
+      }
     },
     {
       "flags": [
@@ -280,7 +323,11 @@
       "usage": [
         "team check [--session <name>] [--file <path>] [--repair] [--json]",
         "team check <ref> [--pr <file>] [--since <ref>] [--file <path>]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -346,12 +393,20 @@
           "subcommands": [],
           "usage": [
             "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the check reads the commit range and the ledger only, from any folder, and asks for no session and no terminal"
+          }
         }
       ],
       "usage": [
         "team commits check <ref> [--since <ref>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it reads the commit range and the ledger only, from any folder, and asks for no session and no terminal"
+      }
     },
     {
       "flags": [],
@@ -359,7 +414,11 @@
       "name": "conformance-adapter",
       "positionals": [],
       "subcommands": [],
-      "usage": []
+      "usage": [],
+      "who": {
+        "gate": "any-caller",
+        "why": "the hidden port answers classify and yaml requests on stdin: it reads no team file and asks for no caller"
+      }
     },
     {
       "flags": [
@@ -406,7 +465,11 @@
       "subcommands": [],
       "usage": [
         "team delegate <session/pane> --commands <act,...> [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "a standing grant with a command list, written against this map: the owner's"
+      }
     },
     {
       "flags": [
@@ -453,7 +516,11 @@
       "subcommands": [],
       "usage": [
         "team doctor [--session <name>] [--file <path>] [--login] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them"
+      }
     },
     {
       "flags": [
@@ -512,7 +579,69 @@
       "subcommands": [],
       "usage": [
         "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "`stop`: the owner or `leads` for its own team, and the owner may always stop"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--follow",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--read",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "drops",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team drops [--follow] [--json]",
+        "team drops --read --seat <seat> [--session <session>]"
+      ],
+      "who": {
+        "gate": "seat-only",
+        "why": "a drop folder is one seat's mailbox: the seat the team declares, on the pane the state records for it, and never the owner; --read is the launch line's own invocation and asks for no caller"
+      }
     },
     {
       "flags": [
@@ -577,7 +706,11 @@
       "subcommands": [],
       "usage": [
         "team feed [--seat <name>] [--limit <n>] [--all] [--audit <path>] [--briefs <dir>] [--follow] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -648,7 +781,11 @@
       "usage": [
         "team grant <seat> --scope <act,...> [--dry-run] [--json]",
         "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "granting is the approval, and the owner grants alone in 0.5.0"
+      }
     },
     {
       "flags": [],
@@ -658,7 +795,11 @@
       "subcommands": [],
       "usage": [
         "team <command> [options]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "the help text reads no team file and asks for no caller"
+      }
     },
     {
       "flags": [
@@ -706,7 +847,11 @@
       "usage": [
         "team hold <reason> [--until <time>] [--json]",
         "team hold --release [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "team-change",
+        "why": "a hold is the team's: the owner, the orchestrator's seat or the operator's seat, on its recorded pane, places and releases it"
+      }
     },
     {
       "flags": [
@@ -741,7 +886,11 @@
       "subcommands": [],
       "usage": [
         "team init [--restore] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`"
+      }
     },
     {
       "flags": [
@@ -770,7 +919,11 @@
       "subcommands": [],
       "usage": [
         "team issues [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it lists the task file the owner committed, from the checkout, and asks for no session and no terminal"
+      }
     },
     {
       "flags": [
@@ -817,7 +970,11 @@
       "subcommands": [],
       "usage": [
         "team list [--all] [--seats] [--watch] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -864,7 +1021,11 @@
       "subcommands": [],
       "usage": [
         "team lock <name> [--for <text>] [--wait <seconds>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "any caller may take a free machine lock from a folder whose team file loads; a lock another caller holds is refused, and unlock releases only the caller's own"
+      }
     },
     {
       "flags": [
@@ -912,7 +1073,56 @@
           "subcommands": [],
           "usage": [
             "team mcp doctor [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the report writes nothing and asks for no caller"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--file",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--seat",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--session",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "serve",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the launch line names its seat and session; the server reads and receipts only that seat's inbox, and asks for no caller"
+          }
         },
         {
           "flags": [
@@ -941,13 +1151,22 @@
           "subcommands": [],
           "usage": [
             "team mcp status [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the report writes nothing and asks for no caller"
+          }
         }
       ],
       "usage": [
         "team mcp status [--json]",
-        "team mcp doctor [--json]"
-      ]
+        "team mcp doctor [--json]",
+        "team mcp serve --seat <seat> [--session <session>] [--file <path>]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "status and doctor write nothing and ask for no caller; serve is the launch line's own invocation for a declared seat and asks for none either"
+      }
     },
     {
       "flags": [
@@ -976,7 +1195,11 @@
       "subcommands": [],
       "usage": [
         "team messages [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -1023,7 +1246,66 @@
       "subcommands": [],
       "usage": [
         "team next [--mine | --release] [--wait] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--reason",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "pause",
+      "positionals": [
+        {
+          "name": "team",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team pause [<team>] [--reason <text>] [--all] [--json]"
+      ],
+      "who": {
+        "gate": "team-pause",
+        "terminal": {
+          "where": "a terminal outside herdr or its own seat",
+          "who": "the owner or the orchestrator"
+        },
+        "why": "a pause stops every seat's intake of new work, the orchestrator's own lever on the team: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`"
+      }
     },
     {
       "flags": [
@@ -1052,7 +1334,11 @@
       "subcommands": [],
       "usage": [
         "team plan [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-only",
+        "why": "a declared seat of this team plans, on the pane the state records for it; the owner and a run with no terminal are not admitted"
+      }
     },
     {
       "flags": [
@@ -1176,7 +1462,11 @@
           "subcommands": [],
           "usage": [
             "team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner alone sets the policy, from a terminal outside herdr, signed and logged"
+          }
         },
         {
           "flags": [
@@ -1246,14 +1536,22 @@
           "subcommands": [],
           "usage": [
             "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the owner alone unsets the policy, from a terminal outside herdr, signed and logged"
+          }
         }
       ],
       "usage": [
         "team policy [--seat <name>] [--file <path>] [--json]",
         "team policy set <level> <name> <value> [--until <iso>] [--kind <enforced|advised>] [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]",
         "team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>] [--file <path>] [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "the view is read by the owner, a seat the state places on its recorded pane, or an approved delegate pane; set and unset are the owner's alone, from a terminal outside herdr"
+      }
     },
     {
       "flags": [
@@ -1313,12 +1611,20 @@
           "subcommands": [],
           "usage": [
             "team pr check <file> [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the check reads the pull request body and the checks only, from any folder, and asks for no session and no terminal"
+          }
         }
       ],
       "usage": [
         "team pr check <file> [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it reads a pull request body and the checks only, from any folder, and asks for no session and no terminal"
+      }
     },
     {
       "flags": [
@@ -1384,7 +1690,15 @@
           "subcommands": [],
           "usage": [
             "team proc add <name> [--pid <pid>] [--note <text>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "terminal": {
+              "where": "a terminal outside herdr or its own pane",
+              "who": "the owner or a seat of this team"
+            },
+            "why": "the owner or a declared seat records its process; a seat of another team and a run with no terminal are refused"
+          }
         },
         {
           "flags": [
@@ -1419,7 +1733,15 @@
           "subcommands": [],
           "usage": [
             "team proc done <name> [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-or-own-team",
+            "terminal": {
+              "where": "a terminal outside herdr or its own pane",
+              "who": "the owner or a seat of this team"
+            },
+            "why": "a seat clears its own, a lead clears another seat's, and the owner clears any; a run with no terminal is refused"
+          }
         },
         {
           "flags": [
@@ -1448,14 +1770,26 @@
           "subcommands": [],
           "usage": [
             "team proc list [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "team-read",
+            "why": "the owner, a seat the state places on its own pane, or an approved delegate pane reads the list"
+          }
         }
       ],
       "usage": [
         "team proc add <name> [--pid <pid>] [--note <text>] [--json]",
         "team proc list [--json]",
         "team proc done <name> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-own-team",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a seat of this team"
+        },
+        "why": "add and done are the owner's or a declared seat's, from a terminal; list reads what status does, so an approved delegate pane may list too"
+      }
     },
     {
       "flags": [
@@ -1484,7 +1818,61 @@
       "subcommands": [],
       "usage": [
         "team projects [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it reads the project registry and changes nothing, from any folder"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "raise",
+      "positionals": [
+        {
+          "name": "kind",
+          "optional": false,
+          "repeatable": false
+        },
+        {
+          "name": "text",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team raise <kind> <text> [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "leads-only",
+        "why": "the line is the lead's: the orchestrator's seat or a seat the team marks `leads`, on its recorded pane, and the owner is not admitted"
+      }
     },
     {
       "flags": [
@@ -1537,7 +1925,11 @@
       "subcommands": [],
       "usage": [
         "team register <seat> [--session <name>] [--pane <id>] [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-own-team",
+        "why": "a registry record is a report and confers no right: the owner, or the seat's own team"
+      }
     },
     {
       "flags": [
@@ -1597,12 +1989,20 @@
           "subcommands": [],
           "usage": [
             "team release check <package@version> [--json] [--file <path>]"
-          ]
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the check reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain"
+          }
         }
       ],
       "usage": [
         "team release check <package@version> [--json] [--file <path>]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it reads the release facts and asks for no session, terminal or login; the Linear check alone needs the owner's keychain"
+      }
     },
     {
       "flags": [
@@ -1643,7 +2043,11 @@
       "subcommands": [],
       "usage": [
         "team reload <seat> [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "the `start` row for a running seat, as `restart`: closing and relaunching one seat is the same act"
+      }
     },
     {
       "flags": [
@@ -1702,7 +2106,11 @@
       "subcommands": [],
       "usage": [
         "team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "removing a seat: the owner or `leads`; a seat holding `grant`, `agree` or `leads` stands only by the owner"
+      }
     },
     {
       "flags": [
@@ -1767,7 +2175,62 @@
       "usage": [
         "team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]",
         "team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "renaming a seat: the owner or `leads` for its own team"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--close",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "reply",
+      "positionals": [
+        {
+          "name": "id",
+          "optional": false,
+          "repeatable": false
+        },
+        {
+          "name": "text",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team reply <id> [<text>] [--close] [--json]",
+        "team reply <id> --close"
+      ],
+      "who": {
+        "gate": "admission",
+        "why": "a reply is judged by the send admission exactly as a send is, with the reply rule; the caller must be the record's addressee"
+      }
     },
     {
       "flags": [
@@ -1826,7 +2289,60 @@
       "subcommands": [],
       "usage": [
         "team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "the `start` row for a seat: as `start`"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--all",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "resume",
+      "positionals": [
+        {
+          "name": "team",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team resume [<team>] [--all] [--json]"
+      ],
+      "who": {
+        "gate": "team-pause",
+        "terminal": {
+          "where": "a terminal outside herdr or its own seat",
+          "who": "the owner or the orchestrator"
+        },
+        "why": "a resume reopens the intake a pause closed, by the same gate: the owner or the orchestrator's seat, on its recorded pane; the operator is not admitted"
+      }
     },
     {
       "flags": [
@@ -1904,7 +2420,11 @@
           "subcommands": [],
           "usage": [
             "team revoke delegate <session/pane> [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing a standing delegation is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal"
+          }
         },
         {
           "flags": [
@@ -1939,14 +2459,22 @@
           "subcommands": [],
           "usage": [
             "team revoke grant [--dry-run] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal"
+          }
         }
       ],
       "usage": [
         "team revoke grant [--dry-run] [--json]",
         "team revoke delegate <session/pane> [--dry-run] [--json]",
         "team revoke <name> [--dry-run] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "removing a standing grant is the owner's edit, and the revocation channel of 0.5.0 is the owner at a terminal"
+      }
     },
     {
       "flags": [
@@ -1987,7 +2515,11 @@
       "subcommands": [],
       "usage": [
         "team route <seat> [--json] [--dry-run]"
-      ]
+      ],
+      "who": {
+        "gate": "admission",
+        "why": "a route is judged by the send admission: the owner and admitted seats are answered, and a run with no terminal is refused"
+      }
     },
     {
       "flags": [
@@ -2040,13 +2572,23 @@
       "subcommands": [],
       "usage": [
         "team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "the owner, a seat the state places on its recorded pane, or an approved delegate pane reads the seats; --session and --file are the owner's alone"
+      }
     },
     {
       "flags": [
         {
           "hidden": false,
           "name": "--channel",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--confirm",
           "repeatable": false,
           "takesValue": true
         },
@@ -2129,10 +2671,60 @@
       "usage": [
         "team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]",
         "team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]",
+        "team send --confirm <id> [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]",
         "team send --list [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "admission",
+        "why": "admission is chain position and the pair's setting, never a role's name: it is decided by the send admission, and this map admits no one to it"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--by",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "sessions",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team sessions [<seat>] [--by <model|team|entity>] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it lists the machine-wide session registry the state records and changes nothing: no team file, no seat and no terminal is read"
+      }
     },
     {
       "flags": [
@@ -2185,7 +2777,11 @@
       "subcommands": [],
       "usage": [
         "team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -2220,7 +2816,11 @@
       "subcommands": [],
       "usage": [
         "team tempo <word> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "the tempo word is the owner's, from a terminal outside herdr"
+      }
     },
     {
       "flags": [
@@ -2255,7 +2855,11 @@
       "subcommands": [],
       "usage": [
         "team unlock <name> [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "a lock is anyone's to take, and its release is the holder's alone: the caller the holder file names releases it, and anyone else is shown the holder"
+      }
     },
     {
       "flags": [
@@ -2308,7 +2912,11 @@
       "subcommands": [],
       "usage": [
         "team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "`start`: it runs the hash-pinned start command, and an operation is reached only through `leads` held in a role, never through a grant"
+      }
     },
     {
       "flags": [
@@ -2349,7 +2957,11 @@
       "subcommands": [],
       "usage": [
         "team usage [--json] [--all] [--tree]"
-      ]
+      ],
+      "who": {
+        "gate": "seat-record",
+        "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
     },
     {
       "flags": [
@@ -2396,7 +3008,15 @@
       "subcommands": [],
       "usage": [
         "team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]"
-      ]
+      ],
+      "who": {
+        "gate": "any-caller",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a placed seat"
+        },
+        "why": "anyone in a terminal or its own pane starts the watch; a run with no terminal is refused before it starts"
+      }
     },
     {
       "flags": [
@@ -2456,7 +3076,11 @@
           "subcommands": [],
           "usage": [
             "team worktree list [--session <name>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "the owner, the orchestrator's seat or the operator's seat lists the worktrees; --session and --file are the owner's"
+          }
         },
         {
           "flags": [
@@ -2515,7 +3139,11 @@
           "subcommands": [],
           "usage": [
             "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "the owner, the orchestrator's seat or the operator's seat creates a worktree; --session and --file are the owner's"
+          }
         },
         {
           "flags": [
@@ -2568,14 +3196,22 @@
           "subcommands": [],
           "usage": [
             "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
-          ]
+          ],
+          "who": {
+            "gate": "team-change",
+            "why": "the owner, the orchestrator's seat or the operator's seat removes a worktree; --session and --file are the owner's"
+          }
         }
       ],
       "usage": [
         "team worktree new <task> [--kind <kind>] [--seat <name>] [--session <name>] [--file <path>] [--json]",
         "team worktree list [--session <name>] [--file <path>] [--json]",
         "team worktree remove <task> [--branch <name>] [--session <name>] [--file <path>] [--json]"
-      ]
+      ],
+      "who": {
+        "gate": "team-change",
+        "why": "the owner, the orchestrator's seat or the operator's seat manages worktrees; --session and --file are the owner's"
+      }
     }
   ],
   "program": {

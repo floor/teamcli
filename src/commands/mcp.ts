@@ -5,6 +5,10 @@
 // missing or misconfigured and prints one fix line per finding, with owner-gated steps marked.
 // Both are read-only: nothing here writes a file, no secret value is ever printed (fields are
 // named, never quoted), and no privileged command runs.
+//
+// `team mcp serve` is the other direction: the seat's own inbox, spoken as MCP over stdio. It is
+// started by a seat's launch line, serves only that seat's drop folder, and writes exactly one
+// listener marker and one receipt per read (../mcp/serve.ts, ../mcp/inbox.ts).
 import { spawnSync } from 'node:child_process';
 import { createPublicKey } from 'node:crypto';
 import { closeSync, constants as fs, fstatSync, lstatSync, openSync, readSync, readdirSync, readFileSync } from 'node:fs';
@@ -16,6 +20,7 @@ import { readArgs } from '../args.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { lobbyDir } from '../lobby/gate.ts';
+import { runMcpServe } from '../mcp/serve.ts';
 import {
   displayPath,
   hasJsonFlag,
@@ -31,6 +36,7 @@ import {
 
 export const USAGE = `Usage: team mcp status [--json]
        team mcp doctor [--json]
+       team mcp serve --seat <seat> [--session <session>] [--file <path>]
 Read-only: reports the MCP bridge's state and diagnoses what is missing.
 \`status\` prints one table per leg and the state they add up to; \`doctor\`
 turns the same surface into findings, each missing one with a one-line fix.
@@ -40,6 +46,15 @@ document instead of the lines: {format, lobby_dir, helper, bridges, guards,
 front, state} for status, {format, lobby_dir, findings, missing, warnings}
 for doctor. A run that exits 2 writes the structured error document instead
 — {error: {id, message, repair}} — and stderr stays empty.
+
+\`serve\` is the seat's inbox, for the CLI that started it: a stdio MCP
+server with \`inbox_check\` and \`inbox_read\` over one seat's drop folder.
+Its stdout carries JSON-RPC lines only. --seat is required; --session
+defaults to the team's session and must match it. --file is the team file
+the seat's launch read: a seat that starts in a lobby has none in its
+folder, so its registration names the launch's file and the server reads
+that. It exits 0 when stdin closes and 2 when the invocation or the team
+placement can't be read.
 
 Exits 0 when every observed leg is up (status) or nothing is missing (doctor),
 1 when a leg is down, the bridge is not set up, or doctor finds something
@@ -1070,7 +1085,7 @@ export async function runMcpDoctor(io: Io, json: boolean, sources: McpSources): 
 }
 
 export async function runMcp(argv: string[], io: Io, sources: McpSources = realSources): Promise<number> {
-  const args = readArgs(argv, [], ['json']);
+  const args = readArgs(argv, ['seat', 'session', 'file'], ['json']);
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
   const json = hasJsonFlag(argv);
@@ -1085,8 +1100,24 @@ export async function runMcp(argv: string[], io: Io, sources: McpSources = realS
     return 2;
   };
   if (args.error) return fail(args.error);
+  if (sub === 'serve') {
+    if (args.flags.has('json')) return fail('unknown option --json');
+    if (args.values.seat === undefined) return fail('--seat <seat> is required');
+    if (args.rest.length > 1) return fail(`unexpected ${JSON.stringify(args.rest[1] as string)}`);
+    return runMcpServe({ seat: args.values.seat, session: args.values.session, ...(args.values.file === undefined ? {} : { file: args.values.file }) }, io);
+  }
+  // The two reports name no seat, so a launch option on them is the invocation error, not a
+  // silent no-op.
+  const stray = args.values.seat !== undefined
+    ? 'seat'
+    : args.values.session !== undefined
+      ? 'session'
+      : args.values.file !== undefined
+        ? 'file'
+        : null;
+  if (stray !== null) return fail(`unknown option --${stray}`);
   if (sub !== 'status' && sub !== 'doctor') {
-    return fail(sub === undefined ? 'a subcommand is required: status or doctor' : `unknown subcommand ${JSON.stringify(sub)}`);
+    return fail(sub === undefined ? 'a subcommand is required: status, doctor or serve' : `unknown subcommand ${JSON.stringify(sub)}`);
   }
   if (args.rest.length > 1) return fail(`unexpected ${JSON.stringify(args.rest[1] as string)}`);
   if (sub === 'status') return runMcpStatus(io, json, sources);

@@ -139,11 +139,20 @@ describe('delivery_order', () => {
     expect(seated.team.deliveryOrder).toBeNull();
   });
 
+  test('drop is a leg the file and a seat may name, in its own position', () => {
+    const checked = validateTeamFile(`${TEAM}delivery_order: [drop]\n`);
+    if (!checked.ok) throw new Error('the drop fixture does not validate');
+    expect(checked.team.deliveryOrder).toEqual(['drop']);
+    const seated = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    delivery_order: [drop, typed]\n`));
+    if (!seated.ok) throw new Error('the seat drop fixture does not validate');
+    expect(seated.team.seats[0]?.deliveryOrder).toEqual(['drop', 'typed']);
+  });
+
   test('a written key with no legs, an unknown leg and a repeated one are refused', () => {
     const cases = [
-      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
-      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed' },
-      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: native, mcp-inbox, typed' },
+      { text: `${TEAM}delivery_order: []\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed, drop' },
+      { text: `${TEAM}delivery_order:\n`, message: 'delivery_order needs at least one leg: native, mcp-inbox, typed, drop' },
+      { text: `${TEAM}delivery_order: [telepathy]\n`, message: 'delivery_order "telepathy" must be one of: native, mcp-inbox, typed, drop' },
       { text: `${TEAM}delivery_order: [typed, typed]\n`, message: 'delivery_order names "typed" twice' },
     ];
     for (const one of cases) {
@@ -157,6 +166,32 @@ describe('delivery_order', () => {
     const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    delivery_order: [typed, typed]\n`));
     expect(checked.ok).toBe(false);
     if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": delivery_order names "typed" twice']);
+  });
+});
+
+// `human` marks a pane a person uses: read as a flag on the seat, part of the built seat, and
+// omitted when the file marks no seat — every file that marks none keeps the digest it had.
+describe('human', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted key reads no field, false reads no field, and true reads the mark', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect('human' in (checked.team.seats[0] as object)).toBe(false);
+    const off = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    human: false\n`));
+    if (!off.ok) throw new Error('the human: false fixture does not validate');
+    expect('human' in (off.team.seats[0] as object)).toBe(false);
+    const marked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    human: true\n`));
+    if (!marked.ok) throw new Error('the human fixture does not validate');
+    expect(marked.team.seats[0]?.human).toBe(true);
+  });
+
+  test('a value that is not an unquoted flag is refused under the seat', () => {
+    for (const value of ['yes', '"true"', '1']) {
+      const checked = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    human: ${value}\n`));
+      expect(checked.ok).toBe(false);
+      if (!checked.ok) expect(checked.errors.map((error) => error.message)).toEqual(['seat "lead": human must be true or false']);
+    }
   });
 });
 
@@ -264,5 +299,44 @@ describe('an approval written by main', () => {
     const checked = validateTeamFile(record().file.replace('interval: 2m', 'interval: 5m'));
     if (!checked.ok) throw new Error('the edited fixture does not validate');
     expect(approvalDifferences(checked.team, root, where)).toEqual(['`watch` changed']);
+  });
+});
+
+// `sender_name` is the word on how a sender reads in TeamCLI's headlines. The file's own key and
+// a seat's are read — the same two places the delivery order is written — and the four words are
+// the ones the resolver reads. It is presentation, not permission: omitted, the file reads null
+// and the seat carries no field, so the digests a file had are unchanged.
+describe('sender_name', () => {
+  const LEAD_LAUNCH = '    launch: claude --model claude-opus-5-5\n';
+
+  test('an omitted key reads null, and the seats carry no field', () => {
+    const checked = validateTeamFile(TEAM);
+    if (!checked.ok) throw new Error('the fixture does not validate');
+    expect(checked.team.senderName).toBeNull();
+    expect('senderName' in (checked.team.seats[0] as object)).toBe(false);
+  });
+
+  test('the file’s own word and a seat’s are read, in the order written', () => {
+    for (const word of ['auto', 'nickname', 'seat', 'seat@team'] as const) {
+      const checked = validateTeamFile(`${TEAM}sender_name: ${word}\n`);
+      if (!checked.ok) throw new Error(`the ${word} fixture does not validate`);
+      expect(checked.team.senderName).toBe(word);
+      expect(checked.team.seats[0]?.senderName).toBeUndefined();
+    }
+    const seated = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    sender_name: seat@team\n`));
+    if (!seated.ok) throw new Error('the seat word fixture does not validate');
+    expect(seated.team.seats[0]?.senderName).toBe('seat@team');
+    expect(seated.team.senderName).toBeNull();
+  });
+
+  test('a word this build cannot read refuses, naming the four it reads', () => {
+    const file = validateTeamFile(`${TEAM}sender_name: full\n`);
+    expect(file.ok).toBe(false);
+    if (!file.ok) expect(file.errors.map((error) => error.message)).toContain('sender_name must be one of: auto, nickname, seat, seat@team');
+    const seat = validateTeamFile(TEAM.replace(LEAD_LAUNCH, `${LEAD_LAUNCH}    sender_name: full\n`));
+    expect(seat.ok).toBe(false);
+    if (!seat.ok) {
+      expect(seat.errors.map((error) => error.message)).toContain('seat "lead": sender_name must be one of: auto, nickname, seat, seat@team');
+    }
   });
 });

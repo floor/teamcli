@@ -17,9 +17,13 @@ import { teamIdOf } from '../../src/registry/teams.ts';
 import { parseMemoryPressure, parseSwapUsage, type Machine } from '../../src/watch/machine.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
+import { RULES_ENTER_TRIES } from '../../src/launch/deliver.ts';
 import { defaultFs } from '../../src/lobby/gate.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
+import { beginSession, readStoreSessions, sessionsPath } from '../../src/sessions/registry.ts';
+import { validateTeamFile } from '../../src/file/validate.ts';
 import { watchLabel } from '../../src/watch/pane.ts';
+import { generalBriefId } from '../../src/launch/general-brief.ts';
 import { agyMismatchedFrame, CLAUDE_IDLE, claudeBox, testIo } from '../helpers.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
@@ -484,7 +488,8 @@ describe('team up, live', () => {
       expect(command).toContain(`--append-system-prompt '`);
       expect(command).toContain(`\n${CLOSING_OPTION}' --settings ${join(root, '.agents', 'hooks', 'acme-web')}/`);
       expect(command).not.toContain('reply ready and wait for your brief');
-      const settingsPath = command.slice(command.lastIndexOf(' --settings ') + ' --settings '.length);
+      // The launch appends its session id after the settings flag, so the path is the next word.
+      const settingsPath = command.slice(command.lastIndexOf(' --settings ') + ' --settings '.length).split(' ')[0] ?? '';
       expect(settingsPath).toMatch(/\/\.agents\/hooks\/acme-web\/[A-Za-z0-9._-]+\.json$/);
       expect(existsSync(settingsPath)).toBe(true);
       expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
@@ -1470,6 +1475,15 @@ describe('team up, live', () => {
     return made;
   }
 
+  /** The seats the fixture's file declares: its own four, and the counted second deepseek. */
+  const BRIEFED_SEATS = ['claude-coordinator-acme', 'codex-acme', 'deepseek-acme', 'deepseek-acme-2', 'grok-acme'];
+
+  /** The session's `briefs` map as the launch's one delivery leaves it: one entry per seat, the
+   *  id the brief's text derives, and the run's own time. */
+  function briefs() {
+    return Object.fromEntries(BRIEFED_SEATS.map((seat) => [seat, { id: generalBriefId(), at: NOW.toISOString() }]));
+  }
+
   function namedState() {
     return {
       format: 1,
@@ -1479,6 +1493,7 @@ describe('team up, live', () => {
             'claude-coordinator-acme': { stage: 'ready', pane: 'w1:p1', workspace: 'w1' },
             'codex-acme': { stage: 'named', pane: 'w2:p1', workspace: 'w2', start_cwd: '.' },
           },
+          briefs: briefs(),
           worktrees: {},
           watch: { pid: 4242, heartbeat: '2026-10-03T14:01:00Z' },
         },
@@ -1636,9 +1651,10 @@ describe('team up, live', () => {
       'codex-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
       + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n',
     );
-    // The resume verifies the box and sends the one Enter; this stub's pane never takes the
-    // key — the box is read again after it, to the deadline, and nothing else is ever typed.
-    expect(sent).toEqual(['Enter']);
+    // The resume verifies the box and presses Enter; this stub's pane never takes the key, so
+    // the submit is retried while the box still reads back as the line — RULES_ENTER_TRIES
+    // presses in all — and nothing else is ever typed.
+    expect(sent).toEqual(Array<string>(RULES_ENTER_TRIES).fill('Enter'));
     expect(again.closes).toEqual([]);
     expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
     const enter = calls.indexOf('pressEnter w2:p1');
@@ -1657,8 +1673,8 @@ describe('team up, live', () => {
     ]);
     const after = calls.slice(enter + 1);
     expect(after).not.toContain('typeText w2:p1');
-    expect(after).not.toContain('pressEnter w2:p1');
-    expect([...new Set(after)].sort()).toEqual(['agentStatus w2:p1', 'paneText w2:p1']);
+    expect(after.filter((call) => call === 'pressEnter w2:p1').length).toBe(RULES_ENTER_TRIES - 1);
+    expect([...new Set(after)].sort()).toEqual(['agentStatus w2:p1', 'foreground w2:p1', 'paneText w2:p1', 'pressEnter w2:p1']);
   });
 
   test('a resumed seat is checked where its pane runs, not where the file would put it; its record and log hold no folder', async () => {
@@ -6611,6 +6627,16 @@ describe('team up, a ready seat whose model drifted', () => {
   test('an idle seat holding unsent text is closed without input and launched again', async () => {
     readyState();
     await approve();
+    // The open record of the session the repair is about to close: the drift repair replaces a
+    // session this run closed on purpose, so the record ends as a swap, never as a crash.
+    const parsed = validateTeamFile(makeExample(base, root, driftYaml()), { home, root });
+    if (!parsed.ok) throw new Error('the drift scene team does not validate');
+    const codexSeat = parsed.team.seats.find((one) => one.name === 'codex-acme');
+    if (codexSeat === undefined) throw new Error('the drift scene has no codex seat');
+    const seeded = beginSession({
+      home, root, team: parsed.team, session: 'acme-web', seat: codexSeat, pane: 'w92:p1', now: NOW,
+    });
+    if (!('id' in seeded)) throw new Error(seeded.note);
     const unsent = terra().replace('› Ask Codex to do anything', '› hello');
     const captured = readFileSync(join(import.meta.dir, '../fixtures/codex/0.157.0/idle.txt'), 'utf8');
     const matched = fileModel(captured);
@@ -6661,6 +6687,18 @@ describe('team up, a ready seat whose model drifted', () => {
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme'];
     expect(seat).toMatchObject({ stage: 'ready', pane: 'w1:p1' });
     expect(seat?.pane).not.toBe('w92:p1');
+    // The repaired launch replaced a session this run closed on purpose: the old record ends as
+    // a swap, with no crash note, and the new record links back to it as its previous.
+    const registry = readStoreSessions(sessionsPath(parsed.team, root, home), home);
+    expect(registry.ok).toBe(true);
+    const records = registry.ok ? registry.sessions.filter((one) => one.seat === 'codex-acme') : [];
+    const old = records.find((one) => one.id === seeded.id);
+    expect(old?.reason).toBe('swap');
+    expect(typeof old?.ended).toBe('string');
+    expect(old?.note).toBeUndefined();
+    const next = records.find((one) => one.id !== seeded.id);
+    expect(next?.previous).toBe(seeded.id);
+    expect(next?.ended).toBeUndefined();
   });
 
   test('a model that matches again before the close is left as it is', async () => {

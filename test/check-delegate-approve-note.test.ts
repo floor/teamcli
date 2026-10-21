@@ -16,7 +16,7 @@ import { CHECK_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T11:00:00Z');
@@ -70,9 +70,13 @@ function place(text: string): string {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-check-approve-')));
   made.push(base);
   const root = join(base, 'acme');
+  const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
+  mkdirSync(home);
   execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
   writeFileSync(join(root, '.agents/team.yaml'), text);
+  const parsed = validateTeamFile(text);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
   // The seat's pane as the launch recorded it, and a watch pass recent enough that the run
   // itself is no difference: the two ambient findings every clean check world seeds away.
   updateState(join(root, '.agents'), (state) => {
@@ -81,6 +85,15 @@ function place(text: string): string {
       worktrees: {},
       watch: { pid: 1, heartbeat: NOW.toISOString() },
     };
+  });
+  // The launch delivered the general brief before it typed: the seat's record and its state entry.
+  deliverBriefs({
+    dir: join(root, '.agents'),
+    root,
+    session: parsed.team.session,
+    seats: parsed.team.seats.map((seat) => seat.name),
+    home,
+    at: NOW.toISOString(),
   });
   return root;
 }
@@ -156,7 +169,7 @@ describe('a delegate entry naming approve', () => {
   test("a set-aside delivery_order in .agents/team.yaml is reported as the lead's difference (D4) and validates under --json", () => {
     const withSetAside = [
       ...HEAD.trimEnd().split('\n'),
-      '    delivery_order: [native, typed]',
+      '    delivery_order: [mcp-inbox, typed]',
       'delivery_order: [typed]',
       '',
     ].join('\n');
@@ -169,7 +182,7 @@ describe('a delegate entry naming approve', () => {
       now: () => NOW,
     });
     expect(code).toBe(1);
-    expect(io.out).toContain('difference: lead: delivery_order [native, typed] in .agents/team.yaml is set aside; [typed] stands\n');
+    expect(io.out).toContain('difference: lead: delivery_order [mcp-inbox, typed] in .agents/team.yaml is set aside; [typed] stands\n');
     expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in .agents/team.yaml\n');
     expect(io.out).toContain("  who: the team's lead\n");
     expect(io.out).toContain('1 difference\n');
@@ -219,6 +232,50 @@ describe('a delegate entry naming approve', () => {
     expect(doc.differences).toHaveLength(1);
     expect(doc.differences[0]?.who).toBe("the team's lead");
     expect(doc.summary).toEqual({ differences: 1, owner_differences: 0 });
+  });
+
+  test('a seat word that adds only the native leg is no difference: the walk may declare it', () => {
+    // `native` is the one leg a delivery order may add — the sender choosing its own SendMessage
+    // and recording the delivery — so a seat word naming it is within the order in force.
+    const addingNative = [
+      ...HEAD.trimEnd().split('\n'),
+      '    delivery_order: [native, typed]',
+      'delivery_order: [typed]',
+      '',
+    ].join('\n');
+    const root = place(addingNative);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({}, io, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code).toBe(0);
+    expect(io.out).toContain('no differences\n');
+  });
+
+  test("a human seat's drop-only word under a team order that lacks drop is no difference: human wins", () => {
+    // The seat walks `drop` alone because it is a person's pane, whatever the inherited order
+    // says, so the resolver's set-aside verdict does not describe its delivery.
+    const humanDrop = [
+      ...HEAD.trimEnd().split('\n'),
+      '    human: true',
+      '    delivery_order: [drop]',
+      'delivery_order: [typed]',
+      '',
+    ].join('\n');
+    const root = place(humanDrop);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({}, io, {
+      live: () => live(TITLE),
+      branch: () => 'main',
+      standing: () => ({ kind: 'none' }),
+      now: () => NOW,
+    });
+    expect(code).toBe(0);
+    expect(io.out).not.toContain('difference:');
+    expect(io.out).toContain('no differences\n');
   });
 
   test('--json invocation refusals (--json --nope, --nope --json, --json extra, --json=1) emit team.error on stdout', async () => {

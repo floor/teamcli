@@ -5,28 +5,40 @@ Reads the project's message history from `~/.config/team/<project>-<hash>/messag
 with any `briefs/<from>-to-<to>.md` files and Desk audit lines when present. It reads: it writes
 nothing, and following the log never grows it.
 
-Each completed `team send` run (`delivered`, `answered`, `held`, `not-submitted`, `timeout`, or
-`unreachable`) appends one JSON object per line to `messages.jsonl`:
+Each completed `team send` run (`delivered`, `delivered (read)`, `sent (unconfirmed)`,
+`answered`, `held`, `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
+line to `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>",...],"note":"<qualifier>"}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
 
-The last six fields are optional. `spec` is the address the sender wrote when it was a form
-rather than the seat's own name — a `@<nickname>`, a `<seat|nickname>@<team>`, `lead@<team>`, or
-an agent id — and `resolved` is the registry id (`agt_…`) that address resolved to; the two are written
-together, and `to` is that seat either way. `ms` is the whole milliseconds from send to outcome,
-written when the send measured it, and `via` is the path the message actually travelled — `typed`
-(a composer trigger) or `socket` (a frame) — absent when it never left the sender. `failed` names
-the delivery legs a send walked past, each as `<leg>: <reason>`: the legs of the seat's delivery
-order that definitely could not take the send — the ones a walk passed before the leg that took
-it, or every leg that failed on a walk that ran out of legs — `native` or `mcp-inbox` in this
-build. It is absent when no leg failed, and a line that has none of the six, from a build older
-than these fields, carries the six required fields alone. `note` is the short qualifier the
-outcome word cannot carry alone: a delivered send whose box cleared before herdr's status or the
-transcript showed the seat act reads `taken, not yet confirmed`, and the sign that the seat acted
-is read later — a later line for the same id reads `taken but never acted on` when that sign
+The fields after `outcome` are optional. `from_team` is the sending team's registry id, written by
+the send run (and by `--record`, `--confirm`, `reply` and the daemon) on the line it appends; a
+receipt line for the same id that carries none takes it from the send's own line when the feed
+merges them. It is what lets the SEAT cell tell a sender from another team apart from a local seat
+of the same name, and a line written by a build before this field carries none. `thread` is the
+first message's id, carried on every line of one conversation; `in_reply_to` is the id of the
+record a reply answers, absent on the message that opened the thread. `spec` is the address the
+sender wrote when it was a form rather than the seat's own name — a `@<nickname>`, a
+`<seat|nickname>@<team>`, `lead@<team>`, or an agent id — and `resolved` is the registry id
+(`agt_…`) that address resolved to; the two are written together, and `to` is that seat either
+way. `ms` is the whole milliseconds from send to outcome, written when the send measured it, and
+`via` is the path the message actually travelled — `typed` (a composer trigger), `socket` (a
+frame), or `mcp-inbox` (the seat's own inbox, where the message is still the signed record) —
+absent when it never left the sender. `failed` names the delivery legs a send walked past, each as
+`<leg>: <reason>`: the legs of the seat's delivery order that definitely could not take the send —
+the ones a walk passed before the leg that took it, or every leg that failed on a walk that ran
+out of legs — `native` (recorded `unavailable` while no socket write is made) or `mcp-inbox`
+(recorded `no live inbox listener` when no server is serving that seat's inbox, and `no receipt
+within 10m` on the watch's later typed line for a message the seat's client left unread past the
+fallback window) in this build. It is absent when no leg failed, and a line that has none of
+these fields, from a build older than them, carries the six required fields alone. `note` is the
+short qualifier the outcome word cannot carry alone: a delivered send whose box cleared before
+herdr's status or the transcript showed the seat act reads `taken, not yet confirmed`, and the
+sign that the seat acted is read later — a later line for the same id reads `taken but never
+acted on` when that sign
 never came. The table shows `ms` and `via` with the outcome in the KIND column, `delivered (via
-socket in 812 ms)`, and carries `spec`, `resolved`, `failed` and `note` in the `--json` event,
-since the plain row keeps the channel that took the send.
+socket in 812 ms)`, and carries `spec`, `resolved`, `failed`, `note`, `thread` and `in_reply_to`
+in the `--json` event, since the plain row keeps the channel that took the send.
 
 The log rotates at 1 MB and keeps three files (`messages.jsonl`, `messages.jsonl.1`,
 `messages.jsonl.2`), each at mode `0600`. Pre-flight refusals, `--list`, and `--dry-run` write
@@ -76,12 +88,19 @@ summary line, `<n> event` or `<n> events`. The table's columns are:
 | --- | --- |
 | TIME | when the entry was written, `HH:MM:SS` |
 | KIND | the send outcome, with `via <path>` and `in <n> ms` when the send measured them |
-| SEAT | `<from> -> <to>` |
-| DETAIL | the body, folded to one line |
+| SEAT | `<from> -> <to>`; the sender reads as the project's [`sender_name`](../team-file.md#sender_name) word asks, resolved through the team the line records for it, and `--json` keeps the line's own `from`. A line that records no sender team — one a build before this field wrote — reads as the plain seat name, never as a local nickname for a sender that was not local |
+| DETAIL | the body, folded to one line; a reply opens with `re <id>: `, the record it answers |
 
 An empty history prints the context line and `0 events` — no table. `--follow` prints one
 header, table and count each time a pass brings new entries, so a reader can tell one arrival
 from the next.
+
+One message is one row. A send filed as `sent (unconfirmed)` and a later line for the same id —
+a `delivered (read)` receipt, a typed fallback, or a taken delivery's later report — are one
+message's outcome moving: a reading shows the latest line once, and the address the send
+recorded (`spec`, `resolved`) stays on that row. The send's measured milliseconds are not
+carried over, since they timed the send and not the outcome that followed it. A `--follow` pass
+prints the update when it arrives, because it is new information.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
@@ -92,11 +111,14 @@ from the next.
 
 With `--json` the run prints one pretty-printed `team.feed` document:
 
-    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","ms":<milliseconds>,"via":"<socket|typed>","failed":["<leg>: <reason>"],"note":"<qualifier>"}]}
+    {"schema":{"name":"team.feed","version":1},"format":1,"project":"<project>","session":"<session>","events":[{"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","status":"<sent|held|delivered|read|replied>","spec":"<address as written>","resolved":"<agt-id>","from_team":"<team-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>"],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}]}
 
-`project` and `session` are `null` when the run names no single team, and `ms`, `via`, `failed`
-and `note` appear on an event only when the history line carries them. The schema is published at
-`schema/feed.schema.json`.
+`project` and `session` are `null` when the run names no single team. `status` is derived from the
+outcome, never stored: `delivered (read)` is `read`, `delivered` is `delivered`, `held` is `held`,
+`answered` is `replied`, and every other outcome — a `sent (unconfirmed)` send, a `timeout`, a
+`not-submitted`, an `unreachable`, a `refused` — is `sent`. `spec`, `resolved`, `from_team`, `ms`,
+`via`, `failed`, `note`, `thread` and `in_reply_to` appear on an event only when the history line
+carries them. The schema is published at `schema/feed.schema.json`.
 
 ## Examples
 
@@ -142,23 +164,26 @@ team beacon, session "beacon"
 exit 0
 ```
 
-After a send, `team feed` prints the exchange with its timestamp, sender, recipient, outcome and body:
+After a send, `team feed` prints the exchange with its timestamp, sender, recipient, outcome and
+body. No server serves this seat's inbox, so the send walks to its drop folder — `via drop` —
+and reads `sent (unconfirmed)` until the seat's own turn-start read writes the signed receipt,
+which a running watch records as one more line, `delivered (read)`:
 
 ```console
 $ team send gpt-reviewer "the gate is green" ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: delivered
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms)
 exit 0
 $ team feed ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                           SEAT                   DETAIL
-  09:00:00  delivered (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                   SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 $ team feed --seat gpt-reviewer ; echo "exit $?"
 team beacon, session "beacon"
-  TIME      KIND                           SEAT                   DETAIL
-  09:00:00  delivered (via typed in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
+  TIME      KIND                                   SEAT                   DETAIL
+  09:00:00  sent (unconfirmed) (via drop in 0 ms)  owner -> gpt-reviewer  from the owner — admitted by: the owner the gate is green
 1 event
 exit 0
 ```

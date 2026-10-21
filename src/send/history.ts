@@ -27,7 +27,44 @@ export const HISTORY_FILE = 'messages.jsonl';
 export const MAX_HISTORY_BYTES = 1_000_000;
 export const HISTORY_KEPT = 3;
 
-export type HistoryOutcome = 'delivered' | 'held' | 'not-submitted' | 'unreachable' | 'answered' | 'timeout';
+export type HistoryOutcome =
+  | 'delivered'
+  | 'delivered (read)'
+  | 'sent (unconfirmed)'
+  | 'held'
+  | 'not-submitted'
+  | 'unreachable'
+  | 'answered'
+  | 'timeout';
+
+/**
+ * A message's status, derived from the receipts beside its record and moving forward only
+ * (`src/send/record.ts` reads them). The attempt outcomes above are not statuses: a send that
+ * was held, timed out or found no reachable leg still leaves a record whose status is `sent`
+ * until a receipt says otherwise.
+ */
+export type MessageStatus = 'sent' | 'held' | 'delivered' | 'read' | 'replied';
+
+/** The statuses in the one order they move; a later receipt is the one that stands. */
+export const STATUS_ORDER: readonly MessageStatus[] = ['sent', 'held', 'delivered', 'read', 'replied'];
+
+/** The status a history line's own outcome implies, when no receipt is at hand (the feed's
+ *  `--json` reading). Only the outcome words that name a status map to one; every attempt
+ *  outcome maps to `sent`, the record's status until a receipt lands. */
+export function statusOfOutcome(outcome: string): MessageStatus {
+  switch (outcome) {
+    case 'delivered (read)':
+      return 'read';
+    case 'delivered':
+      return 'delivered';
+    case 'held':
+      return 'held';
+    case 'answered':
+      return 'replied';
+    default:
+      return 'sent';
+  }
+}
 
 export type HistoryEntry = {
   ts: string;
@@ -36,6 +73,12 @@ export type HistoryEntry = {
   body: string;
   id: string;
   outcome: string;
+  /** The team the sender sits in, by team id, written by the send that made the line. The feed
+   *  needs it to read a sender from another team by its address: without it a seat name shared
+   *  with a local seat would read as the local nickname. A line written before this field (or by
+   *  a reader's own seam, a brief or an audit) carries none, and the feed prints the plain seat
+   *  name rather than guessing a team. */
+  from_team?: string;
   /** The address the caller wrote, when it was not the resolved seat's own name: a `@<nickname>`,
    *  a `<seat|nickname>@<team>`, `lead@<team>`, or an agent id. It lets a reader see what was
    *  addressed beside `to`, the seat it resolved to. */
@@ -55,6 +98,10 @@ export type HistoryEntry = {
    *  delivered send whose box cleared before herdr's status or the transcript showed the seat act,
    *  and `taken but never acted on` when the watch's later look found no sign either. */
   note?: string;
+  /** The thread the message belongs to: the first message's id, on every line a send writes. */
+  thread?: string;
+  /** On a reply's line, the id of the record it answers. */
+  in_reply_to?: string;
 };
 
 export type HistoryWrite =
@@ -91,22 +138,23 @@ function ladderProblem(at: string): string | null {
  * Checks what stands at a history file path (`messages.jsonl`, `.1`, `.2`) with `lstat`.
  * Anything other than a regular file owned by this user is refused and never followed.
  */
-function fileProblem(at: string): string | null {
+function fileProblem(at: string, label = 'history log'): string | null {
   const held = heldAt(at);
   if (held.kind === 'missing') return null;
   if (held.kind === 'link') return 'a symbolic link was found and not followed';
   if (held.kind === 'fifo') return 'a FIFO was found and not followed';
-  if (held.kind === 'folder') return 'the history log path is a directory';
-  if (held.kind !== 'file') return 'the history log path is not a regular file';
+  if (held.kind === 'folder') return `the ${label} path is a directory`;
+  if (held.kind !== 'file') return `the ${label} path is not a regular file`;
   if (process.getuid !== undefined && held.uid !== process.getuid()) return "another user's file";
   return null;
 }
 
 /**
  * Ensures `<home>/.config`, `<home>/.config/team`, and `<storeDir>` exist as real directories
- * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link.
+ * of this user's, with `<storeDir>` at mode 0700. Never walks through a symbolic link. Shared
+ * with the pending records (`pending.ts`), which live in the same store beside the history.
  */
-function ensureStoreLadder(storeDir: string, home: string): string | null {
+export function ensureStoreLadder(storeDir: string, home: string): string | null {
   const stateRoot = storesFolder(home);
   const configDir = dirname(stateRoot);
   const levels: Array<{ at: string; seal: boolean }> = [
@@ -186,12 +234,15 @@ export function appendHistory(project: string, root: string, home: string, entry
     outcome: entry.outcome,
   };
   // Written only when the run recorded them, so a plain line keeps its exact older shape.
+  if (entry.from_team !== undefined) record.from_team = entry.from_team;
   if (entry.spec !== undefined) record.spec = entry.spec;
   if (entry.resolved !== undefined) record.resolved = entry.resolved;
   if (entry.ms !== undefined) record.ms = entry.ms;
   if (entry.via !== undefined) record.via = entry.via;
   if (entry.failed !== undefined && entry.failed.length > 0) record.failed = entry.failed;
   if (entry.note !== undefined) record.note = entry.note;
+  if (entry.thread !== undefined) record.thread = entry.thread;
+  if (entry.in_reply_to !== undefined) record.in_reply_to = entry.in_reply_to;
   return appendStoreLine(project, root, home, HISTORY_FILE, record);
 }
 
@@ -207,13 +258,14 @@ export function appendStoreLine(
   home: string,
   fileName: string,
   record: Record<string, unknown>,
+  options: { rotate?: boolean; label?: string } = {},
 ): HistoryWrite {
   const storeDir = storePath(project, root, home);
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };
 
   const path = join(storeDir, fileName);
-  const targetErr = fileProblem(path);
+  const targetErr = fileProblem(path, options.label);
   if (targetErr !== null) return { ok: false, reason: targetErr };
 
   const line = `${JSON.stringify(record)}\n`;
@@ -221,7 +273,9 @@ export function appendStoreLine(
 
   try {
     const current = heldAt(path);
-    if (current.kind === 'file') {
+    // A registry that is append-only (`sessions.jsonl`) passes `rotate: false`: the history's
+    // rotation would drop its oldest lines, and its lines are records, not a feed.
+    if (options.rotate !== false && current.kind === 'file') {
       const size = statSync(path).size;
       if (size > 0 && size + bytes.length > MAX_HISTORY_BYTES) {
         const rotateErr = rotateHistory(path);
@@ -307,7 +361,10 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
     id: obj.id,
     outcome: obj.outcome,
   };
-  // `spec`, `resolved`, `ms`, `via`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  // `from_team`, `spec`, `resolved`, `ms`, `via`, `failed` and `note` are optional: a line with a wrong-typed one keeps its other fields.
+  if (typeof obj.from_team === 'string' && obj.from_team !== '') {
+    entry.from_team = obj.from_team;
+  }
   if (typeof obj.spec === 'string' && obj.spec !== '') {
     entry.spec = obj.spec;
   }
@@ -325,6 +382,12 @@ export function parseHistoryLine(raw: string): HistoryEntry | null {
   }
   if (typeof obj.note === 'string' && obj.note !== '') {
     entry.note = obj.note;
+  }
+  if (typeof obj.thread === 'string' && obj.thread !== '') {
+    entry.thread = obj.thread;
+  }
+  if (typeof obj.in_reply_to === 'string' && obj.in_reply_to !== '') {
+    entry.in_reply_to = obj.in_reply_to;
   }
   return entry;
 }
@@ -369,6 +432,68 @@ export function readStoreHistory(storeDir: string, home: string): HistoryRead {
  */
 export function readHistory(project: string, root: string, home: string): HistoryRead {
   return readStoreHistory(storePath(project, root, home), home);
+}
+
+export type StoreLinesRead =
+  | { ok: true; lines: string[] }
+  | { ok: false; reason: string };
+
+/**
+ * Reads one JSONL stream beside `messages.jsonl` in a project state folder, with the same
+ * ladder and `lstat` guards, without following a link and without rotating anything. A missing
+ * file is no lines. `label` names the stream in a refusal ("the session registry path ...").
+ */
+export function readStoreLines(
+  storeDir: string,
+  fileName: string,
+  home: string,
+  label = 'history log',
+): StoreLinesRead {
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot, storeDir]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+  const path = join(storeDir, fileName);
+  const problem = fileProblem(path, label);
+  if (problem !== null) return { ok: false, reason: problem };
+  if (heldAt(path).kind === 'missing') return { ok: true, lines: [] };
+  const text = readNoFollow(path);
+  if (text === null) return { ok: false, reason: `the ${label} could not be read` };
+  return { ok: true, lines: text.split('\n') };
+}
+
+/**
+ * Every project state folder under `<home>/.config/team`, in name order, never `lobby` or
+ * `lobbies` and never a symbolic link. A folder the machine cannot read refuses the whole
+ * listing rather than answering with a partial one.
+ */
+export function listStoreDirs(home: string): { ok: true; dirs: string[] } | { ok: false; reason: string } {
+  const stateRoot = storesFolder(home);
+  const configDir = dirname(stateRoot);
+  for (const level of [configDir, stateRoot]) {
+    const problem = ladderProblem(level);
+    if (problem !== null) return { ok: false, reason: problem };
+  }
+  if (heldAt(stateRoot).kind === 'missing') return { ok: true, dirs: [] };
+
+  let names: string[];
+  try {
+    names = readdirSync(stateRoot).sort();
+  } catch {
+    return { ok: false, reason: 'the state folder could not be read' };
+  }
+  const dirs: string[] = [];
+  for (const name of names) {
+    if (name === 'lobby' || name === 'lobbies') continue;
+    if (!STORE_DIR_NAME.test(name)) continue;
+    const dir = join(stateRoot, name);
+    if (ladderProblem(dir) !== null) continue;
+    if (heldAt(dir).kind !== 'folder') continue;
+    dirs.push(dir);
+  }
+  return { ok: true, dirs };
 }
 
 const STORE_DIR_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{12}$/;

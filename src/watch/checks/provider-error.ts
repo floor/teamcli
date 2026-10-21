@@ -37,10 +37,13 @@ export const providerError: SeatCheck = {
     const state = seat.running && !seat.working ? held(seat.screen) : null;
     if (!state) return [];
     const text = textOf(seat.name, accountOf(seat), state);
+    // The two states are different events — a prompt (the owner waits on a reset) and a blocked
+    // seat — so each has its own key. The bus mapping reads the key, never the prose.
+    const key = state.kind === 'rate limit' ? `rate-limit:${seat.name}` : `provider-error:${seat.name}`;
     // `to` names one recipient. The operator and the owner each get the line.
     return [
-      ...reported(ctx.once(`provider-error:${seat.name}`, text)),
-      ...reported(ctx.once(`provider-error:${seat.name}:owner`, text, 'owner')),
+      ...reported(ctx.once(key, text)),
+      ...reported(ctx.once(`${key}:owner`, text, 'owner')),
     ];
   },
 };

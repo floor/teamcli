@@ -16,7 +16,7 @@ import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, sessionRunning, workspaceList, type PaneProcesses } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import { emptySession, holdText, liveHold, liveProcs, pidAlive, readState, type HoldRecord, type SessionState } from '../state.ts';
+import { emptySession, holdText, liveHold, liveProcs, pauseText, pidAlive, readState, type HoldRecord, type PauseRecord, type SessionState } from '../state.ts';
 import { keyFingerprint, keyState } from '../store/keys.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -96,8 +96,11 @@ export const realSources: StatusSources = {
     // Every agent's pane, not only one whose name is a seat: a stray in a seat's workspace has a
     // screen too. A null screen is left out, and that pane is then unread.
     for (const agent of agents) {
-      const screen = paneRead(agent.pane, PANE_WINDOW, session);
-      if (screen !== null) screens[agent.pane] = screen;
+      const declared = team.seats.find((s) => s.name === agent.name);
+      if (declared?.human !== true) {
+        const screen = paneRead(agent.pane, PANE_WINDOW, session);
+        if (screen !== null) screens[agent.pane] = screen;
+      }
       // The pane's process identity, for the comparison with the one the state recorded: a pane
       // that no longer holds what team launched is not the seat. Null when herdr can't tell.
       processes[agent.pane] = paneProcesses(agent.pane, session);
@@ -108,6 +111,7 @@ export const realSources: StatusSources = {
     // The screen is the same read: a pane with no agent still has visible text, and a null leaves
     // the restored row with no note.
     for (const seat of team.seats) {
+      if (seat.human === true) continue;
       const held = state.seats[seat.name];
       if (!held?.launched || !held.pane || held.pane in processes) continue;
       processes[held.pane] = paneProcesses(held.pane, session);
@@ -180,6 +184,8 @@ export interface StatusJson {
   budgets?: BudgetRow[];
   /** Present while a hold stands and has not lapsed (`team hold`). */
   hold?: HoldRecord;
+  /** Present while the team is paused (`team pause`), with its stop points. */
+  pause?: PauseRecord;
   /** The live records of `team proc`, present only when the session's seats hold some. */
   procs?: Array<{
     name: string;
@@ -342,6 +348,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   }
   if (!live.running) comparison.notes.unshift(`the herdr session "${session}" is not running`);
   if (hold) comparison.notes.unshift(holdText(hold));
+  // The pause stands above both: it is the one note that says why no seat takes work.
+  const pause = whole.pause;
+  if (pause) comparison.notes.unshift(pauseText(pause));
   // What the seats recorded with `team proc add`: one note per live process, read the same way
   // `team proc list` reads it — a record whose pid is gone is skipped here and left for the next
   // write to clear. The reading is the note and the document, one derivation for both.
@@ -421,6 +430,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       notice: current.notice ?? null,
       ...(budgets.length ? { budgets } : {}),
       ...(hold ? { hold } : {}),
+      ...(pause ? { pause } : {}),
       ...(procs.length ? { procs } : {}),
     });
   } else {

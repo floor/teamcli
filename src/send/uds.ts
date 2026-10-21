@@ -30,10 +30,10 @@ export const SEND_TIMEOUT_MS = 5_000;
  * socket. Off: the channel is unattested — the receiving session's `crossSessionInbound`
  * policy holds a frame from a standalone sender as unidentified ("The sender did not
  * attest its permission mode"), and a held frame blocks the seat's box until a person
- * lets it through — so no send path dials while this is false: the plain send is the
- * typed trigger, `--wait` to a Claude Code seat is refused until the native leg (the
- * team route plus the caller's own SendMessage) ships, and the daemon and the watch's
- * nudge open no socket either. The socket code stays in the tree, one constant away.
+ * lets it through — so no send path dials while this is false: `team send` (with or
+ * without `--wait`) walks the receiving seat's delivery order and waits on the thread,
+ * and the daemon and the watch's nudge open no socket either. The socket code stays in
+ * the tree, one constant away.
  */
 export const SOCKET_SEND = false;
 

@@ -11,7 +11,7 @@
 // not an authenticity one, and the page says so. Nothing starts or restarts the broker.
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { findRoot, loadTeamFile, NOT_A_REPO_NO_FILE } from '../file/load.ts';
+import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
 import type { Command, Io } from '../io.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
 import { keychainReader, realSecurityRun, type KeyReader } from '../release/keychain.ts';
@@ -28,7 +28,7 @@ and never crosses to a seat: the answer holds the typed record, filtered by the 
 task policy. Ctrl-C stops it.
 
 Exits 0 when it stopped, 1 when it refused to start or lost its socket, 2 when the
-invocation can't be read or this folder is not a git checkout.
+invocation can't be read or this folder is neither a checkout nor a team root.
 `;
 
 /** The command's injectable seams, in the house style: the tracker fetch, the one credential
@@ -76,15 +76,22 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
     // exit: broker.not-owner
     return 1;
   }
-  const root = findRoot(io.cwd);
-  if (!root) {
-    // `team broker` takes no `--file`, so the no-repository refusal must not offer one.
-    io.stderr(`team broker: ${NOT_A_REPO_NO_FILE}\n`);
-    // exit: broker.not-a-repo
-    return 2;
-  }
+  // The folder is resolved the way every command resolves it: the checkout git names, or, in a
+  // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
+  // beside it). A folder that is neither is the no-repository refusal — `team broker` takes no
+  // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
+  // own exit.
   const loaded = loadTeamFile(io.cwd, { home: sources.home });
-  if (!loaded.ok) return unreadable(io, loaded.errors[0]?.message ?? 'the team file can\'t be read');
+  if (!loaded.ok) {
+    const problem = loaded.errors[0];
+    const message = problem?.message ?? 'the team file can\'t be read';
+    if (problem !== undefined && isNoRepository(problem)) {
+      io.stderr(`team broker: ${withoutFileOffer(message)}\n`);
+      // exit: broker.not-a-repo
+      return 2;
+    }
+    return unreadable(io, message);
+  }
   const tasks = loaded.team.tasks;
   if (!tasks) return notLinear(io, 'the team file declares no task source');
   if (tasks.source !== 'linear') return notLinear(io, 'tasks.source must be linear; the broker serves a tracker source');

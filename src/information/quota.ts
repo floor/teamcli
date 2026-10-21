@@ -55,8 +55,26 @@ export type QuotaObservation = {
   observedAt: number;
   source: QuotaSource;
   seat: string | null;
+  /** The herdr session the seat's pane was read in; null for a CLI usage print, which belongs
+   *  to no seat. It keeps two teams' same-named seats apart when a report attributes figures
+   *  back to the seat that showed them. */
+  session?: string | null;
   margin: number | null;
   wall: boolean;
+};
+
+/** One seat's spend in money, as the seat's own screen printed it. A money figure belongs to
+ *  the pane that printed it, so `seat` is never null; `session` is stamped by the observer with
+ *  the herdr session the pane was read in, as a quota observation's is. A screen that prints no
+ *  amount gives no observation — the report shows `unknown`, never an invented zero. */
+export type CostObservation = {
+  seat: string;
+  account: string;
+  session?: string | null;
+  amount: number;
+  currency: 'USD';
+  observedAt: number;
+  source: 'status line';
 };
 
 /** A lab's or an account's state: plenty, close to the cap, out, or nothing fresh to say. */

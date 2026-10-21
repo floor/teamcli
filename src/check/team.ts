@@ -27,11 +27,13 @@ import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
+import { generalBriefId, generalBriefRecord } from '../launch/general-brief.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import {
   collapseNotes,
   contextLine,
+  formatRelativeTime,
   pluralCount,
   renderDeprecationWarnings,
   renderDifferences,
@@ -60,17 +62,19 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
+import { recordHolds } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
-import { emptySession, liveHold, readState, seatOfFile, updateState, type SessionState, type State } from '../state.ts';
-import { compare, orderAndAnnotateDifferences, type Difference, type Live } from '../status/compare.ts';
+import { emptySession, liveHold, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
+import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
+import { toolTrace } from '../labels/traces.ts';
 import { modelDiffers, seatModel } from '../status/statusline.ts';
 import type { Standing } from '../store/store.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { attentionOf } from '../watch/pass.ts';
-import { readScreen } from '../watch/screen.ts';
+import { readScreen, type Screen } from '../watch/screen.ts';
 
 /** The team check's own arguments: the owner's aimed/repair flags and optional `--json`. */
 export type TeamCheckArgs = { session?: string; file?: string; repair?: boolean; json?: boolean };
@@ -113,6 +117,12 @@ export const realCheckSources: CheckSources = {
     for (const seat of team.seats) {
       const pane = state.seats[seat.name]?.pane;
       if (pane) recorded.add(pane);
+    }
+    // A temporary seat is a seat of this team by its record alone (`team add --temporary` never
+    // writes one into the file): its pane is read on the same terms as a declared seat's, so a
+    // temporary seat held at a prompt is named in a real run and not only in a scene.
+    for (const held of Object.values(state.seats)) {
+      if (held.temporary !== undefined && held.pane) recorded.add(held.pane);
     }
     const screens: Record<string, string> = {};
     const processes: Record<string, PaneProcesses | null> = {};
@@ -302,11 +312,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     quiet,
   );
   const provenance = devModeDifferences(team, root, sources.home, quiet);
+  const attention = attentionDifferences(team, state, live, sources.now());
   comparison.differences = orderAndAnnotateDifferences([
-    ...comparison.differences,
+    // A seat the check names itself in its own stuck-prompt line is not named again in
+    // `compare()`'s plain words: one line per held seat, the richer one.
+    ...comparison.differences.filter((difference) => difference.promptSeat === undefined || !attention.named.has(difference.promptSeat)),
     ...signingDifferences(team, state, live, root, sources.home),
+    ...generalBriefDifferences(team, state, root, sources.home, session),
     ...provenance.differences,
-    ...attentionDifferences(team, state, live),
+    ...attention.differences,
     ...labelDifferences(team, state, live),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
@@ -676,31 +690,184 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
 }
 
 /**
- * The watch's own report texts, as differences with the repair beside them (§3.3a): one read of
- * each pane this project's state records for a seat of this team, through the watch's own reader.
- * No write, no key, no nudge, and no pane the state does not record for this team. `to` stays the
- * watch's word for who acts, and no line quotes a seat's screen text.
+ * The general seat brief every launch delivers first, by drop. A session that has launched a seat,
+ * or recorded a delivery, is a session whose seats were due the brief: one with no record under
+ * `briefs` never received it. A recorded delivery is a claim about a file, so the file is checked,
+ * not the claim: the record at the current brief's id must be this brief and this checkout's
+ * message key must have signed it. A state entry naming anything else is a delivery that does not
+ * verify. The repair is the one both delivering paths answer to — `reload` for a CLI seat, `up`
+ * for a human's, where reload refuses to touch the pane. A seat the comparison already names as
+ * not running is left to that difference: its launch is its repair.
  */
-function attentionDifferences(team: TeamFile, state: SessionState, live: Live): Difference[] {
+function generalBriefDifferences(
+  team: TeamFile,
+  state: SessionState,
+  root: string,
+  home: string | undefined,
+  session: string,
+): Difference[] {
+  if (Object.keys(state.seats).length === 0 && state.briefs === undefined) return [];
   const out: Difference[] = [];
   for (const seat of team.seats) {
-    const recorded = state.seats[seat.name]?.pane;
-    if (recorded === undefined) continue;
-    const agent = live.agents.find((candidate) => candidate.name === seat.name);
+    const recorded = state.briefs?.[seat.name];
+    const repair = seat.human === true ? 'team up' : `team reload ${seat.name} or team up`;
+    if (recorded === undefined) {
+      if (seat.human !== true && state.seats[seat.name] === undefined) continue;
+      out.push({ what: `${seat.name}: the general seat brief has not been delivered`, repair });
+      continue;
+    }
+    // Without a home there is no message key to verify with; the entry stands as before.
+    if (home === undefined) continue;
+    const id = generalBriefId();
+    const expected = generalBriefRecord({ to: seat.name, root, session, at: recorded.at });
+    const path = join(root, '.agents', 'send-drops', session, seat.name, id);
+    if (recorded.id === id && recordHolds(path, expected, home)) continue;
+    out.push({ what: `${seat.name}: the general seat brief's delivery record does not verify`, repair });
+  }
+  return out;
+}
+
+// The kinds the check names for a seat held at a prompt, in the words the brief gives them:
+// `quota` is the watch's rate limit and `confirm` the CLI's own exit question. `unknown` is a
+// screen no profile reads whose safety floor caught a prompt row — the floor's matched line is
+// the one piece of that screen a reader may quote.
+type StuckKind = 'permission' | 'trust' | 'quota' | 'confirm' | 'unknown';
+
+const STUCK_WORDS: Record<StuckKind, string> = {
+  permission: 'a permission prompt',
+  trust: 'a trust prompt',
+  quota: 'a quota prompt',
+  confirm: 'a confirm prompt',
+  unknown: 'an unrecognised prompt',
+};
+
+const STUCK_REPAIRS: Record<StuckKind, Pick<Difference, 'repair' | 'owner'>> = {
+  permission: { repair: 'its lead answers it in the pane' },
+  trust: { repair: 'the owner answers it in the pane', owner: true },
+  quota: { repair: 'the owner waits for the reset; team never types into that screen', owner: true },
+  confirm: { repair: 'the owner answers it in the pane, or team down --abandon closes it', owner: true },
+  unknown: { repair: 'the owner looks at the pane', owner: true },
+};
+
+/** The prompt kind a screen shows, or null. Only an unknown screen whose safety floor carries a
+ *  prompt row is named: an unknown one the floor left alone stays the watch's ordinary `blocked`
+ *  line. */
+function stuckKind(screen: Screen): StuckKind | null {
+  switch (screen.kind) {
+    case 'permission':
+      return 'permission';
+    case 'trust':
+      return 'trust';
+    case 'rate limit':
+      return 'quota';
+    case 'exit question':
+      return 'confirm';
+    case 'unknown':
+      return screen.matched === undefined ? null : 'unknown';
+    default:
+      return null;
+  }
+}
+
+/**
+ * One held seat, in the check's words: the kind, the age the state's own clock gives it (the
+ * seat's `last_active` — the only instant a seat record carries), the command the screen shows
+ * when the profile's trace reader finds one, and for an unrecognised prompt the floor row that
+ * named it. The age reads `last active <age>`: the prompt appeared after that moment, so the
+ * record dates the seat's last activity, never claims how long the prompt itself has stood.
+ */
+function stuckPromptDifference(
+  name: string,
+  kind: StuckKind,
+  screen: Screen,
+  screenText: string | undefined,
+  recorded: SeatState | undefined,
+  cli: string,
+  now: Date,
+): Difference {
+  const details: string[] = [];
+  // Every detail below is text the screen showed, not text `team` wrote: each is cleaned the way
+  // the report cleans a difference line, so the same string is safe in `--json`, which renders
+  // `what` as it stands (a control sequence or a `\r` in it would otherwise reach the document).
+  if (screen.kind === 'rate limit' && screen.reset !== null) details.push(`resets at ${plainLine(screen.reset)}`);
+  if (screen.kind === 'unknown' && screen.matched !== undefined) details.push(`matched "${plainLine(screen.matched)}"`);
+  const tool = toolTrace(cli, screenText);
+  if (tool !== null) details.push(plainLine(tool.what));
+  const age = formatRelativeTime(recorded?.last_active, now);
+  const since = age === '-' ? '' : ` (last active ${age})`;
+  const detail = details.length === 0 ? '' : `: ${details.join('; ')}`;
+  return { what: `${name}: stuck at ${STUCK_WORDS[kind]}${since}${detail}`, ...STUCK_REPAIRS[kind] };
+}
+
+/**
+ * The watch's own report texts, as differences with the repair beside them (§3.3a): one read of
+ * each pane this project's state records for a seat of this team, through the watch's own reader.
+ * A seat held at a prompt the check can name — a permission dialog, a trust question, a quota
+ * screen, the CLI's own exit question, or an unrecognised screen the safety floor caught — is
+ * named in the check's own line, and `compare()`'s plain row for that seat is dropped (its
+ * `promptSeat`) so the seat is named once. Every other seat keeps the watch's line. No write, no
+ * key, no nudge, and no pane the state does not record for this team; the only screen text a line
+ * quotes is the floor's own matched row. `named` is the seats the check named itself.
+ */
+function attentionDifferences(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  now: Date,
+): { differences: Difference[]; named: Set<string> } {
+  const differences: Difference[] = [];
+  const named = new Set<string>();
+  type Read = { name: string; cli: string; recorded: SeatState | undefined; declared: boolean };
+  const reads: Read[] = team.seats.map((seat) => ({
+    name: seat.name,
+    cli: seat.cli,
+    recorded: state.seats[seat.name],
+    declared: true,
+  }));
+  for (const [name, recorded] of Object.entries(state.seats)) {
+    if (recorded.temporary === undefined || team.seats.some((seat) => seat.name === name)) continue;
+    // A temporary seat reads its like-seat's CLI, as its row reads the like-seat's model; a
+    // like-seat gone reads nothing, and the screen is unknown then.
+    const like = team.seats.find((seat) => seat.name === recorded.temporary?.like);
+    reads.push({ name, cli: like?.cli ?? '', recorded, declared: false });
+  }
+  for (const read of reads) {
+    const pane = read.recorded?.pane;
     // Only the pane the state records for this seat, and only where that seat answers on it: a
     // pane herdr lists for the name on any other pane is a stale record, and is not read.
-    if (!agent || agent.pane !== recorded) continue;
-    // The watch's own reading, from its own two inputs: herdr's word, and — for a profile herdr
-    // cannot report — the seat's screen, which is the reading there.
-    const screen = readScreen(seat.cli, live.screens[recorded]);
-    const theirWord = herdrUnreliable(seat.cli);
+    if (pane === undefined) continue;
+    const agent = live.agents.find((candidate) => candidate.name === read.name);
+    if (!agent || agent.pane !== pane) continue;
+    // The pane is the seat only while the process team launched is still in it, the same gate
+    // `compare()` applies (`paneShowsSeat`): a pane back at its shell, or one running a process
+    // the record does not name with no stored session showing continuity, keeps the process row,
+    // and its scrollback is not read for a prompt — a dialog the CLI drew before it exited is not
+    // a seat held at one. A record with no identity whose pane holds a bare shell reads no prompt
+    // either.
+    if (!paneShowsSeat(read.recorded, agent, live)) continue;
+    const text = live.screens[pane];
+    const screen = readScreen(read.cli, text);
+    // A launch's own waiting record already names the seat and the dialog it stopped at, with
+    // the repair that resumes the launch (`waitingView`, `src/status/compare.ts`): the check
+    // does not name the same seat a second time beside it. The watch's own line still reads.
+    const kind = read.recorded?.waiting === undefined ? stuckKind(screen) : null;
+    if (kind !== null) {
+      named.add(read.name);
+      differences.push(stuckPromptDifference(read.name, kind, screen, text, read.recorded, read.cli, now));
+      continue;
+    }
+    // A temporary seat has no watch line beside the check's; a declared seat keeps the watch's
+    // own reading, from its own two inputs: herdr's word, and — for a profile herdr cannot
+    // report — the seat's screen, which is the reading there.
+    if (!read.declared) continue;
+    const theirWord = herdrUnreliable(read.cli);
     const quiet = theirWord
       ? screen.kind === 'idle' || screen.kind === 'unsent'
       : agent.status === 'idle' || agent.status === 'done';
-    const view = viewOf(attentionOf(screen, agent.status, quiet, theirWord), seat.name, agent.status);
-    if (view) out.push(view);
+    const view = viewOf(attentionOf(screen, agent.status, quiet, theirWord), read.name, agent.status);
+    if (view) differences.push(view);
   }
-  return out;
+  return { differences, named };
 }
 
 /**
@@ -937,8 +1104,9 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
 
 /**
  * A `delivery_order` declaration in `.agents/team.yaml` (at the team or seat level) that
- * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have, leaving
- * the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ * `resolveOrderSetting` sets aside because it names a leg the inherited order does not have,
+ * leaving the inherited order in force (`src/settings/inherit.ts`, output contract §1.5 scene D4).
+ * `native` is the one leg a word may add, so a declaration naming it is no difference.
  */
 function deliveryOrderDifferences(team: TeamFile, root: string, home: string | undefined): Difference[] {
   let projectOrder: readonly DeliveryLeg[] | undefined;
@@ -973,6 +1141,9 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
   }
   for (const seat of team.seats) {
     if (seat.deliveryOrder === undefined) continue;
+    // A human seat walks `drop` alone whatever its word says, so the resolver's set-aside verdict
+    // never describes its delivery: human wins, and a word it writes is no difference.
+    if (seat.human === true) continue;
     const res = resolveOrderSetting(
       DELIVERY_ORDER,
       orderDeclarationsOf<DeliveryLeg>({
@@ -1001,7 +1172,8 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
  */
 function viewOf(attention: Attention, name: string, _status: string): Difference | null {
   switch (attention) {
-    // `compare()` already emits the permission-prompt difference for `status` and `check`.
+    // A permission or trust screen never reaches here: `compare()` emits its row, and the check
+    // replaces that row with its own stuck-prompt line (`attentionDifferences`).
     case 'question':
       return { what: `${name} asked a question: the operator's to act on`, repair: 'the operator acts in the pane' };
     case 'vendor notice':

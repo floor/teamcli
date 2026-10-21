@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import {
   daemonDropDir,
   startSendDaemon,
@@ -32,7 +33,7 @@ import { triggerLine } from '../src/send/native.ts';
 import { readPending } from '../src/send/pending.ts';
 import { LOG_FILE } from '../src/state.ts';
 import { filed } from './send-native-fixtures.ts';
-import { testIo } from './helpers.ts';
+import { recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T17:00:00.000Z');
 const RULE = '─'.repeat(30);
@@ -87,6 +88,9 @@ seats:
     model: Test
     version: "1"
     launch: codex -m test
+# These scenes are the daemon's typed boundaries: the inbox is tried and skipped for want of a
+# listener, then the trigger line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -192,12 +196,13 @@ describe('the send daemon\'s boundaries', () => {
         id: expect.any(String),
         outcome: 'unreachable',
         ms: expect.any(Number),
-        // The walk reached the typed leg through the native and mcp-inbox legs, and the history
-        // line carries what each of them said: this build makes no socket write, and carries no
-        // mcp-inbox leg.
+        // The line names the team the send left, so a feed can read the sender across teams.
+        from_team: teamIdOf(world.root),
+        // The walk reached the typed leg through the inbox ahead of it, and the history line
+        // carries what that leg said: no inbox server is listening for the seat. The native leg
+        // is never part of an order in force, so it is not walked and nothing about it is said.
         failed: [
-          'native: unavailable; the frame path is a socket write this build does not make',
-          'mcp-inbox: unavailable; this build carries no mcp-inbox leg',
+          'mcp-inbox: no live inbox listener',
         ],
       },
     ]);
@@ -264,7 +269,7 @@ describe('the send daemon\'s boundaries', () => {
     // The drop, and the retry record a held send leaves beside it.
     const directFiles = readdirSync(directDrops).filter((name) => !name.endsWith('.pending'));
     expect(directFiles.length).toBe(1);
-    expect(readFileSync(join(directDrops, directFiles[0]!), 'utf8')).toBe(filed(longBrief));
+    expect(recordBody(join(directDrops, directFiles[0]!))).toBe(filed(longBrief));
     expect(readdirSync(directDrops).filter((name) => name.endsWith('.pending'))).toHaveLength(1);
 
     // 2. Direct send when composer shows a paste chip instead of the trigger
@@ -341,6 +346,8 @@ describe('the send daemon\'s boundaries', () => {
     if (line === null) throw new Error('the fixture path makes a trigger line the native gate would refuse');
     expect(host.typed[0]?.text).toBe(line);
     expect(host.typed[0]?.text.includes(body)).toBe(false);
+    // The daemon's own state-folder drop, not the checkout's record tree: it still holds the
+    // raw body, and the daemon is not wired into a live send.
     expect(readFileSync(dropPath, 'utf8')).toBe(filed(body));
     expect(lstatSync(dropPath).mode & 0o777).toBe(0o600);
 

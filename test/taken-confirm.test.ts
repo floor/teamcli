@@ -57,6 +57,9 @@ seats:
     model: Test
     version: "1"
     launch: claude
+# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -234,7 +237,7 @@ describe('a taken delivery its seat never acted on', () => {
     confirmTakenDrops(at);
 
     expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDirOf(made), id)}`,
+      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
     ]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
 
@@ -270,7 +273,7 @@ describe('a taken delivery its seat never acted on', () => {
     confirmTakenDrops(at);
 
     expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDirOf(made), id)}`,
+      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
     ]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
   });
@@ -299,7 +302,7 @@ describe('a taken delivery its seat never acted on', () => {
     confirmTakenDrops(at);
 
     expect(at.said).toEqual([
-      `lead: a send from owner was taken but never acted on; the drop file is at ${join(dropDirOf(made), id)}`,
+      `lead: a send from owner was taken but never acted on; the record is at ${join(dropDirOf(made), id)}`,
     ]);
     expect(readTaken(dropDirOf(made))).toEqual([]);
   });

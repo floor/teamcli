@@ -61,7 +61,7 @@ export interface Delivery {
   now(): number;
   sleep(ms: number): Promise<void>;
   /** The caller's own last check, immediately before the one terminal input it gates — the
-   *  typed line, then the Enter — for the caller that needs it (`answer`): a refusal sends
+   *  typed line, then every Enter — for the caller that needs it (`answer`): a refusal sends
    *  nothing, and the caller says why in its own words. */
   beforeInput?(action: 'type' | 'enter'): boolean;
   /** Why a delivery stopped, when the caller wants the detail for its report. */
@@ -159,10 +159,16 @@ function boxState(cli: string, text: string, screen: string | undefined, options
 
 /** Whether the pane's box holds exactly `text` right now: an unsent composer, no fold marker, and
  *  rows that read back as the text. The one check the watch's nudge and the exit typing share
- *  with delivery — false for anything not observed, never `true` on trust. */
+ *  with delivery — false for anything not observed, never `true` on trust. A running turn reads
+ *  `working` whatever the composer below it holds, so the composer is read on its own there: a
+ *  draft typed during a turn is found as the text it is, never missed as an empty box. */
 export function boxHoldsText(cli: string, text: string, screen: string | undefined, options?: ScreenOptions): boolean {
   if (readFoldMark(cli, screen)) return false;
-  if (readScreen(cli, screen, options).kind !== 'unsent') return false;
+  if (screen === undefined) return false;
+  const read = readScreen(cli, screen, options);
+  const unsent = read.kind === 'unsent'
+    || (read.kind === 'working' && classifyComposer(cli, screen.split('\n'), options).kind === 'unsent');
+  if (!unsent) return false;
   const box = readBox(cli, screen, options);
   return box !== null && holdsBox(text, box);
 }
@@ -183,6 +189,12 @@ export function boxHoldsOther(cli: string, text: string, screen: string | undefi
  *  the moment the screen is decisive either way. One length and one wait for the exit typing,
  *  the watch's nudge and delivery alike. */
 export const DRAW_WAIT_MS = 5000;
+
+/** The most Enters one rules delivery presses, and how long each one waits for the seat to
+ *  show it took the line: 1s, 3s, then 9s. The send leg's own measured bounds (`MAX_TRIES`,
+ *  `BACKOFF_MS` in `src/send/deliver.ts`), restated here because that module reads this one. */
+export const RULES_ENTER_TRIES = 3;
+export const RULES_ENTER_BACKOFF_MS: readonly number[] = [1000, 3000, 9000];
 
 /** The reading that decides a key, waiting out the pane's late drawing: `undrawn` is what the
  *  screen still reads while the send it has not drawn sits behind it — idle after a typing,
@@ -339,9 +351,11 @@ export function refusalReport(why: Refusal): string {
     case 'file-changed':
       return `rules typed, not sent: the rules file changed after it was written`;
     case 'ack':
-      // A box that still holds the line after Enter never took the key: it sits unsent, and the
-      // report says so rather than claiming a send.
-      return why.typed && why.kind === 'unsent'
+      // A box that still reads back as exactly the line after Enter never took the key: it sits
+      // unsent, and the report says so rather than claiming a send. A box that reads unsent and
+      // holds something else is reported as the reading it is: `row` names the first row that is
+      // not the line's own.
+      return why.typed && why.kind === 'unsent' && why.row === null
         ? `rules typed, not sent: its box still holds the line after Enter; `
           + `press Enter in its pane to send it, or ${clearAdvice(why, 'the box')}, then run up again`
         : `the seat did not come back to its idle prompt (${why.kind}); ${nextStep(why)}`;
@@ -350,11 +364,12 @@ export function refusalReport(why: Refusal): string {
 
 /** One line is accepted only after working is observed with the composer empty again. The line
  *  is typed once, at an empty idle prompt, read back row by row — every visible character in
- *  order, at most one space hidden at a row break — and Enter is pressed once, after a re-read.
- *  A box that already holds exactly today's line is verified and sent, never typed onto again;
- *  a box holding anything else is left alone, and a seat mid-turn is reported as such. A line
- *  this run typed whose rows do not read back is cleared with the profile's one key when the
- *  box is still the unsent composer. */
+ *  order, at most one space hidden at a row break — and Enter is pressed after a re-read, up to
+ *  the bounded number of tries while the box still reads back as the line. A box that already
+ *  holds exactly today's line is verified and sent, never typed onto again; a box holding
+ *  anything else is left alone, and a seat mid-turn is reported as such. A line this run typed
+ *  whose rows do not read back is cleared with the profile's one key when the box is still the
+ *  unsent composer. */
 export async function deliverRules(cli: string, line: string, seconds: number, io: Delivery): Promise<boolean | 'no-agent'> {
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
@@ -446,6 +461,15 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   if (!io.enter()) {
     return readBackStop();
   }
+  // A submit the CLI did not take is retried, never typed again: at most RULES_ENTER_TRIES
+  // Enters, each after the send leg's own wait, and each gated on the checks the first one
+  // passed — the launched CLI still the pane's foreground, the seat free, the box still reading
+  // back as exactly the line, the rules file still holding the text its hash names, and the
+  // caller's own check. A dialog, a busy seat, a box that changed or a file that moved ends the
+  // retries, and the delivery then waits for the acknowledgement it already asked for.
+  let enters = 1;
+  let retryAt = io.now() + (RULES_ENTER_BACKOFF_MS[0] ?? 1000);
+  let retry = true;
   for (;;) {
     const status = io.status();
     const screen = io.screen();
@@ -456,6 +480,19 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
     const kind = readScreen(cli, io.screen()).kind;
     if (kind === 'trust' || kind === 'permission' || kind === 'question' || kind === 'exit question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit' || io.now() >= deadline) {
       return report(stoppedOn(cli, 'ack', io.screen(), line));
+    }
+    if (retry && enters < RULES_ENTER_TRIES && io.now() >= retryAt) {
+      if (!live()) return 'no-agent';
+      if (!free() || !io.file() || boxState(cli, line, io.screen()) !== 'ready') {
+        retry = false;
+      } else if (io.beforeInput && !io.beforeInput('enter')) {
+        return false;
+      } else if (!io.enter()) {
+        return readBackStop();
+      } else {
+        enters += 1;
+        retryAt = io.now() + (RULES_ENTER_BACKOFF_MS[enters - 1] ?? 9000);
+      }
     }
     const before = io.now();
     await io.sleep(100);

@@ -108,6 +108,17 @@ describe('provider-error check', () => {
     expect(texts(providerError.run(seat('claude-a', screen), ctx))).toEqual(told);
   });
 
+  test('the two states carry different report keys, so the bus maps by key and never by the prose', () => {
+    const limited = harness();
+    expect(
+      providerError.run(seat('claude-b', { kind: 'rate limit', reset: '11:00' }), limited.ctx).map((report) => report.key),
+    ).toEqual(['rate-limit:claude-b', 'rate-limit:claude-b:owner']);
+    const lost = harness();
+    expect(
+      providerError.run(seat('claude-b', { kind: 'provider error' }), lost.ctx).map((report) => report.key),
+    ).toEqual(['provider-error:claude-b', 'provider-error:claude-b:owner']);
+  });
+
   test('a seat that is not running, and any other screen, is not this state', () => {
     const { ctx } = harness();
     expect(providerError.run(seat('claude-a', { kind: 'provider error' }, false), ctx)).toEqual([]);

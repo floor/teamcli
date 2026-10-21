@@ -1,8 +1,12 @@
-export type Problem = { line: number; message: string };
+/** A problem in the team file: the line it is on (0 when no line names it) and the message a
+ *  reader prints. `unreadable` marks the one failure no text names — the read itself failed —
+ *  so a caller that tells a file that cannot be read from one that does not load keeps the two
+ *  apart now that the loader returns this refusal instead of throwing it. */
+export type Problem = { line: number; message: string; unreadable?: true };
 
 import type { TaskPolicy } from '../broker/policy.ts';
 import type { Delegates } from '../delegate-types.ts';
-import type { DeliveryLeg, LivenessThresholds } from '../settings/inherit.ts';
+import type { DeliveryLeg, LivenessThresholds, SenderNameMode } from '../settings/inherit.ts';
 import type { YamlValue } from '../yaml.ts';
 import type { ReleaseDecl } from './sections/releases.ts';
 
@@ -115,6 +119,13 @@ export type Seat = {
    * the owner approves, because the capability admits a send.
    */
   assistant?: true;
+  /**
+   * The pane is a person's: the file marks it with `human: true`. A send to it walks the drop
+   * leg alone, whatever its order or the default says — every other leg and the watch's retry
+   * and nudges are all skipped — so the message arrives in the drop file and nothing is typed.
+   * Absent otherwise, so a file that marks none keeps every digest it had.
+   */
+  human?: true;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
   /**
@@ -124,6 +135,13 @@ export type Seat = {
    * or would add a leg, is settled when a send resolves the chain (`src/settings/inherit.ts`).
    */
   deliveryOrder?: DeliveryLeg[];
+  /**
+   * The seat's own word on how a sender reads in its own headlines, when the file writes one:
+   * the presentation word a command run for this seat prints senders with. Absent otherwise, so
+   * a file that writes none keeps the digest it had. Presentation only: every record keeps the
+   * registry id.
+   */
+  senderName?: SenderNameMode;
   /**
    * The seat's own word on the liveness defaults, when the file writes one: the idle-to-lead and
    * idle-to-owner windows its reports run by, and the blind window its state is read by. Absent
@@ -168,6 +186,13 @@ export type TeamFile = {
    * additive — it changes no approval fingerprint, so a file written before it keeps its digests.
    */
   deliveryOrder: DeliveryLeg[] | null;
+  /**
+   * The file's own word on how a sender reads in TeamCLI's headlines, or null when it writes
+   * none. Non-owner and additive — it changes no approval fingerprint, so a file written before
+   * it keeps its digests. A seat's own word is on the seat; the project's is the registry
+   * record's.
+   */
+  senderName: SenderNameMode | null;
   /**
    * Owner-signed team-level policy declarations (Kernel amendment 02 §2.12), when present.
    */

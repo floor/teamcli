@@ -11,7 +11,7 @@ import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
-import { emptySession } from '../src/state.ts';
+import { emptySession, type PauseRecord } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
@@ -119,6 +119,21 @@ describe('watch.nudge', () => {
     expect(at(raw, leadMemory, 10 * MIN, scene({ 'claude-coordinator-acme': { status: 'idle', screen: idle } })).work).toEqual([]);
   });
 
+  test('a seat the file marks human is never a work-drop target', () => {
+    // The mark is written on the declared entry, so both instances of the counted seat carry it:
+    // neither is due, and nothing is put in a drop folder for a pane a person uses.
+    const text = raw
+      .replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`)
+      .replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    human: true\n');
+    const memory = newMemory();
+    const both = scene({
+      'deepseek-acme': { status: 'idle', screen: idle },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    at(text, memory, 0, both);
+    expect(at(text, memory, 10 * MIN, both).work).toEqual([]);
+  });
+
   test('a seat that was in a dialog is sent once the prompt is empty, still inside the same stretch', () => {
     const memory = newMemory();
     const free = scene({ 'deepseek-acme': { status: 'idle', screen: idle } });
@@ -128,6 +143,74 @@ describe('watch.nudge', () => {
     expect(at(raw, memory, 12 * MIN, free).work.map((item) => item.seat)).toEqual(['deepseek-acme']);
   });
 
+});
+
+describe('a pause stops the work nudges', () => {
+  const PAUSE: PauseRecord = { by: 'owner', at: '2026-10-04T09:00:00.000Z', stops: [] };
+  const NOTICE = 'Team watch: paused since 2026-10-04T09:00:00.000Z by owner — finish the step you are on, take nothing new, and hold no lock until `team resume`';
+
+  function pausedAt(
+    text: string,
+    memory: ReturnType<typeof newMemory>,
+    now: number,
+    live = scene(),
+    pause: PauseRecord | null = PAUSE,
+  ) {
+    const team = teamOf(text);
+    return pass({ team, watch: team.watch, state: emptySession(), live, machine: fine, now, memory, pause });
+  }
+
+  test('each seat that takes work is told once, and the idle cadence nudges nothing while it stands', () => {
+    const memory = newMemory();
+    const both = scene({
+      'deepseek-acme': { status: 'idle', screen: idle },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    const told = pausedAt(raw, memory, 10 * MIN, both);
+    expect(told.work.map((item) => item.seat).sort()).toEqual(['deepseek-acme', 'deepseek-acme-2']);
+    expect(told.work.every((item) => item.body === NOTICE)).toBe(true);
+    expect(pausedAt(raw, memory, 12 * MIN, both).work).toEqual([]);
+    expect(pausedAt(raw, memory, 60 * MIN, both).work).toEqual([]);
+  });
+
+  test('a lead, a dialog and unsent text are not targets, and each is told when it reaches an empty prompt', () => {
+    const memory = newMemory();
+    const mixed = scene({
+      'claude-coordinator-acme': { status: 'idle', screen: idle },
+      'deepseek-acme': { status: 'idle', screen: question },
+      'deepseek-acme-2': { status: 'idle', screen: unsent },
+    });
+    expect(pausedAt(raw, memory, 10 * MIN, mixed).work).toEqual([]);
+    const free = scene({ 'deepseek-acme': { status: 'idle', screen: idle } });
+    expect(pausedAt(raw, memory, 12 * MIN, free).work.map((item) => item.seat)).toEqual(['deepseek-acme']);
+  });
+
+  test('a human seat is never told', () => {
+    const text = raw.replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    human: true\n');
+    const memory = newMemory();
+    const both = scene({
+      'deepseek-acme': { status: 'idle', screen: idle },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    expect(pausedAt(text, memory, 10 * MIN, both).work).toEqual([]);
+  });
+
+  test('a new pause instant tells again, and a resume restores the ordinary nudge', () => {
+    const memory = newMemory();
+    const both = scene({
+      'deepseek-acme': { status: 'idle', screen: idle },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    expect(pausedAt(raw, memory, 10 * MIN, both).work).toHaveLength(2);
+    const again: PauseRecord = { ...PAUSE, at: '2026-10-04T10:00:00.000Z' };
+    expect(pausedAt(raw, memory, 20 * MIN, both, again).work).toHaveLength(2);
+    expect(pausedAt(raw, memory, 21 * MIN, both, again).work).toEqual([]);
+    const fresh = newMemory();
+    pausedAt(raw, fresh, 0, both, null);
+    const resumed = pausedAt(raw, fresh, 10 * MIN, both, null);
+    expect(resumed.work.map((item) => item.seat).sort()).toEqual(['deepseek-acme', 'deepseek-acme-2']);
+    expect(resumed.work.every((item) => item.body === NUDGE_TEXT)).toBe(true);
+  });
 });
 
 describe('team watch writes the drop', () => {
@@ -197,6 +280,25 @@ describe('team watch writes the drop', () => {
     expect(statSync(join(dir, '.agents', 'send-drops')).mode & 0o777).toBe(0o700);
     expect(io.out).toContain(`nudged deepseek-acme-2: ${PROMPT}`);
     expect(io.out).not.toContain('nudged claude-coordinator-acme');
+  });
+
+  test('a human seat gets no typed line and no drop', async () => {
+    file = join(dir, '.agents', 'team.yaml');
+    writeFileSync(
+      file,
+      raw
+        .replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`)
+        .replace('    name: deepseek-acme\n', '    name: deepseek-acme\n    human: true\n'),
+    );
+    typed = [];
+    screenNow = idle;
+    clock = Date.parse('2026-10-03T14:00:00Z');
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources({
+      ownPane: () => ({ pane: 'first:pane', workspace: 'first' }),
+    }));
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
   });
 
   test('an edited grant and delegates produces no approved-copy difference line', async () => {

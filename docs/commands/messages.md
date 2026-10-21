@@ -1,9 +1,15 @@
 # team messages
 
 Shows a message that is already waiting and writes the receipt that says it was shown. Anyone in
-the checkout may run it. It verifies the record, prints the body, and writes the receipt in that one
-step; a record that does not verify prints no body and writes nothing. Nothing in this build writes
-a message record: the watch only rings when a record is already there.
+the checkout may run it. A send writes the message as one signed record into the recipient's
+folder, `<root>/.agents/send-drops/<session>/<seat>/<id>`; `team messages` reads every record still
+waiting there, verifies its signature with this checkout's message key, prints the body, and writes
+the signed read receipt (`<id>.read.json`) in that one step. A record that does not verify prints
+no body and writes nothing. A message a previous build left in `.agents/messages/<seat>/` is read
+the same way. The owner's mailbox, `.agents/messages/owner/`, is read with the rest: the Runtime
+writes a signed record there for each event it delivers to the owner (see [the event log and the
+bus](../internal/events.md)), its `FROM` is `runtime`, and the run shows it and writes its receipt
+like any other waiting record.
 
 ## Synopsis
 
@@ -27,14 +33,16 @@ The reading opens with the context line (`team <project>, session "<session>"`) 
 table `ID  FROM  TO  SENT  STATUS`, one row per waiting record; each verified body prints under
 its own `<seat>/<id>:` heading, then the notes and the differences print, and one summary line
 (`<n> message` or `<n> messages`) closes it. `SENT` is the record's own timestamp read as its age; `--json` also
-carries the exact ISO string as `sent`.
+carries the exact ISO string as `sent`. The `FROM` cell reads the sender as the project's
+[`sender_name`](../team-file.md#sender_name) word asks; `--json` carries the record's own `from`,
+and the signed record keeps the sender's registry id apart from it.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | every waiting record was shown and receipted | the reading above, each verified row `shown` and its body printed before the receipt is written | 0 |
 | nothing was waiting | the same reading with no rows, the note `nothing is waiting`, and `0 messages` | 0 |
 | a record did not verify, the message key is missing or unreadable, or the team file can't be read | the record as a `refused` row with its `difference:` block (`repair:` names the file, `who: any seat`), or `team messages: no message key; nothing was shown` / `team messages: <team-file problem>` | 1 |
-| the invocation can't be read, or this folder is not a git checkout | `team messages: <problem>`, with the usage for the invocation | 2 |
+| the invocation can't be read, or this folder is neither a checkout nor a team root | `team messages: <problem>`, with the usage for the invocation | 2 |
 
 A record that does not verify prints no body and writes no receipt.
 

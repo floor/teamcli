@@ -3,6 +3,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
+import { recordBody } from './helpers.ts';
 import { dropDir, filed, nativeHost, owner, world } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
@@ -48,7 +49,7 @@ test('--json delivered names the seat, exit 0, and the drop id', async () => {
   expect('plan' in doc).toBe(false);
   const drops = dropDir(made.dir);
   expect(readdirSync(drops)).toEqual([doc.ids.sent]);
-  expect(readFileSync(join(drops, doc.ids.sent), 'utf8')).toBe(filed('hello'));
+  expect(recordBody(join(drops, doc.ids.sent))).toBe(filed('hello'));
   expect(pane.typed.length).toBe(1);
   expect(host.frames).toEqual([]);
 });
@@ -79,16 +80,17 @@ test('--json not-submitted writes the error document naming the box and the drop
   expect(ids.length).toBe(1);
   const path = join(drops, ids[0] ?? '');
   expect(doc.error.message).toContain(path);
-  expect(readFileSync(path, 'utf8')).toBe(filed('hello'));
+  expect(recordBody(path)).toBe(filed('hello'));
 });
 
-test('--json refused for a native --wait writes nothing and sends no id', async () => {
+test('--json --wait on a native seat sends the record and reports send.timeout when no reply arrives on the thread', async () => {
   const made = world();
   cleanup = made.cleanup;
-  const { host, pane } = nativeHost(made, ['working']);
+  const { host, pane } = nativeHost(made, ['idle', 'working']);
+  host.waitMs = 0;
   const io = owner(made.root);
 
-  const code = await runSend(['native', 'hello', '--wait', '--json'], io, host);
+  const code = await runSend(['native', 'hello', '--wait', '--timeout', '5', '--json'], io, host);
 
   expect(code).toBe(1);
   expect(io.err).toBe('');
@@ -96,13 +98,12 @@ test('--json refused for a native --wait writes nothing and sends no id', async 
   expect(doc).toEqual({
     schema: { name: 'team.error', version: 1 },
     error: {
-      id: 'send.refused',
-      message: 'refused: native runs codex: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent',
+      id: 'send.timeout',
+      message: 'native: timeout: sent, no reply on the thread within 5s; the thread stays open',
       repair: null,
     },
   });
-  expect(pane.typed).toEqual([]);
-  expect(pane.enters).toBe(0);
-  expect(existsSync(join(made.dir, 'send-drops'))).toBe(false);
+  expect(pane.typed.length).toBe(1);
+  expect(pane.enters).toBe(1);
   expect(host.frames).toEqual([]);
 });

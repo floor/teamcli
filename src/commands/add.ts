@@ -20,7 +20,7 @@ import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
-import { clearStopped, seatIsStopped } from '../file/lines.ts';
+import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
 import { loadTeamFile, placedProblems } from '../file/load.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
@@ -39,6 +39,7 @@ import {
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
+import { deliverGeneralBrief } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -54,13 +55,17 @@ import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { resolveEffortOverride, resolveModelOverride, shellQuote, supportsEffortLaunch, withLaunchOverrides } from '../profiles/profile.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
+import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
+import { registerInbox } from '../mcp/register.ts';
 
 export type AddSources = {
   home: string;
@@ -90,6 +95,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
+  registerInbox: (cli, seat, cwd, teamFile) =>
+    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),
   renameAgent: (session, pane, name) => agentRename(pane, name, aim(session)),
   closeWorkspace: (session, workspace) => workspaceClose(workspace, aim(session)),
@@ -130,7 +137,7 @@ export const realSources: AddSources = {
   launch: realLaunch,
 };
 
-export const USAGE = `Usage: team add <name> [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+export const USAGE = `Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
 
 Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
@@ -154,6 +161,10 @@ function delegateRefused(io: Io, json: boolean, verdict: { id: string; text: str
 
 type Running = { name: string; vendor: string; temporary: boolean };
 type Until = { kind: 'result'; path: string } | { kind: 'merged'; branch: string };
+/** What a builder hands the run: the seat to start and the file its entry is written into.
+ *  `copiedFrom` names the source of a declared copy; `temporary` the end a temporary seat runs to. */
+type Built = { name: string; seat: Seat; edited: string; temporary?: SeatState['temporary']; copiedFrom?: string };
+type BuildRefusal = { error: string; id: string };
 
 export const add: Command = (argv, io) => runAdd(argv, io, realSources);
 export default add;
@@ -202,8 +213,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.temporary-unexpected
     return 2;
   }
-  if (!temporary && (args.values.like || args.values.until || args.values.worktree)) {
-    refuse(io, json, 'add', { id: 'add.temporary-flags', message: '--like, --until and --worktree are for --temporary', repair: null });
+  if (!temporary && (args.values.until || args.values.worktree)) {
+    refuse(io, json, 'add', { id: 'add.temporary-flags', message: '--until and --worktree are for --temporary', repair: null });
     // exit: add.temporary-flags
     return 2;
   }
@@ -433,14 +444,18 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const asked = args.rest[0] ?? '';
   const built = temporary
     ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
-    : declaredSeat(asked, original, team, sources.home, sources.fs);
+    : args.values.like !== undefined
+      ? copiedSeat(asked, args.values.like, original, team, sources.home, sources.fs)
+      : declaredSeat(asked, original, team, sources.home, sources.fs);
   if ('error' in built) {
     // The builder names the row its refusal is (`add.no-seat`, `add.until`, `add.branch-missing`,
     // …); the plain line is the sentence it always printed.
     refuse(io, json, 'add', { id: built.id, message: built.error, repair: null });
     // exit: add.no-seat
+    // exit: add.human
     // exit: add.not-restored
     // exit: add.no-like
+    // exit: add.like-exists
     // exit: add.until
     // exit: add.result-absolute
     // exit: add.result-exists
@@ -519,7 +534,18 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if (delegatePane !== null) {
     const stanza = fingerprints(team).seats[built.name];
     const inCopy = standing.kind === 'verified' ? approvedFingerprints(standing.record).seats[built.name] : undefined;
-    if (built.edited !== original || inCopy === undefined || inCopy !== stanza) {
+    let admitted = built.edited === original && inCopy !== undefined && inCopy === stanza;
+    // The seat a delegate adds by copy is new to the file, so the record cannot hold it: the
+    // source is what is compared, hash for hash with the record's own seat, and the edit is the
+    // copy that source makes and nothing else — the command builds it from the live text, never
+    // from the delegate's. A source the record does not hold, or holds differently, stays the
+    // owner's.
+    if (!admitted && built.copiedFrom !== undefined && standing.kind === 'verified') {
+      const beside = fingerprints(team).seats[built.copiedFrom];
+      const held = approvedFingerprints(standing.record).seats[built.copiedFrom];
+      admitted = held !== undefined && held === beside && copySeat(original, built.copiedFrom, built.name) === built.edited;
+    }
+    if (!admitted) {
       refuse(io, json, 'add', { id: 'add.delegate-edit', message: ADD_DELEGATE_EDIT.text, repair: null });
       // exit: add.delegate-edit
       return 1;
@@ -749,6 +775,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
             ...(launchProblemDetail ? { launchProblemDetail } : {}),
           }],
           watchAlive: true,
+          teamFile: path,
           cliHooks: plannedCliHooks(dir, session, [planned]),
           watchLabel: watchLabel(prepared.team.project),
         });
@@ -851,6 +878,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       sessionRunning: live === 'running',
       seats: [seatForPlan],
       watchAlive: true,
+      teamFile: path,
       cliHooks: plannedCliHooks(dir, session, [seatForPlan]),
       watchLabel: watchLabel(prepared.team.project),
     });
@@ -949,12 +977,34 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and launches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [planSeat]);
+    const installed = installCliHooks(dir, session, [planSeat], { project: prepared.team.project, root, home: sources.home });
     const who = describeCaller(caller);
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
-    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
+    const plan = upPlan({ root, session, sessionRunning: live === 'running', seats: [planSeat], watchAlive: true, teamFile: path, cliHooks: installed, watchLabel: watchLabel(prepared.team.project) });
+    // The general seat brief goes first, before the plan types a rules line into the new seat's
+    // pane: one signed drop, human seats included. A delivery that cannot be written is said and
+    // logged, and the launch goes on; `team check` names the seat with no record.
+    const briefs = deliverGeneralBrief({
+      dir,
+      root,
+      session,
+      seats: [planSeat.name],
+      home: sources.home,
+      at: (sources.now?.() ?? new Date()).toISOString(),
+    });
+    for (const delivery of briefs.deliveries) {
+      if (delivery.ok) continue;
+      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+      out.stderr(`team add: ${plainText(said)}\n`);
+      logLine(dir, 'add', who, said, sources.now());
+    }
+    if (briefs.recording !== undefined) {
+      const said = `the general seat brief was written and not recorded (${briefs.recording})`;
+      out.stderr(`team add: ${plainText(said)}\n`);
+      logLine(dir, 'add', who, said, sources.now());
+    }
     // A new seat starts from no reading at all: nothing a previous run left says what it is doing.
     resetCliHookState(dir, session, [planSeat.name]);
     const outcome = { swallowed: false, unknown: false };
@@ -1039,9 +1089,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
 function declaredSeat(
   name: string, current: string, team: TeamFile, home: string, fs?: FsReader,
-): { name: string; seat: Seat; edited: string; temporary?: undefined } | { error: string; id: string } {
+): Built | BuildRefusal {
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) return { id: 'add.no-seat', error: `the file has no seat ${JSON.stringify(name)}` };
+  // A human's pane is never launched into or typed into. `add` names one seat, so it refuses
+  // with the reason rather than walk a plan that would skip the only seat it was asked to add.
+  if (seat.human) return { id: 'add.human', error: `${name} is a human's pane: nothing is typed into it or launched over it; left as it is` };
   let edited = current;
   if (seat.stopped || seatIsStopped(edited, name)) edited = clearStopped(edited, name);
   const again = validateTeamFile(edited, { home, fs });
@@ -1050,10 +1103,43 @@ function declaredSeat(
   return { name, seat: { ...restored, stopped: false }, edited, temporary: undefined };
 }
 
+/**
+ * The new declared seat `team add <name> --like <seat>` writes: the file gains one entry, named
+ * `name`, that the source describes field for field except for the name, the title and the
+ * stopped flag. The copy starts now, so it is written without `stopped: true` and launched like
+ * any declared seat. A source that is a human's pane is refused: nothing is launched over it.
+ */
+function copiedSeat(
+  name: string, like: string, current: string, team: TeamFile, home: string, fs?: FsReader,
+): Built | BuildRefusal {
+  const source = team.seats.find((item) => item.name === like);
+  if (!source) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(like)}` };
+  if (team.seats.some((item) => item.name === name)) {
+    return { id: 'add.like-exists', error: `the file already declares ${JSON.stringify(name)}; --like adds a copy under a new name` };
+  }
+  if (source.human) return { id: 'add.human', error: `${like} is a human's pane: nothing is typed into it or launched over it; left as it is` };
+  const edited = copySeat(current, like, name);
+  if (edited === current || !hasSeat(edited, name)) {
+    return { id: 'add.not-restored', error: `couldn't copy ${like} into the file as ${name}` };
+  }
+  // A copy the file refuses — a second `leads`, `assistant` or nickname — is read here so the
+  // seat carries what the file would say; the validation before the write then refuses it by
+  // name and the file is never touched.
+  const again = validateTeamFile(edited, { home, fs });
+  const copied = again.ok ? again.team.seats.find((item) => item.name === name) : undefined;
+  return {
+    name,
+    seat: copied ? { ...copied, stopped: false } : { ...source, name, label: name, stopped: false },
+    edited,
+    copiedFrom: like,
+    temporary: undefined,
+  };
+}
+
 function temporarySeat(
   values: Record<string, string>, current: string, approved: TeamFile, state: SessionState, agents: readonly HerdrAgent[],
   root: string, base: string | null, home: string, now: Date,
-): { name: string; seat: Seat; edited: string; temporary: NonNullable<SeatState['temporary']> } | { error: string; id: string } {
+): Built | BuildRefusal {
   const like = approved.seats.find((item) => item.name === values.like);
   if (!like) return { id: 'add.no-like', error: `the file has no seat ${JSON.stringify(values.like)}` };
   const until = parseUntil(values.until ?? '');
@@ -1133,8 +1219,17 @@ function seatPlan(
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
     repairLine: relaunchRepair(team, seat.name, 'markdown'),
     stopped: false,
+    // A human's pane: no launch, no key, no line. The plan skips it before any of that.
+    ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root),
+    sessionName: sessionDisplayName({
+      seat: seat.name,
+      nickname: seat.nickname ?? null,
+      team: teamIdOf(root),
+      teamName: team.project,
+      mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+    }),
     ...seatDeliveryOf(standing, team, seat, root, home, true),
     ...(start.lobby ? { lobby: true } : {}),
   };
@@ -1252,6 +1347,9 @@ function hostOf(input: {
     createWorkspace: launch.createWorkspace,
     confirmLobby: input.confirmLobby,
     paneRun: launch.paneRun,
+    ...(launch.registerInbox
+      ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+      : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
       : {}),
@@ -1413,6 +1511,23 @@ function hostOf(input: {
           }
         }
       }
+    },
+    // The session registry records this seat's launch, with the id TeamCLI set where the CLI
+    // takes one; a registry that cannot be written is a note in the run's log.
+    sessionStarted(name, started) {
+      if (name !== seat.name) return;
+      const began = beginSession({
+        home: input.home,
+        root: input.root,
+        team: input.team,
+        session,
+        seat,
+        pane: started.pane,
+        ...(started.workspace === undefined ? {} : { workspace: started.workspace }),
+        ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
+        now: input.now(),
+      });
+      if ('note' in began) logLine(dir, 'add', input.caller, began.note, input.now());
     },
     running(name) {
       if (!running.some((item) => item.name === name)) running.push({ name, vendor: seat.vendor, temporary: Boolean(temporary) });

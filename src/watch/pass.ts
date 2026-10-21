@@ -18,7 +18,7 @@ import { livenessOf, type LivenessThresholds, type SettingLevel, type StateThres
 import { stateThresholds, thresholdRefusals, type ThresholdRefusal } from '../settings/resolve.ts';
 import { watchWords } from '../settings/declared.ts';
 import type { Tempo } from '../file/sections/tempo.ts';
-import type { SessionState } from '../state.ts';
+import { pauseText, type PauseRecord, type SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
 import { seatModel } from '../status/statusline.ts';
@@ -46,6 +46,7 @@ import { load } from './checks/load.ts';
 import { memory as memoryCheck } from './checks/memory.ts';
 import { missing } from './checks/missing.ts';
 import { modelDrift } from './checks/model-drift.ts';
+import { promptEscalation } from './checks/prompt-escalation.ts';
 import { restored } from './checks/restored.ts';
 import { swapFree } from './checks/swap-free.ts';
 import { swapGrowth } from './checks/swap-growth.ts';
@@ -53,6 +54,28 @@ import { teamIdle } from './checks/team-idle.ts';
 import { unsent } from './checks/unsent.ts';
 import type { Machine } from './machine.ts';
 import { readScreen, statusRow, type Screen } from './screen.ts';
+export {
+  classifyPromptKind,
+  createSeatStatusEngine,
+  herdrStatusSource,
+  isScreenVerifiedStatusCli,
+  isStatusWaiterSeat,
+  reconcileStatusWithScreen,
+  seatHasAssignedWorkOnDisk,
+  shouldReadScreenForStatus,
+  waitAgentStatus,
+  type EmittedStatusEvent,
+  type HerdrAgentStatus,
+  type PromptKind,
+  type SeatStatusEngine,
+  type SeatStatusEngineInput,
+  type SeatStatusStep,
+  type SeatStatusWaitStep,
+  type StatusSource,
+  type StatusTarget,
+  type StatusWaitResult,
+  type StatusWaitSeat,
+} from './status-events.ts';
 
 // What the watch remembers between passes. It lives in the watch's process: a restarted watch
 // starts its timers again, and reports again what is still true.
@@ -146,9 +169,9 @@ export type PassResult = {
 // The seat checks, in the order their reports land in the log; the team checks, after them. The
 // order is the core's: a seat's wrong model is reported before its permission prompt, and every
 // seat before the team. Disabling a check in the `watch` section in force takes it out of the
-// run, except the four that can't be turned off.
+// run, except the five that can't be turned off.
 export const SEAT_CHECKS: SeatCheck[] = [missing, restored, modelDrift, attention, providerError, unsent, idle];
-export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
+export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, approval, load, memoryCheck, disk, swapFree, swapGrowth, budget];
 
 // The one exclusive reading of a seat's screen and herdr status. herdr can report a seat at a
 // permission prompt as idle, so the screen decides first. `team check` reads it too, over a pane
@@ -237,6 +260,12 @@ export type PassInput = {
   quotaFor?: (cli: string) => readonly QuotaPattern[];
   /** Unacked messages already verified. Omitted, the pass rings nothing. */
   mailbox?: readonly MailboxWaiting[];
+  /**
+   * The team's pause, when one stands. It replaces the work nudges of this pass with one notice
+   * per non-human seat: the team is stopped, finish the step in hand and take nothing new. A
+   * human seat's pane is never typed into, exactly as it is never nudged.
+   */
+  pause?: PauseRecord | null;
 };
 
 // One pass of the watch. Pure: it reads what it is handed and changes only `memory`.
@@ -262,6 +291,7 @@ export function pass({
   readScreen: read = readScreen,
   quotaFor: patternsOf = shippedQuota,
   mailbox = [],
+  pause,
 }: PassInput): PassResult {
   const reports: Report[] = [];
   const current = new Set<string>();
@@ -565,13 +595,22 @@ export function pass({
       memory.mailboxTold.add(toldKey);
     }
   }
-  return { reports, work: workDrops(team, live, observations, watch, now, memory, read), ring, mailboxNote, readings, machineReadings, labels, refusals: refused };
+  return {
+    reports,
+    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read) : workDrops(team, live, observations, watch, now, memory, read),
+    ring,
+    mailboxNote,
+    readings,
+    machineReadings,
+    labels,
+    refusals: refused,
+  };
 }
 
-/** Idle workers due a work drop this pass. Leads, parked and stopped seats, a dialog and a
- *  box that already holds text are not due. The stamp lives in this process: a restart starts
- *  the idle clock again. A seat seen working clears its stamp, so the next quiet stretch waits
- *  `idle_first` once more. */
+/** Idle workers due a work drop this pass. Leads, parked and stopped seats, a seat whose pane is
+ *  a human's, a dialog and a box that already holds text are not due. The stamp lives in this
+ *  process: a restart starts the idle clock again. A seat seen working clears its stamp, so the
+ *  next quiet stretch waits `idle_first` once more. */
 function workDrops(
   team: TeamFile,
   live: Live,
@@ -585,7 +624,8 @@ function workDrops(
   const body = team.watch.nudge ?? NUDGE_TEXT;
   const due: PassResult['work'] = [];
   for (const obs of observations) {
-    if (obs.lead || obs.parked || obs.stopped || !obs.seat || !obs.agent) {
+    const fileSeat = team.seats.find((item) => item.name === obs.name);
+    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
       delete sent[obs.name];
       continue;
     }
@@ -614,6 +654,46 @@ function workDrops(
       cli: obs.cli,
       body: body.replaceAll('<your seat name>', obs.name),
     });
+  }
+  return due;
+}
+
+/**
+ * The pause's own drops: one notice per non-human agent seat, at the first quiet prompt after the
+ * pause was placed, and never twice for the same pause. The notice says what the pause means for
+ * the seat — finish the step in hand, take nothing new, hold no lock — and names the way out.
+ * Leads, parked and stopped seats and a human seat's pane are skipped exactly as `workDrops`
+ * skips them; a dialog or a box holding unsent text is left alone and tried again next pass. The
+ * stamps are keyed by the pause instant, so a resume and a later pause notice again.
+ */
+function pauseDrops(
+  team: TeamFile,
+  live: Live,
+  observations: SeatObservation[],
+  pause: PauseRecord,
+  now: number,
+  memory: Memory,
+  read: (cli: string, screen: string | undefined) => Screen,
+): PassResult['work'] {
+  const slot = (memory.slots['pause-notice'] ??= {}) as { at?: string; seats?: Record<string, number> };
+  if (slot.at !== pause.at) {
+    slot.at = pause.at;
+    slot.seats = {};
+  }
+  const told = (slot.seats ??= {});
+  const body = `Team watch: ${pauseText(pause)} — finish the step you are on, take nothing new, and hold no lock until \`team resume\``;
+  const due: PassResult['work'] = [];
+  for (const obs of observations) {
+    const fileSeat = team.seats.find((item) => item.name === obs.name);
+    if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) continue;
+    if (live.agents.filter((agent) => agent.name === obs.name).length !== 1) continue;
+    if (told[obs.name] !== undefined) continue;
+    const quiet = (obs.agent.status === 'idle' || obs.agent.status === 'done') && !obs.working && !obs.prompt;
+    if (!quiet) continue;
+    const screen = read(obs.cli, live.screens[obs.agent.pane]);
+    if (screen.kind !== 'idle') continue;
+    told[obs.name] = now;
+    due.push({ pane: obs.agent.pane, seat: obs.name, cli: obs.cli, body: body.replaceAll('<your seat name>', obs.name) });
   }
   return due;
 }

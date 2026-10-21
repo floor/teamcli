@@ -124,10 +124,8 @@ escaped where JSON requires it, for a parser rather than a terminal.
 Every row of the seats table ends with the word for the channel a send would take to reach that
 seat: `socket` while the file declares the seat `cli: claude-code` and the pane's own processes
 carry a live session socket, and `typed` otherwise — another CLI, a pane that is gone, one herdr
-could not read. A plain send is typed for every seat, Claude Code's included: the body travels
-whole in a mode-0600 drop file and one short trigger line is typed into the pane; no path opens a
-cross-session socket, and `--wait`, which would ride one, is refused for every seat until the
-native leg carries a waited send — nothing written. The word
+could not read. No path opens a cross-session socket directly; `--wait` writes the signed record
+through the receiving seat's delivery walk and awaits a reply record on the thread. The word
 is read from the processes the comparison already holds, so no extra herdr call is made; only the
 socket file itself is looked up on disk. `--json` rows carry no such word: `reach` is the plain
 table's alone.

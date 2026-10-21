@@ -26,27 +26,27 @@
   "cells": {
     "antigravity": {
       "idle": {
-        "real": 5,
+        "real": 6,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 4,
+        "real": 5,
         "constructed": 0,
         "undocumented": 0
       },
       "unsent": {
-        "real": 6,
+        "real": 7,
         "constructed": 0,
         "undocumented": 0
       },
       "permission": {
-        "real": 6,
+        "real": 7,
         "constructed": 2,
         "undocumented": 0
       },
       "question": {
-        "real": 5,
+        "real": 6,
         "constructed": 0,
         "undocumented": 0
       },
@@ -56,7 +56,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 5,
+        "real": 6,
         "constructed": 0,
         "undocumented": 0
       },
@@ -76,7 +76,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 4,
+        "real": 5,
         "constructed": 1,
         "undocumented": 0
       }
@@ -93,7 +93,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 9,
+        "real": 10,
         "constructed": 3,
         "undocumented": 0
       },
@@ -197,27 +197,27 @@
     },
     "cursor": {
       "idle": {
-        "real": 12,
+        "real": 13,
         "constructed": 0,
         "undocumented": 0
       },
       "working": {
-        "real": 5,
+        "real": 6,
         "constructed": 5,
         "undocumented": 0
       },
       "unsent": {
-        "real": 23,
+        "real": 24,
         "constructed": 0,
         "undocumented": 0
       },
       "permission": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
       "question": {
-        "real": 2,
+        "real": 3,
         "constructed": 0,
         "undocumented": 0
       },
@@ -227,7 +227,7 @@
         "undocumented": 0
       },
       "trust": {
-        "real": 3,
+        "real": 4,
         "constructed": 0,
         "undocumented": 0
       },
@@ -247,7 +247,7 @@
         "undocumented": 0
       },
       "unknown": {
-        "real": 4,
+        "real": 5,
         "constructed": 0,
         "undocumented": 0
       }
@@ -733,6 +733,48 @@
       "provenance": "capture"
     },
     {
+      "file": "antigravity/1.4.2/exit.txt",
+      "cli": "antigravity",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/idle.txt",
+      "cli": "antigravity",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/permission.txt",
+      "cli": "antigravity",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/question.txt",
+      "cli": "antigravity",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/trust.txt",
+      "cli": "antigravity",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/unsent.txt",
+      "cli": "antigravity",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "antigravity/1.4.2/working.txt",
+      "cli": "antigravity",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/2.1.289/bash-mode-ansi.txt",
       "cli": "claude-code",
       "kind": "unknown",
@@ -970,6 +1012,12 @@
       "file": "claude-code/2.1.302/working.txt",
       "cli": "claude-code",
       "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/2.1.303/unsent-multiline-ansi.txt",
+      "cli": "claude-code",
+      "kind": "unsent",
       "provenance": "capture"
     },
     {
@@ -1646,6 +1694,48 @@
     },
     {
       "file": "cursor/2026.10.14/working.txt",
+      "cli": "cursor",
+      "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/exit.txt",
+      "cli": "cursor",
+      "kind": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/idle.txt",
+      "cli": "cursor",
+      "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/permission.txt",
+      "cli": "cursor",
+      "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/question.txt",
+      "cli": "cursor",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/trust.txt",
+      "cli": "cursor",
+      "kind": "trust",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/unsent.txt",
+      "cli": "cursor",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.16/working.txt",
       "cli": "cursor",
       "kind": "working",
       "provenance": "capture"

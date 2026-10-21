@@ -62,7 +62,9 @@ Reads the team file (or the one `--file` names), this machine's approval store, 
 workspaces), the doctor's findings, and the machine's load, free memory, free disk and free swap.
 Writes `.agents/team.state.json` (each seat's stage, pane, workspace and the CLI it was launched
 with; a waiting seat's classification, process identity and `manual` flag; the watch's pane, pid and
-heartbeat), `.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
+heartbeat; and, under the session's `briefs`, each seat's general-brief record id and delivery
+time), each seat's general-brief record under `.agents/send-drops/<session>/<seat>/`,
+`.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
 starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
 workspace and pane for the watch. A real run holds the session mutator lock
 (`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove` share, from
@@ -236,6 +238,27 @@ herdr could not read when it stopped: the reading is taken once, after the idle 
 launch model check) keeps today's behaviour: nothing checks its pane.
 
 When the idle screen names no model this version can read, `up` writes `<seat>: its screen doesn't show a model this version knows; not checked` to stderr, after the seat's record, and continues. It is detail, not a record: the log keeps the seat's one line, the record `ready`. Nothing is assumed about which model is running.
+
+Before the plan lands anything, the seats whose launch this run owns — the seats it launches or
+relaunches, and every declared seat the session records no launch of, a human's pane among them —
+receive the general seat brief: TeamCLI's built-in default, embedded in the package (`src/launch/general-brief-text.ts`,
+generated from the accepted source by `scripts/brief.ts --write`; `brief:check` pins its bytes, and
+compares it with the source when one is given) so the package never reads a documentation checkout.
+`deliverGeneralBrief` (`src/launch/general-brief.ts`) signs one message record per seat and writes
+it into that seat's drop folder through the signed record writer; the record's id is the brief's
+sha256 read as a lowercase UUID, so a re-run leaves a verified record and its first time as they
+are, and a reworded brief is a new message. A file already at that id that is not this brief signed
+by this checkout's message key — planted, foreign, unsigned, another body — is replaced, and a link,
+a folder or a FIFO there is refused and never followed or replaced. Only a record read back and
+verified (`recordHolds`, `src/send/record.ts`) is recorded as delivered. The session's `briefs` map
+records each delivery — the record's id and its own `at` — in one locked state write, which is what
+[`team check`](check.md) verifies to name a seat the session launched without one. A seat the
+state records as already launched, and that this run leaves as it is, gets neither a drop nor a
+state entry. A drop that
+cannot be written is a line on stderr and in the log for that seat alone, and the launch carries
+on: the record on disk is the message, and the check names the seat. Nothing is typed for the
+brief, and `add`, `restart` and `reload` deliver through the same function, for the one seat each
+acts on — `reload` on its matching path included, so the repair `team check` names is a real one.
 
 A seat whose rules travel as a first message (codex, cursor, antigravity) gets them from a file:
 `up` writes the approved rules text to `<project state folder>/rules/<seat>.md` — owner-only,
@@ -505,7 +528,7 @@ record it belongs to, as its meaning says.
 | `<seat>: left out: rules typed, not sent: the read-back didn't match; the clearing key (<key>) was not delivered; the line sits in its box, unsent: <what to do>` | the pane did not take the clearing key. The line stays unsent |
 | `<seat>: left out: rules typed, not sent: the read-back didn't match; the clearing key (<key>) left the screen reading <kind>; the line sits in its box, unsent: <what to do>` | the key was sent and the screen did not come back to an idle prompt. `<kind>` is the reading after the key, and the line stays unsent |
 | `<seat>: left out: rules typed, not sent: the rules file changed after it was written` | the line read back, but the file — read again without following a link, directly before Enter — no longer held the text whose hash the line names. Enter was not pressed; the line sits in the box, unsent, and the owner checks the project state folder before running `up` again |
-| `<seat>: left out: rules typed, not sent: its box still holds the line after Enter; <what to do>` | Enter was pressed and the box still shows the line: the key did not take, and nothing was sent |
+| `<seat>: left out: rules typed, not sent: its box still holds the line after Enter; <what to do>` | Enter was pressed — up to three tries, each after the box read back as the line again — and the box still shows the line: the key did not take, and nothing was sent |
 | `<seat>: left out: the seat did not come back to its idle prompt (<reading>); <what to do>` | the line was submitted and the seat never came back to its idle prompt — a running turn, or a dialog to answer |
 | `<seat>: left out: its rules were not delivered; left at named` | the pane could not be read at all; nothing was typed |
 | `<seat>: left out: its workspace did not close; left as it is` | its pane no longer held the process `team` launched, and closing that workspace failed, so nothing was launched in its place |

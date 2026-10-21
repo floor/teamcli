@@ -44,6 +44,22 @@ export function declarationsOf(declared: Partial<Record<SettingLevel, boolean | 
 }
 
 /**
+ * How a sender reads in TeamCLI's own headlines: `auto` (the seat's nickname inside its own
+ * team, `seat@team` from another), `nickname`, `seat`, or `seat@team`. It is a presentation
+ * word, not a permission one: the registry id stays in every record, and only the human
+ * headline changes. A team file's own key and a seat's may stand nearer in the chain, and the
+ * project a team sits in declares the word under them; the default is `auto`.
+ */
+export const SENDER_NAME_MODES = ['auto', 'nickname', 'seat', 'seat@team'] as const;
+export type SenderNameMode = (typeof SENDER_NAME_MODES)[number];
+export const DEFAULT_SENDER_NAME: SenderNameMode = 'auto';
+
+/** Whether a declared word is one of the four. */
+export function isSenderNameMode(value: unknown): value is SenderNameMode {
+  return typeof value === 'string' && (SENDER_NAME_MODES as readonly string[]).includes(value);
+}
+
+/**
  * Seats of different teams inside one project may reach each other when this is on: the project
  * setting, default off. The project is the level that may open it; every level inside a project
  * may close it again. Resolve it for the seat that wants to reach out — admission reads the
@@ -212,9 +228,10 @@ export const LIVENESS_RULE = 'a liveness threshold may be tightened, never loose
 /**
  * An order setting: a list of legs, declared once per feature with the catalogue policy it is and
  * the order in force when no level declares one. An order only ever tightens: the catalogue
- * policy's `isWithin` honours a word that drops a leg or reorders the ones it keeps, and sets aside
- * one that adds a leg, names one twice, or names none — an order with no leg takes nothing at all.
- * A word equal to the order in force is no word at all.
+ * policy's `isWithin` honours a word that drops a leg or reorders the ones it keeps, sets aside
+ * one that adds a leg other than the delivery order's own `native`, names one twice, or names
+ * none — an order with no leg takes nothing at all. A word equal to the order in force is no word
+ * at all.
  */
 export type OrderSettingSpec<L extends string> = {
   /** The spelling the setting is written under in a team file and a report — the policy's alias. */
@@ -243,22 +260,31 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
 /**
  * The legs a send may walk, in the words the delivery order is written in: `native`, the frame on
  * the receiving seat's cross-session socket; `mcp-inbox`, the seat's own MCP inbox; `typed`, the
- * 0600 drop file and one composer trigger line.
+ * 0600 drop file and one composer trigger line; `drop`, the same 0600 drop file and no keystroke
+ * at all — for a receiver that watches its own drop folder, or a pane that must not be typed into.
  */
-export type DeliveryLeg = 'native' | 'mcp-inbox' | 'typed';
+export type DeliveryLeg = 'native' | 'mcp-inbox' | 'typed' | 'drop';
 
-export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'typed'];
+export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['native', 'mcp-inbox', 'typed', 'drop'];
 
 /**
- * The order a send walks when no level of the receiving seat's chain declares one: native, then
- * mcp-inbox, then typed. mcp-inbox is not in this build: a walk that reaches it skips the leg and
- * records it unavailable. The chain is the receiving seat's own — entity, project, team, seat —
+ * The order a send walks when no level of the receiving seat's chain declares one: mcp-inbox,
+ * then drop, then typed. The mcp-inbox leg takes a send only while the seat's own inbox server is
+ * listening, and writes the message to that inbox without typing; otherwise it is skipped as
+ * `no live inbox listener` and the walk moves on. The drop leg writes the same 0600 file and
+ * types nothing at all: a receiver that watches its folder — the inbox server where its CLI has
+ * an MCP front, the launch's start-of-turn read where it has a hook — takes the message there,
+ * and a seat that watches nothing never walks this leg (`src/send/delivery.ts` leaves it out of
+ * that seat's order). The typed leg stays the last fallback. The `native` leg is not in the
+ * default: a level that names it is the sender choosing the cross-session SendMessage and
+ * recording the delivery itself, so `native` is the one leg a declared word may add
+ * (`src/policy/types.ts`). The chain is the receiving seat's own — entity, project, team, seat —
  * because the order says how that seat's messages may travel.
  */
 export const DELIVERY_ORDER: OrderSettingSpec<DeliveryLeg> = {
   name: 'delivery_order',
   policy: 'delivery-order',
-  fallback: DELIVERY_LEGS,
+  fallback: ['mcp-inbox', 'drop', 'typed'],
 };
 
 /**

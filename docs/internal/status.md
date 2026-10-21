@@ -63,9 +63,8 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
 The columns are the seat, its state, the model, the pane, and the word for the channel a send would
 take to reach the seat: `socket` when the file declares it `cli: claude-code` and the pane's own
 processes carry a live session socket, `typed` otherwise — another CLI, a pane that is gone, one
-herdr could not read. A plain send is typed for every seat, Claude Code's included; no path opens
-a cross-session socket, and `--wait`, which would ride one, is refused for every seat until the
-native leg carries a waited send — nothing written. The word is
+herdr could not read. No path opens a cross-session socket directly; `--wait` writes the signed
+record through the receiving seat's delivery walk and awaits a reply record on the thread. The word is
 read from the processes the comparison already holds, so no extra herdr call is
 made. The state is what herdr says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
 the file parks and `, temporary`
@@ -93,7 +92,9 @@ When that pane's screen names a model, a note names it — `<seat>: its pane run
 seat with no `launched` record — a seat launched before this record existed, or one whose process
 herdr could not read (the reading is taken once, after the seat's idle prompt; a seat stopped at a
 dialog records it in the same write as its waiting record) — is shown as it always was;
-`team doctor` says which seats those are.
+`team doctor` says which seats those are. The same gate decides whether a pane's screen is read
+as a prompt at all: a dialog left in a shell's scrollback is not a seat waiting at one, for a
+declared seat and a temporary seat alike (`paneShowsSeat`).
 
 The comparison is wrong in the safe direction, but it is wrong: a CLI that replaces its own process
 — an updater that re-executes, a wrapper that hands over — changes the foreground pids, and the

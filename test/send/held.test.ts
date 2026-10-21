@@ -9,7 +9,7 @@
 // session is touched and no real pane is read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
@@ -17,7 +17,7 @@ import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readHistory } from '../../src/send/history.ts';
 import type { NativePane } from '../../src/send/native.ts';
 import type { SendOutcome } from '../../src/send/uds.ts';
-import { testIo } from '../helpers.ts';
+import { recordBody, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-17T04:00:00.000Z');
 
@@ -53,6 +53,9 @@ seats:
     model: Test
     version: "1"
     launch: claude
+# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
+# then the line is typed. The team's word keeps the default's drop step out.
+delivery_order: [mcp-inbox, typed]
 `;
 }
 
@@ -147,28 +150,24 @@ function claudeHost(sockets: string, samples: string[], screens?: string[]): Fak
 const owner = (root: string) => testIo(root, { kind: 'owner' });
 
 describe('team send: a --wait frame cannot land at a dialog', () => {
-  test('--wait is refused before the frame: the pane is never read for the dialog', async () => {
+  test('--wait never sends a socket frame while SOCKET_SEND is off: it walks the typed leg and waits on the thread', async () => {
     const { root, sockets, home } = world();
-    // A plain file at the measured name stands in for the live socket, and the pane would hold
-    // the held-message dialog on its second read: with the socket off, neither is consulted.
     writeFileSync(join(sockets, '222.sock'), '');
-    const host = claudeHost(sockets, ['idle'], [QUIET, HELD_WRAPPED]);
+    const host = { ...claudeHost(sockets, ['idle', 'working'], [QUIET, QUIET]), waitMs: 0 };
     const io = owner(root);
 
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
     expect(io.out).toBe('');
-    expect(io.err).toBe('team send: refused: lead: --wait needs the native leg (team route + your own SendMessage), which this build does not carry; nothing was sent\n');
-    expect(io.err).not.toContain('held');
+    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.frames.length).toBe(0);
-    expect(host.pane.typed).toEqual([]);
-    expect(host.pane.enters).toBe(0);
     const read = readHistory('acme', root, home);
-    // A refusal writes nothing down: no held frame exists, so the history has no line for one.
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.entries).toEqual([]);
+    expect(read.entries).toHaveLength(1);
+    expect(read.entries[0]?.outcome).toBe('timeout');
+    expect(read.entries[0]?.via).toBe('typed');
   });
 });
 
@@ -190,7 +189,7 @@ describe('team send: the plain send is the typed trigger again', () => {
     const path = join(drops, readdirSync(drops)[0] as string);
     expect(host.pane.typed).toEqual([`Read ${path} and do that.`]);
     expect(host.pane.enters).toBe(1);
-    expect(readFileSync(path, 'utf8')).toBe('from the owner — admitted by: the owner\n\nhello');
+    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
     const read = readHistory('acme', root, host.home);
     expect(read.ok).toBe(true);
     if (!read.ok) return;

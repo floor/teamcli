@@ -101,6 +101,20 @@ describe('the rules of a seat', () => {
     ]);
   });
 
+  test('the inbox sentence is asked only of a seat whose CLI registers the inbox', () => {
+    const withInbox = seatRules({ ...rulesInput, inbox: true });
+    expect(withInbox.slice(0, 4)).toEqual([
+      'End every commit message and every pull request body with your signature, given below.',
+      'Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
+      'If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.',
+      'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
+    ]);
+    // A seat whose CLI carries no measured route is asked for nothing: its rules are the ones
+    // earlier builds wrote, byte for byte.
+    expect(seatRules(rulesInput)).toEqual(seatRules({ ...rulesInput, inbox: false }));
+    expect(seatRules(rulesInput).some((line) => line.includes('inbox_check'))).toBe(false);
+  });
+
   test('a shared seat gets no worktree rule, and the position is said as the file has it', () => {
     const rules = seatRules({
       ...rulesInput,
@@ -189,11 +203,13 @@ describe('up --dry-run', () => {
         '  wait until session acme-web is running (30 s at most)',
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label claude-coordinator-acme --no-focus',
         "+ herdr --session acme-web pane run <pane of claude-coordinator-acme> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules.'",
+        '    (reads its drops at each turn start)',
         '  wait until claude-coordinator-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-coordinator-acme> claude-coordinator-acme',
         "+ herdr --session acme-web pane report-metadata <pane of claude-coordinator-acme> --source team --display-agent 'Claude Opus 5.5 default'",
         '+ herdr --session acme-web workspace create --cwd /work/acme-web --label grok-acme --no-focus',
         "+ herdr --session acme-web pane run <pane of grok-acme> 'AGENT_UNATTENDED=1 grok --always-approve --rules Rules.'",
+        '    (reads its drops through its MCP inbox)',
         '  wait until grok-acme shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of grok-acme> grok-acme',
         "+ herdr --session acme-web pane report-metadata <pane of grok-acme> --source team --display-agent 'Claude Opus 5.5 default'",
@@ -201,6 +217,7 @@ describe('up --dry-run', () => {
         '  skip grok-acme: stopped in the file; start it with `team add grok-acme`',
         '+ herdr --session acme-web workspace create --cwd /work/acme-web/docs --label docs --no-focus',
         "+ herdr --session acme-web pane run <pane of claude-docs> 'AGENT_UNATTENDED=1 claude --model claude-opus-5-5 --dangerously-skip-permissions --append-system-prompt Rules.'",
+        '    (reads its drops at each turn start)',
         '  wait until claude-docs shows its idle prompt (90 s at most); anything else is reported, its workspace closed without input, and the seat left out',
         '+ herdr --session acme-web agent rename <pane of claude-docs> claude-docs',
         "+ herdr --session acme-web pane report-metadata <pane of claude-docs> --source team --display-agent 'Claude Opus 5.5 default'",
@@ -241,6 +258,78 @@ describe('up --dry-run', () => {
     expect(commands.some((command) => command.includes('grok') && command.includes('--settings'))).toBe(false);
   });
 
+  test('the dry run names how each seat will learn a drop is waiting', () => {
+    const plan = upPlan({
+      root: '/work/acme-web',
+      session: 'acme-web',
+      sessionRunning: true,
+      seats: [
+        seat('hooked'),
+        seat('inboxed', { cli: 'codex', launch: 'codex' }),
+        seat('blind', { cli: 'muse', launch: 'muse' }),
+        // A claude-code seat the run's map does not hold: the hook does not land, and there is
+        // no MCP inbox behind it, so the launch says it watches nothing.
+        seat('unhooked'),
+      ],
+      watchLabel: 'Watch · acme-web',
+      startWatch: false,
+      cliHooks: { hooked: '/work/acme-web/.agents/hooks/hooked.json' },
+    });
+    const notes = plan.flatMap((step) => (step.do?.do === 'launch' ? [step.note ?? ''] : []));
+    expect(notes).toEqual([
+      'reads its drops at each turn start',
+      'reads its drops through its MCP inbox',
+      'watches nothing: a drop sent here is never read',
+      'watches nothing: a drop sent here is never read',
+    ]);
+  });
+
+  test('the launch records the watcher it leaves beside the seat', async () => {
+    // The record is what a later reading asks; the plan's own words are the dry run's answer.
+    // A hook named in the run's map lands; a hook the map leaves out does not, and a seat with
+    // no inbox behind it records that it watches nothing.
+    const records: { seat: string; watcher: string }[] = [];
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
+      paneRun: () => true,
+      typeLine: () => false,
+      renameAgent: () => true,
+      reportDisplayAgent: () => true,
+      closeWorkspace: () => true,
+      stopSession: () => true,
+      kill: () => true,
+      agentPanes: () => [],
+      classify: () => 'idle',
+      sleep: async () => {},
+      now: () => 0,
+      allow: () => null,
+      record: (_seat, patch) => {
+        if (patch.watcher) records.push({ seat: _seat, watcher: patch.watcher });
+      },
+      running: () => {},
+      drop: () => {},
+      say: () => {},
+      log: () => {},
+    };
+    const plan = upPlan({
+      root: '/work/acme-web',
+      session: 'acme-web',
+      sessionRunning: true,
+      seats: [seat('hooked'), seat('inboxed', { cli: 'codex', launch: 'codex' }), seat('unhooked')],
+      watchLabel: 'Watch · acme-web',
+      startWatch: false,
+      cliHooks: { hooked: '/work/acme-web/.agents/hooks/hooked.json' },
+    });
+
+    await executePlan(plan, 'acme-web', host);
+
+    expect(new Set(records.map((record) => `${record.seat}:${record.watcher}`))).toEqual(
+      new Set(['hooked:hook', 'inboxed:inbox', 'unhooked:none']),
+    );
+  });
+
   test('never holds a command that answers, closes or deletes', () => {
     const plan = upPlan({ root: '/work/a', session: 'a', sessionRunning: false, seats: [seat('one'), seat('two')], watchLabel: 'Watch · a' });
     const verbs = plan.flatMap((step) => {
@@ -250,6 +339,21 @@ describe('up --dry-run', () => {
         .map((argv) => argv.slice(3, 5).join(' '));
     });
     expect(new Set(verbs)).toEqual(new Set(['workspace create', 'pane run', 'pane report-metadata', 'agent rename']));
+  });
+
+  test("a seat the file marks as a human's is not launched into or typed into", () => {
+    const plan = upPlan({
+      root: '/work/a',
+      session: 'a',
+      sessionRunning: true,
+      seats: [seat('desk', { human: true })],
+      watchLabel: 'Watch · a',
+      startWatch: false,
+    });
+    // No workspace, no launch, no wait, no rules line: the skip is the whole of this seat.
+    expect(plan).toEqual([
+      { kind: 'skip', text: "desk: the pane is a human's; nothing is launched into it or typed into it; left as it is" },
+    ]);
   });
 });
 
@@ -325,6 +429,19 @@ describe('down --dry-run', () => {
       { kind: 'skip', text },
       { kind: 'skip', text: 'session s: not stopped, 1 agent left in it' },
     ]);
+  });
+
+  test("a seat the file marks as a human's is not typed into, even with --abandon", () => {
+    const human = { ...seat('w1'), human: true as const };
+    const left: Step[] = [
+      { kind: 'skip', text: "w1: the pane is a human's; nothing is typed into it; left running" },
+      { kind: 'skip', text: 'session s: not stopped, 1 agent left in it' },
+    ];
+    expect(downPlan({ session: 's', seats: [human], extra: 0, watchPid: null, keep: [] })).toEqual(left);
+    // The owner's abandon closes unasked panes; a human's pane is not one it may close.
+    expect(
+      downPlan({ session: 's', seats: [human], extra: 0, watchPid: null, keep: [], abandon: true, closeUnasked: true }),
+    ).toEqual(left);
   });
 
   test('a seat whose CLI exited is closed without typing, and the session follows it down', () => {

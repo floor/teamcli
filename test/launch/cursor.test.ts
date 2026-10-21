@@ -25,6 +25,10 @@ describe('Cursor launch and captured screens', () => {
     expect(launchCommand(cursor, 'cursor-agent --model grok-4.7-high', 'Rules.')).toBe(
       'AGENT_UNATTENDED=1 cursor-agent --model grok-4.7-high --force --sandbox disabled',
     );
+    // The launch approves the inbox server team registers in the seat's `.cursor/mcp.json`.
+    expect(launchCommand(cursor, 'cursor-agent', 'Rules.', undefined, { seat: 'helper', session: 'acme-web', command: '/opt/bun', entry: '/src/cli.ts' })).toBe(
+      'AGENT_UNATTENDED=1 cursor-agent --force --sandbox disabled --approve-mcps',
+    );
     expect(cursor.rulesOption).toBeNull();
     expect(cursor.loginCheck).toEqual(['status']);
     expect(cursor.loginHint).toBe('cursor-agent login');
@@ -33,7 +37,8 @@ describe('Cursor launch and captured screens', () => {
     expect(versionVerdict('2026.10.01-14929f9', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.02', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.14-0f9edde', cursor.tested)).toBe('tested');
-    expect(versionVerdict('2026.10.15', cursor.tested)).toBe('newer');
+    expect(versionVerdict('2026.10.16-e3cb207', cursor.tested)).toBe('tested');
+    expect(versionVerdict('2026.10.17', cursor.tested)).toBe('newer');
     expect(versionVerdict('2026.09.30', cursor.tested)).toBe('older');
   });
 
@@ -45,6 +50,20 @@ describe('Cursor launch and captured screens', () => {
     expect(readScreen('cursor', current('question')).kind).toBe('question');
     expect(readScreen('cursor', current('permission')).kind).toBe('permission');
     expect(readScreen('cursor', current('exit')).kind).toBe('unknown');
+  });
+
+  test('2026.10.16 captures keep the same kinds, and the status row names its model', () => {
+    const current = (name: string) => readFileSync(new URL(`../fixtures/cursor/2026.10.16/${name}.txt`, import.meta.url), 'utf8');
+    expect(readScreen('cursor', current('trust')).kind).toBe('trust');
+    expect(readScreen('cursor', current('idle')).kind).toBe('idle');
+    expect(readScreen('cursor', current('unsent')).kind).toBe('unsent');
+    expect(readScreen('cursor', current('working')).kind).toBe('working');
+    expect(readScreen('cursor', current('question')).kind).toBe('question');
+    expect(readScreen('cursor', current('permission')).kind).toBe('permission');
+    expect(readScreen('cursor', current('exit')).kind).toBe('unknown');
+    // The folder is the profile's ceiling, and the composer's status row is its model.
+    expect(profileFor('cursor')?.tested.to).toBe('2026.10.16');
+    expect(runningModel('cursor', current('idle'))).toEqual({ model: 'Grok', version: '4.7' });
   });
 
   test.each([

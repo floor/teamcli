@@ -3,6 +3,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, s
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { validLockName } from './lock/name.ts';
+import type { CliWatcher } from './launch/cli-hook.ts';
 import type { LaunchedIdentity } from './launch/identity.ts';
 import { cleanClassification, type Classification } from './launch/progress.ts';
 
@@ -11,6 +12,9 @@ import { cleanClassification, type Classification } from './launch/progress.ts';
 // team alone: every write holds the lock and goes through a temporary file.
 
 export const SEAT_ID_PATTERN = /^seat_[0-9a-f]{12}$/;
+
+/** The id a general-brief delivery names: the lowercase UUID every drop record is named by. */
+export const BRIEF_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function isSeatId(value: unknown): value is string {
   return typeof value === 'string' && SEAT_ID_PATTERN.test(value);
@@ -25,12 +29,24 @@ export type RetainedSeat = {
   last_active?: string;
 };
 
+/** One seat's general-brief delivery: the record's id and when the seat received it. */
+export type BriefRecord = {
+  id: string;
+  at: string;
+};
+
 export type SeatState = {
   /** Stable seat handle (`seat_<12 lowercase hex>`), minted when the seat is first recorded. */
   id?: string;
   stage: 'launched' | 'named' | 'ready';
   /** The CLI the seat was launched with: `down` stops it under it when the file renamed it. */
   cli?: string;
+  /**
+   * How the seat's CLI learns a drop is waiting: the turn-start hook the launch installed, the
+   * MCP inbox its profile registers, or nothing. Written by the launch; absent on a seat
+   * launched before it was recorded.
+   */
+  watcher?: CliWatcher;
   /** ISO 8601 timestamp when the seat last reached ready or was seen working. */
   last_active?: string;
   pane?: string;
@@ -119,6 +135,33 @@ export type SwapRecord = { by: string; at: string };
 export type HoldRecord = { reason: string; by: string; at: string; until?: string };
 
 /**
+ * One seat's place when the team was paused: the stage its record held, the branch and folder of
+ * the worktree it was given, and when it was last active. The pause writes a stop point for every
+ * seat the file declares that is not a human's, so the lead restarts from what the tool recorded
+ * rather than from memory. Human seats are never recorded: a pause does not touch them.
+ */
+export type PauseStop = {
+  seat: string;
+  stage?: SeatState['stage'];
+  branch?: string;
+  path?: string;
+  last_active?: string;
+};
+
+/**
+ * The team's pause: when it was placed, by whom, the reason when one was given, and the stop
+ * points it recorded. A pause stands until `team resume` clears it; unlike a hold it names no
+ * end, because the resume is the owner's next act, not a clock. A pause is the project's, not one
+ * session's.
+ */
+export type PauseRecord = {
+  by: string;
+  at: string;
+  reason?: string;
+  stops: PauseStop[];
+};
+
+/**
  * One process a seat started, recorded by `team proc add`: who recorded it, when, the pid to
  * watch, and what it is. Nothing here launches or signals a process — a record is a seat's
  * note that something of its own is running, and a pid is how the note goes out on its own.
@@ -143,6 +186,13 @@ export type SessionState = {
    * its `id` and `last_active` when relaunched, while `seats` holds only active runtime records.
    */
   retained_seats?: Record<string, RetainedSeat>;
+  /**
+   * The general seat brief delivered to each seat: the record's id and when it landed, written by
+   * the launch that wrote the drop. `team check` reads it to name a seat the brief never reached;
+   * only a launch writes it, and only the delivery's own record is trusted to name its time. No
+   * `rules` value and no stage: a seat's brief is not its lifecycle.
+   */
+  briefs?: Record<string, BriefRecord>;
   /**
    * A lead seat (the orchestrator's or the operator's) stopped for a replacement by `team remove
    * <lead> --keep`: who stopped it and when. The file is not edited — a lead is never `stopped:` —
@@ -196,6 +246,12 @@ export type State = {
    */
   hold?: HoldRecord;
   /**
+   * The team's pause: `team pause`'s one record, cleared by `team resume`. While it stands, the
+   * watch types no work nudge, `team next` claims nothing, and `status` and `seats` show it. Like
+   * the hold it is the project's, not one session's.
+   */
+  pause?: PauseRecord;
+  /**
    * Unsigned markers of expired policy declarations whose expiry reading has already been logged
    * to `team.log`, so the expiry reading is logged at most once per expired entry while leaving
    * the signed policy file untouched.
@@ -242,6 +298,46 @@ export function holdText(hold: HoldRecord): string {
   return hold.until === undefined ? `hold: ${hold.reason}` : `hold until ${hold.until}: ${hold.reason}`;
 }
 
+/** Whether a value from the state file is the record `team pause` writes: who placed it, an
+ *  instant that parses, a reason with text when one is there, and stop points whose every field
+ *  is the shape the command writes. Anything else is dropped at the read door, so a hand-edited
+ *  file can never print what it made up. */
+function isPauseRecord(value: unknown): value is PauseRecord {
+  if (value === null || typeof value !== 'object') return false;
+  const pause = value as Partial<PauseRecord>;
+  if (typeof pause.by !== 'string' || pause.by === '') return false;
+  if (typeof pause.at !== 'string' || Number.isNaN(Date.parse(pause.at))) return false;
+  if (pause.reason !== undefined && (typeof pause.reason !== 'string' || pause.reason === '')) return false;
+  if (!Array.isArray(pause.stops)) return false;
+  for (const stop of pause.stops) {
+    if (stop === null || typeof stop !== 'object') return false;
+    const entry = stop as Partial<PauseStop>;
+    if (typeof entry.seat !== 'string' || entry.seat === '') return false;
+    if (entry.stage !== undefined && entry.stage !== 'launched' && entry.stage !== 'named' && entry.stage !== 'ready') return false;
+    if (entry.branch !== undefined && typeof entry.branch !== 'string') return false;
+    if (entry.path !== undefined && typeof entry.path !== 'string') return false;
+    if (entry.last_active !== undefined && (typeof entry.last_active !== 'string' || Number.isNaN(Date.parse(entry.last_active)))) return false;
+  }
+  return true;
+}
+
+/** The pause as its readers print it: `status`'s note and `seats`' header line, one shape for
+ *  both, so the two can never drift apart. */
+export function pauseText(pause: PauseRecord): string {
+  return `paused since ${pause.at} by ${pause.by}${pause.reason === undefined ? '' : `: ${pause.reason}`}`;
+}
+
+/** One stop point as `team pause` and `team resume` print it under the pause's own line: what the
+ *  seat's record held, and the worktree it was given when it had one. */
+export function stopText(stop: PauseStop): string {
+  const at: string[] = [];
+  if (stop.stage !== undefined) at.push(stop.stage);
+  if (stop.branch !== undefined) at.push(`branch ${stop.branch}`);
+  if (stop.path !== undefined) at.push(stop.path);
+  if (stop.last_active !== undefined) at.push(`last active ${stop.last_active}`);
+  return `stop ${stop.seat}: ${at.length > 0 ? at.join(', ') : 'no record'}`;
+}
+
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
 export function readState(dir: string): State {
@@ -261,6 +357,9 @@ export function readState(dir: string): State {
   // dropped here, so the reason, the name and the instants later readers print are the ones
   // the command wrote, never a hand-edited file's.
   if (state.hold !== undefined && !isHoldRecord(state.hold)) delete state.hold;
+  // The pause, cleaned at the same door and for the same reason: the line every reader prints
+  // is the record this command wrote, never a hand-edited file's.
+  if (state.pause !== undefined && !isPauseRecord(state.pause)) delete state.pause;
   if (Array.isArray(state.expired_policies)) {
     state.expired_policies = state.expired_policies.filter((item): item is string => typeof item === 'string');
   } else if (state.expired_policies !== undefined) {
@@ -286,6 +385,26 @@ export function readState(dir: string): State {
       if (seat.waiting && typeof seat.waiting === 'object') {
         seat.waiting.classification = cleanClassification(seat.waiting.classification);
       }
+    }
+    // A brief delivery enters from the file like every other value, and is cleaned here: the id
+    // is the record id the drop leg writes, and the time must parse. A seat name is a key, never
+    // a path, so any non-empty one stands; only a launch writes the map.
+    if (session.briefs && typeof session.briefs === 'object') {
+      for (const [seat, brief] of Object.entries(session.briefs)) {
+        if (
+          seat === '' ||
+          !brief ||
+          typeof brief !== 'object' ||
+          typeof brief.id !== 'string' ||
+          !BRIEF_ID_PATTERN.test(brief.id) ||
+          typeof brief.at !== 'string' ||
+          Number.isNaN(Date.parse(brief.at))
+        ) {
+          delete session.briefs[seat];
+        }
+      }
+    } else if (session.briefs !== undefined) {
+      delete session.briefs;
     }
     if (session.retained_seats && typeof session.retained_seats === 'object') {
       for (const [name, retained] of Object.entries(session.retained_seats)) {
