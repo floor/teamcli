@@ -383,21 +383,29 @@ function modelDrift(
  *  close it: without an identity there is no proof the pane is the seat's. Null when the record
  *  has an identity, or when the pane cannot be told apart from the seat the file describes. */
 /** The refusal a replaced pane already had when its screen is working or unsent.
- *  Null when the screen is free or was not read: that seat is left with the cannot-tie line. */
+ *  Null when the screen is free or was not read: that seat is left with the cannot-tie line.
+ *  `working` separates a running turn — left to finish, reported as skipped working — from a
+ *  box holding unsent text, which is a refusal. */
 function replacedScreenRefusal(
   seat: Seat,
   pane: string,
   screenOf: (pane: string) => string | null,
   status: string | undefined,
-): string | null {
+): { why: string; working: boolean } | null {
   const text = screenOf(pane);
   if (text == null || text === '') return null;
   const kind = readScreen(seat.cli, text).kind;
   if (status === 'working' || kind === 'working') {
-    return `the process in its pane is working; nothing closed (stop it there, or run team remove ${seat.name})`;
+    return {
+      why: `the process in its pane is working; nothing closed (stop it there, or run team remove ${seat.name})`,
+      working: true,
+    };
   }
   if (kind === 'unsent') {
-    return `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${seat.name})`;
+    return {
+      why: `the process in its pane holds unsent text; nothing closed (send or clear it there, or run team remove ${seat.name})`,
+      working: false,
+    };
   }
   return null;
 }
@@ -442,6 +450,9 @@ function seatPlan(
   /** The session this run addresses: the lobby the seat is told to move into is that session's. */
   session: string,
   processes: Readonly<Record<string, PaneProcesses | null>> = {},
+  /** Pane readings for a ready seat the host moved: the pane naming it, tied to its recorded
+   *  conversation. Only read when the recorded pane holds no process at all. */
+  movedProcesses: Readonly<Record<string, PaneProcesses | null>> = {},
   screenOf: (pane: string) => string | null = () => null,
   owner = true,
   /** Dev-mode mount: a message seat's rules come from the live file, with no approval in force. */
@@ -537,6 +548,106 @@ function seatPlan(
   // reported, with the repair that works, and is not closed and not launched again.
   const hold = unidentifiedHold(team, seat, recorded, processes, screenOf);
   if (hold) return { ...planned, stage: recorded.stage, unidentifiedHold: hold };
+  // The host can bring a restored seat back on another pane. Its recorded pane is gone, so the
+  // recorded process identity proves nothing; the pane the host names for the seat is the seat
+  // only while its live agent session is the recorded conversation itself. A pane that cannot be
+  // tied that way, or a name the host lists twice, is a doubt: nothing is closed and nothing is
+  // launched. Proven, the record moves to that pane: a free drifted model is repaired there, a
+  // running one is left, a matching one is adopted with the pids the pane holds now.
+  // A pane the host no longer lists is missing only when nothing runs on it: a live process on
+  // the recorded pane (listed or not) is the doubt below, never a replacement.
+  const paneListed = recorded.pane !== undefined && known.some((agent) => agent.pane === recorded.pane);
+  const recordedGone = !paneListed
+    && Object.hasOwn(processes, seat.name)
+    && (processes[seat.name] ?? null) === null;
+  const moved = asked && recordedGone && recorded.stage === 'ready' && recorded.launched && recorded.pane !== undefined && recorded.workspace !== undefined
+    ? { pane: recorded.pane, workspace: recorded.workspace, named: known.filter((agent) => agent.name === seat.name) }
+    : null;
+  if (moved !== null) {
+    const { pane: movedPane, workspace: movedWorkspace, named } = moved;
+    const next = launchedIdentity(movedProcesses[seat.name] ?? null);
+    const working = (agent: HerdrAgent): boolean => {
+      if (agent.status === 'working') return true;
+      const text = screenOf(agent.pane);
+      return text != null && text !== '' && readScreen(seat.cli, text).kind === 'working';
+    };
+    if (named.length === 0) {
+      // The pane is gone and no name survived: its conversation is resumed on a fresh pane when
+      // the launch line can carry it — never replaced by a blank one. A line that cannot carry
+      // it stops before anything is launched, and the recorded workspace, when the host still
+      // lists it, is named and left.
+      if (continuitySession !== null) {
+        const resumeHold = uncarryableResume(planned, continuitySession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+      }
+      const leftWorkspace = workspaces?.some((item) => item.id === movedWorkspace) ? movedWorkspace : undefined;
+      return {
+        ...planned,
+        replacedPane: movedPane,
+        ...(continuitySession === null ? {} : { resume: continuitySession }),
+        ...(leftWorkspace ? { leftWorkspace } : {}),
+      };
+    }
+    const candidate = named.length === 1 ? named[0] : undefined;
+    const tied = candidate !== undefined
+      && continuitySession !== null
+      && candidate.session !== undefined
+      && candidate.session !== ''
+      && candidate.session === continuitySession;
+    if (!tied) {
+      const why = named.length > 1
+        ? 'its recorded pane is gone and more than one agent in the terminal host is named for it; nothing closed'
+        : 'its recorded pane is gone and the pane naming this seat cannot be tied to its recorded conversation; nothing closed';
+      return {
+        ...planned,
+        stage: 'ready',
+        sessionDoubt: why,
+        doubtHeld: true,
+        ...(named.some(working) ? { doubtWorking: true } : {}),
+      };
+    }
+    if (candidate !== undefined && next === null) {
+      return {
+        ...planned,
+        stage: 'ready',
+        sessionDoubt: 'its recorded pane is gone and the pane naming this seat gives no process identity; nothing closed',
+        doubtHeld: true,
+        ...(working(candidate) ? { doubtWorking: true } : {}),
+      };
+    }
+    if (candidate !== undefined && next !== null) {
+      const movedRecord = { ...recorded, pane: candidate.pane, workspace: candidate.workspace || movedWorkspace };
+      const drift = modelDrift(team, seat, movedRecord, known, processes, screenOf, owner, registry ?? seat, true, callerSeat);
+      if (drift.kind === 'refuse') return { ...planned, stage: 'ready', driftRefused: drift.detail };
+      if (drift.kind === 'cycle') {
+        const resumeHold = uncarryableResume(planned, continuitySession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
+        return {
+          ...planned,
+          repair: {
+            pane: candidate.pane,
+            workspace: movedRecord.workspace,
+            launched: next,
+            cli: seat.cli,
+            drift: { way: drift.way },
+          },
+          resume: continuitySession,
+        };
+      }
+      if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
+      return {
+        ...planned,
+        stage: 'ready',
+        restored: {
+          launched: next,
+          session: continuitySession,
+          detail: restoredDetail({ ...seat, model: registry?.model ?? seat.model, version: registry?.version ?? seat.version }, movedRecord, screenOf),
+          pane: candidate.pane,
+          workspace: movedRecord.workspace,
+        },
+      };
+    }
+  }
   // The pane is the seat only while the process team launched is still in it: a pane that runs
   // no CLI, or one whose process is not the recorded one, is not the seat. Its workspace is
   // closed without input and the seat is launched fresh — the stage it stopped at is not
@@ -602,8 +713,9 @@ function seatPlan(
     return {
       ...planned,
       stage: recorded.stage,
-      sessionDoubt: refusal ?? 'its pane holds a process this record cannot tie to the launch',
+      sessionDoubt: refusal?.why ?? 'its pane holds a process this record cannot tie to the launch',
       ...(refusal ? { doubtHeld: true } : {}),
+      ...(refusal?.working ? { doubtWorking: true } : {}),
     };
   }
   // The shell is in front. The seat's name surviving on the pane does not make it the CLI.
@@ -1225,11 +1337,35 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   // still the seat, or whether it must be launched again. Only a running session has panes, and
   // a herdr that can't tell gives null — read exactly as a seat with no record.
   const processes: Record<string, PaneProcesses | null> = {};
+  const movedProcesses: Record<string, PaneProcesses | null> = {};
   if (state === 'running' && sources.launch?.processInfo) {
+    const readProcess = sources.launch.processInfo;
     for (const [name, held] of Object.entries(recorded?.seats ?? {})) {
       // A pane with no recorded identity is read too: a bare shell is visible without one.
       // The close path still requires the identity; this reading only lets the plan say so.
-      if (held.pane) processes[name] = sources.launch.processInfo(session, held.pane);
+      if (held.pane) processes[name] = readProcess(session, held.pane);
+    }
+    // A ready seat the host moved: the pane naming it is read when the recorded pane holds no
+    // process at all, exactly one agent names the seat, and that agent's live session is the
+    // recorded conversation. The plan proves the same tie again; this reading lets it adopt the
+    // moved pane's process identity.
+    if (agents !== null) {
+      for (const [name, held] of Object.entries(recorded?.seats ?? {})) {
+        const seat = team.seats.find((item) => item.name === name);
+        if (!seat || held.stage !== 'ready' || !held.launched || !held.pane || !held.workspace) continue;
+        if ((processes[name] ?? null) !== null) continue;
+        if (agents.some((agent) => agent.pane === held.pane)) continue;
+        const named = agents.filter((agent) => agent.name === name);
+        if (named.length !== 1) continue;
+        const candidate = named[0];
+        if (candidate === undefined || candidate.session === undefined || candidate.session === '') continue;
+        const continuity = continuityIdOf(
+          recordedSeatContinuity({ home: sources.home, root, herdrSession: session, seat, state: held }),
+          held,
+        );
+        if (continuity === null || candidate.session !== continuity) continue;
+        movedProcesses[name] = readProcess(session, candidate.pane);
+      }
     }
   }
   const readings = loadReadings(dir);
@@ -1281,6 +1417,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       sources.home,
       session,
       processes,
+      movedProcesses,
       (pane) => sources.launch?.paneText(session, pane) ?? null,
       // A passed delegation is not the owner, pane or seat. Every other caller keeps today's
       // reading: anyone but a seat.

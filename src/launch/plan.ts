@@ -52,6 +52,9 @@ export type Op =
       detail?: string;
       /** A restored seat: the process ids to store, so the next `up` sees `same`. */
       launched?: LaunchedIdentity;
+      /** A restored seat the host moved: the pane the record points at now. */
+      pane?: string;
+      workspace?: string;
       /** The agent session kept beside those pids. */
       agentSession?: string;
       /** This record is a refusal: the run exits 1 even when the stored stage stays ready. */
@@ -266,9 +269,10 @@ export interface UpSeat {
   driftRefused?: string;
   /**
    * The pane's pids differ and its agent session is the one stored at launch. Nothing is
-   * closed. `launched` is the process in the pane now; the record stores it.
+   * closed. `launched` is the process in the pane now; the record stores it. `pane` and
+   * `workspace` are set when the seat came back on another pane: the record moves with it.
    */
-  restored?: { launched: LaunchedIdentity; session: string; detail: string };
+  restored?: { launched: LaunchedIdentity; session: string; detail: string; pane?: string; workspace?: string };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
   registry?: { launch: string; model: string; version: string; sessionId?: string };
   /**
@@ -289,9 +293,11 @@ export interface UpSeat {
    * the stored process is left as it is.
    */
   sessionDoubt?: string;
-  /** The doubt is a working or unsent screen: the refusal that already existed.
-   *  The seat is left out and the run exits 1. Nothing is closed. */
+  /** The doubt is a refusal: the seat is left out and the run exits 1. Nothing is closed. */
   doubtHeld?: boolean;
+  /** The doubt's screen is working: the seat keeps its record, nothing is closed, and the run
+   *  reports it as skipped working — not as a refusal. */
+  doubtWorking?: boolean;
   /**
    * A seat recorded with no process identity whose pane is a bare shell or another model.
    * This `up` does not close it: the record cannot prove the pane is the seat's. The line
@@ -496,13 +502,15 @@ export function upPlan(input: UpInput): Step[] {
           record: { kind: 'ready' },
           detail: `  ${seat.restored.detail}\n`,
           launched: seat.restored.launched,
+          ...(seat.restored.pane === undefined ? {} : { pane: seat.restored.pane }),
+          ...(seat.restored.workspace === undefined ? {} : { workspace: seat.restored.workspace }),
           agentSession: seat.restored.session,
         },
       });
       continue;
     }
     if (seat.sessionDoubt) {
-      if (seat.doubtHeld) {
+      if (seat.doubtHeld && !seat.doubtWorking) {
         steps.push({
           kind: 'skip',
           text: `${seat.name}: ${seat.sessionDoubt}`,

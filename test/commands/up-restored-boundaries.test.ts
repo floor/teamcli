@@ -797,4 +797,193 @@ describe('team up, a restored session: boundaries', () => {
     expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(before);
     expect(seatsOf()['deepseek-acme']).toMatchObject({ launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
+
+  // Gap 4A — the host moved a ready seat onto another pane. The recorded pane holds no process
+  // at all; the pane naming the seat is the seat only while its live session is the recorded
+  // conversation. A free drifted model there is closed and relaunched, resuming it.
+  test('a moved pane tied to the recorded session is repaired there and resumed', async () => {
+    await approve();
+    writeState('kept', true);
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === 'w93:p1') return null; // the recorded pane is gone
+      if (pane === 'w99:p1') return { shell: 750, foreground: [751] };
+      return sameProcess(pane);
+    };
+    const live = () => [
+      ...list().filter((item) => item.name !== 'deepseek-acme'),
+      { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+    ];
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          agents: live,
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    // Closed on the pane the seat actually holds now, and relaunched with its conversation.
+    expect(made.closes).toEqual(['w99']);
+    expect(made.runs.map((run) => run.command).some((command) => command.includes('--resume kept'))).toBe(true);
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready' });
+  });
+
+  // Gap 4A — the same moved pane on the recorded model: nothing is closed, and the record moves
+  // to the pane the seat holds now, with that pane's process identity.
+  test('a moved pane on the recorded model is adopted with its process identity', async () => {
+    await approve();
+    writeState('kept');
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === 'w93:p1') return null;
+      if (pane === 'w99:p1') return { shell: 750, foreground: [751] };
+      return sameProcess(pane);
+    };
+    const live = () => [
+      ...list().filter((item) => item.name !== 'deepseek-acme'),
+      { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+    ];
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          agents: live,
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: ready\n');
+    expect(io.err).toContain('  restored; left as it is\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({
+      stage: 'ready',
+      pane: 'w99:p1',
+      workspace: 'w99',
+      launched: { shell: 750, cli: [751] },
+      agent_session: 'kept',
+    });
+  });
+
+  // Gap 4A — the moved pane cannot be tied to the recorded conversation: a doubt, held, and
+  // nothing is closed or launched.
+  test('a moved pane on another conversation is doubted, never closed', async () => {
+    await approve();
+    writeState('kept');
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => {
+      if (pane === 'w93:p1') return null;
+      if (pane === 'w99:p1') return { shell: 750, foreground: [751] };
+      return sameProcess(pane);
+    };
+    const live = () => [
+      ...list().filter((item) => item.name !== 'deepseek-acme'),
+      { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'ses-foreign' },
+    ];
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          agents: live,
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(1);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: left out: its recorded pane is gone and the pane naming this seat cannot be tied to its recorded conversation; nothing closed\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1' });
+  });
+
+  // Gap 4A — the pane is gone and no name survived: the recorded conversation is resumed on a
+  // fresh pane, and the recorded workspace, still listed by the host, is named and left.
+  test('a missing pane resumes the recorded conversation on a fresh pane', async () => {
+    await approve();
+    writeState('kept', true);
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? null : sameProcess(pane));
+    const live = () => list().filter((item) => item.name !== 'deepseek-acme');
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces,
+          agents: live,
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    const resumed = made.runs.filter((run) => run.command.includes('--resume kept'));
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]?.pane).toBe('w1:p1');
+    expect(io.err).toContain('deepseek-acme: its recorded pane w93:p1 was gone and was replaced; its workspace w93 was left\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w1:p1' });
+  });
+
+  // Gap 4A — a proven conversation this seat's launch line cannot carry stops before anything
+  // is launched: the record stays ready and the run exits 1 with the reason.
+  test('a missing pane whose launch line cannot carry the conversation is left as it is', async () => {
+    await approve();
+    writeSeats('kept');
+    registerSeat('kept', { launch: 'team-deepseek --continue' });
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? null : sameProcess(pane));
+    const live = () => list().filter((item) => item.name !== 'deepseek-acme');
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces,
+          agents: live,
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(1);
+    expect(made.closes).toEqual([]);
+    // Only the mandatory watch workspace exists; nothing was created for the seat.
+    expect(made.creates.filter((label) => !label.startsWith('Watch · '))).toEqual([]);
+    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+    expect(io.err).toContain('  its recorded conversation cannot be resumed');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1' });
+  });
 });

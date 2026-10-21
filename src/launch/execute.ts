@@ -740,6 +740,8 @@ export async function executePlan(
         if (op.launched) {
           host.record(op.seat, {
             stage: 'ready',
+            ...(op.pane ? { pane: op.pane } : {}),
+            ...(op.workspace ? { workspace: op.workspace } : {}),
             launched: op.launched,
             ...(op.agentSession ? { agent_session: op.agentSession } : {}),
           });
@@ -1503,7 +1505,9 @@ export async function executePlan(
           const kind = host.classify(session, op.pane, op.cli);
           const status = listed.status;
           if (status === 'working' || kind === 'working') {
-            refuse(`its model drifted; left as it is (${op.drift.way})`, true);
+            // A seat that came back working is left to finish its turn: nothing is closed and
+            // the run does not fail on it (the restore sweep reports it as skipped working).
+            refuse(`its model drifted; left as it is (${op.drift.way})`, false);
             break;
           }
           if (!((status === 'idle' || status === 'done') && (kind === 'idle' || kind === 'unsent'))) {
@@ -1556,7 +1560,8 @@ export async function executePlan(
             break;
           }
           if (kind === 'working') {
-            held = true;
+            // A turn is running in the pane: nothing is closed, and it is not a refusal — the
+            // restore sweep reports the seat as skipped working.
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: `the process in its pane is working; nothing closed (stop it there, or run team remove ${op.seat})` });
             break;

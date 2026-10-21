@@ -2947,8 +2947,10 @@ describe('team up, a session that was restored', () => {
     made.launch.paneText = (session, pane) => (pane === 'w93:p1' ? 'esc to interrupt' : text(session, pane));
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources(restoredSources(), made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('deepseek-acme: left out: the process in its pane is working; nothing closed (stop it there, or run team remove deepseek-acme)\n');
+    // A working seat is skipped, not refused: nothing is closed, the record stays ready, and
+    // the run does not fail on it (the restore sweep reports it as skipped working).
+    expect(code).toBe(0);
+    expect(io.err).toContain('  the process in its pane is working; nothing closed (stop it there, or run team remove deepseek-acme)\n');
     expect(made.closes).toEqual([]);
     expect(made.creates).not.toContain('deepseek-acme · implementer');
     expect(made.creates).not.toContain('deepseek-acme-2 · implementer');
@@ -6862,7 +6864,9 @@ describe('team up, a ready seat whose model drifted', () => {
       io,
       sources({ sessionState: () => 'running', agents: () => [lead(), codex()], doctor: doctor() }, made),
     );
-    expect(code).toBe(1);
+    // Working at the close: nothing is closed, and the run does not fail on it — the seat is
+    // skipped working, not refused.
+    expect(code).toBe(0);
     expect(made.closes).toEqual([]);
     expect(io.out).toContain('codex-acme: left out: its model drifted; left as it is (team remove codex-acme --abandon)\n');
   });
