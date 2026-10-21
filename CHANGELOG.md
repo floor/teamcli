@@ -103,12 +103,9 @@ whose running model has drifted is held rather than delivered.
   on every pass, so a change to the `watch-rhythm` value changes the next wait without
   restarting the watch.
 
-- **Development-mode support for local release work was improved.** The operational details
-  stay internal.
-
 ### Limits
 
-- Claude socket confirmed; Codex reached by typed wake (proven live on vlist); Antigravity and
+- Claude socket confirmed; Codex reached by typed wake; Antigravity and
   Cursor by typed fallback without read receipts; Grok untested.
 
 ## [0.5.2] - 2026-10-19
