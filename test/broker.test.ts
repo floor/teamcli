@@ -1219,6 +1219,173 @@ describe('the start protocol', () => {
     }
   });
 
+  // The clock lives in a child process of the scene's own: a parent-runner `Date.now` override
+  // is not isolated on this runner — a two-file probe on bun 1.4.2 ran both files in one
+  // process, and the second read the global and the clock the first had installed — so it
+  // would reach every other scene and file. This child owns the logical clock, runs the real
+  // `startBroker` under the same root, and reports each step on stdout. The parent only speaks
+  // through files (`go`, `go1999`, `go2001`, `close`) and never touches its own clock.
+  //
+  // `acquireStartLock` reads `Date.now()` at its loop head (the whole-wait deadline) and again
+  // for the lock's age, so the logical clock pins both boundaries without the host's clock.
+  // Its origin sits a minute behind the real clock: a start that read the real one would
+  // refuse the already-past deadline at its first loop head. Every logical read is counted;
+  // the first loop iteration reads the clock synchronously before the start returns, so an
+  // increase after a step is the positive acknowledgement that a poll ran at that logical
+  // time. Mode `boundary` parks an empty entry at age 999, acknowledges a poll there, then
+  // steps to age 1000 (LOCK_YOUNG_MS) where the entry must be taken over and serve; mode
+  // `deadline` holds a future-mtime entry young, acknowledges a poll at 1999, and steps to
+  // 2001 where the start must answer the specified `locked` without touching the entry or
+  // claiming it. Probed on bun 1.4.2 before these scenes: age 999 stayed pending across a
+  // further poll with the same inode and empty bytes, age 1000 served, and the deadline pair
+  // answered pending at 1999 and `locked` at 2001 with entry and claim untouched.
+  const CLOCK_FIXTURE = `import { existsSync, lstatSync, readFileSync, writeSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const [root, repo, originText, mode] = process.argv.slice(2);
+const origin = Number(originText);
+const lockPath = join(root, '.agents', 'broker.sock.lock');
+const checked = (await import(pathToFileURL(join(repo, 'src', 'file', 'validate.ts')).href)).validateTeamFile(
+  readFileSync(join(root, '.agents', 'team.yaml'), 'utf8'),
+);
+if (!checked.ok) {
+  writeSync(2, 'the fixture team file does not validate');
+  process.exit(2);
+}
+const { startBroker } = await import(pathToFileURL(join(repo, 'src', 'broker', 'server.ts')).href);
+const tick = (ms) => new Promise((done) => setTimeout(done, ms));
+const said = (line) => writeSync(1, line + '\\n');
+const entry = () => {
+  try {
+    const stat = lstatSync(lockPath);
+    return { dev: stat.dev, ino: stat.ino, bytes: readFileSync(lockPath, 'utf8') };
+  } catch {
+    return undefined;
+  }
+};
+const describe = (value) => value === undefined ? 'gone' : value.dev + ' ' + value.ino + ' ' + value.bytes.length;
+const until = async (name) => {
+  while (!existsSync(join(root, '.agents', name))) await tick(2);
+};
+let logical = origin;
+let reads = 0;
+Date.now = () => {
+  reads += 1;
+  return logical;
+};
+const result = startBroker({
+  root,
+  team: checked.team,
+  read: async () => ({ kind: 'read', read: { kind: 'records', records: [{ id: 'm1', title: 't' }], refusals: [] } }),
+  stderr: (text) => writeSync(2, text),
+});
+let settled;
+result.then((answer) => {
+  settled = answer;
+});
+const acknowledged = async () => {
+  const since = reads;
+  while (reads <= since && settled === undefined) await tick(2);
+  if (settled !== undefined) {
+    said('early ' + settled.kind);
+    process.exit(1);
+  }
+  return reads;
+};
+said('ready');
+const readsAtStart = reads;
+await acknowledged();
+said('waiting ' + describe(entry()) + ' ' + readsAtStart);
+await until(mode === 'boundary' ? 'go' : 'go1999');
+logical = origin + (mode === 'boundary' ? 1 : 1999);
+if (mode === 'boundary') {
+  const started = await result;
+  if (started.kind !== 'serving') {
+    said('outcome ' + started.kind);
+    process.exit(1);
+  }
+  said('serving');
+  await until('close');
+  await started.handle.close();
+  const rest = entry();
+  said('closed ' + describe(rest));
+  process.exit(rest === undefined ? 0 : 1);
+}
+await acknowledged();
+said('waiting1999 ' + describe(entry()) + ' ' + reads);
+await until('go2001');
+logical = origin + 2001;
+const started = await result;
+const after = entry();
+const claim = existsSync(lockPath + '.takeover');
+said('result ' + started.kind + ' ' + describe(after) + ' ' + claim);
+process.exit(started.kind === 'locked' && after !== undefined && after.bytes.length === 0 && !claim ? 0 : 1);
+`;
+
+  type ClockChild = {
+    /** The next line, which must start with `prefix`; a mismatch or an early exit rejects. */
+    next: (prefix: string) => Promise<string>;
+    exited: Promise<number | null>;
+    kill: () => void;
+  };
+
+  /** Boot the clock fixture under this scene's `root`, its logical clock at `origin`. */
+  function spawnClockChild(mode: 'boundary' | 'deadline', origin: number): ClockChild {
+    const script = join(base, `clock-${mode}.mjs`);
+    writeFileSync(script, CLOCK_FIXTURE);
+    const child = spawn(process.execPath, [script, root, join(import.meta.dir, '..'), String(origin), mode], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const said: string[] = [];
+    const exited = new Promise<number | null>((done) => child.once('exit', (code) => done(code)));
+    let cursor = 0;
+    let code: number | null | undefined;
+    let err = '';
+    let notify: (() => void) | undefined;
+    const wake = (): void => {
+      const check = notify;
+      notify = undefined;
+      check?.();
+    };
+    let buffer = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      buffer += chunk;
+      let at: number;
+      while ((at = buffer.indexOf('\n')) >= 0) {
+        said.push(buffer.slice(0, at));
+        buffer = buffer.slice(at + 1);
+      }
+      wake();
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => (err += chunk));
+    child.once('exit', (status) => {
+      code = status;
+      wake();
+    });
+    return {
+      next: (prefix) => new Promise<string>((resolve, reject) => {
+        const check = (): void => {
+          if (cursor < said.length) {
+            const line = said[cursor] ?? '';
+            cursor += 1;
+            if (line.startsWith(prefix)) resolve(line);
+            else reject(new Error(`the clock fixture said "${line}", expected "${prefix}"`));
+            return;
+          }
+          if (code !== undefined) {
+            reject(new Error(`the clock fixture exited (${code})${err ? `: ${err.trim()}` : ''}`));
+            return;
+          }
+          notify = check;
+        };
+        check();
+      }),
+      exited,
+      kill: () => child.kill('SIGKILL'),
+    };
+  }
+
   scene('an empty lock file is waited on, not taken over', async () => {
     // The create→write gap, made observable: the lock exists the instant `openSync(path,'wx')`
     // returns, its pid one beat later — an empty read is what a sibling lands on in that gap,
@@ -1231,38 +1398,94 @@ describe('the start protocol', () => {
     // too young to hold its pid, then taken over where no writer is coming (nothing here ever
     // writes a pid into it; LOCK_YOUNG_MS is 1000).
     //
-    // The young window is held open by the lock's own mtime, not by the host's clock: an entry
-    // whose mtime sits ahead of now has a negative age, which no delay can age past the
-    // boundary. The handshake therefore observes the wait deterministically — the start still
-    // pending, the entry the same inode with the same empty bytes — and then crosses the
-    // boundary explicitly, where the aged file must be taken over.
+    // The start runs in the clock child: the empty entry is parked at age 999 — one millisecond
+    // under the window — while the child's logical clock is frozen; a poll is acknowledged there
+    // by the child's clock-read count, and the entry it reports must still be the same inode with
+    // the same empty bytes. One logical millisecond more reaches LOCK_YOUNG_MS exactly; the aged
+    // entry must then be taken over, serve a read and be released.
     project();
     record();
     const path = brokerSocket(root);
     const lockPath = `${path}.lock`;
     writeFileSync(lockPath, '');
-    utimesSync(lockPath, new Date(), new Date(Date.now() + 3_600_000));
+    const origin = Date.now() - 60_000;
+    utimesSync(lockPath, new Date(), new Date(origin - 999));
     const before = lstatSync(lockPath);
-    const starting = startBroker({ root, team: teamOf(), read: () => Promise.resolve(records([{ id: 'm1', title: 't' }])), stderr: () => {} });
-    // One poll turn of the wait (its cadence is 20 ms): a start that took the empty file over
-    // would have replaced this entry by now.
-    await new Promise((tick) => setTimeout(tick, 25));
-    const during = lstatSync(lockPath);
-    expect(during.dev).toBe(before.dev);
-    expect(during.ino).toBe(before.ino);
-    expect(readFileSync(lockPath, 'utf8')).toBe('');
-    expect(await Promise.race([starting.then(() => 'settled'), new Promise<string>((tick) => setTimeout(() => tick('pending'), 0))])).toBe('pending');
-    // Cross the young boundary; the entry is still the one the wait saw, and now it is aged.
-    utimesSync(lockPath, new Date(), new Date(Date.now() - 1_100));
-    const after = lstatSync(lockPath);
-    expect(after.dev).toBe(before.dev);
-    expect(after.ino).toBe(before.ino);
-    expect(readFileSync(lockPath, 'utf8')).toBe('');
-    const started = await starting;
-    if (started.kind !== 'serving') throw new Error(`the broker did not start: ${started.kind}`);
-    expect(await ask(leadSeat)).toMatchObject({ kind: 'read' });
-    await started.handle.close();
-    expect(existsSync(lockPath)).toBe(false);
+    const parentClock = Date.now;
+    const parentWall = parentClock();
+    const child = spawnClockChild('boundary', origin);
+    try {
+      expect(await child.next('ready')).toBe('ready');
+      // `waiting <dev> <ino> <bytes> <reads>`: a poll ran at age 999 and saw this entry.
+      const waiting = (await child.next('waiting ')).split(' ');
+      expect(Number(waiting[1])).toBe(before.dev);
+      expect(Number(waiting[2])).toBe(before.ino);
+      expect(Number(waiting[3])).toBe(0);
+      expect(Number(waiting[4])).toBeGreaterThanOrEqual(2);
+      // Cross the young boundary: age 1000 is not too young, no writer is coming, and the aged
+      // empty entry is taken over.
+      writeFileSync(join(root, '.agents', 'go'), '');
+      expect(await child.next('serving')).toBe('serving');
+      expect(await ask(leadSeat)).toMatchObject({ kind: 'read' });
+      writeFileSync(join(root, '.agents', 'close'), '');
+      expect(await child.next('closed ')).toBe('closed gone');
+      expect(await child.exited).toBe(0);
+      expect(existsSync(lockPath)).toBe(false);
+      // The clock the scenes controlled is the child's: the runner's own clock is still the
+      // function it was and its real time advanced across the scene.
+      expect(Date.now).toBe(parentClock);
+      expect(Date.now()).toBeGreaterThan(parentWall);
+    } finally {
+      child.kill();
+      await child.exited.catch(() => undefined);
+    }
+  });
+
+  scene('an empty lock still young at the whole-wait deadline answers locked', async () => {
+    // The other half of the wait: past LOCK_WAIT_MS (2000) a start answers the specified
+    // fail-closed `locked` even while the entry is too young to take over. The child holds a
+    // future mtime young while its logical clock steps to 1999 — one under the deadline —
+    // where the start must still be pending, and then to 2001, where it must answer without
+    // touching the entry or taking a claim.
+    project();
+    record();
+    const path = brokerSocket(root);
+    const lockPath = `${path}.lock`;
+    writeFileSync(lockPath, '');
+    const origin = Date.now() - 60_000;
+    utimesSync(lockPath, new Date(), new Date(origin + 1_000_000));
+    const before = lstatSync(lockPath);
+    const parentClock = Date.now;
+    const parentWall = parentClock();
+    const child = spawnClockChild('deadline', origin);
+    try {
+      expect(await child.next('ready')).toBe('ready');
+      const waiting = (await child.next('waiting ')).split(' ');
+      expect(Number(waiting[1])).toBe(before.dev);
+      expect(Number(waiting[2])).toBe(before.ino);
+      expect(Number(waiting[3])).toBe(0);
+      writeFileSync(join(root, '.agents', 'go1999'), '');
+      // One logical millisecond under LOCK_WAIT_MS: a poll ran and the entry is still young.
+      const young = (await child.next('waiting1999 ')).split(' ');
+      expect(Number(young[1])).toBe(before.dev);
+      expect(Number(young[2])).toBe(before.ino);
+      expect(Number(young[3])).toBe(0);
+      writeFileSync(join(root, '.agents', 'go2001'), '');
+      expect(await child.next('result ')).toBe(`result locked ${before.dev} ${before.ino} 0 false`);
+      expect(await child.exited).toBe(0);
+      const after = lstatSync(lockPath);
+      expect(after.dev).toBe(before.dev);
+      expect(after.ino).toBe(before.ino);
+      expect(readFileSync(lockPath, 'utf8')).toBe('');
+      expect(existsSync(`${lockPath}.takeover`)).toBe(false);
+      // The clock the scene controlled is the child's: the runner's own clock is still the
+      // function it was and its real time advanced across the scene.
+      expect(Date.now).toBe(parentClock);
+      expect(Date.now()).toBeGreaterThan(parentWall);
+    } finally {
+      child.kill();
+      await child.exited.catch(() => undefined);
+    }
   });
 
   scene('an interrupted writer\'s empty lock is waited on, then taken over', async () => {
@@ -1271,9 +1494,9 @@ describe('the start protocol', () => {
     // file is now a dead writer's, and the second start is a real start: it must not take the
     // file over inside the young window — nothing has had a chance to write, and the oldest a
     // fresh entry can be is microseconds — and with no writer coming, the empty file is taken
-    // over once it has aged past LOCK_YOUNG_MS (1000) and serves. As above, the window is held
-    // open by the lock's mtime and then crossed explicitly, so the wait is observed without
-    // depending on the host's clock.
+    // over once it has aged past LOCK_YOUNG_MS (1000) and serves. The same clock child as above
+    // parks the dead entry at age 999, acknowledges a poll there, requires the entry unchanged,
+    // and steps one logical millisecond across the boundary.
     project();
     record();
     const path = brokerSocket(root);
@@ -1287,25 +1510,34 @@ describe('the start protocol', () => {
     }
     expect(existsSync(lockPath)).toBe(true);
     expect(readFileSync(lockPath, 'utf8')).toBe('');
-    utimesSync(lockPath, new Date(), new Date(Date.now() + 3_600_000));
+    const origin = Date.now() - 60_000;
+    utimesSync(lockPath, new Date(), new Date(origin - 999));
     const before = lstatSync(lockPath);
-    const starting = startBroker({ root, team: teamOf(), read: () => Promise.resolve(records([{ id: 'm1', title: 't' }])), stderr: () => {} });
-    await new Promise((tick) => setTimeout(tick, 25));
-    const during = lstatSync(lockPath);
-    expect(during.dev).toBe(before.dev);
-    expect(during.ino).toBe(before.ino);
-    expect(readFileSync(lockPath, 'utf8')).toBe('');
-    expect(await Promise.race([starting.then(() => 'settled'), new Promise<string>((tick) => setTimeout(() => tick('pending'), 0))])).toBe('pending');
-    utimesSync(lockPath, new Date(), new Date(Date.now() - 1_100));
-    const after = lstatSync(lockPath);
-    expect(after.dev).toBe(before.dev);
-    expect(after.ino).toBe(before.ino);
-    expect(readFileSync(lockPath, 'utf8')).toBe('');
-    const started = await starting;
-    if (started.kind !== 'serving') throw new Error(`the broker did not start: ${started.kind}`);
-    expect(await ask(leadSeat)).toMatchObject({ kind: 'read' });
-    await started.handle.close();
-    expect(existsSync(lockPath)).toBe(false);
+    const parentClock = Date.now;
+    const parentWall = parentClock();
+    const child = spawnClockChild('boundary', origin);
+    try {
+      expect(await child.next('ready')).toBe('ready');
+      const waiting = (await child.next('waiting ')).split(' ');
+      expect(Number(waiting[1])).toBe(before.dev);
+      expect(Number(waiting[2])).toBe(before.ino);
+      expect(Number(waiting[3])).toBe(0);
+      expect(Number(waiting[4])).toBeGreaterThanOrEqual(2);
+      writeFileSync(join(root, '.agents', 'go'), '');
+      expect(await child.next('serving')).toBe('serving');
+      expect(await ask(leadSeat)).toMatchObject({ kind: 'read' });
+      writeFileSync(join(root, '.agents', 'close'), '');
+      expect(await child.next('closed ')).toBe('closed gone');
+      expect(await child.exited).toBe(0);
+      expect(existsSync(lockPath)).toBe(false);
+      // The clock the scenes controlled is the child's: the runner's own clock is still the
+      // function it was and its real time advanced across the scene.
+      expect(Date.now).toBe(parentClock);
+      expect(Date.now()).toBeGreaterThan(parentWall);
+    } finally {
+      child.kill();
+      await child.exited.catch(() => undefined);
+    }
   });
 
   scene('a live writer paused in the lock\'s create is never evicted', async () => {
