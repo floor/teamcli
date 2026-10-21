@@ -41,6 +41,7 @@ const CAPTURE = (name: string): string => readFileSync(new URL(`../fixtures/${na
 // Captures: the repository's own retained panes.
 const CLAUDE_LIMIT = CAPTURE('claude-code/rate-limit.txt');
 const CLAUDE_PROVIDER_ERROR = CAPTURE('claude-code/provider-error.txt');
+const CLAUDE_QUESTION = CAPTURE('claude-code/2.1.289/question-plain.txt');
 const GEMINI_LIMIT = CAPTURE('gemini/0.64.0/rate-limit.txt');
 const AGY_IDLE = CAPTURE('antigravity/1.4.2/idle.txt');
 const CODEX_WARNING = CAPTURE('codex/0.157.0/idle.txt');
@@ -195,6 +196,16 @@ describe('send at a quota-out screen', () => {
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_PROVIDER_ERROR, 'idle');
     expect(scene.code).toBe(1);
     expect(scene.doc?.error?.message).toContain('provider error');
+    expect(scene.out).not.toContain('quota');
+    expect(scene.typed).toEqual([]);
+    expect(scene.enters).toBe(0);
+  });
+
+  test('an ordinary dialog keeps its own hold and is not read as quota', async () => {
+    const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_QUESTION, 'idle');
+    expect(scene.code).toBe(1);
+    expect(scene.doc?.error?.id).toBe('send.unreachable');
+    expect(scene.doc?.error?.message).toContain('question');
     expect(scene.out).not.toContain('quota');
     expect(scene.typed).toEqual([]);
     expect(scene.enters).toBe(0);
