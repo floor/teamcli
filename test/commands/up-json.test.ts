@@ -183,9 +183,10 @@ describe('team up --json', () => {
       expect(doc.schema).toEqual({ name: 'team.up', version: 1 });
       expect(doc.dry_run).toBe(false);
       expect(doc.status).toBe('ready');
-      expect(doc.action_summary).toMatch(/^builder-1: ready$/);
+      expect(doc.action_summary).toBe('0 seats repaired, 0 skipped (working), 0 refused');
       expect(doc.seats).toEqual(['lead', 'builder-1']);
       expect(doc.notes.some((line) => line === 'lead: ready')).toBe(true);
+      expect(doc.notes.some((line) => line === 'builder-1: ready')).toBe(true);
     } finally {
       rmSync(here.base, { recursive: true, force: true });
     }

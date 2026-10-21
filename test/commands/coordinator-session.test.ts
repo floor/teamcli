@@ -1121,7 +1121,8 @@ describe('up over the v0.2.1 state', () => {
         '  already ready; left as it is; its process was never recorded: ' +
         `run team register ${OPERATOR} to record it, nothing relaunched\n` +
         '  already ready; left as it is; its process was never recorded: ' +
-        `run team register ${SEAT} to record it, nothing relaunched\n`,
+        `run team register ${SEAT} to record it, nothing relaunched\n` +
+        '0 seats repaired, 0 skipped (working), 0 refused\n',
     );
     expect(counts).toEqual({ starts: 0, creates: 0, runs: 0, renames: 0, closes: 0 });
     expect(readFileSync(stateFile, 'utf8')).toBe(`${JSON.stringify(UP_STATE_021, null, 2)}\n`);
