@@ -122,22 +122,41 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'swap', args: ['swap'], schemaKey: 'team.swap' },
 ];
 
+/** One cold entry into src/cli.ts is a fresh Bun process; a healthy `--help` answers in well
+ *  under a second. This per-child deadline names a hung command at its own window, instead of
+ *  leaving it to the runner's test timeout, which kills every child still in flight (exit 143). */
+const COLD_ENTRY_DEADLINE_MS = 10_000;
+
+/** The batch below launches two cold entries per command through 16 lanes. A 2-vCPU hosted
+ *  runner needs more than one 5s test deadline for that many spawns; the per-child deadline
+ *  above, not this budget, is what catches a hang. */
+const COLD_ENTRY_BATCH_DEADLINE_MS = 30_000;
+
 async function runCli(
   args: string[],
   opts?: { cwd?: string; env?: Record<string, string | undefined> },
-): Promise<{ code: number; stdout: string; stderr: string }> {
+): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
   const proc = Bun.spawn([process.execPath, cliEntry, ...args], {
     cwd: opts?.cwd,
     env: opts?.env,
     stdout: 'pipe',
     stderr: 'pipe',
   });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  return { code, stdout, stderr };
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, COLD_ENTRY_DEADLINE_MS);
+  try {
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr, timedOut };
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 
 async function mapConcurrent<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -179,7 +198,8 @@ describe('CLI cold-entry smoke test across every command', () => {
       ...(await runCli(args)),
     }));
 
-    for (const { name, args, code, stdout, stderr } of results) {
+    for (const { name, args, code, stdout, stderr, timedOut } of results) {
+      expect(timedOut, `${args.join(' ')} finished within ${COLD_ENTRY_DEADLINE_MS}ms`).toBe(false);
       expect(stderr, `${args.join(' ')} stderr`).not.toContain('before initialization');
       expect(stderr, `${args.join(' ')} stderr`).not.toMatch(/^\s*at\s+/m);
       expect(stderr, `${args.join(' ')} stderr`).toBe('');
@@ -189,7 +209,7 @@ describe('CLI cold-entry smoke test across every command', () => {
         expect(stdout, `${args.join(' ')} usage header`).toMatch(new RegExp(`^Usage: team ${name}\\b`));
       }
     }
-  }, 30_000);
+  }, COLD_ENTRY_BATCH_DEADLINE_MS);
 
   test('every read-only command runs in a scratch fixture, validates its --json schema, and prints clean human output', async () => {
     const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-cli-smoke-')));
