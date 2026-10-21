@@ -781,3 +781,108 @@ describe('bus verification checkpoint: verify only what came after the last veri
     expect(restored.events.map((event) => event.payload.seq)).toEqual([1]);
   });
 });
+
+describe('event log appends are serialized across processes (RFC 002 Amendment 01 §4.1)', () => {
+  const TS = '2026-10-21T12:00:00.000Z';
+  const DAY_MS = 86_400 * 1_000;
+
+  test('twelve concurrent writers each take a unique sequence and every record is read past a shared cursor', async () => {
+    const { root, home } = makeScratch();
+    const seed = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'seed' },
+      { deduplicate: false, retain: false },
+    );
+    expect(seed.ok).toBe(true);
+    if (!seed.ok) return;
+    expect(seed.record.payload.seq).toBe(1);
+
+    // Each writer is a separate process released at one instant, so the scene exercises the
+    // cross-process path: allocation and append must serialize or two writers mint one sequence.
+    const script = join(import.meta.dir, 'bus-log-race-run.ts');
+    const startAt = Date.now() + 1_500;
+    const children = Array.from({ length: 12 }, (_, at) => {
+      const id = `race-${String(at)}`;
+      const child = Bun.spawn([process.execPath, script, root, home, id, String(startAt)], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      return { id, child };
+    });
+
+    const written: { id: string; ok: boolean; seq?: number; reason?: string }[] = [];
+    for (const { id, child } of children) {
+      const [out, err, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      expect({ id, err, code }).toEqual({ id, err: '', code: 0 });
+      written.push(JSON.parse(out.trim().split('\n').at(-1) ?? 'null') as (typeof written)[number]);
+    }
+
+    expect(written.filter((result) => result.ok !== true)).toEqual([]);
+    const seqs = written.map((result) => result.seq ?? -1).sort((a, b) => a - b);
+    expect(seqs).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+
+    // A consumer that had already passed seq 1 sees every sibling: the cursor filter drops only
+    // records at or below the cursor, so a duplicate sequence would silently hide one.
+    const read = readEventsFromCursor('acme', root, home, 1, { kept: 2 });
+    expect(read.ok).toBe(true);
+    if (!read.ok || read.kind !== 'events') return;
+    expect(read.events.map((event) => event.payload.seq).sort((a, b) => a - b)).toEqual(seqs);
+    const tracker = createSequenceTracker(1);
+    for (const event of read.events) {
+      expect(tracker.accept(event)).toBe(true);
+    }
+    expect(tracker.cursor).toBe(13);
+
+    const full = readEvents('acme', root, home);
+    expect(full.ok).toBe(true);
+    if (!full.ok) return;
+    expect(full.events).toHaveLength(13);
+    expect(full.unverified).toBe(0);
+  }, 30_000);
+
+  test('a drop declared from inside an append takes the next sequence, and the append after it is stale by nothing', () => {
+    const { root, home } = makeScratch();
+    const appendOne = (id: string, options: Parameters<typeof appendEvent>[4] = {}) =>
+      appendEvent(
+        'acme',
+        root,
+        home,
+        { ts: TS, kind: 'message.arrived', session: 'acme', record_id: id },
+        { deduplicate: false, ...options },
+      );
+    expect(appendOne('kept-1', { retain: false }).ok).toBe(true);
+    expect(appendOne('kept-2', { retain: false }).ok).toBe(true);
+
+    // Backdate the live file past the window: the next append seals it, the prune drops it, and
+    // the drop declaration appends its signed record from inside that append.
+    const path = eventLogPath('acme', root, home);
+    const monthAgo = new Date(Date.now() - 31 * DAY_MS);
+    utimesSync(path, monthAgo, monthAgo);
+
+    const fresh = appendOne('fresh');
+    expect(fresh.ok).toBe(true);
+    if (!fresh.ok) return;
+    expect(fresh.record.payload.seq).toBe(3);
+
+    const after = appendOne('after');
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.record.payload.seq).toBe(5);
+
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((event) => [event.payload.record_id, event.payload.seq])).toEqual([
+      ['fresh', 3],
+      ['retention:1-2', 4],
+      ['after', 5],
+    ]);
+    expect(read.unverified).toBe(0);
+  });
+});
