@@ -1064,13 +1064,21 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // undelivered to the lead), and a stored signed copy waiting unread is not a wake. When
         // the daemon hosts the watch, the hosted loop owns the ring and this pass types nothing;
         // an unverified pace holds the ring with the rest of the automatic work.
+        // Resolve receipts before the ring: an inbox/drop receipt can prove this id was read
+        // even when the matching mailbox record's separate receipt is not present.
+        const promotedReads = !foreign
+          ? promoteInboxDrops({
+            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
+          })
+          : new Set<string>();
         const ring = result.ring;
         if (ring && delivered.size === 0 && !suppressed.has(ring.to) && hosted === undefined && paceVerified && sources.home !== undefined) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${ring.text}`, false);
           // A read that landed since the pass read the mailbox is the seat's own word: the signed
           // receipt is read again here, and an already-read message is not reminded. The snapshot
           // held it only because the read came after that read.
-          else if (!listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id && one.to === ring.to)) {
+          else if (promotedReads.has(`${ring.to}\n${ring.id}`)
+            || !listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id && one.to === ring.to)) {
             say(`ring not typed: message ${ring.id} is already read`, false);
           } else await deliver({
             pane: ring.pane,
@@ -1082,11 +1090,6 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // An inbox send the seat's client has read since the last pass is promoted here: the
         // receipt is that client's own word, and the history records `delivered (read)` once. It
         // types nothing and needs no pane, so a watch without nudges promotes it just the same.
-        if (!foreign) {
-          promoteInboxDrops({
-            dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
-          });
-        }
         // A send held while a pane was busy leaves its drop and a record beside it: the pass
         // delivers one per seat once the box is free, bounded, and says the drop's path when it
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.

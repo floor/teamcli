@@ -292,7 +292,11 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
  * per marker — so it runs in a watch without nudges too, where the receipt is the only word the
  * sender gets. The name is the inbox-side one it grew from; the watch's call site keeps it.
  */
-export function promoteInboxDrops(scene: RetryScene): void {
+export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
+  // A promoted inbox/drop receipt may have a matching message record in the ordinary mailbox
+  // store. Tell the ring path which exact seat/id was read so it cannot use the stale mailbox
+  // snapshot from before this promotion.
+  const read = new Set<string>();
   for (const seat of scene.team.seats) {
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     for (const drop of readPending(dropDir)) {
@@ -301,6 +305,7 @@ export function promoteInboxDrops(scene: RetryScene): void {
       if (drop.leg === undefined) continue;
       if (scene.home === undefined) continue;
       if (!receiptHeld(dropDir, drop.id, { to: seat.name, root: scene.root, session: scene.session }, scene.home, claimBindingIn(scene.root, scene.session, seat.name, drop.id))) continue;
+      read.add(`${seat.name}\n${drop.id}`);
       clearPending(dropDir, drop.id);
       if (scene.home !== undefined) {
         appendHistory(scene.team.project, scene.root, scene.home, {
@@ -321,6 +326,7 @@ export function promoteInboxDrops(scene: RetryScene): void {
       );
     }
   }
+  return read;
 }
 
 /**

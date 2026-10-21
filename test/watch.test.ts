@@ -19,6 +19,8 @@ import type { Live } from '../src/status/compare.ts';
 import { launchLimit, parseLoadavg, parseMeminfo, parseMemoryPressure, parsePsiMemory, parseSwapUsage, parseVmPressureLevel, readMachine, readingsText, swapTotalProblem } from '../src/watch/machine.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { newMemory, NUDGE_TEXT, pass, ringText } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
@@ -1222,6 +1224,28 @@ describe('team watch', () => {
     expect(io.out).toContain('watching the session "acme-web" every 120s');
     expect(waits).toEqual([120]);
     expect(io.out).not.toContain('the file differs from the approved one');
+  });
+
+  test('a signed watch-rhythm change is reloaded by the running watch on its next pass', async () => {
+    const io = testIo(dir, { kind: 'owner' });
+    const waits: number[] = [];
+    let changed = false;
+    const code = await runWatch(['--file', file], io, sources(2, {
+      wait: async (seconds) => {
+        waits.push(seconds);
+        if (!changed) {
+          changed = true;
+          const wrote = writePolicySet(join(dir, 'home'), {
+            level: 'team', target: teamIdOf(dir), teamRoot: dir, name: 'watch-rhythm', value: 'relaxed',
+          }, { now: new Date(clock) });
+          if (!wrote.ok) throw new Error(wrote.why);
+          return true;
+        }
+        return false;
+      },
+    }));
+    expect(code).toBe(0);
+    expect(waits).toEqual([120, 240]);
   });
 
   test('an edited grant and delegates logs no approved-copy difference', async () => {

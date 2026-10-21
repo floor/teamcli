@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listDrops } from '../src/commands/drops.ts';
+import { listUnacked, plantMessage } from '../src/commands/messages.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -733,7 +734,7 @@ describe('promoteInboxDrops', () => {
     expect(readHistory('acme', made.root, made.home)).toMatchObject({ ok: true, entries: [] });
 
     readInbox(made, INBOX_A, 'lead', 'acme');
-    promoteInboxDrops(at);
+    expect(promoteInboxDrops(at)).toEqual(new Set([`lead\n${INBOX_A}`]));
 
     expect(readPending(dropDir)).toEqual([]);
     // The record is the message and stays: only the receipt beside it is done with.
@@ -1350,6 +1351,56 @@ describe('team watch retries a held drop', () => {
 });
 
 describe('team watch promotes an inbox send its seat has read', () => {
+  test('a retry receipt is promoted before a matching unread mailbox record can ring', async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-no-ring-')));
+    base = directory;
+    execFileSync('git', ['init', '-q'], { cwd: directory });
+    mkdirSync(join(directory, '.agents'));
+    const file = join(directory, '.agents', 'team.yaml');
+    writeFileSync(file, raw);
+    const body = 'from the owner\n\nalready read';
+    const seeded = { root: directory, dir: join(directory, '.agents'), home: directory };
+    const dropDir = seedInbox(seeded, 'acme-web', 'deepseek-acme', INBOX_A, body);
+    // The prior mailbox generation can leave its signed record beside the new send record. Its
+    // mailbox receipt is absent, while the inbox receipt is the authoritative read for this id.
+    plantMessage(directory, directory, 'deepseek-acme', INBOX_A, {
+      kind: 'message', id: INBOX_A, to: 'deepseek-acme', root: realpathSync(directory),
+      session: 'acme-web', at: NOW.toISOString(), body, from: 'owner',
+    });
+    expect(listUnacked(directory, 'acme-web', directory)).toHaveLength(2);
+    readInbox(seeded, INBOX_A, 'deepseek-acme', 'acme-web');
+    expect(listUnacked(directory, 'acme-web', directory)).toHaveLength(1);
+
+    const one = pane(claudeBox(''));
+    const typed: string[] = [];
+    const sources: WatchSources = {
+      live: () => liveWith('deepseek-acme', 'first:pane'),
+      machine: () => ({ loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 }),
+      standing: () => ({ kind: 'none' }),
+      readChecks: () => [],
+      screen: () => one.screen,
+      status: () => one.status,
+      foreground: () => ['claude'],
+      typeText: (_pane, text) => { typed.push(text); one.screen = claudeBox(text); return true; },
+      pressEnter: () => { one.enters += 1; one.status = 'working'; one.screen = claudeBox(''); return true; },
+      sleep: async () => {},
+      notify: () => {},
+      now: () => NOW,
+      wait: async () => false,
+      alive: () => false,
+      pid: 4242,
+      home: directory,
+    };
+    const io = testIo(directory, { kind: 'owner' });
+    const code = await runWatch(['--file', file], io, sources);
+    expect(code).toBe(0);
+    expect(typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: an inbox send from owner was read in its inbox');
+    expect(io.out).not.toContain('rang deepseek-acme:');
+  });
+
   test('the receipt is promoted with --no-nudge, and the watch types nothing', async () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-promote-')));
     base = directory;
