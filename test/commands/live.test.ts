@@ -2492,7 +2492,7 @@ describe('team up, a session that was restored', () => {
     expect(seats['deepseek-acme-2']).toMatchObject({ stage: 'ready', pane: 'w2:p1', launched: { shell: 700, cli: [701] } });
   });
 
-  test('a matching agent session is not closed, and a drifted model on it is not closed', async () => {
+  test('a matching agent session on its own model is not closed, and one on another model is repaired', async () => {
     writeFileSync(join(root, '.agents/team.yaml'), makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n')));
     await approve();
     writeFileSync(
@@ -2511,17 +2511,49 @@ describe('team up, a session that was restored', () => {
       }),
     );
     const terra = readFileSync(join(import.meta.dir, '../fixtures/codex/0.161.0/idle.txt'), 'utf8');
-    const made = world();
+    const settled = fileModel(readFileSync(join(import.meta.dir, '../fixtures/codex/0.157.0/idle.txt'), 'utf8'));
+    // The repaired codex seat's new pane reads the codex idle box; every other new pane reads
+    // the claude-code one. The recorded panes read their own screens.
+    const made = world((_pane, label) => (label.startsWith('codex-acme ') ? settled : IDLE));
+    made.seed('w92:p1', terra, true);
+    made.seed('w93:p1', IDLE, true);
     made.session = 'running';
     made.launch.processInfo = (_session, pane) => {
       if (pane === 'w92:p1') return { shell: 800, foreground: [801] };
       if (pane === 'w93:p1') return { shell: 900, foreground: [901] };
       return { shell: 700, foreground: [700, 701] };
     };
-    made.launch.paneText = (_session, pane) => (pane === 'w92:p1' ? terra : IDLE);
+    // The repaired codex seat's rules arrive as a typed first message: the box holds the line
+    // while it is typed, the Enter submits it, and herdr reports the turn as working. The old
+    // pane was already at its idle box, so nothing else in this scene is typed into.
     const keys: string[] = [];
-    made.launch.typeText = () => { keys.push('type'); return true; };
-    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    let codexPane = '';
+    let typedLine = '';
+    let holding = false;
+    let status = 'idle';
+    const boxed = () => {
+      const [first = '', ...rest] = wrappedRows(typedLine);
+      return settled.replace('› Ask Codex to do anything', [`› ${first}`, ...rest.map((line) => `  ${line}`)].join('\n'));
+    };
+    const read = made.launch.paneText;
+    made.launch.paneText = (session, pane) => (pane === codexPane && holding ? boxed() : read(session, pane));
+    made.launch.typeText = (_session, pane, text) => {
+      codexPane = pane;
+      typedLine = text;
+      holding = true;
+      keys.push('type');
+      return true;
+    };
+    made.launch.pressEnter = () => { holding = false; status = 'working'; keys.push('enter'); return true; };
+    made.launch.agentStatus = (_session, pane) => (pane === codexPane ? status : 'idle');
+    // The execute pass re-reads the host's agent list directly before the close; once w92 is
+    // closed the seat is gone from it, as herdr would report.
+    made.launch.agents = () => (made.closes.includes('w92')
+      ? []
+      : [
+          { ...agent('codex-acme', 'w92:p1', 'idle', 'codex'), session: 'kept' },
+          { ...agent('deepseek-acme', 'w93:p1', 'idle'), session: 'kept' },
+        ]);
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -2540,13 +2572,20 @@ describe('team up, a session that was restored', () => {
       ),
     );
     expect(code).toBe(0);
-    expect(made.closes).not.toContain('w92');
-    expect(made.closes).not.toContain('w93');
-    expect(keys).toEqual([]);
-    expect(io.err).toContain('  restored; left as it is; its model drifted; left as it is\n');
+    // The codex seat's screen names another model: its recorded conversation is proven
+    // (`kept`), so it is closed without input and relaunched through the file's line with
+    // that conversation resumed — never a blank one.
+    expect(made.closes).toEqual(['w92']);
+    const relaunched = made.runs.filter(({ command }) => command.includes('codex -m gpt-6-sol'));
+    expect(relaunched).toHaveLength(1);
+    expect(relaunched[0]?.command).toContain('resume kept');
+    expect(keys).toEqual(['type', 'enter']);
+    // The deepseek seat's own model is not readable from a Claude Code screen: nothing is
+    // closed and the record takes the pids the pane holds now.
     expect(io.err).toContain('  restored; left as it is\n');
     const seats = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
-    expect(seats['codex-acme']).toMatchObject({ stage: 'ready', pane: 'w92:p1', launched: { shell: 800, cli: [801] }, agent_session: 'kept' });
+    expect(seats['codex-acme']).toMatchObject({ stage: 'ready' });
+    expect(seats['codex-acme']?.pane).not.toBe('w92:p1');
     expect(seats['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 900, cli: [901] }, agent_session: 'kept' });
   });
 

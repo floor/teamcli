@@ -559,9 +559,10 @@ function seatPlan(
   if (restoredSession !== null && recorded.pane && recorded.workspace && recorded.launched) {
     const next = launchedIdentity(processes[seat.name] ?? null);
     if (next) {
-      const drift = registry
-        ? modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry, true, callerSeat)
-        : { kind: 'skip' as const };
+      // The expected side is the signed record where there is one, and the file it was declared
+      // from otherwise: a restored seat the host brought back on another model is repaired too.
+      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry ?? seat, true, callerSeat);
+      if (drift.kind === 'refuse') return { ...planned, stage: 'ready', driftRefused: drift.detail };
       if (drift.kind === 'cycle') {
         // A proven conversation this seat's own launch line cannot carry stops the repair before
         // its close: the conversation would not come back. The line checked is the one the
