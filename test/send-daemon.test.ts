@@ -672,6 +672,13 @@ describe('working seat retry and seat-lock coexistence', () => {
     expect(polls).toBeGreaterThanOrEqual(3);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
+    // The Enter is observed inside the worker's delivery, before it has verified the take and
+    // appended its history line: on a loaded host the poll above can return in that window, so
+    // wait for the line itself — the delivery's last step — before reading its outcome.
+    await until(() => {
+      const h = readHistory('acme', w.root, w.home);
+      return h.ok && h.entries.length >= 1;
+    });
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
     if (hist.ok) expect(hist.entries[0]?.outcome).toBe('sent (unconfirmed)');
