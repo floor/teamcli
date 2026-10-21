@@ -962,6 +962,10 @@ describe('the lead report aggregates a pass', () => {
   }
 
   test('two waiting messages across seats yield one signed lead drop listing both', () => {
+    // Fixed vectors: the one-message id is the one earlier builds wrote, and the two-message id
+    // is fixed by the sorted set — a drift in the rule, the implementation or this helper fails.
+    expect(reportIdOf([UNREAD_A])).toBe('14bcc046-ef11-84dd-a25b-2c172ed7987a');
+    expect(reportIdOf([UNREAD_B, UNREAD_A])).toBe('3e4b2dda-54ce-8990-803a-be163b25c59f');
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const leadDrop = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nfirst', new Date(NOW.getTime() - 21 * MIN));
