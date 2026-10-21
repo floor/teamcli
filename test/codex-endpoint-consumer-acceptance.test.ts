@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { entitiesPath } from '../src/entities.ts';
@@ -55,7 +56,7 @@ afterEach(() => {
 /** One team, one Codex seat bound to THREAD_ID in the registry and the state, and a scratch
  *  `codex` recorder. The state starts with no managed-launch fields; each scene adds them. */
 function makeScene(): Scene {
-  const base = realpathSync(mkdtempSync('/private/tmp/b7-codex-endpoint-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b7-codex-endpoint-')));
   live.push(base);
   const root = join(base, 'acme');
   const dir = join(root, '.agents');

@@ -18,6 +18,7 @@ import {
   appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { daemonHealth, probeDaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type MachineDaemon } from '../src/daemon/host.ts';
@@ -70,12 +71,10 @@ let daemons: Running[] = [];
 let servers: Server[] = [];
 
 /**
- * One synthetic checkout, home and seat record. Under /private/tmp rather than os.tmpdir(): a
- * child process under the system temp measured seconds of startup here; these scenes only use
- * in-process handles, but the world stays in the same place the accepted hook chain measured.
+ * One synthetic checkout, home and seat record under the platform temporary directory.
  */
 function makeWorld(): World {
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'presence-rpc-acceptance-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'presence-rpc-acceptance-')));
   const home = join(base, 'home');
   const root = join(base, 'repo');
   const dir = join(root, '.agents');
@@ -442,7 +441,7 @@ describe('the client merges only what the answering epoch proves', () => {
   }
 
   test('epoch mismatch, absent or malformed roots, and contradictions leave the recorded root alone', async () => {
-    const home = realpathSync(mkdtempSync(join('/private/tmp', 'presence-rpc-client-')));
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'presence-rpc-client-')));
     worlds.push({ base: home, home, root: home, dir: home, binding: '' });
     const state = stateOf(home);
     writeDaemonState(home, state);
@@ -504,7 +503,7 @@ describe('the client merges only what the answering epoch proves', () => {
   }, 15_000);
 
   test('a persisted record can never carry healthy, and an unanswered probe pastes nothing', async () => {
-    const home = realpathSync(mkdtempSync(join('/private/tmp', 'presence-rpc-client-')));
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'presence-rpc-client-')));
     worlds.push({ base: home, home, root: home, dir: home, binding: '' });
     const state = stateOf(home);
     // A hand-edited file, the way a stale writer or a person could leave one: the record says

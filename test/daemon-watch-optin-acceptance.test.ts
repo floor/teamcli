@@ -55,7 +55,7 @@ const worlds: World[] = [];
 const running: Array<{ close: () => Promise<void> }> = [];
 
 function scratch(): World {
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'b7watch-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b7watch-')));
   const root = join(base, 'repo');
   const other = join(base, 'other');
   const home = join(base, 'home');

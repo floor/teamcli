@@ -28,6 +28,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { entitiesPath } from '../src/entities.ts';
@@ -69,7 +70,7 @@ afterEach(() => {
 /** One team, one Codex seat bound to `THREAD_ID`, delivery order native then drop, a scratch
  *  `codex` recorder first on PATH, and (until a scene adds it) no managed seat state. */
 function makeScene(): Scene {
-  const base = realpathSync(mkdtempSync('/private/tmp/b4-epl-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b4-epl-')));
   live = base;
   const root = join(base, 'acme');
   const dir = join(root, '.agents');

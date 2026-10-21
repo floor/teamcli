@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isPresenceBinding } from '../src/daemon/presence/contract.ts';
 import { createPresenceActivity } from '../src/daemon/presence/activity.ts';
@@ -68,11 +69,7 @@ let worlds: World[] = [];
 let ingesters: PresenceIngester[] = [];
 
 beforeEach(() => {
-  // Under /private/tmp, not os.tmpdir(): a child bun started with its cwd under the system temp
-  // on this host measured 0.8-1.4 s of startup alone (a /private/tmp cwd measured ~0.08 s),
-  // which would drown the chain this file measures. The folder is still synthetic and removed
-  // with the world.
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'presence-hook-command-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'presence-hook-command-')));
   const home = join(base, 'home');
   const root = join(base, 'crew');
   const dir = join(root, '.agents');

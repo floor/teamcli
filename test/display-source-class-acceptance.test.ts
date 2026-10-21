@@ -1,6 +1,6 @@
 // Independent acceptance of the display's per-seat identity and source-class reading against the
 // real machine daemon and the real health client. A synthetic checkout, home and runtime source
-// live under /private/tmp; the daemon's own ingester and activity apply the staged transitions to
+// live under a temporary directory; the daemon's own ingester and activity apply the staged transitions to
 // the canonical projection and its fence, and every display answer comes through
 // `daemonHealth()`'s own strict wire reading and the display functions in src/labels/presence.ts.
 // No live seat, pane, service, owner home or credential file is involved.
@@ -19,6 +19,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { daemonHealth, type DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type MachineDaemon } from '../src/daemon/host.ts';
@@ -100,7 +101,7 @@ afterEach(async () => {
 });
 
 function makeWorld(nativeBinding: string = BINDING): World {
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'display-source-class-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'display-source-class-')));
   const home = join(base, 'home');
   const root = join(base, 'repo');
   const dir = join(root, '.agents');

@@ -4,6 +4,7 @@
 // snapshot directly; no watch loop, runtime or pane is started.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { presenceId, type PresenceReading } from '../src/daemon/presence/contract.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -68,7 +69,7 @@ function world(seats: string[] = ['worker-a', 'worker-b', 'worker-c']): {
   team: TeamFile;
   state: SessionState;
 } {
-  const root = mkdtempSync('/private/tmp/b7native-');
+  const root = mkdtempSync(join(tmpdir(), 'b7native-'));
   roots.push(root);
   mkdirSync(join(root, '.agents'), { recursive: true });
   writeFileSync(join(root, '.agents', 'queue.yaml'), '');

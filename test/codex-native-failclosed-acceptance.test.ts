@@ -2,7 +2,7 @@
 // integration fdc457174), same file against the fix fd2fd9202. The transport is a real Unix-socket
 // WebSocket JSON-RPC app-server fixture (the frame shapes pinned by the measured capture in the
 // source's own test file); the source, mapper and spool writer are production modules. Synthetic
-// /private/tmp scene only: no live Codex, pane, session or credential is touched.
+// temporary scene only: no live Codex, pane, session or credential is touched.
 //
 // The scenes hold the source to the consumer's required answer:
 //   - a bound `notLoaded` / `systemError` / unrecognized status is the current measured state, so
@@ -17,6 +17,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   CODEX_RETRY_MS,
@@ -49,7 +50,7 @@ afterEach(() => {
 
 /** One Codex seat bound to THREAD with a valid presence binding, in a synthetic agents folder. */
 function makeScene(): Scene {
-  const base = realpathSync(mkdtempSync('/private/tmp/b7-codex-accept-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b7-codex-accept-')));
   live = base;
   const dir = join(base, 'acme', '.agents');
   mkdirSync(dir, { recursive: true });

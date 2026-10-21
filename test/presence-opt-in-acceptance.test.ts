@@ -2,8 +2,8 @@
 // (a0fb1fc12), the hosted send server's per-seat proof (38677807f) and the strict endpoint reader
 // (742d5a1c0, shared with cc6016621).
 //
-// Every world is synthetic: a scratch team and state under /private/tmp, the real darwin service
-// adapter writing its unit with an injected runner (no launchctl call leaves the process), the
+// Every world is synthetic: a scratch team and state under a temporary directory, the real service
+// adapter writing its unit with an injected runner (no service-manager call leaves the process), the
 // real `team daemon install/run` command surface, and the real machine daemon with its presence
 // pipeline. No live install, reload, service, seat, pane or credential file is touched.
 //
@@ -18,6 +18,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
@@ -72,10 +73,10 @@ afterEach(() => {
 type World = { base: string; root: string; home: string; dir: string; sockets: string };
 
 function world(): World {
-  const base = realpathSync(mkdtempSync('/private/tmp/b7-b5-opt-in-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'o-')));
   bases.push(base);
   const root = join(base, 'repo');
-  const home = join(base, 'home');
+  const home = join(base, 'h');
   const dir = join(root, '.agents');
   const sockets = join(base, 'sockets');
   mkdirSync(dir, { recursive: true });

@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { daemonHealth, type DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type MachineDaemon } from '../src/daemon/host.ts';
@@ -80,10 +81,10 @@ afterEach(async () => {
   for (const world of worlds.splice(0)) rmSync(world.base, { recursive: true, force: true });
 });
 
-/** One synthetic checkout, home and two seat records, under /private/tmp: the same place the
- *  accepted daemon scenes measure, never the owner's home or a real checkout. */
+/** One synthetic checkout, home and two seat records under the platform temporary directory,
+ *  never the owner's home or a real checkout. */
 function makeWorld(): World {
-  const base = realpathSync(mkdtempSync(join('/private/tmp', 'display-host-acceptance-')));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'display-host-acceptance-')));
   const home = join(base, 'home');
   const root = join(base, 'repo');
   const dir = join(root, '.agents');

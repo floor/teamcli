@@ -9,10 +9,11 @@
 //     answer is the one injected source — the machine socket is the host's acceptance, not this file —
 //     and it is the only thing that can qualify a projection live.
 //
-// Every world below is synthetic and under /private/tmp; no live CLI seat, pane, home or
+// Every world below is synthetic and under a temporary directory; no live CLI seat, pane, home or
 // credential file is read. The screen texts are the repository's own captured fixtures.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runSeats, type SeatsJson, type SeatsSources } from '../src/commands/seats.ts';
@@ -407,7 +408,7 @@ seats:
   }
 
   beforeEach(() => {
-    root = realpathSync(mkdtempSync('/private/tmp/b7-display-world-'));
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'b7-display-world-')));
     agentsDir = join(root, '.agents');
     mkdirSync(agentsDir);
     file = join(agentsDir, 'team.yaml');
