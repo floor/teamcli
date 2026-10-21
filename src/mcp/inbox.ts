@@ -14,7 +14,7 @@
 // argument's; the folder is checked step by step so a link at `.agents`, `send-drops`, the
 // session or the seat refuses service; an id is a lowercase UUID and nothing else, so no id can
 // name a path; a drop or receipt that is a link is refused, never followed.
-import { chmodSync, lstatSync, mkdirSync, readdirSync, realpathSync, unlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { readNoFollow } from '../send/history.ts';
@@ -270,6 +270,37 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
     });
   }
   return messages.sort((a, b) => (Date.parse(a.ts) - Date.parse(b.ts)) || a.id.localeCompare(b.id));
+}
+
+/** The text as JSON, or undefined when it is not JSON at all. */
+function parsedJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the file at `path` is a drop an earlier build wrote: plain text, not JSON at all. This
+ * build can never serve one — it is unsigned, and nothing in it can be verified — so the inbox
+ * neither lists it nor raises its refusal to the owner; `team drops --read` skips and counts the
+ * same file. Only a regular file of this user's is classified: a link, a FIFO, another user's file
+ * or one that cannot be read keeps the refusal the record reader gave it. So does a file that opens
+ * as JSON, even one that is not a record: a tampered or truncated signed record always starts as a
+ * JSON object, and is never mistaken for old plain-text mail.
+ */
+export function legacyDropAt(path: string): boolean {
+  const held = heldAt(path);
+  if (held.kind !== 'file' || (process.getuid !== undefined && held.uid !== process.getuid())) return false;
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return false;
+  }
+  if (parsedJson(text) !== undefined) return false;
+  return !text.trimStart().startsWith('{');
 }
 
 /** Why a record was refused, as the rule and the object a refusal event names. The rule is one

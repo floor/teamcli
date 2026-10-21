@@ -19,6 +19,7 @@ const LEAD_ID = '0b7c4f4e-3c4a-4f6e-9a2b-5d1c7e8f9a01';
 const WORKER_ID = '1c8d5a5f-4d5b-4a7f-8b3c-6e2d8f9a0b12';
 const TAMPERED_ID = '2d9e6b60-5e6c-4b80-9c4d-7f3e9a0b1c23';
 const UNSIGNED_ID = '3eaf7c71-6f7d-4c91-8d5e-8a4fab1c2d34';
+const LEGACY_ID = '4fb08d82-708e-4da2-9e6f-9b5ca01d3e45';
 
 function teamText(seats: readonly string[], session = SESSION): string {
   const rows = seats.map((name, at) => `  - role: ${at === 0 ? 'coordinator' : 'worker'}
@@ -544,6 +545,71 @@ describe('an inbox read serves only a record it verified', () => {
         reason: join(at.dropDir('lead'), UNSIGNED_ID),
       });
       expect(JSON.stringify(refused[0]!.payload)).not.toContain('the body nobody signed');
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a plain-text drop an earlier build wrote is not listed, served or raised', async () => {
+    const at = place();
+    try {
+      // A signed record beside it proves the check still lists real mail; the old drop is the
+      // plain text an earlier build wrote, under a name this build's sends would use.
+      signed(at, 'lead', LEAD_ID, 'for lead');
+      const legacyBody = 'from harness (harness@acme) — old mail, not a record\n';
+      const path = drop(at.dropDir('lead'), LEGACY_ID, legacyBody);
+      const { replies } = await preloaded(at.root, at.home, [
+        call('1', 'inbox_check'),
+        call('2', 'inbox_read', { id: LEGACY_ID }),
+      ]);
+      // The check omits it: listing it every turn would only invite a refused read.
+      const listed = JSON.parse(replies[0]!.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+      // A read of it still answers the tool error, and leaves no receipt and no body.
+      expect(replies[1]!.result.isError).toBe(true);
+      expect(replies[1]!.result.content[0].text).toContain('is not a signed record');
+      expect(replies[1]!.result.content[0].text).not.toContain('old mail');
+      expect(existsSync(receiptPath(at.dropDir('lead'), LEGACY_ID))).toBe(false);
+      // The file is left exactly where it is, byte for byte.
+      expect(readFileSync(path, 'utf8')).toBe(legacyBody);
+      // The owner hears no refusal: this is not a record anything could have admitted.
+      const events = readEvents('acme', at.root, at.home);
+      expect(events.ok).toBe(true);
+      if (!events.ok) return;
+      expect(events.events.filter((event) => event.payload.kind === 'record.invalid')).toHaveLength(0);
+    } finally {
+      at.cleanup();
+    }
+  });
+
+  test('a signed record broken into invalid JSON keeps its refusal and its owner event', async () => {
+    const at = place();
+    try {
+      // A truncated record is not plain text an earlier build wrote: it starts as the record's
+      // JSON object, so it keeps the strict shape refusal and the event that follows.
+      const path = signed(at, 'lead', LEAD_ID, 'the body that was signed');
+      writeFileSync(path, readFileSync(path, 'utf8').slice(0, 10), { mode: 0o600 });
+      const { replies } = await preloaded(at.root, at.home, [
+        call('1', 'inbox_check'),
+        call('2', 'inbox_read', { id: LEAD_ID }),
+      ]);
+      const listed = JSON.parse(replies[0]!.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+      expect(replies[1]!.result.isError).toBe(true);
+      expect(replies[1]!.result.content[0].text).toContain('is not a signed record');
+      expect(existsSync(receiptPath(at.dropDir('lead'), LEAD_ID))).toBe(false);
+      const events = readEvents('acme', at.root, at.home);
+      expect(events.ok).toBe(true);
+      if (!events.ok) return;
+      const refused = events.events.filter((event) => event.payload.kind === 'record.invalid');
+      expect(refused).toHaveLength(1);
+      expect(refused[0]!.payload).toMatchObject({
+        session: SESSION,
+        rule: 'shape',
+        seat: 'lead',
+        subject: LEAD_ID,
+        reason: join(at.dropDir('lead'), LEAD_ID),
+      });
     } finally {
       at.cleanup();
     }
