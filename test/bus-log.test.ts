@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import {
   checkPrivilegedSelfSubscription,
   DEFAULT_OWNER_AT_ONCE_KINDS,
@@ -885,4 +885,38 @@ describe('event log appends are serialized across processes (RFC 002 Amendment 0
     ]);
     expect(read.unverified).toBe(0);
   });
+
+  test('the standalone prune pass holds the same lock, so a startup prune cannot mint a sequence beside a writer', async () => {
+    const { root, home } = makeScratch();
+    const seed = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'kept' },
+      { deduplicate: false, retain: false },
+    );
+    expect(seed.ok).toBe(true);
+    if (!seed.ok) return;
+
+    // A separate process holds the event lock; the prune pass must wait for it before it touches
+    // the retained files or precomputes its declaration. Without the wait it would return at once.
+    const storeDir = dirname(eventLogPath('acme', root, home));
+    const ready = join(storeDir, 'holder.ready');
+    const holder = Bun.spawn(
+      [process.execPath, join(import.meta.dir, 'bus-log-hold-lock-run.ts'), storeDir, ready, '3000'],
+      { stdout: 'ignore', stderr: 'pipe' },
+    );
+    const exit = holder.exited;
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(ready) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    expect(existsSync(ready)).toBe(true);
+
+    const started = Date.now();
+    pruneEventLog('acme', root, home);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(500);
+    expect(await exit).toBe(0);
+    expect(await new Response(holder.stderr).text()).toBe('');
+  }, 20_000);
 });
