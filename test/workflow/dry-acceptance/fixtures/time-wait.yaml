@@ -1,0 +1,14 @@
+workflow: dry-acceptance-time
+version: 1
+initial: parked
+states:
+  parked:
+    wait:
+      for: time
+      at: release-date
+  done: {}
+transitions:
+  - from: parked
+    to: done
+    on: time-reached
+    role: builder
