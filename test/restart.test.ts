@@ -1107,7 +1107,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.closed).toEqual([]);
     expect(run.did.created).toBe(0);
     expect(run.did.runs.join('\n')).not.toContain('resume ses_other');
-    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (team restart worker --abandon for a fresh start)');
+    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)');
   });
 
   test('a recorded launcher that resumes --last is refused before the stop', async () => {
@@ -1125,7 +1125,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources)).toBe(1);
     expect(run.did.closed).toEqual([]);
     expect(run.did.runs.join('\n')).not.toContain('--last');
-    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (team restart worker --abandon for a fresh start)');
+    expect(io.err).toContain('worker: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)');
   });
 
   test('a CLI with no resume form is refused before the stop, its conversation unresumable', async () => {
@@ -1195,6 +1195,67 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(runs).toContain('codex -m gpt-6.1-sol resume ses_codex');
     expect(runs.split('resume ses_codex').length - 1).toBe(1);
     expect(io.err).toBe('');
+  });
+
+  test('--abandon refuses a launch line that itself names another conversation, before the stop', async () => {
+    // The recorded launcher pins a conversation of its own. `--abandon` is the caller's fresh
+    // start, and a fresh start cannot run that line: the stop is not made and nothing is typed.
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_other',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker', '--abandon'], io, run.sources);
+    // The argv assertion leads: a red run quotes the line the flag would have run.
+    expect(run.did.runs).toEqual([]);
+    expect(code).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(run.did.typed).toEqual([]);
+    expect(io.err).toContain('worker: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)');
+  });
+
+  test('--abandon refuses a launch line that itself names the recorded conversation, before the stop', async () => {
+    // Fresh means fresh: a line the caller's flag cannot make conversation-free is not run, even
+    // when the id it names is the recorded one.
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      launch: 'codex -m gpt-6.1-sol resume ses_codex',
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    const code = await runRestart(['worker', '--abandon'], io, run.sources);
+    expect(run.did.runs).toEqual([]);
+    expect(code).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(io.err).toContain('worker: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)');
+  });
+
+  test('--abandon on a plain launch line starts the seat fresh: no recorded id is added', async () => {
+    // The id the records bind is not put on a line the caller abandons. The recorded launcher
+    // runs as it is, which starts a fresh conversation.
+    const { fixture, run } = seeded({ registry: 'ses_codex', declaredCli: 'codex', workerSession: 'ses_codex', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--abandon'], io, run.sources)).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.runs.join('\n')).not.toContain('resume');
+    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
   });
 
   test('a restored Codex seat running another conversation is still left as it is', async () => {

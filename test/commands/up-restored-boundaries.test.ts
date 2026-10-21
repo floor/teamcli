@@ -623,7 +623,7 @@ describe('team up, a restored session: boundaries', () => {
     expect(made.closes).toEqual([]);
     expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
     expect(keys).toEqual([]);
-    expect(io.err).toContain('  its recorded conversation cannot be resumed: its launch line resumes a different conversation; left as it is (team restart deepseek-acme --abandon for a fresh start)\n');
+    expect(io.err).toContain('  its recorded conversation cannot be resumed: its launch line resumes a different conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', launched: { shell: 430, cli: [431] } });
     expect(seatsOf()['deepseek-acme']?.agent_session).toBeUndefined();
   });
