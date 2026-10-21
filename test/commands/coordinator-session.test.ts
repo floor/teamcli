@@ -22,6 +22,7 @@ import type { DoctorSources } from '../../src/commands/doctor.ts';
 import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
+import { GENERAL_BRIEF_SHA256, generalBriefBody, generalBriefId } from '../../src/launch/general-brief.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import { CLAUDE_IDLE, claudeBox, testIo, type TestIo } from '../helpers.ts';
@@ -1044,11 +1045,48 @@ function upSources(over: Partial<UpSources> = {}): UpSources {
   };
 }
 
+const SEEDED_BRIEFS = {
+  [COORDINATOR]: {
+    id: generalBriefId('inc_000000000001', generalBriefBody()),
+    at: '2026-10-04T09:00:00.000Z',
+    incarnation: 'inc_000000000001',
+    epoch: 'run_000000000001',
+    sha256: GENERAL_BRIEF_SHA256,
+    attempt: 0,
+    stage: 'ready' as const,
+  },
+  [OPERATOR]: {
+    id: generalBriefId('inc_000000000002', generalBriefBody()),
+    at: '2026-10-04T09:00:00.000Z',
+    incarnation: 'inc_000000000002',
+    epoch: 'run_000000000002',
+    sha256: GENERAL_BRIEF_SHA256,
+    attempt: 0,
+    stage: 'ready' as const,
+  },
+  [SEAT]: {
+    id: generalBriefId('inc_000000000003', generalBriefBody()),
+    at: '2026-10-04T09:00:00.000Z',
+    incarnation: 'inc_000000000003',
+    epoch: 'run_000000000003',
+    sha256: GENERAL_BRIEF_SHA256,
+    attempt: 0,
+    stage: 'ready' as const,
+  },
+};
+
 // The owner's one command after upgrading: a team brought up by v0.2.1 runs on, seat by seat,
 // and `up` disturbs nothing — the state records every pane, the coordinator's included.
 describe('up over the v0.2.1 state', () => {
+  const UP_STATE_021 = {
+    ...STATE_021,
+    sessions: {
+      [SESSION]: { ...STATE_021.sessions[SESSION], briefs: SEEDED_BRIEFS },
+    },
+  };
+
   test('every seat is left as it is, and nothing is started, closed or renamed', async () => {
-    writeFileSync(stateFile, `${JSON.stringify(STATE_021, null, 2)}\n`);
+    writeFileSync(stateFile, `${JSON.stringify(UP_STATE_021, null, 2)}\n`);
     const { counts, launch } = upHost();
     const io = testIo(dir, { kind: 'owner' });
     const code = await runUp(
@@ -1086,7 +1124,7 @@ describe('up over the v0.2.1 state', () => {
         `run team register ${SEAT} to record it, nothing relaunched\n`,
     );
     expect(counts).toEqual({ starts: 0, creates: 0, runs: 0, renames: 0, closes: 0 });
-    expect(readFileSync(stateFile, 'utf8')).toBe(`${JSON.stringify(STATE_021, null, 2)}\n`);
+    expect(readFileSync(stateFile, 'utf8')).toBe(`${JSON.stringify(UP_STATE_021, null, 2)}\n`);
   });
 
   // The hole the refusal text stands on: while the unrecorded seat's pane is live, no owner
@@ -1123,7 +1161,11 @@ describe('up and the panes a force-close leaves behind', () => {
   const WATCHED = {
     ...STATE,
     sessions: {
-      [SESSION]: { ...STATE.sessions[SESSION], watch: { pid: 4242, heartbeat: '2026-10-04T09:00:00.000Z' } },
+      [SESSION]: {
+        ...STATE.sessions[SESSION],
+        watch: { pid: 4242, heartbeat: '2026-10-04T09:00:00.000Z' },
+        briefs: SEEDED_BRIEFS,
+      },
     },
   };
 
