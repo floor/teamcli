@@ -919,4 +919,48 @@ describe('event log appends are serialized across processes (RFC 002 Amendment 0
     expect(await exit).toBe(0);
     expect(await new Response(holder.stderr).text()).toBe('');
   }, 20_000);
+
+  test('an append that cannot take the lock within its bounded wait fails closed and writes nothing', async () => {
+    const { root, home } = makeScratch();
+    const seed = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'seed' },
+      { deduplicate: false, retain: false },
+    );
+    expect(seed.ok).toBe(true);
+    if (!seed.ok) return;
+
+    // The holder outlasts the append's bounded wait, so the append must answer with the
+    // structured failure instead of blocking forever or writing beside the holder.
+    const storeDir = dirname(eventLogPath('acme', root, home));
+    const ready = join(storeDir, 'holder-busy.ready');
+    const holder = Bun.spawn(
+      [process.execPath, join(import.meta.dir, 'bus-log-hold-lock-run.ts'), storeDir, ready, '8000'],
+      { stdout: 'ignore', stderr: 'pipe' },
+    );
+    const exit = holder.exited;
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(ready) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    expect(existsSync(ready)).toBe(true);
+
+    const busy = appendEvent(
+      'acme',
+      root,
+      home,
+      { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'busy' },
+      { deduplicate: false, retain: false },
+    );
+    expect(busy).toEqual({ ok: false, reason: 'the event log is busy; the record was not written' });
+    expect(await exit).toBe(0);
+    expect(await new Response(holder.stderr).text()).toBe('');
+
+    const read = readEvents('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.events.map((event) => event.payload.record_id)).toEqual(['seed']);
+  }, 20_000);
 });
