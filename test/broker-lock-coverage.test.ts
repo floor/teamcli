@@ -6,7 +6,7 @@
 // 900 ms into the documented 1000 ms window, so only ~100 ms of the young wait remains. That keeps
 // the age assertion exact (the entry may not change before its age reaches 1000 ms) while leaving
 // the whole-wait deadline nearly two seconds of margin, where a loaded machine's stall cannot
-// stand in for the behavior under test. The actual-main b071 macOS read is that hazard's own
+// stand in for the behavior under test. The actual-main b071 hosted read is that hazard's own
 // record: a start starved across the deadline answered `locked` before the takeover its wait was
 // for, and the scene's wall-clock assertion could not tell that from the product it meant to pin.
 // Nothing here asserts an upper bound on real elapsed time; the only deadline asserted is the
