@@ -9,6 +9,7 @@
 // The pane here is a scripted screen; no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -646,7 +647,10 @@ describe('reportUnreadDrops', () => {
     expect(waiting.map((message) => message.id)).toContain(reportId);
     // The report is served by the same reader the checklist names, and that read leaves a receipt.
     const served = readMessage({ dropDir: leadDir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, reportId, made.home);
-    expect(served.ok ? served.body : served.reason).toBe(toOwner.body);
+    // The lead's drop is the pass's one aggregate: it lists the message under its count, and the
+    // sender's own record keeps the per-message sentence.
+    expect(served.ok ? served.body : served.reason).toContain('1 message has been unread past the report window:');
+    expect(served.ok ? served.body : served.reason).toContain(toOwner.body);
     expect(existsSync(receiptPath(leadDir, reportId))).toBe(true);
     expect(said).toEqual(['lead: a message from owner was still unread after 21 min; reported to owner and lead']);
 
@@ -726,7 +730,7 @@ describe('reportUnreadDrops', () => {
 
     const toHelper = mailboxBody(made.root, 'helper', `unread-${UNREAD_A}`);
     expect(toHelper.body).toContain('its wake line was sent at 2026-10-17T03:50:00.000Z');
-    expect(leadReportBody(made.dir, UNREAD_A)).toBe(toHelper.body);
+    expect(leadReportBody(made.dir, UNREAD_A)).toContain(toHelper.body);
   });
 
   test("a foreign sender's own team is told in its own root and session", () => {
@@ -942,6 +946,116 @@ describe('reportUnreadDrops', () => {
 
     expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
     expect(said).toEqual([]);
+  });
+});
+
+describe('the lead report aggregates a pass', () => {
+  /** The drop id the deterministic rule fixes for a set of messages: sorted ids, SHA-256, UUIDv8. */
+  function reportIdOf(ids: string[]): string {
+    const digest = createHash('sha256').update('unread-report');
+    for (const id of [...new Set(ids)].sort()) digest.update(`\u0000${id}`);
+    const bytes = [...digest.digest().subarray(0, 16)];
+    bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x80;
+    bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+    const hex = bytes.map((byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  }
+
+  test('two waiting messages across seats yield one signed lead drop listing both', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const leadDrop = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nfirst', new Date(NOW.getTime() - 21 * MIN));
+    const helperDrop = seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nsecond', new Date(NOW.getTime() - 25 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const aggregate = reportIdOf([UNREAD_A, UNREAD_B]);
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name)).sort()).toEqual([UNREAD_A, aggregate].sort());
+    const read = readRecord(join(leadDir, aggregate), aggregate);
+    expect(read.ok).toBe(true);
+    if (!read.ok || read.record === null) return;
+    const body = read.record.payload.body;
+    expect(read.record.payload.from).toBe('runtime');
+    expect(body.startsWith('2 messages have been unread past the report window:\n')).toBe(true);
+    expect(body).toContain(`lead: a message from owner has been unread for 21 min (id ${UNREAD_A})`);
+    expect(body).toContain(`helper: a message from owner has been unread for 25 min (id ${UNREAD_B})`);
+    // The sender records stay per message: each carries its own sentence, and the aggregate
+    // repeats that sentence rather than replacing it.
+    const senderA = join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`);
+    const senderB = join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_B}.json`);
+    const mailboxA = mailboxBody(made.root, 'owner', `unread-${UNREAD_A}`);
+    const mailboxB = mailboxBody(made.root, 'owner', `unread-${UNREAD_B}`);
+    expect(body).toContain(mailboxA.body);
+    expect(body).toContain(mailboxB.body);
+    // Each reservation names the one drop that carried its message.
+    expect(JSON.parse(readFileSync(reportedPath(leadDrop, UNREAD_A), 'utf8'))).toMatchObject({
+      id: UNREAD_A,
+      report: aggregate,
+      state: 'reported',
+    });
+    expect(JSON.parse(readFileSync(reportedPath(helperDrop, UNREAD_B), 'utf8'))).toMatchObject({
+      id: UNREAD_B,
+      report: aggregate,
+      state: 'reported',
+    });
+    expect(said).toHaveLength(2);
+    expect(said.every((line) => line.includes('reported to owner and lead'))).toBe(true);
+
+    // A repeat pass writes nothing. Losing both markers does not write a second drop either: the
+    // id is fixed by the set, so the standing record is found and every byte stays as it was.
+    const bytes = [
+      readFileSync(join(leadDir, aggregate), 'utf8'),
+      readFileSync(senderA, 'utf8'),
+      readFileSync(senderB, 'utf8'),
+    ];
+    const again: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, one, again), { unreadAfter: N });
+    expect(again).toEqual([]);
+    unlinkSync(reportedPath(leadDrop, UNREAD_A));
+    unlinkSync(reportedPath(helperDrop, UNREAD_B));
+    reportUnreadDrops(sceneOf(made, team, one, again), { unreadAfter: N });
+    expect(again).toEqual([]);
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name)).sort()).toEqual([UNREAD_A, aggregate].sort());
+    expect(readFileSync(join(leadDir, aggregate), 'utf8')).toBe(bytes[0] as string);
+    expect(readFileSync(senderA, 'utf8')).toBe(bytes[1] as string);
+    expect(readFileSync(senderB, 'utf8')).toBe(bytes[2] as string);
+    expect(existsSync(reportedPath(leadDrop, UNREAD_A))).toBe(true);
+    expect(existsSync(reportedPath(helperDrop, UNREAD_B))).toBe(true);
+  });
+
+  test('a refused lead write releases every reservation, and the retry publishes once', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const helperDrop = seedMessage(made, 'acme', 'helper', UNREAD_B, 'from the owner\n\nrefused once', new Date(NOW.getTime() - 21 * MIN));
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    mkdirSync(join(made.dir, 'send-drops', 'acme'), { recursive: true });
+    // The lead's drop folder cannot be made: a file stands where the directory goes.
+    writeFileSync(leadDir, 'not a drop folder');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+
+    // The lead's mailbox took nothing: the reservation went back and no sender record was written.
+    expect(existsSync(reportedPath(helperDrop, UNREAD_B))).toBe(false);
+    expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_B}.json`))).toBe(false);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('was not written');
+    expect(said[0]).toContain('nothing was sent');
+
+    // The folder is back: the released reservation lets the same message be aggregated once.
+    rmSync(leadDir);
+    mkdirSync(leadDir, { recursive: true });
+    const later: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, one, later), { unreadAfter: N });
+
+    expect(existsSync(reportedPath(helperDrop, UNREAD_B))).toBe(true);
+    expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_B}.json`))).toBe(true);
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name))).toEqual([reportIdOf([UNREAD_B])]);
+    expect(later).toEqual(['helper: a message from owner was still unread after 21 min; reported to owner and lead']);
   });
 });
 
@@ -1164,7 +1278,7 @@ describe('team watch wakes an unread seat', () => {
     expect(one.enters).toBe(0);
     const owner = mailboxBody(directory, 'owner', `unread-${UNREAD_B}`);
     expect(owner.body).toContain('no wake line was typed');
-    expect(leadReportBody(join(directory, '.agents'), UNREAD_B, 'claude-coordinator-acme', 'acme-web')).toBe(owner.body);
+    expect(leadReportBody(join(directory, '.agents'), UNREAD_B, 'claude-coordinator-acme', 'acme-web')).toContain(owner.body);
     expect(io.out).toContain('deepseek-acme: a message from owner was still unread after 21 min; reported to owner and claude-coordinator-acme');
   });
 });

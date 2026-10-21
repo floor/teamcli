@@ -259,10 +259,15 @@ held-send retry and the unread wake.
   writes its `<id>.wake` reservation before the line is typed and holds it through the
   attempt: a crash after the reservation never types a second line, a definite not-delivered
   outcome (`held`, `not-submitted`) gives the reservation back so a later pass may wake, and an
-  uncertain one (`unreachable`) keeps it, spent. At twice the window a message still unread is reported once to its sender and to the
-  team's lead as a signed Runtime mailbox record — never by typing into a pane — after a
-  `<id>.reported` reservation of its own; the record is published write-once, so a mailbox
-  already holding it keeps those bytes. The sender's mailbox is resolved from the signed
+  uncertain one (`unreachable`) keeps it, spent. At twice the window a message still unread is
+  reported once to its sender as a signed Runtime mailbox record and to the team's lead as one
+  signed drop for the pass, listing every message due in it — never by typing into a pane —
+  after a `<id>.reported` reservation for each message; the sender's record is published
+  write-once, so a mailbox already holding it keeps those bytes. The lead drop's UUID is fixed
+  by the sorted set of messages it lists, so a repeat pass — even one whose markers were lost —
+  finds the standing record instead of writing a second; a lead write that fails releases every
+  reservation the pass took, and the sender records being write-once, the retry duplicates none
+  of them. The sender's mailbox is resolved from the signed
   `from_id` through this home's registries, never from the `from` name: one agent record naming
   that seat, and for another team its team record listing that agent at that seat and recording
   the session the record is bound to. A sender those records cannot pin to one team, seat and
@@ -437,7 +442,9 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    before typing, and the wake reads the folder again under the lock; `--no-nudge` MUST
    suppress the wake too. The wake and the unread report MUST reserve their marker before
    their effect and MUST keep a reservation whose attempt is uncertain, so no crash repeats a
-   typed line or a published record. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `ringText`), `src/watch/retry.ts`,
+   typed line or a published record; a lead report the mailbox definitely refuses MUST give
+   back every reservation that pass took, and the lead's drop MUST list every message due in
+   that pass under one signed record whose id is fixed by that set. *Source:* `src/watch/pass.ts` (`NUDGE_TEXT`, `ringText`), `src/watch/retry.ts`,
    `src/watch/unread.ts`, `src/send/native.ts` (`triggerLine`), the watch command. *Proof:*
    `test/watch-nudge-boundaries.test.ts`, `test/watch.test.ts`, `test/held-retry.test.ts`,
    `test/unread-wake.test.ts`.

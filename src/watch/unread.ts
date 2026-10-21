@@ -5,9 +5,12 @@
 // send's own window proves only what it saw while it waited; the watch is the reader that keeps
 // looking. Its unread pass counts from `watch.unread_after` (N): a message still without a
 // receipt N after it landed gets one wake — the seat's own drop read typed into its pane — and a
-// message still unread at twice that window is reported to its sender and to the team's lead.
-// The lead gets one signed drop (`team drops --read` serves it), never a keystroke into another
-// seat's pane. The sender's own mailbox is the one its signed agent id resolves to through this
+// message still unread at twice that window is reported to its sender's own mailbox and to the
+// team's lead. The sender's record is per message; the lead gets one signed drop per pass,
+// listing every message due in it (`team drops --read` serves it), never a keystroke into
+// another seat's pane. The drop's id is fixed by the sorted set of messages it lists, so a repeat
+// pass — even one whose markers were lost — finds the standing record instead of writing a
+// second. The sender's own mailbox is the one its signed agent id resolves to through this
 // home's agent and team registries — a teammate in another checkout is written in that team's
 // root and session — and a sender those registries cannot pin to one team, seat and session is
 // reported to the lead alone, with the missing metadata said.
@@ -361,12 +364,15 @@ type ReportTarget = { root: string; session: string; to: string; label: string }
  *  being reported on again: a report is the pass's own product, not a message to report about. */
 const LEAD_REPORT_RULE = "the team's unread-message report";
 
-/** The lead drop's id for one source message: a UUID shaped from the message id, so a repeat
- *  pass — even one whose `.reported` marker was lost — finds the standing record instead of
- *  writing a second report. Version 8 and the RFC variant bits make it a valid UUID, not just a
- *  name that fits the reader's pattern. */
-function reportDropId(messageId: string): string {
-  const bytes = [...createHash('sha256').update(`unread-report\u0000${messageId}`).digest().subarray(0, 16)];
+/** The lead drop's id for one report: a UUID shaped from the sorted source message ids it lists,
+ *  so a repeat pass — even one whose `.reported` markers were lost — finds the standing record
+ *  instead of writing a second report. A one-message report keeps the id earlier builds gave it.
+ *  Version 8 and the RFC variant bits make it a valid UUID, not just a name that fits the
+ *  reader's pattern. */
+function reportDropId(messageIds: readonly string[]): string {
+  const digest = createHash('sha256').update('unread-report');
+  for (const id of [...new Set(messageIds)].sort()) digest.update(`\u0000${id}`);
+  const bytes = [...digest.digest().subarray(0, 16)];
   bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x80;
   bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
   const hex = bytes.map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -375,17 +381,19 @@ function reportDropId(messageId: string): string {
 
 /** A report addressed to this team's lead is a signed send-drop under an ordinary message id:
  *  `team drops --read` serves a lowercase UUID and writes its receipt, while a legacy mailbox
- *  record and an `unread-…` name are both invisible to that reader. */
+ *  record and an `unread-…` name are both invisible to that reader. One drop lists every message
+ *  due in the pass, and its id is fixed by that set. */
 function writeLeadReportDrop(
   target: ReportTarget,
   home: string,
-  id: string,
+  messageIds: readonly string[],
   text: string,
   at: string,
-): { ok: true; path: string; existing?: true } | { ok: false; error: string } {
+): { ok: true; path: string; id: string; existing?: true } | { ok: false; error: string } {
   const dropDir = join(target.root, '.agents', 'send-drops', target.session, target.to);
+  const id = reportDropId(messageIds);
   const path = join(dropDir, id);
-  if (existsSync(path)) return { ok: true, path, existing: true };
+  if (existsSync(path)) return { ok: true, path, id, existing: true };
   let record: ReturnType<typeof signRecord>;
   try {
     record = signRecord({
@@ -396,7 +404,7 @@ function writeLeadReportDrop(
   } catch (error) {
     return { ok: false, error: String(error) };
   }
-  return { ok: true, path };
+  return { ok: true, path, id };
 }
 
 function sceneRoot(root: string): string {
@@ -504,16 +512,34 @@ function reportTargets(scene: RetryScene, payload: RecordPayload, home: string):
   return { targets, unresolved };
 }
 
+/** One message due in this pass: what the sender's record says, and the sentence the lead's
+ *  aggregate repeats for it. */
+type DueReport = {
+  seat: string;
+  dropDir: string;
+  id: string;
+  payload: RecordPayload;
+  senders: ReportTarget[];
+  unresolved: string | null;
+  minutes: number;
+  text: string;
+  /** Every mailbox the message is reported to, in words: its senders and the lead. */
+  to: string[];
+};
+
 /**
- * Reports every message still unread at twice the window to its sender and the team's lead, once.
- * The lead receives a signed send-drop (`team drops --read` serves it); the sender receives the
- * Runtime mailbox record. No pane is touched, which is why a watch without nudges runs this too.
- * The sender's mailbox is the one its
- * signed `from_id` resolves to through this home's registries; a sender they cannot pin is
- * reported to the lead only, and the reason is said there and in the line. The words keep the
- * three wake states apart: a message with a wake marker says its wake line was sent; one without
- * says none was typed. A write that fails leaves the message without `<id>.reported`, and a later
- * pass writes the same record name again rather than a second one.
+ * Reports every message still unread at twice the window, once. The sender receives its own
+ * Runtime mailbox record, one per message; the team's lead receives one signed send-drop per pass
+ * listing every message due in it (`team drops --read` serves it). No pane is touched, which is
+ * why a watch without nudges runs this too. The sender's mailbox is the one its signed `from_id`
+ * resolves to through this home's registries; a sender they cannot pin is reported to the lead
+ * only, and the reason is said there and in the line. The words keep the three wake states
+ * apart: a message with a wake marker says its wake line was sent; one without says none was
+ * typed. The reservations are linked before the lead's write; a write the lead's mailbox refuses
+ * releases every reservation the pass took, and a later pass aggregates the same messages again —
+ * the sender records are write-once, so the retry publishes each name once. A lead drop's id is
+ * fixed by the set of messages it lists, so a lost marker finds the standing record rather than
+ * writing a second one.
  */
 export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void {
   const home = scene.home;
@@ -522,6 +548,12 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
   if (key.kind !== 'key') return;
   const nowMs = scene.now.getTime();
   const threshold = window.unreadAfter * 1000 * 2;
+  const at = scene.now.toISOString();
+  const leadName = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
+  const lead: ReportTarget | null = leadName === ''
+    ? null
+    : { root: scene.root, session: scene.session, to: leadName, label: leadName };
+  const due: DueReport[] = [];
   for (const seat of scene.team.seats) {
     // A person writes no receipt; a drop to a human seat is read by the person, not by a watcher.
     // The retry pass's own give-up already names a drop no watcher read.
@@ -539,11 +571,13 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       if (payload.rule === LEAD_REPORT_RULE) continue;
       const { targets, unresolved } = reportTargets(scene, payload, home);
       if (targets.length === 0) continue;
-      const at = scene.now.toISOString();
+      const senders = lead === null
+        ? targets
+        : targets.filter((target) => target.root !== lead.root || target.session !== lead.session || target.to !== lead.to);
       // The reservation is linked before the first write: one pass publishes, and one that finds
       // the name taken — a concurrent pass, or a crash between the write and its marker — spends
-      // nothing. The lead drop's id is fixed by the source message, so a lost marker finds the
-      // standing record rather than writing a second report.
+      // nothing. The lead drop's id is fixed by the set of messages it lists, so a lost marker
+      // finds the standing record rather than writing a second report.
       if (!reserve(reportedPath(dropDir, message.id), { id: message.id, at, state: 'reserved' })) continue;
       const minutes = Math.max(1, Math.round(age / 60_000));
       const woke = wakeMarkOf(dropDir, message.id);
@@ -556,59 +590,101 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       const text = unresolved === null
         ? `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}`
         : `${seat.name}: a message from ${payload.from} has been unread for ${minutes} min (id ${message.id}); ${wakeWords}; ${where}; the sender's own mailbox could not be resolved (${unresolved}), so this report goes to the team's lead only`;
-      let published = 0;
-      let existed = 0;
-      let failure: string | null = null;
-      const lead = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
-      for (const target of targets) {
-        const isLeadMailbox = target.root === scene.root && target.session === scene.session && target.to === lead;
-        const outcome = isLeadMailbox
-          ? writeLeadReportDrop(target, home, reportDropId(message.id), text, at)
-          : writeRuntimeMailboxRecord({
-            root: target.root,
-            home,
-            to: target.to,
-            id: `unread-${message.id}`,
-            text,
-            session: target.session,
-            at,
-            once: true,
-          });
-        if (!outcome.ok) {
-          failure = `${target.label}: ${outcome.error}`;
-          continue;
-        }
-        if (outcome.existing === true) existed += 1;
-        else published += 1;
-      }
-      if (failure !== null && published === 0 && existed === 0) {
-        // Nothing was published: the reservation goes back, and a later pass may speak.
-        release(reportedPath(dropDir, message.id));
-        scene.say(`${seat.name}: the unread report for ${message.id} was not written (${failure}); nothing was sent`, true);
+      due.push({
+        seat: seat.name,
+        dropDir,
+        id: message.id,
+        payload,
+        senders,
+        unresolved,
+        minutes,
+        text,
+        to: [...senders.map((target) => target.label), ...(lead === null ? [] : [lead.label])],
+      });
+    }
+  }
+  if (due.length === 0) return;
+  const ids = due.map((one) => one.id);
+  // One signed drop for the whole pass: every message due in it, listed under their count. A
+  // repeat pass with the same set finds the same id on disk and writes nothing.
+  let leadId: string | null = null;
+  let leadNew = false;
+  if (lead !== null) {
+    const header = due.length === 1
+      ? '1 message has been unread past the report window:'
+      : `${String(due.length)} messages have been unread past the report window:`;
+    const body = [header, ...due.map((one) => `- ${one.text}`)].join('\n');
+    const outcome = writeLeadReportDrop(lead, home, ids, body, at);
+    if (!outcome.ok) {
+      // The lead's mailbox took nothing: every reservation this pass made goes back, and a later
+      // pass may aggregate the same messages again. The sender records are written after this
+      // point, so nothing was sent.
+      for (const one of due) release(reportedPath(one.dropDir, one.id));
+      scene.say(
+        due.length === 1
+          ? `the unread report for ${ids[0] ?? ''} was not written (${lead.label}: ${outcome.error}); nothing was sent`
+          : `the unread report for ${String(due.length)} messages was not written (${lead.label}: ${outcome.error}); nothing was sent`,
+        true,
+      );
+      return;
+    }
+    leadId = outcome.id;
+    leadNew = outcome.existing !== true;
+  }
+  for (const one of due) {
+    let published = 0;
+    let existed = 0;
+    let failure: string | null = null;
+    for (const target of one.senders) {
+      const outcome = writeRuntimeMailboxRecord({
+        root: target.root,
+        home,
+        to: target.to,
+        id: `unread-${one.id}`,
+        text: one.text,
+        session: target.session,
+        at,
+        once: true,
+      });
+      if (!outcome.ok) {
+        failure = `${target.label}: ${outcome.error}`;
         continue;
       }
-      if (failure !== null) {
-        // Part of it landed. The reservation stays spent — a repeat could duplicate the part
-        // that did — and the line says what did not land.
-        mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'partial', to: targets.map((target) => target.label) });
-        scene.say(
-          `${seat.name}: the unread report for ${message.id} reached ${String(published + existed)} of ${String(targets.length)} mailboxes (${failure})`,
-          true,
-        );
-        continue;
-      }
-      mark(dropDir, `${message.id}.reported`, { id: message.id, at, state: 'reported', to: targets.map((target) => target.label) });
-      // A record already at a mailbox is the first publication still standing; only a pass that
-      // wrote something new says the line again.
-      if (published > 0) {
-        const reached = targets.map((target) => target.label).join(' and ');
-        scene.say(
-          unresolved === null
-            ? `${seat.name}: a message from ${payload.from} was still unread after ${minutes} min; reported to ${reached}`
-            : `${seat.name}: a message from ${payload.from} was still unread after ${minutes} min; reported to ${reached} only: the sender's own mailbox could not be resolved (${unresolved})`,
-          true,
-        );
-      }
+      if (outcome.existing === true) existed += 1;
+      else published += 1;
+    }
+    if (lead !== null) {
+      if (leadNew) published += 1;
+      else existed += 1;
+    }
+    const marker = leadId === null ? { id: one.id, at } : { id: one.id, at, report: leadId };
+    if (failure !== null && published === 0 && existed === 0) {
+      // Nothing was published: the reservation goes back, and a later pass may speak.
+      release(reportedPath(one.dropDir, one.id));
+      scene.say(`${one.seat}: the unread report for ${one.id} was not written (${failure}); nothing was sent`, true);
+      continue;
+    }
+    if (failure !== null) {
+      // Part of it landed. The reservation stays spent — a repeat could duplicate the part
+      // that did — and the line says what did not land.
+      mark(one.dropDir, `${one.id}.reported`, { ...marker, state: 'partial', to: one.to });
+      scene.say(
+        `${one.seat}: the unread report for ${one.id} reached ${String(published + existed)} of ${String(one.senders.length + (lead === null ? 0 : 1))} mailboxes (${failure})`,
+        true,
+      );
+      continue;
+    }
+    mark(one.dropDir, `${one.id}.reported`, { ...marker, state: 'reported', to: one.to });
+    // A record already at a mailbox is the first publication still standing; only a pass that
+    // wrote something new says the line again.
+    if (published > 0) {
+      const reached = one.to.join(' and ');
+      scene.say(
+        one.unresolved === null
+          ? `${one.seat}: a message from ${one.payload.from} was still unread after ${one.minutes} min; reported to ${reached}`
+          : `${one.seat}: a message from ${one.payload.from} was still unread after ${one.minutes} min; reported to ${reached} only: the sender's own mailbox could not be resolved (${one.unresolved})`,
+        true,
+      );
     }
   }
 }
