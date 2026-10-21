@@ -26,7 +26,7 @@
 // over and never reported over. A delivery the seam itself says took nothing (`held`,
 // `not-submitted`) gives its reservation back so a later pass may still wake; one it could not
 // reach (`unreachable`) gives nothing back, because an uncertain attempt is not repeated.
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync,
   existsSync,
@@ -357,8 +357,25 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
  *  session; both teams on this home share the message key the record is signed with. */
 type ReportTarget = { root: string; session: string; to: string; label: string };
 
-/** A report addressed to this team's lead is a signed send-drop: its own `team drops --read`
- *  trigger can serve the body, unlike a legacy mailbox record that the drops command cannot see. */
+/** The rule line the lead's signed report drop carries, and the mark that keeps that drop from
+ *  being reported on again: a report is the pass's own product, not a message to report about. */
+const LEAD_REPORT_RULE = "the team's unread-message report";
+
+/** The lead drop's id for one source message: a UUID shaped from the message id, so a repeat
+ *  pass — even one whose `.reported` marker was lost — finds the standing record instead of
+ *  writing a second report. Version 8 and the RFC variant bits make it a valid UUID, not just a
+ *  name that fits the reader's pattern. */
+function reportDropId(messageId: string): string {
+  const bytes = [...createHash('sha256').update(`unread-report\u0000${messageId}`).digest().subarray(0, 16)];
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x80;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** A report addressed to this team's lead is a signed send-drop under an ordinary message id:
+ *  `team drops --read` serves a lowercase UUID and writes its receipt, while a legacy mailbox
+ *  record and an `unread-…` name are both invisible to that reader. */
 function writeLeadReportDrop(
   target: ReportTarget,
   home: string,
@@ -373,7 +390,7 @@ function writeLeadReportDrop(
   try {
     record = signRecord({
       kind: 'message', id, to: target.to, to_id: null, root: sceneRoot(target.root), session: target.session,
-      at, body: text, from: 'runtime', from_id: null, rule: "the team's unread-message report", thread: id,
+      at, body: text, from: 'runtime', from_id: null, rule: LEAD_REPORT_RULE, thread: id,
     }, home);
     dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
   } catch (error) {
@@ -517,13 +534,16 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       if (existsSync(reportedPath(dropDir, message.id))) continue;
       const payload = payloadOf(dropDir, message.id, home);
       if (payload === null) continue;
+      // A report the pass wrote is not a message to report about: served as an ordinary drop, it
+      // waits for the lead's next read like any other message, and never seeds a report of itself.
+      if (payload.rule === LEAD_REPORT_RULE) continue;
       const { targets, unresolved } = reportTargets(scene, payload, home);
       if (targets.length === 0) continue;
       const at = scene.now.toISOString();
-      // The reservation is linked before the first mailbox write: one pass publishes, and one
-      // that finds the name taken — a concurrent pass, or a crash between the write and its
-      // marker — spends nothing. The record id alone would make a repeat overwrite bytes; this
-      // makes a repeat impossible.
+      // The reservation is linked before the first write: one pass publishes, and one that finds
+      // the name taken — a concurrent pass, or a crash between the write and its marker — spends
+      // nothing. The lead drop's id is fixed by the source message, so a lost marker finds the
+      // standing record rather than writing a second report.
       if (!reserve(reportedPath(dropDir, message.id), { id: message.id, at, state: 'reserved' })) continue;
       const minutes = Math.max(1, Math.round(age / 60_000));
       const woke = wakeMarkOf(dropDir, message.id);
@@ -539,17 +559,16 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       let published = 0;
       let existed = 0;
       let failure: string | null = null;
+      const lead = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
       for (const target of targets) {
-        const reportId = `unread-${message.id}`;
-        const lead = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
         const isLeadMailbox = target.root === scene.root && target.session === scene.session && target.to === lead;
         const outcome = isLeadMailbox
-          ? writeLeadReportDrop(target, home, reportId, text, at)
+          ? writeLeadReportDrop(target, home, reportDropId(message.id), text, at)
           : writeRuntimeMailboxRecord({
             root: target.root,
             home,
             to: target.to,
-            id: reportId,
+            id: `unread-${message.id}`,
             text,
             session: target.session,
             at,
