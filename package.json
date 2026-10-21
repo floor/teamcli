@@ -29,7 +29,11 @@
     "dist",
     "examples",
     "schema",
-    "packages/relay",
+    "packages/relay/index.js",
+    "packages/relay/index.d.ts",
+    "packages/relay/host",
+    "packages/relay/package.json",
+    "packages/relay/README.md",
     "README.md",
     "LICENSE"
   ],
