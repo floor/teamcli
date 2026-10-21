@@ -7,7 +7,7 @@
 // afterBind true, afterClose false on both).
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, connect, type Socket } from 'node:net';
 import { cpus, loadavg, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1229,19 +1229,37 @@ describe('the start protocol', () => {
     // `broker young EMPTY "": outcome=serving in 0ms`). The pin: the start must serve only
     // after the lock's age passed the young window — the empty file waited on like any lock
     // too young to hold its pid, then taken over where no writer is coming (nothing here ever
-    // writes a pid into it; LOCK_YOUNG_MS is 1000). At the frozen head the serve lands within
-    // a few ms of the create, so the elapsed is the observable: a wait that never happened
-    // cannot be faked by a slow machine, only by the bug.
+    // writes a pid into it; LOCK_YOUNG_MS is 1000).
+    //
+    // The young window is held open by the lock's own mtime, not by the host's clock: an entry
+    // whose mtime sits ahead of now has a negative age, which no delay can age past the
+    // boundary. The handshake therefore observes the wait deterministically — the start still
+    // pending, the entry the same inode with the same empty bytes — and then crosses the
+    // boundary explicitly, where the aged file must be taken over.
     project();
     record();
     const path = brokerSocket(root);
     const lockPath = `${path}.lock`;
-    const t0 = Date.now();
     writeFileSync(lockPath, '');
-    const started = await startBroker({ root, team: teamOf(), read: () => Promise.resolve(records([{ id: 'm1', title: 't' }])), stderr: () => {} });
-    const waited = Date.now() - t0;
+    utimesSync(lockPath, new Date(), new Date(Date.now() + 3_600_000));
+    const before = lstatSync(lockPath);
+    const starting = startBroker({ root, team: teamOf(), read: () => Promise.resolve(records([{ id: 'm1', title: 't' }])), stderr: () => {} });
+    // One poll turn of the wait (its cadence is 20 ms): a start that took the empty file over
+    // would have replaced this entry by now.
+    await new Promise((tick) => setTimeout(tick, 25));
+    const during = lstatSync(lockPath);
+    expect(during.dev).toBe(before.dev);
+    expect(during.ino).toBe(before.ino);
+    expect(readFileSync(lockPath, 'utf8')).toBe('');
+    expect(await Promise.race([starting.then(() => 'settled'), new Promise<string>((tick) => setTimeout(() => tick('pending'), 0))])).toBe('pending');
+    // Cross the young boundary; the entry is still the one the wait saw, and now it is aged.
+    utimesSync(lockPath, new Date(), new Date(Date.now() - 1_100));
+    const after = lstatSync(lockPath);
+    expect(after.dev).toBe(before.dev);
+    expect(after.ino).toBe(before.ino);
+    expect(readFileSync(lockPath, 'utf8')).toBe('');
+    const started = await starting;
     if (started.kind !== 'serving') throw new Error(`the broker did not start: ${started.kind}`);
-    expect(waited).toBeGreaterThanOrEqual(900);
     expect(await ask(leadSeat)).toMatchObject({ kind: 'read' });
     await started.handle.close();
     expect(existsSync(lockPath)).toBe(false);
@@ -1253,7 +1271,9 @@ describe('the start protocol', () => {
     // file is now a dead writer's, and the second start is a real start: it must not take the
     // file over inside the young window — nothing has had a chance to write, and the oldest a
     // fresh entry can be is microseconds — and with no writer coming, the empty file is taken
-    // over once it has aged past LOCK_YOUNG_MS (1000) and serves.
+    // over once it has aged past LOCK_YOUNG_MS (1000) and serves. As above, the window is held
+    // open by the lock's mtime and then crossed explicitly, so the wait is observed without
+    // depending on the host's clock.
     project();
     record();
     const path = brokerSocket(root);
@@ -1267,11 +1287,22 @@ describe('the start protocol', () => {
     }
     expect(existsSync(lockPath)).toBe(true);
     expect(readFileSync(lockPath, 'utf8')).toBe('');
-    const t0 = Date.now();
-    const started = await startBroker({ root, team: teamOf(), read: () => Promise.resolve(records([{ id: 'm1', title: 't' }])), stderr: () => {} });
-    const waited = Date.now() - t0;
+    utimesSync(lockPath, new Date(), new Date(Date.now() + 3_600_000));
+    const before = lstatSync(lockPath);
+    const starting = startBroker({ root, team: teamOf(), read: () => Promise.resolve(records([{ id: 'm1', title: 't' }])), stderr: () => {} });
+    await new Promise((tick) => setTimeout(tick, 25));
+    const during = lstatSync(lockPath);
+    expect(during.dev).toBe(before.dev);
+    expect(during.ino).toBe(before.ino);
+    expect(readFileSync(lockPath, 'utf8')).toBe('');
+    expect(await Promise.race([starting.then(() => 'settled'), new Promise<string>((tick) => setTimeout(() => tick('pending'), 0))])).toBe('pending');
+    utimesSync(lockPath, new Date(), new Date(Date.now() - 1_100));
+    const after = lstatSync(lockPath);
+    expect(after.dev).toBe(before.dev);
+    expect(after.ino).toBe(before.ino);
+    expect(readFileSync(lockPath, 'utf8')).toBe('');
+    const started = await starting;
     if (started.kind !== 'serving') throw new Error(`the broker did not start: ${started.kind}`);
-    expect(waited).toBeGreaterThanOrEqual(950);
     expect(await ask(leadSeat)).toMatchObject({ kind: 'read' });
     await started.handle.close();
     expect(existsSync(lockPath)).toBe(false);
