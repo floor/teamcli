@@ -120,6 +120,7 @@ const READ_ONLY_SMOKE_CASES: ReadOnlySmokeCase[] = [
   { command: 'revoke', args: ['revoke', 'grant', '--dry-run'], schemaKey: 'team.revoke' },
   { command: 'brief', args: ['brief', 'rollout'], schemaKey: 'team.brief' },
   { command: 'swap', args: ['swap'], schemaKey: 'team.swap' },
+  { command: 'workflow', args: ['workflow', 'check', 'workflow.yaml'], schemaKey: 'team.workflow' },
 ];
 
 /** One cold entry into src/cli.ts is a fresh Bun process; a healthy `--help` answers in well
@@ -316,6 +317,10 @@ seats:
       writeFileSync(
         join(root, 'pr-body.md'),
         'Summary of changes.\n\nAgent: Claude Opus 5.5 · coordinator\n',
+      );
+      writeFileSync(
+        join(root, 'workflow.yaml'),
+        'name: smoke-workflow\nstart: build\nstates:\n  build:\n    run:\n      role: implementer\n      task: verify smoke workflow\n    next:\n      - on: task-done\n        to: done\n  done:\n    end: pass\n',
       );
 
       // Signed ask-show fixture files.
