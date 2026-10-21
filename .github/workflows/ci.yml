@@ -37,7 +37,7 @@ jobs:
           bun-version: 1.4.2
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.23.3
       - run: bun install --frozen-lockfile
       # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
       - run: bun run ci
@@ -54,16 +54,26 @@ jobs:
       - run: bun run brief:check
 
       # The release's tarball guard, on every pull request, so the real path is
-      # exercised before any tag. The filename comes from the pack script's own
-      # JSON line, never a glob. The pack is stamped with the commit this run
-      # checked out: scripts/pack.ts refuses a dirty tree or an uncommitted
-      # version, and writes the full HEAD SHA into the tarball's manifest.
+      # exercised before any tag. The filename and SHA256 come from the pack
+      # script's own JSON line, never a glob. The pack is stamped with the
+      # commit this run checked out: scripts/pack.ts refuses a dirty tree, an
+      # uncommitted version or an unpinned compressor, and writes the full HEAD
+      # SHA into the tarball's manifest. The gzip frame is fixed, so this SHA256
+      # is the one a local pack of the same commit prints.
       - name: Pack the tarball
         id: pack
         run: |
-          filename="$(bun scripts/pack.ts --pack-destination . | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
+          report="$(bun scripts/pack.ts --pack-destination .)"
+          filename="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
+          sha256="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).sha256')"
           test -f "$filename" || { echo "pack reported '$filename', which is not a file" >&2; exit 1; }
           echo "tarball=$filename" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "Reproducible tarball SHA256: $sha256"
+            echo "Compressor: Node $(node --version), zlib $(node -p 'process.versions.zlib')"
+            echo "Tar builder: npm $(npm --version)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: The tarball carries its source stamp and no internal ticket reference
         env:
