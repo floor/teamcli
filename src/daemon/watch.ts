@@ -12,6 +12,11 @@
 // seconds, half the ten-second sweep floor, so the next pass is always due within one in-force
 // watch interval. A deliberate stop, a loop that stood down to a live pane watch, and a run a
 // pulse closed are the host's own decisions: they are never counted and never restarted.
+//
+// `fault(why)` is the one diagnostic entry into that recovery path, and it is deliberately not a
+// second recovery implementation: it ends the run currently in flight at the run's own seam, and
+// the exit then takes the ordinary unexpected-exit path (counted once, restarted on the next
+// beat). It never signals a process, never touches another route and never starts a run.
 
 import { routeId, type HostedRoute } from './routes.ts';
 import type { HostedLoop, HostedWatchHandle, HostedWatchState } from '../watch/hosted.ts';
@@ -38,6 +43,17 @@ export type HostedWatchInput = {
 
 export type HostedWatch = HostedWatchHandle & {
   route: HostedRoute;
+  /**
+   * Ends the run currently in flight as a requested diagnostic fault. The run's outstanding
+   * host wait settles false and its next wait — if it reaches one — is answered false too, so
+   * the run leaves by its own seam; the exit is then recorded exactly like an unexpected one:
+   * `failures` + 1, phase `failed` with `why`, and one restart on the next heartbeat tick.
+   * Returns false, changing nothing, when no run is in flight (a standby, a stopped host, a
+   * pulse that failed terminally, or the gap between a fault and its restart). `left` is called
+   * with the reason the record carries once that exit has been recorded; it never runs for a
+   * deliberate stop, because stop owns that exit.
+   */
+  fault(why: string, left?: (recorded: string) => void): boolean;
 };
 
 /** What a hosted route may do outbound right now. */
@@ -67,6 +83,11 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
   // a loop that leaves at once is restarted at the beat cadence, never in a busy loop.
   let restartPending = false;
   let inFlight = false;
+  // A fault asked for by the daemon's own diagnostic. The reason is carried to the exit's
+  // record; `armed` marks one that landed while the run was between waits, so its next wait is
+  // answered false rather than sleeping past the request.
+  let faultDiagnostic: { why: string; left?: (recorded: string) => void } | undefined;
+  let faultArmed = false;
   let current: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
   let doneSettled = false;
@@ -95,6 +116,12 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       // A wait registered after the stop resolves false at once: a loop that slept through its
       // own cancellation never starts another pass.
       if (stopped) return Promise.resolve(false);
+      // A fault that landed while the run was mid-pass is delivered at this seam: the run
+      // leaves here instead of sleeping past the request.
+      if (faultArmed) {
+        faultArmed = false;
+        return Promise.resolve(false);
+      }
       return new Promise<boolean>((resolve) => {
         waiters.add({ due: now().getTime() + Math.max(0, ms), resolve });
       });
@@ -127,6 +154,11 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     inFlight = false;
     current = undefined;
     settleWaiters(false);
+    // The fault request belongs to this exit, whichever end it turns out to be; a request the
+    // run never reached (it stood down or was stopped first) leaves no claim behind.
+    const diagnostic = faultDiagnostic;
+    faultDiagnostic = undefined;
+    faultArmed = false;
     if (stopped) return; // stop() owns the reason and settles `done`
     if (phase === 'standby') {
       settleDone();
@@ -150,10 +182,19 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     failures += 1;
     lastCycleOutcome = 'failed';
     phase = 'failed';
-    why = error !== undefined
+    // A diagnostic fault asks for the ordinary fault path with its own reason: the reader sees
+    // the injected reason, not whichever end the loop's own seam happened to take.
+    why = diagnostic?.why ?? (error !== undefined
       ? (error instanceof Error ? error.message : 'the watch loop failed')
-      : (code === 0 ? 'the watch loop ended' : `the watch loop ended with code ${String(code)}`);
+      : (code === 0 ? 'the watch loop ended' : `the watch loop ended with code ${String(code)}`));
     restartPending = true;
+    if (diagnostic?.left !== undefined) {
+      try {
+        diagnostic.left(why);
+      } catch {
+        // The exit record stands whatever a reader of it could not write.
+      }
+    }
   };
 
   /**
@@ -252,10 +293,28 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     why,
   });
 
+  /**
+   * The diagnostic entry: it ends the run in flight and nothing else. A standby, a stopped host
+   * and a terminal pulse failure have no run to end, so they refuse instead of inventing one.
+   */
+  const fault = (why: string, left?: (recorded: string) => void): boolean => {
+    // One fault owns the exit in flight: a second diagnostic asked before the first reached its
+    // seam would replace the first writer's answer, so it is refused instead.
+    if (stopped || phase === 'standby' || terminalFailure || !inFlight || faultDiagnostic !== undefined) return false;
+    const reason = why.trim() === '' ? 'a hosted watch fault was requested' : why;
+    faultDiagnostic = left === undefined ? { why: reason } : { why: reason, left };
+    if (waiters.size > 0) settleWaiters(false);
+    else faultArmed = true;
+    return true;
+  };
+
   const stop = (reason: string): Promise<void> => {
     if (stopPromise !== undefined) return stopPromise;
     stopped = true;
     restartPending = false;
+    // A stop owns the exit: a diagnostic that has not been reached is dropped, never counted.
+    faultDiagnostic = undefined;
+    faultArmed = false;
     if (terminalFailure) {
       // A pulse that failed is the state; closing does not write over it.
       phase = 'failed';
@@ -279,6 +338,7 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     route: input.route,
     state,
     tick,
+    fault,
     stop,
     done,
   };
