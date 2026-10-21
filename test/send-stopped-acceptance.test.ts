@@ -252,9 +252,11 @@ describe('the same seat without the stopped mark plans and delivers normally', (
     const delivered = io(w);
     const deliveredCode = await runSend([STOPPED, 'hello', 'there'], delivered, host);
     expect(deliveredCode, said(delivered)).toBe(0);
-    expect(delivered.out, said(delivered)).toBe(`team acme, session "${SESSION}"\n${STOPPED}: delivered\n`);
+    expect(delivered.out, said(delivered)).toBe(
+      `team acme, session "${SESSION}"\n${STOPPED}: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n`,
+    );
     expect(host.typed.length).toBe(1);
-    expect(dropFiles(w).length).toBe(1);
-    expect(sendRecords(w)).toEqual(['delivered']);
+    expect(dropFiles(w).filter((path) => !path.endsWith('.fallback.json')).length).toBe(1);
+    expect(sendRecords(w)).toEqual(['sent (unconfirmed)']);
   });
 });

@@ -188,7 +188,7 @@ describe('team send: the plain send is the typed trigger again', () => {
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
-    const path = join(drops, readdirSync(drops)[0] as string);
+    const path = join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string);
     expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
     expect(host.pane.enters).toBe(1);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');

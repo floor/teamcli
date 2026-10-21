@@ -212,10 +212,13 @@ function seatCaller(name: string): Caller {
  *  own receipt-writing read and names no path, so the folder is read, not the line. */
 function dropOf(root: string, session: string, seat: string): { path: string; text: string } {
   const dir = join(root, '.agents', 'send-drops', session, seat);
-  const name = readdirSync(dir).find((one) => !one.includes('.'));
-  if (name === undefined) throw new Error(`no drop was written in ${dir}`);
-  const path = join(dir, name);
-  return { path, text: readFileSync(path, 'utf8') };
+  const names = readdirSync(dir).filter((one) => !one.includes('.'));
+  for (const name of names) {
+    const path = join(dir, name);
+    const text = readFileSync(path, 'utf8');
+    if (!text.includes('from the launch — admitted by:')) return { path, text };
+  }
+  throw new Error(`no send drop was written in ${dir}`);
 }
 
 // ---- (1) two team files register into one project ----

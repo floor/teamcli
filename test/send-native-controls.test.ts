@@ -31,7 +31,7 @@ test('control characters in the body are not typed into the pane', async () => {
   expect(trigger).not.toContain('PAYLOAD');
   expect(trigger).not.toContain('END');
   const drops = dropDir(made.dir);
-  const names = readdirSync(drops);
+  const names = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(names.length).toBe(1);
   const path = join(drops, names[0] as string);
   const line = readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' });
