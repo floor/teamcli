@@ -2620,6 +2620,55 @@ A run with no terminal is refused: only the owner or a placed seat runs this, fr
 
 None.
 
+## `workflow`
+
+Hidden: no
+
+Usage:
+
+    team workflow check <path> [--json]
+
+### Who may run it
+
+`any-caller` — the workflow subcommand group: checking a workflow definition needs no session and no seat
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `check`
+
+Hidden: no
+
+Usage:
+
+    team workflow check <path> [--json]
+
+#### Who may run it
+
+`any-caller` — checks a workflow definition and its transition graph: read-only, so any seat, CI or the owner may run it
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | no | no |
+
 ## `worktree`
 
 Hidden: no

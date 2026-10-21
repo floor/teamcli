@@ -77,6 +77,7 @@ import { runSwap } from '../src/commands/swap.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import { runUsage } from '../src/commands/usage.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { runWorkflow } from '../src/commands/workflow.ts';
 import { runWorktree, type WorktreeSources } from '../src/commands/worktree.ts';
 import { main, reportFailure, version } from '../src/cli.ts';
 import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
@@ -1224,6 +1225,43 @@ scene('pr.refused', async (place) => {
   writeFileSync(join(place.root, 'body.md'), 'Bump the retry window to thirty seconds.\n');
   const io = testIo(place.root, owner);
   return show({ code: await pr(['check', 'body.md', '--file', place.file], io, loader(place)), out: io.out, err: io.err }, 'the pull request body refused');
+});
+
+const WORKFLOW_OK = `workflow: tiny
+version: 1
+initial: start
+states:
+  start: {}
+  complete: {}
+transitions:
+  - from: start
+    to: complete
+    on: pr-opened
+    role: owner
+`;
+
+scene('workflow.check.invocation', async (place) => {
+  const io = testIo(place.root, owner);
+  return show({ code: await runWorkflow(['check'], io), out: io.out, err: io.err }, 'a <path> is required');
+});
+scene('workflow.check.file', async (place) => {
+  const io = testIo(place.root, owner);
+  return show({ code: await runWorkflow(['check', 'missing.yaml'], io), out: io.out, err: io.err }, "can't read missing.yaml");
+});
+scene('workflow.check.file-invalid', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), 'format: [\n');
+  const io = testIo(place.root, owner);
+  return show({ code: await runWorkflow(['check', 'workflow.yaml'], io), out: io.out, err: io.err }, 'workflow.yaml:1:');
+});
+scene('workflow.check.passed', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  const io = testIo(place.root, owner);
+  return show({ code: await runWorkflow(['check', 'workflow.yaml'], io), out: io.out, err: io.err }, 'team workflow check: workflow.yaml: ok');
+});
+scene('workflow.check.refused', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK.replace('to: complete', 'to: missing'));
+  const io = testIo(place.root, owner);
+  return show({ code: await runWorkflow(['check', 'workflow.yaml'], io), out: io.out, err: io.err }, 'refused');
 });
 
 scene('conformance-adapter.finished', async () => {

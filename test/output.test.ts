@@ -1325,6 +1325,20 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           summary: { worktrees: 1 },
         }),
       ],
+      'team.workflow': [
+        jsonEnvelope('team.workflow', {
+          format: 1 as const,
+          ok: true,
+          path: 'workflow.yaml',
+          definition: {
+            workflow: 'build-review-merge',
+            schemaVersion: 1 as const,
+            digest: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+          },
+          findings: [],
+          summary: { refusals: 0, notes: 0 },
+        }),
+      ],
     };
 
     for (const spec of COMMAND_OUTPUT_SCHEMAS) {
