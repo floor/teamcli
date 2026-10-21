@@ -1,0 +1,133 @@
+format: 1
+project: acme-web
+visibility: public            # public | private: decides whether forbidden_public applies
+session: acme-web             # the herdr session; `--session` overrides it
+coordinator: claude-coordinator-acme
+operator: claude-coordinator-acme
+
+tools:
+  tracker: { kind: linear, workspace: acme, team: WEB, project: acme-web }
+  issues: { kind: github, repository: acme/web }
+  chat: { kind: slack, workspace: acme, channel: web-agents }
+
+identity:
+  signature:
+    template: "Agent: {display} · {role}"
+    commits:
+      position: trailer        # last-line | trailer | anywhere
+      exempt: [merge]
+    pull_requests:
+      position: last-line
+      template: "**Agent:** {display} · {role}"
+  humans: [jane@acme.example]  # commit authors who don't sign
+  since: 4f2a9c1               # `check` reads no commit older than this one
+  forbidden: []                # added to the defaults: ^Claude-Session: and a session link
+  forbidden_public:            # only when visibility is public
+    - "\\bWEB-[0-9]+\\b"       # internal tracker ids
+
+rules:                         # added to every seat's rules at launch
+  - Run the tests your change touches, not the whole suite.
+  - Run a script with its interpreter; never chmod, chown, sudo or recursive rm.
+
+trust:                         # applied only by the owner, with `team trust`
+  - .                          # the project itself
+  - ../worktrees/acme-web/*    # its worktrees, by pattern
+
+workspace:
+  mode: worktree               # worktree | shared: the default for every seat
+  path: ../worktrees/{repo}/{task}
+  branch: "{kind}/{task}"      # e.g. fix/select-width; never an internal tracker id
+  base: main
+  setup:
+    - bun install --frozen-lockfile
+  remove: on-merge             # on-merge | manual
+  protected: [.]               # checkouts no seat switches, resets or commits in
+  limit: 8                     # open worktrees at most
+
+watch:
+  interval: 120s               # between passes
+  idle_first: 5m               # before an idle seat's lead is told
+  idle_repeat: 20m             # between reports while it stays idle
+  team_idle: 10m               # a fully idle team, before the nudge
+  nudge_wait: 10m              # a nudge that can't be delivered becomes a notification
+  unsent_after: 1m             # text left in an input box before it is reported
+
+budgets:                       # owner-only; a change needs a new approval
+  marks: [50, 75, 90]          # percent used, per account and window
+
+machine:                       # checked before each seat is launched, and by the watch
+  load_start: 3.0              # 1-minute load per core above which `up` and `add` refuse
+  load_max: 6.0                # per core, above which the watch reports
+  memory_start: 25%            # free memory below which `up` and `add` refuse
+  memory_min: 15%              # below which the watch reports
+  disk_min: 10GB               # free on the project's volume; both refuse and report
+
+limits:                        # the ceilings `up` and `add` refuse above; fixed at approval
+  seats: 10                    # every running seat, temporary ones included
+  temporary: 2
+  vendors: { openai: 1, deepseek: 3 }
+
+seats:
+  - role: project coordinator
+    name: claude-coordinator-acme
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    mode: shared               # the coordinator reads; it never implements
+
+  - role: implementer
+    name: codex-acme
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6"
+    display: GPT-6 Sol         # the vendor's spelling; without it the signature would read "GPT Sol 6"
+    launch: codex -m gpt-6-sol -c model_reasoning_effort=high
+    parked: true
+
+  - role: implementer
+    name: deepseek-acme
+    cli: claude-code           # DeepSeek's model, run by Claude Code
+    vendor: deepseek
+    model: DeepSeek Flash
+    version: "V4.1"
+    display: DeepSeek V4.1 Flash
+    launch: team-deepseek
+    count: 2                   # deepseek-acme, deepseek-acme-2
+
+  - role: reviewer
+    name: grok-acme
+    cli: grok
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    launch: grok --model grok-4.7
+    stopped: true              # kept in the file; `up` doesn't start it, `add grok-acme` does
+
+  # The quota-out acceptance seats: one per vendor whose screen this slice reads today, and
+  # two more whose wall-looking status rows it must not read as a wall (Codex, Cursor).
+  - role: implementer
+    name: agy-acme
+    cli: antigravity
+    vendor: google
+    model: Gemini
+    version: "1.4.2"
+    launch: agy
+
+  - role: implementer
+    name: gemini-acme
+    cli: gemini
+    vendor: google
+    model: Gemini
+    version: "0.64.0"
+    launch: gemini
+
+  - role: implementer
+    name: cursor-acme
+    cli: cursor
+    vendor: anysphere
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent
