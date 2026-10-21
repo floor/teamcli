@@ -316,7 +316,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   });
   let resume: string | undefined;
   // The pane's continuity is proven by the session the registry binds to the seat, whatever
-  // flag the new launch line can carry: a CLI with no resume flag has no resume id, and its
+  // resume form the new launch line can carry: a CLI with none has no resume id, and its
   // state copy may predate the id a restore kept. The live agent's session must still be the
   // recorded one; `inspectSeat` makes that comparison. A state naming another id, or a record
   // that is not this seat's, binds nothing.
@@ -337,19 +337,27 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     else out.stderr(`team restart: ${plainText(said)}\n`);
     if (!dry) logLine(dir, 'restart', describeCaller(caller), said, sources.now());
   };
+  // The id to resume is the one the records bind, not one the state copy must also agree with:
+  // the registry record is the proof, and a state copy naming no id is a copy that predates the
+  // id, not a disagreement. A state naming another id is refused above by both readers.
+  const resumeCandidate = ownSession.kind === 'bound' && ownSession.recorded.launch
+    ? { id: ownSession.recorded.sessionId, launch: ownSession.recorded.launch }
+    : boundSession.kind === 'bound' && boundSession.recorded.launch
+      ? { id: boundSession.recorded.sessionId, launch: boundSession.recorded.launch }
+      : undefined;
   if (ownSession.kind === 'refused') {
     noResume(ownSession.why);
-  } else if (ownSession.kind === 'bound' && ownSession.recorded.launch) {
+  } else if (resumeCandidate !== undefined) {
     const recordedPane = recordedSeat?.pane;
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
-    if (listed?.session !== undefined && listed.session !== '' && listed.session !== ownSession.recorded.sessionId) {
+    if (listed?.session !== undefined && listed.session !== '' && listed.session !== resumeCandidate.id) {
       // The live pane is another conversation: resuming the recorded one would put two live
       // copies of the seat's history beside each other. The restart proceeds fresh.
       noResume('its live agent session is not the recorded one');
-    } else if (withResume(declared.cli, ownSession.recorded.launch, ownSession.recorded.sessionId) !== null) {
-      resume = ownSession.recorded.sessionId;
+    } else if (withResume(declared.cli, resumeCandidate.launch, resumeCandidate.id) !== null) {
+      resume = resumeCandidate.id;
     }
   }
 
@@ -472,7 +480,7 @@ export type PerformInput = {
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
   /** The registry-bound session id this restart proves a restored pane against. Absent when no
-   *  binding exists, or the CLI cannot write a resume flag and the state copy names no id: the
+   *  binding exists, or the CLI has no measured resume form and the state copy names no id: the
    *  pane is then never tied to the launch, and a replaced process is left as it is. */
   continuity?: string;
   /** Registry recipe bound to the resume id. */
@@ -663,7 +671,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // and this one no longer names the conversation this run would start with, so the launch goes
     // out fresh and says why. A restart never resumes an id the current records do not bind.
     if (input.command === 'restart' && resumed !== undefined) {
-      const freshOwn = recordedSeatSession({
+      // The same reader the resume was chosen with: the registry binding, refused by a state
+      // that names another id. A state copy that merely names none no longer cancels the resume.
+      const freshOwn = recordedSeatContinuity({
         home,
         root,
         herdrSession: session,

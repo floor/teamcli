@@ -411,7 +411,7 @@ input:
   });
 });
 
-describe('the resume line a swap appends', () => {
+describe('the resume line a launch appends', () => {
   test('a launch line that already names a session is left as it is', () => {
     for (const line of ['claude --resume abc', 'claude -r abc', 'claude --continue', 'claude -c', 'claude --session-id abc']) {
       expect(withResume('claude-code', line, 'ses_1')).toBeNull();
@@ -420,5 +420,22 @@ describe('the resume line a swap appends', () => {
 
   test('a plain launch line takes the recorded id', () => {
     expect(withResume('claude-code', 'claude --model deepseek-flash', 'ses_1')).toBe('claude --model deepseek-flash --resume ses_1');
+  });
+
+  test('a Codex line takes the id as the word after its own resume subcommand', () => {
+    // `codex resume --help` on 0.161.0: `Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]`.
+    // The `-c` here is Codex's config override, not Claude Code's continue flag: it stays.
+    expect(withResume('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_1'))
+      .toBe('codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1');
+  });
+
+  test('a Codex line that already names resume keeps its own choice', () => {
+    for (const line of ['codex -m gpt-6-sol resume abc', 'codex resume --last']) {
+      expect(withResume('codex', line, 'ses_1')).toBeNull();
+    }
+  });
+
+  test('a CLI with no measured resume form takes no id', () => {
+    expect(withResume('cursor', 'cursor-agent --model x', 'ses_1')).toBeNull();
   });
 });

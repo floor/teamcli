@@ -268,9 +268,20 @@ export function supportsSessionId(cli: string): boolean {
  *
  *      -r, --resume [value]                  Resume a conversation - provide a session ID
  *                                            or interactively select a conversation
+ *
+ *  and from Codex's own subcommand, `codex resume --help` (codex-cli 0.161.0):
+ *
+ *      Resume a previous interactive session (picker by default; use --last to continue the
+ *      most recent)
+ *
+ *      Usage: codex resume [OPTIONS] [SESSION_ID] [PROMPT]
+ *
+ *  Codex takes the id as a word after `resume`, not as a flag. `codex -m gpt-6-sol -c
+ *  model_reasoning_effort=high resume --help` printed that usage and exited 0 in an empty
+ *  synthetic home, so a recorded line's own options stay in front of the subcommand.
  */
 export function supportsSessionResume(cli: string): boolean {
-  return cli === 'claude-code';
+  return cli === 'claude-code' || cli === 'codex';
 }
 
 /** The session id a launch line already names with `--session-id`, if it names one. */
@@ -298,14 +309,22 @@ export function withLaunchSession(cli: string, command: string): { command: stri
 /**
  * The command a pane runs to resume a recorded conversation, where the CLI keeps sessions: the
  * id is appended after every other argument, as `withLaunchSession` appends a new one. The
- * measured line is Claude Code's (`-r, --resume [value] Resume a conversation - provide a
- * session ID`, `claude --help` 2.1.303, quoted on `supportsSessionResume`). Null when the CLI
- * cannot resume: the caller hands over instead. Null, too, for a launch line that already names
- * a session (`--session-id`, `--resume`/`-r`, `--continue`/`-c`): appending ours would leave two
- * of the flag on the line, and the line's own choice is the one the file records.
+ * measured lines are Claude Code's (`-r, --resume [value] Resume a conversation - provide a
+ * session ID`, `claude --help` 2.1.303) and Codex's subcommand (`Usage: codex resume [OPTIONS]
+ * [SESSION_ID] [PROMPT]`, `codex resume --help` 0.161.0; both quoted on
+ * {@link supportsSessionResume}). A Codex line takes the subcommand, so its id is a word after
+ * `resume`, never a flag. Null when the CLI cannot resume: the caller hands over instead. Null,
+ * too, for a launch line that already names a session — the flags below for Claude Code, the
+ * `resume` subcommand for Codex: appending ours would leave two choices on the line, and the
+ * line's own choice is the one the file records. `-c` is a flag's name only on a Claude Code
+ * line: Codex's own `-c` is a config override, and a recorded Codex line carries one.
  */
 export function withResume(cli: string, command: string, sessionId: string): string | null {
   if (!supportsSessionResume(cli)) return null;
+  if (cli === 'codex') {
+    if (/(^|\s)resume(\s|$)/.test(command)) return null;
+    return `${command} resume ${sessionId}`;
+  }
   if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return null;
   return `${command} --resume ${sessionId}`;
 }

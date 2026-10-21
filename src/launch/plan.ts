@@ -3,7 +3,7 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { launchCommand, shellQuote, withResume } from '../profiles/profile.ts';
+import { launchCommand, shellQuote, supportsSessionResume, withResume } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -265,6 +265,13 @@ export interface UpSeat {
   restored?: { launched: LaunchedIdentity; session: string; detail: string };
   /** A bound registry policy. Its launch/model are authoritative over the team file. */
   registry?: { launch: string; model: string; version: string; sessionId?: string };
+  /**
+   * The conversation a relaunch through this seat's line resumes, when the pane itself proved
+   * it: the registry binding read against the live agent's session, even where the seat state
+   * names no id. Set on a repair the proof decided (a restored seat whose model drifted, or the
+   * seat's own process drifted); `registry.sessionId`, where present, stays the first choice.
+   */
+  resume?: string;
   /**
    * The pane holds a program this record cannot tie to the launch. Nothing is closed and
    * the stored process is left as it is.
@@ -662,9 +669,16 @@ export function upPlan(input: UpInput): Step[] {
         session,
       });
     }
-    const recordedLine = seat.registry?.sessionId
-      ? withResume(profile.cli, seat.launch, seat.registry.sessionId) ?? seat.launch
-      : seat.launch;
+    // The id a proven conversation writes into the launch line: the state-agreeing record's
+    // first, then the one the pane itself proved (`seat.resume`). A CLI with no measured resume
+    // form cannot carry either; the plan says so on the launch rather than losing it silently.
+    const resumeId = seat.registry?.sessionId ?? seat.resume;
+    const recordedLine = resumeId === undefined
+      ? seat.launch
+      : withResume(profile.cli, seat.launch, resumeId) ?? seat.launch;
+    const resumeGap = resumeId !== undefined && !supportsSessionResume(profile.cli)
+      ? 'its recorded conversation cannot be resumed by this CLI\'s launch line'
+      : undefined;
     const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
@@ -687,10 +701,13 @@ export function upPlan(input: UpInput): Step[] {
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
       const said = takeNotice();
       const watched = watcherNote(watcher);
+      const launchNote = [said, resumeGap, 'would launch', watched]
+        .filter((part): part is string => part !== undefined)
+        .join('; ');
       steps.push({
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
-        note: said ? `${said}; would launch; ${watched}` : watched,
+        note: launchNote,
         do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }

@@ -543,6 +543,9 @@ function seatPlan(
             cli: seat.cli,
             drift: { way: drift.way },
           },
+          // The pane's live agent is the recorded conversation (`restored`): the relaunch through
+          // the record's launch resumes it, whether or not the state copy names it.
+          resume: restoredSession,
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
@@ -580,6 +583,14 @@ function seatPlan(
   if (recorded.stage === 'ready') {
     if (named || onPane) {
       const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry ?? seat);
+      // The pane's own agent names the conversation the records bind: a relaunch may resume it,
+      // even where the state copy names no id. A pane naming another session proves nothing.
+      const provenSession = continuitySession !== null
+        && onRecordedPane?.session !== undefined
+        && onRecordedPane.session !== ''
+        && onRecordedPane.session === continuitySession
+        ? continuitySession
+        : undefined;
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
         return {
           ...planned,
@@ -590,6 +601,7 @@ function seatPlan(
             cli: seat.cli,
             drift: { way: drift.way },
           },
+          ...(provenSession === undefined ? {} : { resume: provenSession }),
         };
       }
       if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };

@@ -558,10 +558,10 @@ describe('team up, a restored session: boundaries', () => {
   });
 
   // Item 3 through `up` with no state copy: a restored seat whose model drifted is closed
-  // without input and relaunched through the record's launcher, never the bare CLI. The launch
-  // resumes only an id the state agrees with, exactly as restart does; here the state names
-  // none, so the recorded conversation is not written into the launch line.
-  test("a drifted restored seat relaunches through the record's launcher with no state copy", async () => {
+  // without input and relaunched through the record's launcher, never the bare CLI. The state
+  // names no session, but the pane's live agent carries the record's id: the live proof is what
+  // the relaunch resumes, so the conversation comes back with the model.
+  test("a drifted restored seat relaunches through the record's launcher and resumes the conversation the pane proves", async () => {
     await approve();
     writeSeats();
     registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
@@ -588,7 +588,8 @@ describe('team up, a restored session: boundaries', () => {
     expect(made.closes).toEqual(['w93']);
     const seatLaunches = made.runs.filter((run) => run.command.includes('team-deepseek'));
     expect(seatLaunches).toHaveLength(1);
-    expect(seatLaunches[0]?.command).not.toContain('--resume');
+    // The record's launcher, then the id the live pane proved next to it.
+    expect(seatLaunches[0]?.command).toContain('team-deepseek --resume kept');
     expect(keys).toEqual([]);
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', agent_session: 'kept' });
     expect(findAgent(home, { team: teamIdOf(root), seat: 'deepseek-acme' })?.signing).toMatchObject({
