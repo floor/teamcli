@@ -3,9 +3,9 @@
 // A delivery is a deposit until the seat's signed read receipt follows. The watch's unread pass
 // counts from `watch.unread_after` (N): N after a message landed it types the seat's own drop
 // read once, and at twice that window it tells the sender and the team's lead — a mailbox record
-// `team messages` reads, never a keystroke into another seat's pane. A message a held send is
-// still retrying is not woken here, a human seat is never typed into, and a box holding someone's
-// unsent text is moved and put back, never typed over.
+// for the sender, and a signed UUID-named drop the lead's own `team drops --read` serves. A
+// message a held send is still retrying is not woken here, a human seat is never typed into, and
+// a box holding someone's unsent text is moved and put back, never typed over.
 // The pane here is a scripted screen; no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -19,14 +19,14 @@ import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { readMessage, receiptPath } from '../src/mcp/inbox.ts';
+import { listUnread, MESSAGE_ID, readMessage, receiptPath } from '../src/mcp/inbox.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
 import { dropMessage, readTriggerLine } from '../src/send/native.ts';
 import { markPending, pendingDropPath } from '../src/send/pending.ts';
-import { signReceiptPayload, signRecord, writeReceipt } from '../src/send/record.ts';
+import { readRecord, signReceiptPayload, signRecord, writeReceipt } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { takenDropPath } from '../src/send/taken.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -232,6 +232,22 @@ function mailboxBody(root: string, seat: string, id: string): { from: string; to
   const text = readFileSync(path, 'utf8');
   const parsed = JSON.parse(text) as { payload: { from: string; to: string; body: string } };
   return parsed.payload;
+}
+
+/** The lead's report drop for one source message: the UUID-shaped id fixed by that message. */
+function leadReportId(dir: string, sourceId: string, seat = 'lead', session = 'acme'): string {
+  const dropDir = join(dir, 'send-drops', session, seat);
+  const ids = readdirSync(dropDir).filter((name) => MESSAGE_ID.test(name) && name !== sourceId);
+  if (ids.length !== 1) throw new Error(`expected one lead report drop, found ${String(ids.length)}`);
+  return ids[0] as string;
+}
+
+function leadReportBody(dir: string, sourceId: string, seat = 'lead', session = 'acme'): string {
+  const id = leadReportId(dir, sourceId, seat, session);
+  const read = readRecord(join(dir, 'send-drops', session, seat, id), id);
+  if (!read.ok) throw new Error(read.reason);
+  if (read.record === null) throw new Error(`no lead report drop at ${id}`);
+  return read.record.payload.body;
 }
 
 describe('wakeUnreadDrops', () => {
@@ -616,17 +632,51 @@ describe('reportUnreadDrops', () => {
     expect(toOwner.body).toContain('no wake line was typed');
     expect(toOwner.body).toContain(join(dropDir, UNREAD_A));
     const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const reportId = leadReportId(made.dir, UNREAD_A);
+    expect(MESSAGE_ID.test(reportId)).toBe(true);
     const listing = listDrops(leadDir, messageKeyOf(made.home), {
       to: 'lead', root: realpathSync(made.root), session: 'acme',
     });
-    expect(listing.kind === 'ok' && listing.rows.some((row) => row.id === `unread-${UNREAD_A}` && row.from === 'runtime')).toBe(true);
-    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toBe(toOwner.body);
+    expect(listing.kind === 'ok' && listing.rows.some((row) => row.id === reportId && row.from === 'runtime')).toBe(true);
+    // The inbox filter that used to drop `unread-…` names now lists the report as waiting.
+    const waiting = listUnread(leadDir, { to: 'lead', root: realpathSync(made.root), session: 'acme' }, made.home);
+    expect(waiting.map((message) => message.id)).toContain(reportId);
+    // The report is served by the same reader the checklist names, and that read leaves a receipt.
+    const served = readMessage({ dropDir: leadDir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, reportId, made.home);
+    expect(served.ok ? served.body : served.reason).toBe(toOwner.body);
+    expect(existsSync(receiptPath(leadDir, reportId))).toBe(true);
     expect(said).toEqual(['lead: a message from owner was still unread after 21 min; reported to owner and lead']);
 
     // One report per message: the marker is the memory, and a later pass says nothing new.
     const again: string[] = [];
     reportUnreadDrops(sceneOf(made, team, one, again), { unreadAfter: N });
     expect(again).toEqual([]);
+  });
+
+  test('an unread report drop is served to the lead but never reported on again', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 21 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const reportId = leadReportId(made.dir, UNREAD_A);
+
+    // The report is now unread well past twice the window. It is the pass's own product, so the
+    // later pass leaves it alone instead of reporting on it.
+    const laterSaid: string[] = [];
+    reportUnreadDrops(
+      sceneOf(made, team, one, laterSaid, { now: new Date(NOW.getTime() + 30 * MIN) }),
+      { unreadAfter: N },
+    );
+    expect(laterSaid).toEqual([]);
+    const ids = readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name));
+    expect(ids.sort()).toEqual([UNREAD_A, reportId].sort());
+
+    // Serving it is the lead's own `team drops --read` path, unchanged.
+    const served = readMessage({ dropDir: leadDir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, reportId, made.home);
+    expect(served.ok).toBe(true);
   });
 
   test('a stopped seat stays unwoken, gets one report drop, and its original message waits', async () => {
@@ -652,7 +702,8 @@ describe('reportUnreadDrops', () => {
     const rows = listDrops(leadDir, messageKeyOf(made.home), {
       to: 'lead', root: realpathSync(made.root), session: 'acme',
     });
-    expect(rows.kind === 'ok' && rows.rows.some((row) => row.id === `unread-${UNREAD_B}` && row.from === 'runtime')).toBe(true);
+    const reportId = leadReportId(made.dir, UNREAD_B);
+    expect(rows.kind === 'ok' && rows.rows.some((row) => row.id === reportId && row.from === 'runtime')).toBe(true);
     expect(said).toHaveLength(1);
   });
 
@@ -672,7 +723,7 @@ describe('reportUnreadDrops', () => {
 
     const toHelper = mailboxBody(made.root, 'helper', `unread-${UNREAD_A}`);
     expect(toHelper.body).toContain('its wake line was sent at 2026-10-17T03:50:00.000Z');
-    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toBe(toHelper.body);
+    expect(leadReportBody(made.dir, UNREAD_A)).toBe(toHelper.body);
   });
 
   test("a foreign sender's own team is told in its own root and session", () => {
@@ -735,7 +786,7 @@ describe('reportUnreadDrops', () => {
 
     expect(existsSync(join(gammaRoot, '.agents', 'messages', 'scout'))).toBe(false);
     expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
-    const toLead = mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body;
+    const toLead = leadReportBody(made.dir, UNREAD_A);
     expect(toLead).toContain(
       `team ${JSON.stringify(betaId)} records root ${JSON.stringify(gammaRoot)}, whose own identity is ${JSON.stringify(teamIdOf(gammaRoot))}`,
     );
@@ -768,7 +819,7 @@ describe('reportUnreadDrops', () => {
     reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
 
     expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
-    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(
+    expect(leadReportBody(made.dir, UNREAD_A)).toContain(
       `team ${JSON.stringify(betaId)} lists 2 roster entries for agent ${scout} at seat "scout"`,
     );
     expect(said).toHaveLength(1);
@@ -802,7 +853,7 @@ describe('reportUnreadDrops', () => {
     // seats: its seat is ambiguous, so nothing is written in beta's root or here.
     expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
     const reason = `team ${JSON.stringify(betaId)} lists 2 seats for agent ${scout}; one agent must hold one seat`;
-    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(reason);
+    expect(leadReportBody(made.dir, UNREAD_A)).toContain(reason);
     expect(said).toHaveLength(1);
     expect(said[0]).toContain(reason);
     expect(said[0]).toContain('reported to lead only');
@@ -836,7 +887,7 @@ describe('reportUnreadDrops', () => {
     // ambiguous, so nothing is written in beta's root or here.
     expect(existsSync(join(betaRoot, '.agents', 'messages', 'scout'))).toBe(false);
     const reason = `team ${JSON.stringify(betaId)} lists 2 agents at seat "scout"; one seat must hold one agent`;
-    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(reason);
+    expect(leadReportBody(made.dir, UNREAD_A)).toContain(reason);
     expect(said).toHaveLength(1);
     expect(said[0]).toContain(reason);
     expect(said[0]).toContain('reported to lead only');
@@ -852,9 +903,9 @@ describe('reportUnreadDrops', () => {
     reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
 
     expect(existsSync(join(made.root, '.agents', 'messages', 'helper'))).toBe(false);
-    const toLead = mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`);
-    expect(toLead.body).toContain('the sender\'s own mailbox could not be resolved (the signed record names no agent id for "helper")');
-    expect(toLead.body).toContain('this report goes to the team\'s lead only');
+    const toLead = leadReportBody(made.dir, UNREAD_A);
+    expect(toLead).toContain('the sender\'s own mailbox could not be resolved (the signed record names no agent id for "helper")');
+    expect(toLead).toContain('this report goes to the team\'s lead only');
     expect(said).toEqual([
       'lead: a message from helper was still unread after 21 min; reported to lead only: the sender\'s own mailbox could not be resolved (the signed record names no agent id for "helper")',
     ]);
@@ -870,7 +921,7 @@ describe('reportUnreadDrops', () => {
     reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
 
     expect(existsSync(join(made.root, '.agents', 'messages', 'scout'))).toBe(false);
-    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toContain(
+    expect(leadReportBody(made.dir, UNREAD_A)).toContain(
       `agent ${ghost} names team "ffffffffffff", which this home's registry does not hold`,
     );
     expect(said).toHaveLength(1);
@@ -1110,7 +1161,7 @@ describe('team watch wakes an unread seat', () => {
     expect(one.enters).toBe(0);
     const owner = mailboxBody(directory, 'owner', `unread-${UNREAD_B}`);
     expect(owner.body).toContain('no wake line was typed');
-    expect(mailboxBody(directory, 'claude-coordinator-acme', `unread-${UNREAD_B}`).body).toBe(owner.body);
+    expect(leadReportBody(join(directory, '.agents'), UNREAD_B, 'claude-coordinator-acme', 'acme-web')).toBe(owner.body);
     expect(io.out).toContain('deepseek-acme: a message from owner was still unread after 21 min; reported to owner and claude-coordinator-acme');
   });
 });
