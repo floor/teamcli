@@ -1,5 +1,5 @@
 import { reportedLiveAgent } from './agent.ts';
-import { profileFor } from '../profiles/index.ts';
+import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import type { RulesFileWrite } from './rules-file.ts';
 import {
   classifyComposer, readBox, readFoldMark, readScreen, type Box, type Screen, type ScreenOptions,
@@ -241,7 +241,13 @@ async function clearTypedLine(cli: string, why: Refusal, io: Delivery): Promise<
   if (key === null || !io.key) return why;
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
-  const resting = () => io.status() === 'idle' || io.status() === 'done';
+  // A CLI whose profile says herdr cannot report it: herdr's missing or `unknown` word is no
+  // reading of the seat, and the unsent composer the caller proved is the reading that stands.
+  const wordless = () => {
+    const status = io.status();
+    return herdrUnreliable(cli) && (status === null || status === 'unknown');
+  };
+  const resting = () => io.status() === 'idle' || io.status() === 'done' || wordless();
   if (readScreen(cli, io.screen()).kind !== 'unsent' || !resting() || !live()) return why;
   if (!io.key(key)) return { ...why, cleared: 'undelivered' };
   const after = await settleScreen('unsent', () => readScreen(cli, io.screen()).kind, io);
@@ -373,7 +379,16 @@ export function refusalReport(why: Refusal): string {
 export async function deliverRules(cli: string, line: string, seconds: number, io: Delivery): Promise<boolean | 'no-agent'> {
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
-  const free = () => ['idle', 'done'].includes(io.status() ?? '');
+  // Herdr's word for a CLI its profile reports faithfully. For a CLI the profile says herdr
+  // cannot report (`herdr_status: unreliable`), a missing or `unknown` status is no reading of
+  // the seat at all: the profile's own recognised screen is the reading there, exactly as the
+  // watch and status read such a seat. A status herdr can give — idle, done, working, blocked —
+  // is still its word.
+  const wordless = () => {
+    const status = io.status();
+    return herdrUnreliable(cli) && (status === null || status === 'unknown');
+  };
+  const free = () => ['idle', 'done'].includes(io.status() ?? '') || wordless();
   const report = (why: Refusal): false => { io.report?.(why); return false; };
   // The CLI may start through a wrapper: a shell runs in the pane first, and the CLI draws
   // behind it. Nothing is typed until the CLI itself is the pane's foreground process and its
@@ -395,7 +410,7 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
       if (start === 'trust' || start === 'permission' || start === 'question' || start === 'exit question' || start === 'vendor notice' || start === 'provider error' || start === 'rate limit') {
         return report(stopAs(cli, 'screen', io.screen()));
       }
-      if ((status === 'idle' || status === 'done') && (start === 'idle' || start === 'unsent')) break;
+      if ((status === 'idle' || status === 'done' || wordless()) && (start === 'idle' || start === 'unsent')) break;
     }
     if (io.now() >= untilUp) {
       return report(seenLive ? stopAs(cli, 'screen', io.screen()) : stopAs(cli, 'launch', io.screen()));
@@ -478,6 +493,10 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
     // The line was submitted and no ready prompt was seen. Nothing about it is confirmed: the
     // box is read as the screen shows it.
     const kind = readScreen(cli, io.screen()).kind;
+    // A CLI herdr cannot report: its own recognised working screen is the acknowledgement
+    // herdr's `working` status would have given. The composer must be back to its empty idle
+    // row — a box still holding the line is not a submission.
+    if (herdrUnreliable(cli) && kind === 'working' && composer.kind === 'idle') return true;
     if (kind === 'trust' || kind === 'permission' || kind === 'question' || kind === 'exit question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit' || io.now() >= deadline) {
       return report(stoppedOn(cli, 'ack', io.screen(), line));
     }
