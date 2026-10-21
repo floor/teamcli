@@ -52,6 +52,21 @@ function realResolvers(): WorkflowResolvers {
   return { ...provisionalResolvers(['operator']), operations: { descriptor: (name) => table[name] } };
 }
 
+/** A provisional descriptor that does declare an account, to prove declared fields are checked. */
+function provisionalWithAccount(): WorkflowResolvers {
+  const scoped: OperationDescriptor = {
+    kernelOperation: 'scoped',
+    capabilities: ['write'],
+    scopes: [],
+    account: 'deploy-bot',
+    confirmationClass: 'owner',
+    reach: 'local',
+    provisional: true,
+  };
+  const table: Record<string, OperationDescriptor> = { scoped };
+  return { ...provisionalResolvers(), operations: { descriptor: (name) => table[name] } };
+}
+
 describe('checkWorkflow — clean graphs', () => {
   test('a minimal graph has no findings and passes', () => {
     expect(check(VALID)).toEqual({ ok: true, findings: [] });
@@ -291,10 +306,45 @@ effects:
 `;
     const result = check(text);
     expect(shape(result.findings)).toEqual([
+      ['note', 'annotation.act-as', 8],
       ['note', 'annotation.capability-pending', 8],
       ['note', 'ref.operation', 8],
     ]);
     expect(result.ok).toBe(true);
+  });
+
+  test('an undeclared capability on a provisional descriptor is a note', () => {
+    const text = `workflow: solo
+version: 1
+initial: a
+states:
+  a: {}
+transitions: []
+effects:
+  kick: { run: release-tag, capability: write, role: lead, reach: outside-machine }
+`;
+    const result = check(text);
+    expect(shape(result.findings)).toEqual([
+      ['note', 'annotation.capability', 8],
+      ['note', 'ref.operation', 8],
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
+  test('a provisional descriptor with a declared account still refuses a mismatch', () => {
+    const text = `workflow: solo
+version: 1
+initial: a
+states:
+  a: {}
+transitions: []
+effects:
+  kick: { run: scoped, capability: write, role: lead, act-as: other }
+`;
+    expect(shape(check(text, provisionalWithAccount()).findings)).toEqual([
+      ['refusal', 'annotation.act-as', 8],
+      ['note', 'ref.operation', 8],
+    ]);
   });
 
   test('a provisional descriptor with a declared capability set still refuses a mismatch', () => {

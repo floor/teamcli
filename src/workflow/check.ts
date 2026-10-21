@@ -9,6 +9,7 @@ import type { Finding, Workflow, WorkflowEffect } from './types.ts';
 export type CheckResult = { ok: boolean; findings: Finding[] };
 
 type Refuse = (code: string, line: number, message: string) => void;
+type Note = (code: string, line: number, message: string) => void;
 
 function compareFindings(a: Finding, b: Finding): number {
   if (a.line !== b.line) return a.line - b.line;
@@ -22,7 +23,7 @@ export function checkWorkflow(definition: Workflow, resolvers: WorkflowResolvers
   const refuse: Refuse = (code, line, message) => {
     findings.push({ level: 'refusal', code, line, message });
   };
-  const note = (code: string, line: number, message: string): void => {
+  const note: Note = (code, line, message) => {
     findings.push({ level: 'note', code, line, message });
   };
 
@@ -152,7 +153,7 @@ export function checkWorkflow(definition: Workflow, resolvers: WorkflowResolvers
         `operation "${effect.run.name}" is provisional; its descriptor is not yet a registry row`,
       );
     }
-    checkAnnotations(effect, descriptor, refuse);
+    checkAnnotations(effect, descriptor, refuse, note);
   }
 
   findings.sort(compareFindings);
@@ -162,10 +163,16 @@ export function checkWorkflow(definition: Workflow, resolvers: WorkflowResolvers
 /**
  * Checked assertions, never authorization: an effect's `reach` and `capability` must agree with
  * what the descriptor declares. `reach` is always declared, so its contradictions are refused
- * even against a provisional descriptor; a provisional descriptor's empty capability list or
- * absent account is unresolved information, never a contradiction (ruled 2026-10-21).
+ * even against a provisional descriptor. A provisional descriptor's undeclared authority fields —
+ * an empty capability list or an absent account — are notes: unresolved information, never a
+ * contradiction (ruled 2026-10-21). Real descriptors get the full checks.
  */
-function checkAnnotations(effect: WorkflowEffect, descriptor: OperationDescriptor, refuse: Refuse): void {
+function checkAnnotations(
+  effect: WorkflowEffect,
+  descriptor: OperationDescriptor,
+  refuse: Refuse,
+  note: Note,
+): void {
   const reachesOutside = descriptor.reach === 'outside-machine';
   if (effect.reach?.value === 'outside-machine' && !reachesOutside) {
     refuse(
@@ -183,8 +190,13 @@ function checkAnnotations(effect: WorkflowEffect, descriptor: OperationDescripto
   }
 
   if (effect.capability !== undefined) {
-    const declared = descriptor.provisional ? descriptor.capabilities.length > 0 : true;
-    if (declared && !descriptor.capabilities.includes(effect.capability)) {
+    if (descriptor.provisional && descriptor.capabilities.length === 0) {
+      note(
+        'annotation.capability',
+        effect.line,
+        `operation "${effect.run.name}" declares no capabilities yet; capability "${effect.capability}" is unresolved`,
+      );
+    } else if (!descriptor.capabilities.includes(effect.capability)) {
       refuse(
         'annotation.capability',
         effect.line,
@@ -194,13 +206,21 @@ function checkAnnotations(effect: WorkflowEffect, descriptor: OperationDescripto
   }
 
   if (effect.actAs !== undefined) {
-    if (!descriptor.provisional && descriptor.account === undefined) {
-      refuse(
-        'annotation.act-as',
-        effect.actAs.line,
-        `effect "${effect.name}" acts as "${effect.actAs.value}", but operation "${effect.run.name}" names no account`,
-      );
-    } else if (descriptor.account !== undefined && descriptor.account !== effect.actAs.value) {
+    if (descriptor.account === undefined) {
+      if (descriptor.provisional) {
+        note(
+          'annotation.act-as',
+          effect.actAs.line,
+          `operation "${effect.run.name}" declares no account yet; acting as "${effect.actAs.value}" is unresolved`,
+        );
+      } else {
+        refuse(
+          'annotation.act-as',
+          effect.actAs.line,
+          `effect "${effect.name}" acts as "${effect.actAs.value}", but operation "${effect.run.name}" names no account`,
+        );
+      }
+    } else if (descriptor.account !== effect.actAs.value) {
       refuse(
         'annotation.act-as',
         effect.actAs.line,
