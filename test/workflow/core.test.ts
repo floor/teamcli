@@ -587,6 +587,21 @@ describe('evidence and guards', () => {
     }
   });
 
+  test('E12 a cited ref the document does not supply is held on that ref', () => {
+    const decision = decide(
+      scene({
+        definition: guarded,
+        envelope: { evidence: ['ev-gate', 'ev-absent'] },
+      }),
+    );
+    expect(decision.kind).toBe('held');
+    if (decision.kind === 'held') {
+      expect(decision.code).toBe(DECISION_CODES.evidenceMissing);
+      expect(decision.waitingOn).toEqual({ kind: 'evidence', ref: 'ev-absent' });
+      expect(decision.revision).toBe(0);
+    }
+  });
+
   test('E10 two outcomes in one envelope: each selector picks its own', () => {
     const ci = outcomeEvidence('run-0/1/ci', 'ci-suite', 'done');
     const publish = outcomeEvidence('run-0/1/pub', 'release-publish', 'done');
