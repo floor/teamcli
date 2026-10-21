@@ -37,7 +37,7 @@ the restart goes on; [`team check`](check.md) names the seat.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--abandon` | — | close the workspace of a stuck seat without typing into its pane; a seat caller cannot abandon a `working` seat or a lead seat |
+| `--abandon` | — | close the workspace of a stuck seat without typing into its pane, and replace a `replaced` pane herdr still names as the seat; a seat caller cannot abandon a `working` seat or a lead seat |
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
@@ -127,6 +127,11 @@ simply carries nothing to resume. A CLI with a resume flag is then relaunched wi
 conversation through the seat's launch line; a CLI without one, or a state that names another
 id, is relaunched without one, and a conversation that differs or cannot be read remains refused (`<seat> has a process in its old
 pane that is not the signed seat; left as it is`, exit 1).
+
+That refusal's `--json` `repair` names `team restart <seat> --abandon` when herdr still names
+the seat on the recorded pane. With the flag the run closes that pane's workspace without typing
+into it — the conversation there is not this run's to answer — and launches the seat again in a
+fresh workspace. A pane herdr does not name as the seat is refused with or without the flag.
 
 ```console screens="claude-beacon=working"
 $ team restart claude-beacon ; echo "exit $?"

@@ -393,7 +393,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         notes,
       });
     case 'replaced':
-      return replacedRefused(out, json, name);
+      return replacedRefused(out, json, name, performed.takeable);
     case 'abandon-working':
       return abandonWorkingRefused(out, json, name);
     case 'busy':
@@ -498,7 +498,7 @@ export type ReadBack =
 
 export type PerformResult =
   | { kind: 'dry'; text: string; plan: PlanStep[] }
-  | { kind: 'replaced' }
+  | { kind: 'replaced'; takeable: boolean }
   | { kind: 'abandon-working' }
   | { kind: 'busy'; message: string }
   | { kind: 'not-ready'; message: string }
@@ -552,7 +552,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   // Inspect the target seat's current pane before any preflight or stop.
   let continuitySession = input.command === 'restart' ? (input.continuity ?? input.resume) : undefined;
   const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
-  if (inspected.kind === 'replaced') return { kind: 'replaced' };
+  if (inspected.kind === 'replaced') return { kind: 'replaced', takeable: inspected.takeable };
   if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
   if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
 
@@ -684,7 +684,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       }
     }
     const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
-    if (rechecked.kind === 'replaced') return { kind: 'replaced' };
+    if (rechecked.kind === 'replaced') return { kind: 'replaced', takeable: rechecked.takeable };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
     if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
 
@@ -758,7 +758,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         const fresh = sources.agents(session);
         if (fresh === null) return { kind: 'herdr' };
         const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
-        if (seen.kind === 'replaced') return { kind: 'replaced' };
+        if (seen.kind === 'replaced') return { kind: 'replaced', takeable: seen.takeable };
         if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
         if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
         stopObs = seen;
@@ -788,6 +788,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
             state: stopObs.where === 'free' ? 'free' : stopObs.where,
             ...(stopObs.exitInBox ? { exitInBox: true } : {}),
             ...(stopObs.atExitQuestion ? { atExitQuestion: true } : {}),
+            // A doubt pane the caller's `--abandon` takes is closed without typing: nothing is
+            // read from it, no exit text is sent, and no key answers whatever is in front.
+            ...(stopObs.taken === true ? { unproven: true as const } : {}),
           },
           keep: false,
           // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
@@ -1127,7 +1130,8 @@ export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
 }
 
 type InspectedSeat =
-  | { kind: 'replaced' }
+  /** `takeable`: herdr names this seat on the recorded pane, so `--abandon` would replace it. */
+  | { kind: 'replaced'; takeable: boolean }
   | { kind: 'abandon-working' }
   | { kind: 'busy'; message: string }
   | {
@@ -1144,6 +1148,8 @@ type InspectedSeat =
       /** The screen reads as the CLI's rate limit or provider error and the caller observed it:
        *  the pane cannot answer, so it is closed without typing and never refused as busy. */
       brokenScreen: boolean;
+      /** The pane was a `replaced` doubt the caller's `--abandon` takes: close it without typing. */
+      taken?: boolean;
     };
 
 function inspectSeat(
@@ -1176,8 +1182,17 @@ function inspectSeat(
     recordedSession: draftCapture ? continuitySession : recorded?.agent_session,
     liveSession: listedOnRecorded?.session,
   });
-  if ((verdict === 'replaced' && continuity !== 'restored') || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched)) {
-    return { kind: 'replaced' };
+  // A pane whose process is not the recorded one is taken only by an explicit `--abandon`, and
+  // only while herdr still names this seat on the recorded pane: the pane is the seat's own, and
+  // the caller has said what to do with whatever now runs in front of the launch line. Every
+  // other doubt — no name on that pane, or no flag — is left as it is.
+  const takeable = abandon && listedOnRecorded !== undefined;
+  if (
+    ((verdict === 'replaced' && continuity !== 'restored')
+      || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched))
+    && !takeable
+  ) {
+    return { kind: 'replaced', takeable: listedOnRecorded !== undefined };
   }
 
   const matched = agents.filter((item) => item.name === name);
@@ -1227,6 +1242,7 @@ function inspectSeat(
       atExitQuestion: false,
       unrecognised: agent.status,
       brokenScreen: false,
+      taken: takeable,
     };
   }
   // Unsent text is not a block: the box is read now, the text is copied under the run lock
@@ -1247,6 +1263,7 @@ function inspectSeat(
           atExitQuestion: false,
           draftScreen: raw ?? '',
           brokenScreen,
+          taken: takeable,
         };
       }
       return {
@@ -1279,6 +1296,7 @@ function inspectSeat(
     exitInBox: clearable,
     atExitQuestion: screen.kind === 'exit question',
     brokenScreen,
+    taken: takeable,
   };
 }
 
@@ -1813,11 +1831,12 @@ function noSessionRefused(out: Io, json: boolean, session: string): number {
   return 1;
 }
 
-function replacedRefused(out: Io, json: boolean, name: string): number {
+function replacedRefused(out: Io, json: boolean, name: string, takeable = false): number {
   refuse(out, json, 'restart', {
     id: 'restart.replaced',
     message: `${name} has a process in its old pane that is not the signed seat; left as it is`,
-    repair: null,
+    // herdr names the seat on that pane: the caller's own `--abandon` replaces it, without a key.
+    repair: takeable ? `team restart ${name} --abandon` : null,
   });
   // exit: restart.replaced
   return 1;

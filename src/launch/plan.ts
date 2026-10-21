@@ -830,6 +830,9 @@ export interface DownSeat {
    *  and the workspace for this seat: close it, type nothing, unless `keep` names the seat.
    *  The name is not the match. */
   title?: string;
+  /** The caller's `--abandon` takes a pane herdr names as this seat but whose process cannot be
+   *  tied to the launch: close its workspace, type nothing — no key, no exit text, no draft. */
+  unproven?: true;
 }
 
 export interface DownInput {
@@ -885,6 +888,23 @@ export function downPlan(input: DownInput): Step[] {
         text: `${seat.name}: the pane is a human's; nothing is typed into it; left running`,
       });
       left++;
+      continue;
+    }
+    // A pane herdr names as this seat, whose process is not the launched one, and which the
+    // caller's `--abandon` takes: its conversation is not this run's to answer, so nothing is
+    // typed into it. The workspace close ends whatever is in front.
+    if (seat.unproven) {
+      steps.push({
+        kind: 'run',
+        argv: herdr(session, 'workspace', 'close', seat.workspace),
+        note: 'abandoned: its process is not the launched one; closed without typing',
+        do: {
+          do: 'close',
+          seat: seat.name,
+          workspace: seat.workspace,
+          said: 'its process is not the launched one; its workspace was closed without typing',
+        },
+      });
       continue;
     }
     if (seat.unnamed || seat.title) {
