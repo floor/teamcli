@@ -1,0 +1,16 @@
+agy
+❯ agy
+
+      ▄▀▀▄        Antigravity CLI 1.4.2
+     ▀▀▀▀▀▀       <account>
+    ▀▀▀▀▀▀▀▀      <workspace>
+   ▄▀▀    ▀▀▄
+  ▄▀▀      ▀▀▄
+
+Individual quota reached
+Resets in 47h31m
+
+─────────────────────────────────────────────────────
+>
+─────────────────────────────────────────────────────
+? for shortcuts
