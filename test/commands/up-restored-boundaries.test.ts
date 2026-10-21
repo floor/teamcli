@@ -667,6 +667,14 @@ describe('team up, a restored session: boundaries', () => {
     made.launch.agents = live;
     // The new pane never draws the idle prompt: the wait goes to its deadline after the line ran.
     made.launch.paneText = (_session, pane) => (made.runs.some((run) => run.pane === pane) ? 'startup still drawing\n' : IDLE);
+    // What the state says at every sleep of the readiness wait: the successor must already be
+    // persisted there, while the stage is still launched, not only after the run ends.
+    const duringWait: { stage: string | undefined; binding: string | undefined }[] = [];
+    const rawSleep = made.launch.sleep;
+    made.launch.sleep = async (ms) => {
+      duringWait.push({ stage: seatsOf()['deepseek-acme']?.stage, binding: seatsOf()['deepseek-acme']?.presence_binding });
+      await rawSleep(ms);
+    };
     const io = quietIo();
     const code = await runUp(
       FILE,
@@ -682,6 +690,9 @@ describe('team up, a restored session: boundaries', () => {
     expect(minted).not.toBe('prs_aaaaaaaaaaaa');
     expect(seatsOf()['deepseek-acme']?.stage).toBe('launched');
     expect(seatsOf()['deepseek-acme']?.presence_binding).toBe(minted);
+    expect(duringWait.length).toBeGreaterThan(0);
+    expect(duringWait.every((read) => read.stage === 'launched')).toBe(true);
+    expect(duringWait.every((read) => read.binding === minted)).toBe(true);
   });
 
   // The same repair whose workspace is never made: the old pane was closed and its record
