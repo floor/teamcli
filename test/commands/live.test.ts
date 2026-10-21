@@ -3196,9 +3196,11 @@ describe('team up, a session that was restored', () => {
     expect(code).toBe(1);
     // The recorded process was verified before anything was closed, its screen read between
     // the check and the close, and the close's own process read comes directly before it —
-    // nothing is typed, focused or asked of a terminal.
+    // nothing is typed, focused or asked of a terminal. The two reads before that are the
+    // plan's model read of the ready seats, taken while the plan is built.
     expect(calls).toEqual([
       'process:w1:p1', 'process:w2:p1', 'process:w3:p1',
+      'paneText:w2:p1', 'paneText:w3:p1',
       'process:w1:p1', 'paneText:w1:p1',
     ]);
     expect(made.terminal.reads).toBe(0);
@@ -3276,9 +3278,11 @@ describe('team up, a session that was restored', () => {
     }, made));
     expect(code).toBe(1);
     // The refusal names the launch's identity as what changed under it and keeps the record —
-    // nothing is closed, nothing typed, nothing asked of a terminal.
+    // nothing is closed, nothing typed, nothing asked of a terminal. The two reads before the
+    // resume's own proof are the plan's model read of the ready seats.
     expect(calls).toEqual([
       'process:w1:p1', 'process:w2:p1', 'process:w3:p1',
+      'paneText:w2:p1', 'paneText:w3:p1',
       'process:w1:p1', 'paneText:w1:p1',
     ]);
     expect(io.out).toContain('claude-coordinator-acme: left out: a run with no terminal does not close a waiting seat; left as it is\n');
@@ -3862,10 +3866,11 @@ describe('team up, the pause', () => {
     // The fresh read of the recorded pane comes first — the pane's presence, its process, its
     // screen — and only then the prompt: nothing is created, run, typed or focused before the
     // owner has chosen. (The three `process` reads before it are the run's own pre-pass over
-    // the recorded seats, at up.ts; the deepseek seats pass the ready gate through the agent
-    // list, which this trace does not wrap.)
+    // the recorded seats, at up.ts, and the two `read`s after them are the plan's model read
+    // of the ready seats.)
     expect(calls).toEqual([
       'process:w1:p1', 'process:w2:p1', 'process:w3:p1',
+      'read:w2:p1', 'read:w3:p1',
       'agents', 'process:w1:p1', 'read:w1:p1', 'key:o',
       'agents', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
       'sleep:2000', 'agents', 'process:w1:p1', 'read:w1:p1',
