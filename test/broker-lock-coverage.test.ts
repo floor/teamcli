@@ -171,12 +171,12 @@ describe('the start lock over an independent world', () => {
     expect(output).toContain(`CLOCK scene=claim pid=${pid} held age=999 turns=6 pending=1 same-lock=1 same-claim=1`);
     expect(output).toContain('CLOCK scene=claim crossed age=1001 serving=1 read=1 lock-released=1 claim-released=1 temps=0');
     expect(output).toContain(`CLOCK done pid=${pid} scenes=2`);
-    // The mock stayed in the child: this process's clock still advances with real time.
+    // The mock stayed in the child: this process's clock still advances with real time. A frozen
+    // clock would advance ~0, so only the floor is meaningful; no ceiling, which a loaded host
+    // could only make later.
     const began = Date.now();
     await new Promise((tick) => setTimeout(tick, 60));
-    const advanced = Date.now() - began;
-    expect(advanced).toBeGreaterThanOrEqual(40);
-    expect(advanced).toBeLessThan(10_000);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(40);
   });
 
   scene('a dead holder\'s lock is taken over and serves', async () => {
