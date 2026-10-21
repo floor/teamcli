@@ -454,12 +454,19 @@ export function pruneEventLog(
   try {
     const kept = options.kept ?? EVENT_LOG_KEPT;
     const retentionSeconds = options.retentionSeconds ?? DEFAULT_EVENT_RETENTION_SECONDS;
-    const path = eventLogPath(project, root, home);
-    const drops: DroppedSegment[] = [];
-    const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
-    if (sealed !== null) drops.push(sealed);
-    drops.push(...pruneSealed(path, home, kept, options));
-    declareDrop(project, root, home, kept, options, drops, options.session ?? project);
+    const storeDir = storePath(project, root, home);
+    if (ensureStoreLadder(storeDir, home) !== null) return;
+    // The whole pass holds the append lock: its rotation and drops move the retained files the
+    // append scans, and its declaration precomputes a sequence override before appending. A
+    // writer that slipped between those two steps could mint that same sequence.
+    withEventLock(storeDir, () => {
+      const path = eventLogPath(project, root, home);
+      const drops: DroppedSegment[] = [];
+      const sealed = sealIdleLiveFile(path, home, kept, Date.now() - retentionSeconds * 1_000);
+      if (sealed !== null) drops.push(sealed);
+      drops.push(...pruneSealed(path, home, kept, options));
+      declareDrop(project, root, home, kept, options, drops, options.session ?? project);
+    });
   } catch {
     // Dropped on purpose: reads and writes are unaffected by retention failing.
   }
@@ -794,6 +801,22 @@ const appendIndexes = new Map<string, AppendIndex>();
  *  caller already holds instead of waiting on itself. */
 const heldEventLocks = new Set<string>();
 
+/** Runs `work` under the store's event lock. A call made while this process already holds the
+ *  lock — the drop declaration's append, from inside an append or from the prune pass — runs
+ *  directly under the lock its caller holds. */
+function withEventLock<T>(storeDir: string, work: () => T): T {
+  const lockDir = join(storeDir, 'locks', 'events');
+  if (heldEventLocks.has(lockDir)) return work();
+  return withLock(lockDir, () => {
+    heldEventLocks.add(lockDir);
+    try {
+      return work();
+    } finally {
+      heldEventLocks.delete(lockDir);
+    }
+  });
+}
+
 function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
   return `${payload.kind}\u0000${payload.record_id}\u0000${payload.session}`;
 }
@@ -981,19 +1004,12 @@ export function appendEvent(
 
   // Allocation and the append it stamps are one critical section across processes: two writers
   // that scan the same newest sequence would otherwise mint it twice, and one of the two records
-  // would then be invisible to every cursor reader. The held set lets the drop declaration
-  // (declareDrop, below) append from inside an append without waiting on its own lock.
+  // would then be invisible to every cursor reader. A call made from inside this lock (the drop
+  // declaration) skips the wrapper below and runs the append under the lock its caller holds.
   const lockDir = join(storeDir, 'locks', 'events');
   if (!heldEventLocks.has(lockDir)) {
     try {
-      return withLock(lockDir, () => {
-        heldEventLocks.add(lockDir);
-        try {
-          return appendEvent(project, root, home, input, options);
-        } finally {
-          heldEventLocks.delete(lockDir);
-        }
-      });
+      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options));
     } catch (error) {
       if (error instanceof LockBusyError) {
         return { ok: false, reason: 'the event log is busy; the record was not written' };
