@@ -246,6 +246,7 @@
       "additionalProperties": false,
       "properties": {
         "chrome": { "type": "array", "items": { "type": "string", "maxLength": 200 } },
+        "turn_end": { "type": "string", "description": "optional: the row that ends a turn — the CLI's own completion line. A `live` rule's region is the newest turn above the composer, and a turn-end row closes the turn it ends: every transcript row above the last one is a turn the pane has already scrolled past, so an error a completion ended is history while an error after the completion is still current. The pattern must match the whole row: \"^…$\". Absent: the whole paragraph above the composer is the newest turn." },
         "unknown": { "$ref": "#/$defs/stage" },
         "trust": { "$ref": "#/$defs/stage" },
         "permission": { "$ref": "#/$defs/stage" },

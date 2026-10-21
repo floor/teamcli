@@ -585,8 +585,12 @@ export function composerBox(data: ScreenData, lines: string[], options?: ScreenO
  * frame to the window's end, the box's rows, rules and footers among them — and the newest turn
  * of transcript above it: the run of non-blank rows directly above the frame, once the blank
  * margin the captures draw is skipped. A sentence further up is a turn the pane has scrolled
- * past, not the live screen. Null when the composer cannot be read, and the rule then reads the
- * whole window, as a rule without `live` does.
+ * past, not the live screen. A profile whose CLI draws a turn-end row closes a turn there: the
+ * newest turn is what follows the last turn-end row of that run, so a sentence a completion
+ * already ended is history, while a fresh sentence after the completion is still the live
+ * screen. The turn-end is only looked for in the transcript above the frame: a box's own rows
+ * are typed text, never a completion. Null when the composer cannot be read, and the rule then
+ * reads the whole window, as a rule without `live` does.
  */
 function liveRegion(
   data: ScreenData,
@@ -600,12 +604,21 @@ function liveRegion(
   if (hit.kind === 'stop' || hit.kind === 'unknown') return null;
   const region = new Set<number>();
   for (let i = Math.max(0, hit.from); i < plain.length; i++) region.add(i);
-  let i = hit.from - 1;
-  while (i >= 0 && !(plain[i] ?? '').trim()) i--;
-  while (i >= 0 && (plain[i] ?? '').trim()) {
-    region.add(i);
-    i--;
+  let hi = hit.from - 1;
+  while (hi >= 0 && !(plain[hi] ?? '').trim()) hi--;
+  let lo = hi;
+  while (lo >= 0 && (plain[lo] ?? '').trim()) lo--;
+  lo++;
+  let start = lo;
+  if (data.turnEnd !== undefined) {
+    for (let i = hi; i >= lo; i--) {
+      if (data.turnEnd.test(plain[i] ?? '')) {
+        start = i + 1;
+        break;
+      }
+    }
   }
+  for (let i = start; i <= hi; i++) region.add(i);
   return region;
 }
 

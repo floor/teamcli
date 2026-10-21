@@ -112,7 +112,7 @@ function loadScreenModule(specifier: string, baseDir: string | undefined, line: 
 
 function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string, profileFile?: string): ScreenData {
   const entries = mapping(node, 'screen');
-  only(entries, ['chrome', 'composer', 'screen_module', ...STAGES]);
+  only(entries, ['chrome', 'turn_end', 'composer', 'screen_module', ...STAGES]);
   const chrome = optional(entries, 'chrome');
   const screenScreenModule = optional(entries, 'screen_module');
   const moduleEntry = screenScreenModule ?? topScreenModule;
@@ -138,6 +138,13 @@ function screenOf(node: YamlNode, topScreenModule?: YamlEntry, baseDir?: string,
     chrome: chrome ? chromeOf(chrome.value) : [],
     composer: composer ? composerOf(composer.value) : DEFAULT_COMPOSER,
   };
+  const turnEnd = optional(entries, 'turn_end');
+  if (turnEnd) {
+    const text = stringOf(turnEnd.value);
+    if (text === null) fail(turnEnd.line, '"turn_end" must be a string');
+    if (!anchored(text)) fail(turnEnd.line, 'a turn_end pattern must match the whole line: "^…$"');
+    data.turnEnd = patternOf(text, false, turnEnd.line);
+  }
   if (profile) {
     data.profile = profile;
     data.whole_screen = true;
