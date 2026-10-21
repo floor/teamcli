@@ -2239,7 +2239,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       seats: team.seats,
       states: recorded?.seats ?? {},
     });
-    const report = await executePlan(plan, session, host, { concurrency, continuityIds });
+    const report = await executePlan(plan, session, host, { concurrency, continuityIds, restoreSeats: seats });
     // A fresh install minted a binding for every seat this run planned to launch. A seat whose
     // line ran keeps the successor `sessionStarted` wrote back. A seat whose line never ran —
     // refused before it, or its step left out — never loaded the settings file that names the

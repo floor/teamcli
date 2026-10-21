@@ -5,7 +5,7 @@ import { profileFor, shellQuote, versionVerdict, withLaunchSession } from '../pr
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
-import { IDLE_POLL_MS, type Step } from './plan.ts';
+import { IDLE_POLL_MS, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
@@ -225,7 +225,137 @@ export type Report = {
   /** A seat or the watch was left behind, so the session must not be stopped. */
   held: boolean;
   dropped: readonly string[];
+  /** The restore sweep's outcome per seat, in the plan's order. Empty when the caller passed
+   *  no `restoreSeats` (`down`, `restart`, `reload`, `add`, `remove`). */
+  restoreBuckets: readonly SeatRestoreBucket[];
 };
+
+/** One seat's outcome in a restore pass. The bucket is decided from what the run actually
+ *  finished: a repair counts only once the seat reached ready through `finishReady`. */
+export type SeatRestoreBucket =
+  | { seat: string; outcome: 'repaired' }
+  | { seat: string; outcome: 'skipped_working'; detail: string }
+  | { seat: string; outcome: 'refused'; reason: string };
+
+export type RestoreSweepSummary = {
+  repaired: number;
+  skipped_working: number;
+  refused: number;
+  repaired_seats: string[];
+  skipped_working_seats: string[];
+  refused_seats: Array<{ seat: string; reason: string }>;
+  /** Canonical one-line owner summary: "N seats repaired, M skipped (working), K refused
+   *  [ (seat: why; ...)]". */
+  line: string;
+};
+
+/** Folds the per-seat buckets into the one line the owner reads once per sweep, even when it
+ *  is 0/0/0. A refused seat's own words follow in parentheses, `seat: why` pairs. */
+export function restoreSummaryOf(buckets: readonly SeatRestoreBucket[]): RestoreSweepSummary {
+  const repaired_seats: string[] = [];
+  const skipped_working_seats: string[] = [];
+  const refused_seats: Array<{ seat: string; reason: string }> = [];
+  for (const bucket of buckets) {
+    if (bucket.outcome === 'repaired') repaired_seats.push(bucket.seat);
+    else if (bucket.outcome === 'skipped_working') skipped_working_seats.push(bucket.seat);
+    else refused_seats.push({ seat: bucket.seat, reason: bucket.reason });
+  }
+  const base =
+    `${repaired_seats.length} ${repaired_seats.length === 1 ? 'seat' : 'seats'} repaired, ` +
+    `${skipped_working_seats.length} skipped (working), ${refused_seats.length} refused`;
+  const line =
+    refused_seats.length === 0
+      ? base
+      : `${base} (${refused_seats.map((entry) => `${entry.seat}: ${entry.reason}`).join('; ')})`;
+  return {
+    repaired: repaired_seats.length,
+    skipped_working: skipped_working_seats.length,
+    refused: refused_seats.length,
+    repaired_seats,
+    skipped_working_seats,
+    refused_seats,
+    line,
+  };
+}
+
+/** What the run recorded about the seats it passed through. Every set is filled where the
+ *  outcome was decided, so a bucket never has to be inferred from an attempted launch. */
+type RestoreEvidence = {
+  /** Seats that reached ready through `finishReady`. */
+  ready: ReadonlySet<string>;
+  /** Seats the pre-close re-read found working: nothing was closed, and the run does not fail. */
+  working: ReadonlySet<string>;
+  /** Seats a repair was planned for that the close proved were already the seat's. */
+  restored: ReadonlySet<string>;
+  /** Seats whose final record is a plain ready (already ready, or proven restored by the plan). */
+  settledReady: ReadonlySet<string>;
+  /** The words of every final record that is not ready. */
+  reasons: ReadonlyMap<string, string>;
+};
+
+/** One restore bucket per configured, non-stopped, non-human seat. The classification is the
+ *  run's actual outcome: `repaired` only where a repair plan met `finishReady`; `skipped_working`
+ *  where the seat was left to finish its turn; `refused` with the reason the record names. A
+ *  seat that was already the seat is a survivor and counts nowhere. */
+function restoreBucketsOf(seats: readonly UpSeat[], evidence: RestoreEvidence): SeatRestoreBucket[] {
+  const buckets: SeatRestoreBucket[] = [];
+  for (const seat of seats) {
+    // A stopped or human seat is not the sweep's to launch, and a granted run keeps the seat
+    // it was granted for. None of them is a restore outcome.
+    if (seat.stopped || seat.human || seat.grantKeep !== undefined) continue;
+    const name = seat.name;
+    const candidate = seat.repair !== undefined || seat.replacedPane !== undefined;
+    if (seat.driftHold !== undefined) {
+      buckets.push({ seat: name, outcome: 'skipped_working', detail: seat.driftHold });
+      continue;
+    }
+    if (seat.doubtWorking === true) {
+      buckets.push({
+        seat: name,
+        outcome: 'skipped_working',
+        detail: seat.sessionDoubt ?? 'it is working; nothing closed',
+      });
+      continue;
+    }
+    if (evidence.working.has(name)) {
+      buckets.push({
+        seat: name,
+        outcome: 'skipped_working',
+        detail: evidence.reasons.get(name) ?? 'it is working; nothing closed',
+      });
+      continue;
+    }
+    if (candidate && evidence.ready.has(name)) {
+      buckets.push({ seat: name, outcome: 'repaired' });
+      continue;
+    }
+    if (evidence.restored.has(name)) continue;
+    if (seat.resumeHold !== undefined || seat.sessionDoubt !== undefined || seat.driftRefused !== undefined || seat.unidentifiedHold !== undefined || seat.launchProblem !== undefined || seat.rulesRefusal !== undefined || seat.budget?.kind === 'refuse') {
+      const planned =
+        seat.resumeHold ??
+        seat.driftRefused ??
+        seat.unidentifiedHold ??
+        seat.sessionDoubt ??
+        seat.launchProblem ??
+        seat.rulesRefusal ??
+        (seat.budget?.kind === 'refuse' ? seat.budget.why : undefined);
+      buckets.push({
+        seat: name,
+        outcome: 'refused',
+        reason: evidence.reasons.get(name) ?? planned ?? 'left out',
+      });
+      continue;
+    }
+    // A seat the plan kept or found ready: a survivor, counted nowhere.
+    if (evidence.ready.has(name) || evidence.settledReady.has(name)) continue;
+    buckets.push({
+      seat: name,
+      outcome: 'refused',
+      reason: evidence.reasons.get(name) ?? 'left out',
+    });
+  }
+  return buckets;
+}
 
 type Place = { pane: string; workspace?: string };
 
@@ -285,6 +415,9 @@ export type ExecuteOptions = {
    *  path decides a replaced pane the same way the plan did; without a map it reads the state
    *  copy alone, as it always did. */
   continuityIds?: ReadonlyMap<string, string | null>;
+  /** The plan's seats, in the team file's order, when this run is a restore pass (or an `up`
+   *  that a restore summary will read). The run's buckets are decided from these at the end. */
+  restoreSeats?: readonly UpSeat[];
 };
 
 /** Runs a plan. Steps carry the operation beside the command the dry run prints. */
@@ -317,6 +450,13 @@ export async function executePlan(
   const namedAtCreate = new Set<string>();
   /** Whether this run started the session: only then may `q` stop it. */
   let createdSession = false;
+  // Restore bookkeeping, only read when the caller passed `restoreSeats`. A seat is repaired
+  // only when `finishReady` ran for it; a working skip and a proven-restored survivor are
+  // tracked where they are decided, and a refusal's own words are the final record's.
+  const finalReady = new Set<string>();
+  const leftOutReasons = new Map<string, string>();
+  const skippedWorking = new Set<string>();
+  const provedRestored = new Set<string>();
 
   // Concurrent seats polling at the same timestamp share one sleep call, so virtual clocks
   // and real timers advance once per poll interval rather than once per concurrent seat.
@@ -464,6 +604,11 @@ export async function executePlan(
     logged.add(seat);
     lastProgress.delete(seat);
     const clean = cleanRecord(record);
+    // The restore bucket reads what the run settled on: ready seats are survivors (or repairs,
+    // decided by `finishReady`), and every other record carries the words a refusal is said in.
+    if (clean.kind === 'ready') finalReady.add(seat);
+    else if (clean.kind === 'left out') leftOutReasons.set(seat, clean.reason);
+    else leftOutReasons.set(seat, `waiting for the owner (${clean.classification})`);
     const what = clean.kind === 'left out' && clean.reason === 'stopped cleanly' ? 'stopped cleanly' : recordWhat(clean);
     const rest = detail + release(seat);
     if (!parallel) {
@@ -1499,6 +1644,9 @@ export async function executePlan(
             break;
           }
           if (!modelDiffers(running, op.drift)) {
+            // The seat's own model is back on the pane: the plan's drift is gone, and nothing
+            // was repaired.
+            provedRestored.add(op.seat);
             refuse('its model matches the file again; left as it is', false);
             break;
           }
@@ -1507,6 +1655,7 @@ export async function executePlan(
           if (status === 'working' || kind === 'working') {
             // A seat that came back working is left to finish its turn: nothing is closed and
             // the run does not fail on it (the restore sweep reports it as skipped working).
+            skippedWorking.add(op.seat);
             refuse(`its model drifted; left as it is (${op.drift.way})`, false);
             break;
           }
@@ -1515,6 +1664,7 @@ export async function executePlan(
             break;
           }
         } else if (verdict === 'same') {
+          provedRestored.add(op.seat);
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: "its pane is the seat's again; left as it is" });
           break;
@@ -1548,6 +1698,7 @@ export async function executePlan(
                 agent_session: recordedSession,
               });
             }
+            provedRestored.add(op.seat);
             dropped.add(op.seat);
             final(op.seat, { kind: 'ready' }, '  restored; left as it is\n');
             break;
@@ -1562,6 +1713,7 @@ export async function executePlan(
           if (kind === 'working') {
             // A turn is running in the pane: nothing is closed, and it is not a refusal — the
             // restore sweep reports the seat as skipped working.
+            skippedWorking.add(op.seat);
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: `the process in its pane is working; nothing closed (stop it there, or run team remove ${op.seat})` });
             break;
@@ -1838,7 +1990,14 @@ export async function executePlan(
     }
   }
 
-  return { serverFailed, watchFailed, held, dropped: [...dropped] };
+  const restoreBuckets = restoreBucketsOf(options?.restoreSeats ?? [], {
+    ready,
+    working: skippedWorking,
+    restored: provedRestored,
+    settledReady: finalReady,
+    reasons: leftOutReasons,
+  });
+  return { serverFailed, watchFailed, held, dropped: [...dropped], restoreBuckets };
 }
 
 // A vendor notice is classified by its predicate whatever version the CLI reports — a reading is
