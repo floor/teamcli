@@ -13,15 +13,27 @@
 // branch. The source SHA is read from git, never accepted from a caller and
 // never inferred.
 //
+// The gzip layer is pinned too: npm builds the tar, then
+// `scripts/reproducible-gzip.mjs` rewrites only its gzip frame with the fixed
+// compressor (Node v22.23.3, zlib 1.3.1-e00f703, level 9, stable header), so
+// the same commit packs to the same compressed SHA256 on every supported
+// machine. The stamp also records the uncompressed tar's SHA256 and that
+// compressor identity; builtAt stays in the sidecar and never enters the
+// archive, whose tar bytes are exactly npm's.
+//
 //   bun run pack [--pack-destination <dir>]
 //
 // Exit 2 when a precondition fails (no git checkout, a changed working tree,
-// an uncommitted version, or a tarball that does not carry the stamp).
+// an uncommitted version, an unpinned compressor or tar builder, or a tarball
+// that does not carry the stamp).
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
+import { COMPRESSOR, toolchainProblem } from './reproducible-gzip.mjs';
 
 function exit(message: string, code: number): never {
   console.error(message);
@@ -38,6 +50,27 @@ function git(args: string[]): string {
 /** sha256 of one file, for comparing the archive with the staged sources. */
 function digest(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+/** The npm that builds the tar; fixed so tar headers, modes and stamps stay stable. */
+const NPM_VERSION = '10.9.9';
+
+function commandOutput(command: string, args: string[]): string | undefined {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
+  if (result.error !== undefined || result.status !== 0) return undefined;
+  return result.stdout.trim();
+}
+
+/** Refuses anything but the pinned compressor and tar builder, naming what it found. */
+function checkToolchain(): void {
+  const node = commandOutput('node', ['--version']) ?? '(not found)';
+  const zlib = commandOutput('node', ['-p', 'process.versions.zlib']) ?? '(not found)';
+  const npm = commandOutput('npm', ['--version']) ?? '(not found)';
+  const problems: string[] = [];
+  const compressor = toolchainProblem({ node, zlib });
+  if (compressor !== undefined) problems.push(compressor);
+  if (npm !== NPM_VERSION) problems.push(`npm must be ${NPM_VERSION} for stable tar headers; this run has ${npm}`);
+  if (problems.length > 0) exit(`pack: ${problems.join('; ')}`, 2);
 }
 
 /** Every regular file under `dir`, as paths relative to it. */
@@ -111,7 +144,12 @@ if (!/^[0-9a-f]{40}$/.test(source)) {
   exit(`pack: git rev-parse HEAD returned ${JSON.stringify(source)}, not a full commit SHA`, 2);
 }
 
-// 3. Build from these sources, so dist/ matches the stamped commit. The build's
+// 3. The compressed bytes must come from the pinned compressor and tar builder,
+// or the same commit packs to different hashes on different machines. Refuse
+// before building, naming the versions this run actually has.
+checkToolchain();
+
+// 4. Build from these sources, so dist/ matches the stamped commit. The build's
 // stdout goes to stderr: this script's stdout is one JSON line the workflows parse.
 const build = spawnSync('bun', ['run', 'build'], { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' });
 if (build.error !== undefined) exit(`pack: cannot run the build: ${build.error.message}`, 2);
@@ -125,18 +163,33 @@ if (afterBuild.trim() !== '') {
   exit(`pack: the build changed the working tree; commit or ignore its output before packing:\n${afterBuild.trimEnd()}`, 2);
 }
 
-// 4. Pack from a staging copy of HEAD plus the build output. The tracked
+// 5. Pack from a staging copy of HEAD plus the build output. The tracked
 // package.json is never edited: the stamp goes into the staging manifest only.
 const directory = resolve(destination);
 mkdirSync(directory, { recursive: true });
 const work = mkdtempSync(join(tmpdir(), 'team-pack-'));
 const staging = join(work, 'stage');
 const unpacked = join(work, 'unpacked');
+const npmOutput = join(work, 'npm');
 const archive = join(work, 'head.tar');
 mkdirSync(staging, { recursive: true });
 mkdirSync(unpacked, { recursive: true });
+mkdirSync(npmOutput, { recursive: true });
 
-let stamp: { tarball: string; version: string; gitHead: string; sha256: string; bytes: number; builtAt: string; branch: string } | undefined;
+let tarSha256 = '';
+let stamp:
+  | {
+      tarball: string;
+      version: string;
+      gitHead: string;
+      sha256: string;
+      bytes: number;
+      tarSha256: string;
+      compressor: typeof COMPRESSOR;
+      builtAt: string;
+      branch: string;
+    }
+  | undefined;
 let problem: string | undefined;
 try {
   const archived = spawnSync('git', ['archive', '--format=tar', '--output', archive, 'HEAD'], { encoding: 'utf8' });
@@ -156,7 +209,7 @@ try {
     const manifest = JSON.parse(readFileSync(join(staging, 'package.json'), 'utf8')) as Record<string, unknown>;
     manifest.gitHead = source;
     writeFileSync(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    const packed = spawnSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', directory], {
+    const packed = spawnSync('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', npmOutput], {
       cwd: staging,
       encoding: 'utf8',
     });
@@ -175,50 +228,95 @@ try {
         problem = 'pack: npm pack reported no filename';
       }
       if (problem === undefined) {
+        const npmTarball = join(npmOutput, name as string);
         const tarball = join(directory, name as string);
-        // 5. Verify the artifact itself: the manifest names this commit, and
-        // every member is the staged source byte for byte.
-        const read = spawnSync('tar', ['-xzOf', tarball, 'package/package.json'], { encoding: 'utf8' });
-        if (read.error !== undefined || read.status !== 0) {
-          problem = `pack: cannot read package/package.json from ${tarball}`;
+        // npm's tar is kept as it is; only the gzip frame is rewritten by the
+        // pinned compressor. The report names the input, tar and output hashes.
+        const recompressed = spawnSync(
+          'node',
+          [fileURLToPath(new URL('reproducible-gzip.mjs', import.meta.url)), npmTarball, tarball],
+          { encoding: 'utf8' },
+        );
+        let report: { tar?: { sha256?: unknown }; output?: { sha256?: unknown } } | undefined;
+        if (recompressed.error !== undefined) {
+          problem = `pack: cannot run the pinned compressor: ${recompressed.error.message}`;
+        } else if (recompressed.status !== 0) {
+          problem = `pack: the pinned compressor failed: ${recompressed.stderr.trim()}`;
         } else {
-          const packedManifest = JSON.parse(read.stdout) as { version?: unknown; gitHead?: unknown; bin?: unknown };
-          if (packedManifest.version !== version || packedManifest.gitHead !== source) {
-            problem =
-              `pack: the tarball carries version ${JSON.stringify(packedManifest.version ?? null)} and ` +
-              `gitHead ${JSON.stringify(packedManifest.gitHead ?? null)}; expected ${JSON.stringify(version)} and ${JSON.stringify(source)}`;
+          try {
+            report = JSON.parse(recompressed.stdout) as typeof report;
+          } catch (error) {
+            problem = `pack: the pinned compressor printed no JSON report: ${(error as Error).message}`;
           }
-          const bin = (packedManifest.bin as { team?: unknown } | undefined)?.team;
-          if (problem === undefined) {
-            const again = spawnSync('tar', ['-xzf', tarball, '-C', unpacked], { encoding: 'utf8' });
-            if (again.error !== undefined || again.status !== 0) {
-              problem = `pack: cannot unpack ${tarball} for verification`;
-            } else if (typeof bin === 'string' && bin !== '' && !existsSync(join(unpacked, 'package', bin))) {
-              problem = `pack: the tarball does not carry the bin ${JSON.stringify(bin)}`;
-            }
-          }
-          if (problem === undefined) {
-            for (const path of files(join(unpacked, 'package'))) {
-              if (path === 'package.json') continue;
-              const staged = join(staging, path);
-              if (!existsSync(staged) || digest(staged) !== digest(join(unpacked, 'package', path))) {
-                problem = `pack: the tarball member ${JSON.stringify(path)} is not the staged HEAD source`;
-                break;
+        }
+        if (problem === undefined) {
+          try {
+            const npmTar = gunzipSync(readFileSync(npmTarball));
+            const finalBytes = readFileSync(tarball);
+            const finalTar = gunzipSync(finalBytes);
+            if (!npmTar.equals(finalTar)) {
+              problem = 'pack: the pinned compressor changed the tar bytes';
+            } else if (finalBytes.subarray(0, 10).toString('hex') !== COMPRESSOR.gzipHeader) {
+              problem = `pack: the tarball header is ${finalBytes.subarray(0, 10).toString('hex')}, not ${COMPRESSOR.gzipHeader}`;
+            } else {
+              tarSha256 = createHash('sha256').update(finalTar).digest('hex');
+              if (report?.tar?.sha256 !== tarSha256) {
+                problem = 'pack: the pinned compressor reported a different tar sha256';
+              } else if (report?.output?.sha256 !== createHash('sha256').update(finalBytes).digest('hex')) {
+                problem = 'pack: the pinned compressor reported a different output sha256';
               }
             }
+          } catch (error) {
+            problem = `pack: cannot verify the pinned compressor output: ${(error as Error).message}`;
           }
-          if (problem === undefined) {
-            const bytes = statSync(tarball).size;
-            stamp = {
-              tarball: name as string,
-              version,
-              gitHead: source,
-              sha256: createHash('sha256').update(readFileSync(tarball)).digest('hex'),
-              bytes,
-              builtAt: new Date().toISOString(),
-              branch: git(['rev-parse', '--abbrev-ref', 'HEAD']).trim(),
-            };
-            writeFileSync(`${tarball}.stamp.json`, `${JSON.stringify(stamp, null, 2)}\n`);
+        }
+        if (problem === undefined) {
+          // 6. Verify the artifact itself: the manifest names this commit, and
+          // every member is the staged source byte for byte.
+          const read = spawnSync('tar', ['-xzOf', tarball, 'package/package.json'], { encoding: 'utf8' });
+          if (read.error !== undefined || read.status !== 0) {
+            problem = `pack: cannot read package/package.json from ${tarball}`;
+          } else {
+            const packedManifest = JSON.parse(read.stdout) as { version?: unknown; gitHead?: unknown; bin?: unknown };
+            if (packedManifest.version !== version || packedManifest.gitHead !== source) {
+              problem =
+                `pack: the tarball carries version ${JSON.stringify(packedManifest.version ?? null)} and ` +
+                `gitHead ${JSON.stringify(packedManifest.gitHead ?? null)}; expected ${JSON.stringify(version)} and ${JSON.stringify(source)}`;
+            }
+            const bin = (packedManifest.bin as { team?: unknown } | undefined)?.team;
+            if (problem === undefined) {
+              const again = spawnSync('tar', ['-xzf', tarball, '-C', unpacked], { encoding: 'utf8' });
+              if (again.error !== undefined || again.status !== 0) {
+                problem = `pack: cannot unpack ${tarball} for verification`;
+              } else if (typeof bin === 'string' && bin !== '' && !existsSync(join(unpacked, 'package', bin))) {
+                problem = `pack: the tarball does not carry the bin ${JSON.stringify(bin)}`;
+              }
+            }
+            if (problem === undefined) {
+              for (const path of files(join(unpacked, 'package'))) {
+                if (path === 'package.json') continue;
+                const staged = join(staging, path);
+                if (!existsSync(staged) || digest(staged) !== digest(join(unpacked, 'package', path))) {
+                  problem = `pack: the tarball member ${JSON.stringify(path)} is not the staged HEAD source`;
+                  break;
+                }
+              }
+            }
+            if (problem === undefined) {
+              const bytes = statSync(tarball).size;
+              stamp = {
+                tarball: name as string,
+                version,
+                gitHead: source,
+                sha256: createHash('sha256').update(readFileSync(tarball)).digest('hex'),
+                bytes,
+                tarSha256,
+                compressor: COMPRESSOR,
+                builtAt: new Date().toISOString(),
+                branch: git(['rev-parse', '--abbrev-ref', 'HEAD']).trim(),
+              };
+              writeFileSync(`${tarball}.stamp.json`, `${JSON.stringify(stamp, null, 2)}\n`);
+            }
           }
         }
       }
