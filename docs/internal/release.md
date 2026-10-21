@@ -3,7 +3,8 @@
 What moved off [the `team release check` page](../commands/release.md): what the run
 reads and writes, the team file's `releases` section and the Linear key's one-time setup, the
 checks and what each one passes on, the refusals, and the known limits. The synopsis, the flags,
-the caller table and the exit codes stay on the page.
+the caller table and the exit codes stay on the page. For packing a local candidate and installing
+it forward before any tag, see [packing and installing a local release candidate](rc-pack-install.md).
 
 ## What the run does: the records, the two pairs, the checks
 

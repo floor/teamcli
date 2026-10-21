@@ -64,7 +64,9 @@ service-managed daemon hosts a watch only after an owner installs it that way. P
 are independent flags: a daemon may host either, both or neither. A hosted watch renews and
 verifies its own authority on every fixed heartbeat beat and does not blur that beat into the
 watch's sweep rhythm; `status` and `check` name a watch that is standing down, stopped, failed or
-whose outbound gate is closed, and say nothing while it is simply cycling.
+whose outbound gate is closed, and say nothing while it is simply cycling. The hosted loop is in
+the current source; its live activation and installed acceptance are not proven, and the pane watch
+remains the path the build ships by default ([watch](watch.md)).
 
 `install` writes the user service unit and registers it with the system service manager. It
 prints `team daemon: installed for <n> checkout(s); the system service manager starts it at login

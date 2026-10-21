@@ -76,10 +76,12 @@ display line from the file and the pane's
 screen; it paints them on its first cycle and again when the title, the model or the effort
 changes.
 
-The pane watch is the path this build ships. A daemon-hosted watch lifecycle — the same pass
-driven by the daemon's fixed heartbeat tick, with an existing pane watch asked to hand over
-through its own loop and stood by honestly when it does not answer — is forthcoming: it is not
-released, and its live activation is not proven.
+The pane watch is the path this build ships by default. A daemon-hosted watch lifecycle — the
+same pass driven by the daemon's fixed heartbeat tick, with an existing pane watch asked to hand
+over through its own loop and stood by honestly when it does not answer — is in the current
+source: it runs when the daemon is started or installed with `--watch`
+([daemon](daemon.md)). This build neither installs nor activates it on its own, and its live
+activation and installed acceptance are not proven.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone
@@ -192,7 +194,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question; only its owner answers those |
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a screen the seat's profile captures as a vendor notice — today, Codex 0.157.0's update screen; `team` never answers one |
-| `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
+| `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen. The error is read in the live region, so one the turn has already ended above a ready composer is history and is not reported |
 | `<seat> is at a rate limit on <account>: usage limit, resets at <time>` | a seat stopped on its provider's usage limit, and the screen names when it resets — today Claude Code's rejected 429 or 403 and Gemini's exhausted-quota dialog; `<account>` is the pool the seat spends, its own `account:` or its vendor when it names none; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
 | `<seat> is at a rate limit on <account>: usage limit, and the screen names no reset time` | the same usage-limit screen when it names no reset time |
 | `<seat> is still at a <prompt> prompt after <n> minutes: the team's lead has not cleared it, and the entity's lead and the owner are told` | a permission, vendor-notice or rate-limit prompt held for `prompt_escalation_seconds` (5m in this release): once per prompt, the team's lead having cleared none of it |
