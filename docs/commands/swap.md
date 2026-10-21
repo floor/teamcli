@@ -247,7 +247,7 @@ claude-keeper: context: workspace close ends the pane; relaunch runs "claude --m
 claude-keeper: stopped
 claude-keeper: ready
 claude-keeper: its screen doesn't show a model this version knows; not checked
-swapped: claude-keeper in w1:p2 (read-back unread)
+swapped: claude-keeper in w3:p1 (read-back unread)
 exit 0
 $ team swap ; echo "exit $?"
 swap: beacon (entity lab)
