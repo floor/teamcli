@@ -16,7 +16,7 @@ import { DECISION_CODES } from './codes.ts';
 import type { DecisionCode } from './codes.ts';
 import { SIGNAL_RECORD_TYPES } from './signals.ts';
 import type { RecordSelector, SignalName } from './signals.ts';
-import type { OccurrenceRecord, RunState } from './core-state.ts';
+import type { OccurrenceRecord, RequestRecord, RunState } from './core-state.ts';
 import type { EvidenceSource, GuardCatalogue, GuardScope, SettingSource } from './registry.ts';
 import type {
   ArtifactRef,
@@ -92,8 +92,8 @@ export type DuplicateDecision = {
   at: string;
   signal: SignalName;
   requestId: RequestId;
-  /** The step that request produced: the zero-based index into `journal.steps`. */
-  recorded: { step: number };
+  /** The stored result the used request id already answers with: its digest and step index. */
+  recorded: RequestRecord;
 };
 
 type StopFields = {
@@ -211,7 +211,7 @@ export function decide(input: CoreInput): CoreDecision {
         at,
         signal: signal.name,
         requestId: envelope.requestId,
-        recorded: { step: recordedRequest.step },
+        recorded: recordedRequest,
       };
     }
     return refused(

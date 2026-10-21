@@ -309,15 +309,14 @@ describe('acceptance order', () => {
     }
   });
 
-  test('R2 a used request id with an identical payload returns the recorded step', () => {
+  test('R2 a used request id with an identical payload returns the recorded result', () => {
     const base = scene({ definition: release });
+    const stored = { payloadDigest: requestDigest(base), step: 0 };
     const decision = decide({
       ...base,
       run: {
         ...base.run,
-        requests: new Map([
-          ['req-1', { payloadDigest: requestDigest(base), step: 0 }],
-        ]),
+        requests: new Map([['req-1', stored]]),
       },
     });
     expect(decision).toEqual({
@@ -325,7 +324,7 @@ describe('acceptance order', () => {
       at,
       signal: 'gate-passed',
       requestId: 'req-1',
-      recorded: { step: 0 },
+      recorded: stored,
     });
   });
 
