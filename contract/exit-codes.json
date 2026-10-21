@@ -4930,11 +4930,74 @@
       "trigger": "team workflow check workflow.yaml"
     },
     {
+      "code": 0,
+      "command": "workflow",
+      "id": "workflow.replay",
+      "meaning": "the dry-run journal replayed identically against the definition and evidence",
+      "trigger": "team workflow replay workflow.yaml journal.json --evidence evidence.json"
+    },
+    {
+      "code": 0,
+      "command": "workflow",
+      "id": "workflow.run-dry",
+      "meaning": "the dry run exhausted the script without a stop",
+      "trigger": "team workflow run workflow.yaml --dry --script script.yaml"
+    },
+    {
       "code": 1,
       "command": "workflow",
       "id": "workflow.check.refused",
       "meaning": "at least one finding is a refusal",
       "trigger": "team workflow check workflow.yaml"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.definition",
+      "meaning": "the workflow definition is invalid, mismatches the journal's digest, or reaches uses:",
+      "trigger": "team workflow replay workflow.yaml journal.json --evidence evidence.json"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.dry-only",
+      "meaning": "live workflow execution is refused without --dry until the Kernel workflow gate (amendment 04)",
+      "trigger": "team workflow run workflow.yaml"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.evidence",
+      "meaning": "the evidence block or evidence file is malformed or a referenced fixture is missing",
+      "trigger": "team workflow replay workflow.yaml journal.json --evidence evidence.json"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.journal",
+      "meaning": "the dry-run journal is malformed or not a non-authoritative dry-run journal",
+      "trigger": "team workflow replay workflow.yaml journal.json --evidence evidence.json"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.refused",
+      "meaning": "the dry run stopped on a held or refused decision",
+      "trigger": "team workflow run workflow.yaml --dry --script script.yaml"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.replay-mismatch",
+      "meaning": "the re-evaluated run diverged from the recorded journal",
+      "trigger": "team workflow replay workflow.yaml journal.json --evidence evidence.json"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.script",
+      "meaning": "the dry-run script is not valid format 1",
+      "trigger": "team workflow run workflow.yaml --dry --script script.yaml"
     },
     {
       "code": 2,
@@ -4956,6 +5019,20 @@
       "id": "workflow.check.invocation",
       "meaning": "the invocation can't be read",
       "trigger": "team workflow check"
+    },
+    {
+      "code": 2,
+      "command": "workflow",
+      "id": "workflow.file",
+      "meaning": "a workflow, script, journal, or evidence file can't be read or the workflow file is invalid for run",
+      "trigger": "team workflow run missing.yaml --dry --script script.yaml"
+    },
+    {
+      "code": 2,
+      "command": "workflow",
+      "id": "workflow.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team workflow"
     },
     {
       "code": 0,

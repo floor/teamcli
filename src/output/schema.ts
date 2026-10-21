@@ -2684,50 +2684,249 @@ export const SEAT_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+const WORKFLOW_DEFINITION_ID_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['workflow', 'schemaVersion', 'digest'],
+  properties: {
+    workflow: { type: 'string', minLength: 1 },
+    schemaVersion: { type: 'integer', const: 1 },
+    digest: { type: 'string', minLength: 1 },
+  },
+};
+
+const WORKFLOW_DRY_EFFECT_SCHEMA_FRAGMENT: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'state', 'activation', 'occurrence', 'payloadDigest', 'dispatched'],
+  properties: {
+    name: { type: 'string', minLength: 1 },
+    state: { type: 'string', minLength: 1 },
+    activation: { type: 'integer', minimum: 1 },
+    occurrence: { type: 'string', minLength: 1 },
+    payloadDigest: { type: 'string', minLength: 1 },
+    outcome: { type: 'string', minLength: 1 },
+    dispatched: { type: 'boolean', const: false },
+  },
+};
+
 /** Published `--json` output schema for `team workflow` (`schema/workflow.schema.json`). */
 export const WORKFLOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.workflow',
   fileName: 'workflow.schema.json',
   title: 'team workflow --json output',
-  required: ['format', 'ok', 'path', 'definition', 'findings', 'summary'],
-  properties: {
-    format: { type: 'integer', const: 1 },
-    ok: { type: 'boolean' },
-    path: { type: 'string', minLength: 1 },
-    definition: {
-      type: ['object', 'null'],
+  required: [],
+  properties: {},
+  oneOf: [
+    {
+      type: 'object',
       additionalProperties: false,
-      required: ['workflow', 'schemaVersion', 'digest'],
+      required: ['schema', 'format', 'ok', 'path', 'definition', 'findings', 'summary'],
       properties: {
-        workflow: { type: 'string', minLength: 1 },
-        schemaVersion: { type: 'integer', const: 1 },
-        digest: { type: 'string', minLength: 1 },
-      },
-    },
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['code', 'level', 'line', 'message'],
-        properties: {
-          code: { type: 'string', minLength: 1 },
-          level: { type: 'string', enum: ['refusal', 'note'] },
-          line: { type: 'integer', minimum: 0 },
-          message: { type: 'string', minLength: 1 },
+        schema: schemaTagFragment('team.workflow', 1),
+        format: { type: 'integer', const: 1 },
+        ok: { type: 'boolean' },
+        path: { type: 'string', minLength: 1 },
+        definition: {
+          type: ['object', 'null'],
+          additionalProperties: false,
+          required: ['workflow', 'schemaVersion', 'digest'],
+          properties: {
+            workflow: { type: 'string', minLength: 1 },
+            schemaVersion: { type: 'integer', const: 1 },
+            digest: { type: 'string', minLength: 1 },
+          },
+        },
+        findings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['code', 'level', 'line', 'message'],
+            properties: {
+              code: { type: 'string', minLength: 1 },
+              level: { type: 'string', enum: ['refusal', 'note'] },
+              line: { type: 'integer', minimum: 0 },
+              message: { type: 'string', minLength: 1 },
+            },
+          },
+        },
+        summary: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['refusals', 'notes'],
+          properties: {
+            refusals: { type: 'integer', minimum: 0 },
+            notes: { type: 'integer', minimum: 0 },
+          },
         },
       },
     },
-    summary: {
+    {
       type: 'object',
       additionalProperties: false,
-      required: ['refusals', 'notes'],
+      required: [
+        'format',
+        'kind',
+        'authoritative',
+        'notice',
+        'definition',
+        'run',
+        'target',
+        'artifact',
+        'inputs',
+        'settings',
+        'initial',
+        'start',
+        'steps',
+        'outcome',
+      ],
       properties: {
-        refusals: { type: 'integer', minimum: 0 },
-        notes: { type: 'integer', minimum: 0 },
+        format: { type: 'integer', const: 1 },
+        kind: { type: 'string', const: 'workflow-run-dry' },
+        authoritative: { type: 'boolean', const: false },
+        notice: { type: 'string', const: 'dry run — no record is written' },
+        definition: WORKFLOW_DEFINITION_ID_SCHEMA_FRAGMENT,
+        run: { type: 'string', minLength: 1 },
+        target: { type: 'string', minLength: 1 },
+        artifact: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['kind'],
+          properties: {
+            kind: { type: 'string', enum: ['none', 'ref', 'tree'] },
+            value: { type: 'string', minLength: 1 },
+          },
+        },
+        inputs: { type: 'object' },
+        settings: { type: 'object' },
+        initial: { type: 'string', minLength: 1 },
+        start: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['state', 'activation', 'effects'],
+          properties: {
+            state: { type: 'string', minLength: 1 },
+            activation: { type: 'integer', const: 1 },
+            effects: {
+              type: 'array',
+              items: WORKFLOW_DRY_EFFECT_SCHEMA_FRAGMENT,
+            },
+          },
+        },
+        steps: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: [
+              'revision',
+              'at',
+              'signal',
+              'requestId',
+              'requestDigest',
+              'transition',
+              'activation',
+              'evidence',
+              'effects',
+            ],
+            properties: {
+              revision: { type: 'integer', minimum: 1 },
+              at: { type: 'string', minLength: 1 },
+              signal: { type: 'string', minLength: 1 },
+              requestId: { type: 'string', minLength: 1 },
+              requestDigest: { type: 'string', minLength: 1 },
+              transition: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['from', 'to', 'on'],
+                properties: {
+                  from: { type: 'string', minLength: 1 },
+                  to: { type: 'string', minLength: 1 },
+                  on: { type: 'string', minLength: 1 },
+                },
+              },
+              activation: { type: 'integer', minimum: 2 },
+              evidence: {
+                type: 'array',
+                items: { type: 'string', minLength: 1 },
+              },
+              guard: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['name', 'answer', 'evidence'],
+                properties: {
+                  name: { type: 'string', minLength: 1 },
+                  answer: { type: 'boolean' },
+                  evidence: {
+                    type: 'array',
+                    items: { type: 'string', minLength: 1 },
+                  },
+                },
+              },
+              effects: {
+                type: 'array',
+                items: WORKFLOW_DRY_EFFECT_SCHEMA_FRAGMENT,
+              },
+            },
+          },
+        },
+        outcome: {
+          type: 'object',
+          required: ['kind'],
+          properties: {
+            kind: { type: 'string', enum: ['script-exhausted', 'stopped'] },
+            decision: { type: 'string', enum: ['held', 'refused'] },
+            code: { type: 'string', minLength: 1 },
+            why: { type: 'string', minLength: 1 },
+            at: { type: 'string', minLength: 1 },
+            state: { type: 'string', minLength: 1 },
+            revision: { type: 'integer', minimum: 0 },
+            waitingOn: { type: 'object' },
+            signal: { type: 'string', minLength: 1 },
+            requestId: { type: 'string', minLength: 1 },
+            evidence: {
+              type: 'array',
+              items: { type: 'string', minLength: 1 },
+            },
+            guard: { type: 'object' },
+          },
+        },
       },
     },
-  },
+    {
+      type: 'object',
+      additionalProperties: false,
+      required: ['schema', 'format', 'kind', 'authoritative', 'notice', 'ok'],
+      properties: {
+        schema: schemaTagFragment('team.workflow', 1),
+        format: { type: 'integer', const: 1 },
+        kind: { type: 'string', const: 'workflow-replay' },
+        authoritative: { type: 'boolean', const: false },
+        notice: { type: 'string', const: 'dry run — no record is written' },
+        ok: { type: 'boolean' },
+        definition: WORKFLOW_DEFINITION_ID_SCHEMA_FRAGMENT,
+        run: { type: 'string', minLength: 1 },
+        stepsReplayed: { type: 'integer', minimum: 0 },
+        finalState: { type: 'string', minLength: 1 },
+        revision: { type: 'integer', minimum: 0 },
+        activation: { type: 'integer', minimum: 1 },
+        blocked: { type: ['object', 'null'] },
+        reason: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'why'],
+          properties: {
+            code: { type: 'string', minLength: 1 },
+            why: { type: 'string', minLength: 1 },
+            step: { type: 'integer', minimum: -1 },
+            expected: {},
+            actual: {},
+          },
+        },
+      },
+    },
+  ],
 };
 
 /** Registry of published command output schemas under `schema/`. */

@@ -466,11 +466,19 @@ function buildGates(): Record<string, Gate> {
     },
     workflow: {
       kind: 'any-caller',
-      why: 'the workflow subcommand group: checking a workflow definition needs no session and no seat',
+      why: 'the workflow subcommand group: checking, dry-running, or replaying a workflow definition needs no session and no seat',
     },
     'workflow:check': {
       kind: 'any-caller',
       why: 'checks a workflow definition and its transition graph: read-only, so any seat, CI or the owner may run it',
+    },
+    'workflow:replay': {
+      kind: 'any-caller',
+      why: 're-evaluates a dry-run journal against a workflow definition and supplied evidence: read-only, so any seat, CI or the owner may run it',
+    },
+    'workflow:run': {
+      kind: 'any-caller',
+      why: 'runs a workflow definition in pure in-memory dry mode against a script: writes no state or ledger, so any seat, CI or the owner may run it',
     },
   };
   for (const word of READ_SURFACES) {

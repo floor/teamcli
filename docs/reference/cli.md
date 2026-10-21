@@ -2655,10 +2655,12 @@ Hidden: no
 Usage:
 
     team workflow check <path> [--json]
+    team workflow run <path> --dry --script <path> [--json]
+    team workflow replay <definition> <journal> --evidence <path> [--json]
 
 ### Who may run it
 
-`any-caller` — the workflow subcommand group: checking a workflow definition needs no session and no seat
+`any-caller` — the workflow subcommand group: checking, dry-running, or replaying a workflow definition needs no session and no seat
 
 ### Flags
 
@@ -2689,6 +2691,62 @@ Usage:
 | --- | --- | --- | --- |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | no | no |
+
+### `replay`
+
+Hidden: no
+
+Usage:
+
+    team workflow replay <definition> <journal> --evidence <path> [--json]
+
+#### Who may run it
+
+`any-caller` — re-evaluates a dry-run journal against a workflow definition and supplied evidence: read-only, so any seat, CI or the owner may run it
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--evidence` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `definition` | no | no |
+| `journal` | no | no |
+
+### `run`
+
+Hidden: no
+
+Usage:
+
+    team workflow run <path> --dry --script <path> [--json]
+
+#### Who may run it
+
+`any-caller` — runs a workflow definition in pure in-memory dry mode against a script: writes no state or ledger, so any seat, CI or the owner may run it
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--script` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals

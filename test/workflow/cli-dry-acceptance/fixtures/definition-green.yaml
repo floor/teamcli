@@ -1,0 +1,11 @@
+workflow: dry-cli-green
+version: 1
+initial: draft
+states:
+  draft: {}
+  live: {}
+transitions:
+  - from: draft
+    to: live
+    on: pr-opened
+    role: builder

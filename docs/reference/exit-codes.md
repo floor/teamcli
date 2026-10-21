@@ -710,10 +710,21 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |
 | `watch.not-a-repo` | `watch` | 2 | not inside a git repository | `team watch` |
 | `workflow.check.passed` | `workflow` | 0 | the workflow passed validation | `team workflow check workflow.yaml` |
+| `workflow.replay` | `workflow` | 0 | the dry-run journal replayed identically against the definition and evidence | `team workflow replay workflow.yaml journal.json --evidence evidence.json` |
+| `workflow.run-dry` | `workflow` | 0 | the dry run exhausted the script without a stop | `team workflow run workflow.yaml --dry --script script.yaml` |
 | `workflow.check.refused` | `workflow` | 1 | at least one finding is a refusal | `team workflow check workflow.yaml` |
+| `workflow.definition` | `workflow` | 1 | the workflow definition is invalid, mismatches the journal's digest, or reaches uses: | `team workflow replay workflow.yaml journal.json --evidence evidence.json` |
+| `workflow.dry-only` | `workflow` | 1 | live workflow execution is refused without --dry until the Kernel workflow gate (amendment 04) | `team workflow run workflow.yaml` |
+| `workflow.evidence` | `workflow` | 1 | the evidence block or evidence file is malformed or a referenced fixture is missing | `team workflow replay workflow.yaml journal.json --evidence evidence.json` |
+| `workflow.journal` | `workflow` | 1 | the dry-run journal is malformed or not a non-authoritative dry-run journal | `team workflow replay workflow.yaml journal.json --evidence evidence.json` |
+| `workflow.refused` | `workflow` | 1 | the dry run stopped on a held or refused decision | `team workflow run workflow.yaml --dry --script script.yaml` |
+| `workflow.replay-mismatch` | `workflow` | 1 | the re-evaluated run diverged from the recorded journal | `team workflow replay workflow.yaml journal.json --evidence evidence.json` |
+| `workflow.script` | `workflow` | 1 | the dry-run script is not valid format 1 | `team workflow run workflow.yaml --dry --script script.yaml` |
 | `workflow.check.file` | `workflow` | 2 | the workflow file can't be read | `team workflow check missing.yaml` |
 | `workflow.check.file-invalid` | `workflow` | 2 | the workflow file can't be parsed as a YAML mapping | `team workflow check workflow.yaml` |
 | `workflow.check.invocation` | `workflow` | 2 | the invocation can't be read | `team workflow check` |
+| `workflow.file` | `workflow` | 2 | a workflow, script, journal, or evidence file can't be read or the workflow file is invalid for run | `team workflow run missing.yaml --dry --script script.yaml` |
+| `workflow.invocation` | `workflow` | 2 | the invocation can't be read | `team workflow` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
 | `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |

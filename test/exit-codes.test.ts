@@ -1245,6 +1245,24 @@ transitions:
     role: owner
 `;
 
+const WORKFLOW_SCRIPT_OK = `format: 1
+target: "project://tiny"
+artifact:
+  kind: none
+inputs: {}
+settings: {}
+evidence:
+  step-1:
+    type: step
+    target: "project://tiny"
+signals:
+  - signal: pr-opened
+    at: "2026-10-21T12:00:00Z"
+    request-id: req-1
+    expected-revision: 0
+    evidence: [step-1]
+`;
+
 scene('workflow.check.invocation', async (place) => {
   const io = testIo(place.root, owner);
   return show({ code: await runWorkflow(['check'], io), out: io.out, err: io.err }, 'a <path> is required');
@@ -1267,6 +1285,112 @@ scene('workflow.check.refused', async (place) => {
   writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK.replace('to: complete', 'to: missing'));
   const io = testIo(place.root, owner);
   return show({ code: await runWorkflow(['check', 'workflow.yaml'], io), out: io.out, err: io.err }, 'refused');
+});
+scene('workflow.invocation', async (place) => {
+  const io = testIo(place.root, owner);
+  return show({ code: await runWorkflow([], io), out: io.out, err: io.err }, 'a subcommand is required');
+});
+scene('workflow.file', async (place) => {
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['run', 'missing.yaml', '--dry', '--script', 'script.yaml'], io), out: io.out, err: io.err },
+    "can't read missing.yaml",
+  );
+});
+scene('workflow.dry-only', async (place) => {
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['run', 'workflow.yaml'], io), out: io.out, err: io.err },
+    'Kernel workflow gate (amendment 04)',
+  );
+});
+scene('workflow.script', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'script.yaml'), WORKFLOW_SCRIPT_OK.replace('format: 1', 'format: 2'));
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml'], io), out: io.out, err: io.err },
+    'format must be the integer 1',
+  );
+});
+scene('workflow.evidence', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'script.yaml'), WORKFLOW_SCRIPT_OK.replace('  step-1:\n    type: step\n    target: "project://tiny"', '  step-1: not-a-map'));
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml'], io), out: io.out, err: io.err },
+    'evidence.step-1 must be a mapping',
+  );
+});
+scene('workflow.run-dry', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'script.yaml'), WORKFLOW_SCRIPT_OK);
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml'], io), out: io.out, err: io.err },
+    'script-exhausted',
+  );
+});
+scene('workflow.refused', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'script.yaml'), WORKFLOW_SCRIPT_OK.replace('expected-revision: 0', 'expected-revision: 9'));
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml'], io), out: io.out, err: io.err },
+    'stopped (refused core.revision-stale',
+  );
+});
+scene('workflow.replay', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'script.yaml'), WORKFLOW_SCRIPT_OK);
+  const runIo = testIo(place.root, owner);
+  await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml', '--json'], runIo);
+  writeFileSync(join(place.root, 'journal.json'), runIo.out);
+  writeFileSync(join(place.root, 'evidence.json'), '{"step-1":{"type":"step","target":"project://tiny"}}\n');
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['replay', 'workflow.yaml', 'journal.json', '--evidence', 'evidence.json'], io), out: io.out, err: io.err },
+    'team workflow replay: journal.json: ok',
+  );
+});
+scene('workflow.replay-mismatch', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'script.yaml'), WORKFLOW_SCRIPT_OK);
+  const runIo = testIo(place.root, owner);
+  await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml', '--json'], runIo);
+  const journal = JSON.parse(runIo.out);
+  journal.steps[0].activation = 99;
+  writeFileSync(join(place.root, 'journal.json'), `${JSON.stringify(journal, null, 2)}\n`);
+  writeFileSync(join(place.root, 'evidence.json'), '{"step-1":{"type":"step","target":"project://tiny"}}\n');
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['replay', 'workflow.yaml', 'journal.json', '--evidence', 'evidence.json'], io), out: io.out, err: io.err },
+    '[workflow.replay-mismatch]',
+  );
+});
+scene('workflow.journal', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'journal.json'), '{ not json\n');
+  writeFileSync(join(place.root, 'evidence.json'), '{}\n');
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['replay', 'workflow.yaml', 'journal.json', '--evidence', 'evidence.json'], io), out: io.out, err: io.err },
+    '[workflow.journal]',
+  );
+});
+scene('workflow.definition', async (place) => {
+  writeFileSync(join(place.root, 'workflow.yaml'), WORKFLOW_OK);
+  writeFileSync(join(place.root, 'script.yaml'), WORKFLOW_SCRIPT_OK);
+  const runIo = testIo(place.root, owner);
+  await runWorkflow(['run', 'workflow.yaml', '--dry', '--script', 'script.yaml', '--json'], runIo);
+  writeFileSync(join(place.root, 'journal.json'), runIo.out);
+  writeFileSync(join(place.root, 'other.yaml'), WORKFLOW_OK.replace('workflow: tiny', 'workflow: other'));
+  writeFileSync(join(place.root, 'evidence.json'), '{}\n');
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runWorkflow(['replay', 'other.yaml', 'journal.json', '--evidence', 'evidence.json'], io), out: io.out, err: io.err },
+    '[workflow.definition]',
+  );
 });
 
 scene('conformance-adapter.finished', async () => {
