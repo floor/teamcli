@@ -27,7 +27,8 @@ import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
-import { hostedWatchCheckNotes } from '../daemon/watch_display.ts';
+import { canonicalRoot } from '../daemon/routes.ts';
+import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
@@ -76,7 +77,7 @@ import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
 import { resolveOrderSetting } from '../settings/resolve.ts';
-import { emptySession, liveHold, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
+import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
 import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
@@ -87,6 +88,7 @@ import type { Standing } from '../store/store.ts';
 import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
+import { watchSitting } from '../watch/liveness.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
@@ -115,6 +117,9 @@ export type CheckSources = {
   idleWork?(input: IdleWorkInput): IdleWorkReport;
   /** Ready-but-not-installed slices, from the green journal. Read-only; a test stands in for it. */
   pendingGreen?(dir: string): PendingGreenSlice[];
+  /** Whether a recorded watch's process is alive. Absent: the real process reading; a scene
+   *  stands in for it so a live, dead or stale pane watch can be pinned. */
+  alive?(pid: number): boolean;
   /** The machine daemon's reading, already probed by the command wrapper before this
    *  synchronous report runs. Absent in a test that does not stand one in. */
   daemon?: DaemonHealth;
@@ -341,6 +346,17 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // reported as a note rather than silently replaced.
   const watchPace = watchPaceOf({ team, root, home: sources.home, now: sources.now(), standing });
   const inForce = watchInForceWithPace(standing, team, watchPace);
+  // The watch that owns this session, read once through the same predicate `up` plans from: the
+  // check cannot call a watch stale that `up` would leave alone, or miss the one it would replace.
+  const watch = watchSitting({
+    daemon: sources.daemon,
+    root,
+    pane: state.watch,
+    alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid),
+    now: sources.now().getTime(),
+    interval: inForce.interval,
+  });
+  const watchRoute = canonicalRoot(root) ?? root;
   // The registry's own continuity per declared seat, read once: the check's process gate and
   // `compare()` must decide a restored pane the same way `up` and `status` do.
   const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
@@ -448,7 +464,19 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...(sources.daemon !== undefined ? daemonProblemNotes(sources.daemon) : []),
     // A hosted watch the daemon carries, notes only: a standing-down or stopped watch, a failed
     // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing.
-    ...(sources.daemon !== undefined ? hostedWatchCheckNotes(sources.daemon, sources.now()) : []),
+    ...(sources.daemon !== undefined
+      ? hostedWatchCheckNotes(
+          sources.daemon,
+          sources.now(),
+          watch.kind === 'pane' ? { route: watchRoute, live: watch.health.state === 'live' } : undefined,
+        )
+      : []),
+    // A pane watch when no hosted one owns the route: live, dead, stale or — only with a daemon
+    // reading to prove no hosted watch exists — missing. Notes only, like every line above.
+    ...paneWatchCheckNotes(watch, {
+      known: sources.daemon !== undefined && sources.daemon.state !== 'unknown',
+      running: live?.running === true,
+    }),
   ];
   // The notes print above the differences, as `team status` prints them: a note names something
   // worth acting on without counting it wrong — it is not in the total and does not change the exit.
