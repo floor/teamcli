@@ -6,6 +6,7 @@
 // is blocked.
 import type { DaemonHealth } from './health.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
+import type { WatchSitting } from '../watch/liveness.ts';
 import { formatRelativeTime } from '../output/text.ts';
 
 type Watched = { root: string; watch: HostedWatchState };
@@ -38,13 +39,24 @@ export function hostedWatchNotes(health: DaemonHealth, now: Date): string[] {
  * watch names the pane watch that owns the session, and a closed outbound gate says it is not
  * enforcing anything. None of these is a difference, and none changes the total or the exit.
  */
-export function hostedWatchCheckNotes(health: DaemonHealth, now: Date): string[] {
+export function hostedWatchCheckNotes(
+  health: DaemonHealth,
+  now: Date,
+  /**
+   * The pane watch the check read for this team's route. A standing-by hosted watch was told a
+   * live pane watch owns the session; when that pane watch is now dead or stale, the pane note
+   * names the repair and this line would claim a live watch that is not there.
+   */
+  ownPane?: { route: string; live: boolean },
+): string[] {
   const entries = watched(health);
   return entries.flatMap((entry) => {
     const lines: string[] = [];
     const { watch } = entry;
-    if (watch.phase === 'standby') lines.push(watchPhaseLine(watch, now));
-    else if ((watch.phase === 'stopped' || watch.phase === 'failed') && watch.required) {
+    if (watch.phase === 'standby') {
+      const stoodDownForThisRoute = ownPane !== undefined && entry.root === ownPane.route;
+      if (!stoodDownForThisRoute || ownPane!.live) lines.push(watchPhaseLine(watch, now));
+    } else if ((watch.phase === 'stopped' || watch.phase === 'failed') && watch.required) {
       lines.push(watchPhaseLine(watch, now));
     } else if (watch.phase === 'running' && watch.lastCycleOutcome === 'failed') {
       const at = watch.lastCycleAt === null ? '' : ` ${formatRelativeTime(watch.lastCycleAt, now)}`;
@@ -53,6 +65,42 @@ export function hostedWatchCheckNotes(health: DaemonHealth, now: Date): string[]
     if (watch.effects === 'blocked') lines.push(BLOCKED_LINE);
     return lines.map((line) => qualify(line, entry, entries.length));
   });
+}
+
+/**
+ * The check's reading of a pane watch, from the same sitting `up` plans from. Only something
+ * worth acting on is said: a healthy watch is silent, as a healthy hosted one is; a dead or
+ * stale record names the repair the next `up` makes; and a missing one is named only when the
+ * daemon reading proves no hosted watch owns the route. A hosted watch is the hosted lines' own,
+ * and a session that is not running has no watch to expect — both stay silent here.
+ */
+export function paneWatchCheckNotes(
+  sitting: WatchSitting,
+  options: { known: boolean; running: boolean },
+): string[] {
+  if (sitting.kind === 'hosted' || !options.running) return [];
+  const { health } = sitting;
+  if (health.state === 'live') return [];
+  // With no daemon reading to prove the route is free, `up` deliberately starts nothing; the
+  // note says what is wrong and names that limit rather than promising a repair it will not make.
+  const start = options.known ? 'the next team up starts one' : 'the daemon health cannot say whether a hosted watch owns the route';
+  const replace = options.known ? 'the next team up replaces it' : 'the daemon health cannot say whether a hosted watch owns the route';
+  if (health.state === 'dead') {
+    return [`watch: the recorded process ${health.pid} is gone; ${start}`];
+  }
+  if (health.state === 'stale') {
+    if (health.why === 'no-process') {
+      return [`watch: recorded with no process or pane; ${start}`];
+    }
+    const beat = health.why === 'heartbeat-old' ? 'old' : 'unreadable';
+    return [
+      health.pid === null
+        ? `watch: its heartbeat is ${beat}; ${start}`
+        : `watch: process ${health.pid} is alive but its heartbeat is ${beat}; ${replace}`,
+    ];
+  }
+  if (!options.known) return [];
+  return ['watch: none running; the next team up starts one'];
 }
 
 /** One watched route's phase, with no cycle claim it cannot support: a running watch that has

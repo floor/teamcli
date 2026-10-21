@@ -14,6 +14,11 @@ import type { WaitingRecord } from '../state.ts';
  *  reads a trust prompt's terminal with, when `team answer` may be racing it. */
 export const IDLE_POLL_MS = 2000;
 
+/** How long a replacement waits for a signalled watch to be confirmed gone. A watch stopped by a
+ *  signal ends its wait and returns well inside this; a process still alive at the deadline is
+ *  held, never treated as stopped. */
+export const WATCH_STOP_SECONDS = 10;
+
 /**
  * What running a step does. The printed command stays in `argv`; this is how the live command
  * performs that same step, so a dry run and a real run share one plan.
@@ -43,6 +48,11 @@ export type Op =
   /** `why` is the reason the record and the log carry; `detail`, when the reason has a fuller
    *  sentence with a folder in it, is the stderr line said under the record. */
   | { do: 'refuse'; seat: string; why: string; detail?: string }
+  /** The run is held with this sentence: nothing is signalled and nothing is started. */
+  | { do: 'hold'; text: string }
+  /** Waits, bounded, for a signalled watch to be gone. A process still alive at the deadline
+   *  holds the run and suppresses the replacement. */
+  | { do: 'watch-gone'; pid: number; seconds: number }
   /** A seat's final record, decided by the plan: no profile, already ready. The step's printed
    *  text stays for the dry run; `detail` is the stderr lines said after the record. */
   | {
@@ -334,6 +344,18 @@ export interface UpInput {
   watchLabel: string;
   /** The watch is running, so no second watch is started. */
   watchAlive?: boolean;
+  /** A recorded pane watch whose process lives but whose heartbeat is stale, and that the pane
+   *  its own record names still shows as that pane's process. The plan stops it, waits for it to
+   *  be confirmed gone, and only then starts the replacement; without this the replacement would
+   *  be the second watcher on the route. */
+  watchPid?: number;
+  /** A stale pid that cannot be shown to be the watch — no pane recorded, an unreadable pane, or
+   *  another process in it. Nothing is signalled and nothing is started; the run is held with
+   *  this sentence. */
+  watchHold?: string;
+  /** The daemon health cannot say whether a hosted watch owns the route. No pane watch is
+   *  started, and the plan says why rather than leaving the reader to guess. */
+  watchUnknown?: boolean;
   /** When false, no watch is started: a flagless watch started in `root` would
    *  not read the file this plan was built from. Absent means start one, as before. */
   startWatch?: boolean;
@@ -830,6 +852,34 @@ export function upPlan(input: UpInput): Step[] {
   }
 
   if (input.watchAlive || input.startWatch === false) return steps;
+  if (input.watchUnknown) {
+    steps.push({
+      kind: 'skip',
+      text: 'watch: the daemon health cannot be read; no pane watch is started this run',
+    });
+    return steps;
+  }
+  if (input.watchHold !== undefined) {
+    steps.push({
+      kind: 'skip',
+      text: input.watchHold,
+      do: { do: 'hold', text: input.watchHold },
+    });
+    return steps;
+  }
+  if (input.watchPid !== undefined) {
+    steps.push({
+      kind: 'run',
+      argv: ['kill', String(input.watchPid)],
+      note: 'the stale watch, before its replacement',
+      do: { do: 'kill', pid: input.watchPid },
+    });
+    steps.push({
+      kind: 'wait',
+      text: `until pid ${input.watchPid} is confirmed gone (${WATCH_STOP_SECONDS} s at most); no replacement is started while it runs`,
+      do: { do: 'watch-gone', pid: input.watchPid, seconds: WATCH_STOP_SECONDS },
+    });
+  }
   const watchArguments = session === 'default' ? '' : ` --session ${shellQuote(session)}`;
   const watchLine = input.watchLine ?? `team watch${watchArguments}`;
   steps.push({
