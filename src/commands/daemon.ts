@@ -4,20 +4,31 @@
 // `run --watch` hosts one watch per checkout on the same heartbeat; without a flag the daemon
 // hosts neither. `install` and `uninstall` write and register the user service unit through a
 // neutral interface, with the platform's own file and command only inside the adapter. `status`
-// is the one-line health reading every other command and person reads.
+// is the one-line health reading every other command and person reads. `fault-watch` asks a
+// running daemon to inject one diagnostic fault into exactly one hosted watch: one request,
+// one route id, no process killed.
 //
 // The machine daemon holds no credential and reads no credential store. The broker feature is
 // not hosted in this build, and the catalogue's `daemon.broker` policy is off by default, so a
 // machine with no broker handler never falls back to the old per-clone broker.
+import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
+import {
+  FAULT_POLL_MS,
+  FAULT_WAIT_MS,
+  FAULT_WHY,
+  readFaultResult,
+  writeFaultRequest,
+} from '../daemon/fault.ts';
 import { daemonHealth } from '../daemon/health.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
+import { routeId, routeOf } from '../daemon/routes.ts';
 import { systemServiceManager, type ServiceManager, type ServiceProgram } from '../daemon/service.ts';
 import type { DaemonHost } from '../send/daemon.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -29,6 +40,7 @@ export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
        team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
        team daemon uninstall [--json]
+       team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 One machine-wide daemon serves every team and clone on this machine. It answers its own
 protocol on the one machine socket, and for now it also hosts each checkout's existing send
@@ -42,6 +54,11 @@ Without the flag no checkout's watch is hosted, and the daemon reads no pane for
 \`install\` writes and registers a user service unit that starts the daemon at login and restarts
 it after a failure; \`uninstall\` removes it. \`status\` prints one line: running, not running, or
 unknown.
+\`fault-watch\` asks the running daemon to inject one diagnostic fault into exactly one hosted
+watch, named by the route id its record already carries. One request is written, the daemon
+consumes it on its next heartbeat, and only that route's loop is ended and restarted; no
+process is killed. A route that is not hosted, not required, standing down or stopped is
+refused, and the result names why.
 
 The daemon reads no credential store; the broker feature is not hosted in this build.
 
@@ -68,6 +85,12 @@ export type DaemonCommandSources = {
   heartbeatMs?: number;
   /** Injected for tests: never the real pane/herdr sources. */
   sendHost?: DaemonHost;
+  /** Injected for tests: how long `fault-watch` waits for the daemon's result. */
+  faultWaitMs?: number;
+  /** Injected for tests: the interval between result reads. */
+  faultPollMs?: number;
+  /** Injected for tests: the wait between result reads, so a scene never sleeps for real. */
+  sleep?: (ms: number) => Promise<void>;
 };
 
 export const daemon: Command = (argv, io) => runDaemon(argv, io);
@@ -77,6 +100,7 @@ type Parsed = {
   verb: string | undefined;
   known: boolean;
   roots: string[];
+  route: string | undefined;
   json: boolean;
   dryRun: boolean;
   presence: boolean;
@@ -87,7 +111,7 @@ type Parsed = {
 };
 
 function parse(argv: string[]): Parsed {
-  const args = readArgs(argv, ['root', 'started-by'], ['json', 'dry-run', 'presence', 'watch']);
+  const args = readArgs(argv, ['root', 'started-by', 'route'], ['json', 'dry-run', 'presence', 'watch']);
   const verb = args.rest[0];
   // The command contract reads these comparisons as the subcommand list. The parse itself
   // uses `known`; the flags and values come from `readArgs`.
@@ -95,7 +119,8 @@ function parse(argv: string[]): Parsed {
   const isRun = verb === 'run';
   const isInstall = verb === 'install';
   const isUninstall = verb === 'uninstall';
-  const known = isStatus || isRun || isInstall || isUninstall;
+  const isFaultWatch = verb === 'fault-watch';
+  const known = isStatus || isRun || isInstall || isUninstall || isFaultWatch;
   // `--root` is repeatable; `readArgs` keeps one value per option, so a second pass collects
   // every occurrence for the daemon to host.
   const roots: string[] = [];
@@ -116,6 +141,7 @@ function parse(argv: string[]): Parsed {
     verb,
     known,
     roots,
+    route: args.values['route'],
     json: args.flags.has('json'),
     dryRun: args.flags.has('dry-run'),
     presence: args.flags.has('presence'),
@@ -128,18 +154,26 @@ function parse(argv: string[]): Parsed {
 
 function verbProblem(parsed: Parsed): string | null {
   if (parsed.error !== null) return parsed.error;
-  if (parsed.verb === undefined) return 'a subcommand is required (status, run, install or uninstall)';
+  if (parsed.verb === undefined) return 'a subcommand is required (status, run, install, uninstall or fault-watch)';
   if (!parsed.known) return `unknown subcommand "${parsed.verb}"`;
   if (parsed.extra !== undefined) return `unexpected "${parsed.extra}"`;
-  if (parsed.verb === 'run' && parsed.json) return '--json belongs to status, install or uninstall';
-  if (parsed.verb === 'run' && parsed.dryRun) return '--dry-run belongs to install';
+  if (parsed.verb === 'run' && parsed.json) return '--json belongs to status, install, uninstall or fault-watch';
+  if (parsed.verb === 'run' && parsed.dryRun) return '--dry-run belongs to install or fault-watch';
+  if (parsed.verb === 'run' && parsed.route !== undefined) return '--route belongs to fault-watch';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.presence) return '--presence belongs to run or install';
   if (parsed.verb !== 'run' && parsed.verb !== 'install' && parsed.watch) return '--watch belongs to run or install';
-  if (parsed.verb === 'status' && parsed.dryRun) return '--dry-run belongs to install';
+  if (parsed.verb === 'fault-watch' && parsed.startedBy !== undefined) return '--started-by belongs to run';
+  if (parsed.verb === 'fault-watch') {
+    if (parsed.roots.length === 0) return 'fault-watch needs --root <folder>';
+    if (parsed.roots.length > 1) return 'fault-watch names exactly one checkout with --root';
+    if (parsed.route === undefined || parsed.route === '') return 'fault-watch needs --route <routeId>';
+  }
+  if (parsed.verb !== 'fault-watch' && parsed.route !== undefined) return '--route belongs to fault-watch';
+  if (parsed.verb === 'status' && parsed.dryRun) return '--dry-run belongs to install or fault-watch';
   if (parsed.verb === 'status' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'status' && parsed.startedBy !== undefined) return '--started-by belongs to run';
   if (parsed.verb === 'install' && parsed.startedBy !== undefined) return '--started-by belongs to run';
-  if (parsed.verb === 'uninstall' && parsed.dryRun) return '--dry-run belongs to install';
+  if (parsed.verb === 'uninstall' && parsed.dryRun) return '--dry-run belongs to install or fault-watch';
   if (parsed.verb === 'uninstall' && parsed.roots.length > 0) return '--root belongs to run or install';
   if (parsed.verb === 'uninstall' && parsed.startedBy !== undefined) return '--started-by belongs to run';
   if (
@@ -238,6 +272,184 @@ function rootsSummary(roots: MachineRootStatus[]): string[] {
     parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
   }
   return parts;
+}
+
+/**
+ * `fault-watch`: one owner-admitted request for one diagnostic fault on one hosted route.
+ *
+ * Admission is the install/uninstall gate — the owner, or the dev-mode orchestrator the same
+ * proof admits — never the stricter foreground `run` gate, because the daemon already runs and
+ * this command only asks it to end one loop it owns. Everything after admission is a proof
+ * rather than a claim: the named checkout's own team file yields the route id, the running
+ * daemon's record must carry that exact id with a required watch, and the request repeats the
+ * resolved home plus the daemon run it was written for. The daemon refuses any request it
+ * cannot match exactly; this side never writes to a process.
+ */
+async function faultWatch(
+  parsed: Parsed,
+  io: Io,
+  sources: DaemonCommandSources,
+  home: string,
+): Promise<number> {
+  const routeArg = parsed.route as string;
+  if (!/^[0-9a-f]{32}$/.test(routeArg)) {
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.fault-usage',
+      message: '--route takes the 32-character route id a hosted watch records',
+      repair: null,
+      usage: USAGE,
+    });
+    // exit: daemon.fault-usage
+    return 2;
+  }
+  // Exactly one checkout is named (verbProblem), so this is the only read that can fail here.
+  const root = resolve(io.cwd, parsed.roots[0] as string);
+  const loaded = loadTeamFile(root, { home });
+  if (!loaded.ok) {
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.fault-root',
+      message: `${root}: ${loaded.errors[0]?.message ?? 'the team file cannot be read'}`,
+      repair: null,
+    });
+    // exit: daemon.fault-root
+    return 2;
+  }
+  const route = routeOf(loaded.root, loaded.team.project, loaded.team.session, loaded.team.seats.map((seat) => seat.name));
+  const expected = routeId(route);
+  if (routeArg !== expected) {
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.fault-route',
+      message: `--route does not name this checkout's hosted route; it records ${expected}`,
+      repair: null,
+    });
+    // exit: daemon.fault-route
+    return 1;
+  }
+
+  const health = await daemonHealth(home, {
+    ...(sources.now !== undefined ? { now: sources.now } : {}),
+  });
+  if (health.state !== 'running' || health.pid === null || health.since === null) {
+    const message = health.state === 'running'
+      ? 'the daemon record names no running process to ask'
+      : 'the machine daemon is not running; a fault can only be asked of a running daemon';
+    refuse(io, parsed.json, 'daemon', { id: 'daemon.fault-daemon', message, repair: null });
+    // exit: daemon.fault-daemon
+    return 1;
+  }
+  const served = health.roots.find((entry) => entry.watch?.routeId === expected);
+  const watch = served?.watch;
+  if (watch === undefined) {
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.fault-watch',
+      message: 'this checkout has no hosted watch in the daemon record; start the daemon with watch hosting, or name the checkout it hosts',
+      repair: null,
+    });
+    // exit: daemon.fault-watch
+    return 1;
+  }
+  const unwatchable =
+    !watch.required
+      ? 'this route was not started with a hosted watch'
+      : watch.phase === 'standby'
+        ? 'this route stands down to a live pane watch; there is no hosted loop to fault'
+        : watch.phase === 'stopped'
+          ? "this route's hosted watch has stopped; nothing is running to fault"
+          : null;
+  if (unwatchable !== null) {
+    refuse(io, parsed.json, 'daemon', { id: 'daemon.fault-watch-state', message: unwatchable, repair: null });
+    // exit: daemon.fault-watch-state
+    return 1;
+  }
+
+  if (parsed.dryRun) {
+    if (parsed.json) {
+      writeJson(io, 'team.daemon-fault', {
+        format: 1,
+        command: 'fault-watch',
+        dry_run: true,
+        root: loaded.root,
+        route_id: expected,
+        watch: {
+          phase: watch.phase,
+          failures: watch.failures,
+          cycles: watch.cycles,
+          required: watch.required,
+        },
+      });
+    } else {
+      io.stdout(
+        `team daemon: would ask the running daemon to fault the hosted watch for ${loaded.root} (route ${expected}); nothing was written\n`,
+      );
+    }
+    // exit: daemon.fault-dry-run
+    return 0;
+  }
+
+  const now = sources.now?.() ?? new Date();
+  const request = {
+    format: 1 as const,
+    home,
+    routeId: expected,
+    daemonPid: health.pid,
+    daemonSince: health.since,
+    why: FAULT_WHY,
+    requestedAt: now.toISOString(),
+    nonce: randomUUID(),
+  };
+  const written = writeFaultRequest(home, request);
+  if (!written.ok) {
+    refuse(io, parsed.json, 'daemon', { id: 'daemon.fault-pending', message: written.why, repair: null });
+    // exit: daemon.fault-pending
+    return 1;
+  }
+  const wait = sources.faultWaitMs ?? FAULT_WAIT_MS;
+  const pollMs = sources.faultPollMs ?? FAULT_POLL_MS;
+  const sleep = sources.sleep ?? ((ms: number) => new Promise<void>((settle) => setTimeout(settle, ms)));
+  const deadline = Date.now() + wait;
+  for (;;) {
+    const result = readFaultResult(home);
+    if (result !== null && result.nonce === request.nonce) {
+      if (result.outcome === 'faulted') {
+        if (parsed.json) {
+          writeJson(io, 'team.daemon-fault', {
+            format: 1,
+            command: 'fault-watch',
+            outcome: 'faulted',
+            root: loaded.root,
+            route_id: expected,
+            why: result.why,
+            requested_at: request.requestedAt,
+            answered_at: result.at,
+          });
+        } else {
+          io.stdout(
+            `team daemon: faulted the hosted watch for ${loaded.root} (route ${expected}); the failure is counted and the loop restarts on the next heartbeat\n`,
+          );
+        }
+        // exit: daemon.faulted
+        return 0;
+      }
+      refuse(io, parsed.json, 'daemon', {
+        id: result.outcome === 'refused' ? 'daemon.fault-refused' : 'daemon.fault-not-reached',
+        message: `the daemon ${result.outcome === 'refused' ? 'refused the fault' : 'did not reach the fault'}: ${result.why}`,
+        repair: null,
+      });
+      // exit: daemon.fault-refused
+      return 1;
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(pollMs);
+  }
+  // The request is left where it is: a later beat may still consume it, and the result file it
+  // writes then names this nonce, but nothing was killed by this call.
+  refuse(io, parsed.json, 'daemon', {
+    id: 'daemon.fault-not-reached',
+    message: `the daemon did not reach the fault within ${String(wait)} ms; nothing was killed`,
+    repair: null,
+  });
+  // exit: daemon.fault-not-reached
+  return 1;
 }
 
 function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
@@ -359,6 +571,10 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   if (!ownerAllows(io, sources, parsed.json)) {
     // exit: daemon.not-owner
     return 1;
+  }
+
+  if (parsed.verb === 'fault-watch') {
+    return await faultWatch(parsed, io, sources, home);
   }
 
   const manager = sources.service !== undefined ? sources.service : systemServiceManager();

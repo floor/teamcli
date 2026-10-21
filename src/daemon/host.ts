@@ -37,6 +37,7 @@ import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath } from
 import { createHostServer } from '../../packages/relay/host/server.js';
 import { canonicalRoot, duplicateRoute, resolveScope, routeOf, type HostedRoute } from './routes.ts';
 import type { NextAnswer, NextClaim, NextHandlerInput } from './next.ts';
+import { createFaultInbox } from './fault.ts';
 import { createHostedWatch, type HostedEffects, type HostedWatch } from './watch.ts';
 import { hostedWatchAuthority } from './watch-authority.ts';
 import { createPresenceIngester, type PresenceIngester } from './presence/ingest.ts';
@@ -1398,6 +1399,19 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
   };
 
+  // The one scoped fault diagnostic rides this same heartbeat: at most one request per beat,
+  // consumed before the beat's ticks, and only the route it names exactly can be faulted. The
+  // request must name this daemon's resolved home, pid and start instant; a pending fault is
+  // answered `not reached` at close, never left to a later incarnation.
+  const faultTargets: readonly HostedWatch[] = hostedWatches.map((one) => one.watch);
+  const faultInbox = createFaultInbox({
+    home,
+    pid,
+    since,
+    now,
+    log: (text) => appendDaemonLog(home, text, now()),
+  });
+
   // The first state write happened before hosting so a reader never finds a bound socket with no
   // record; this one records what each checkout actually got, failures and reasons included, and
   // every heartbeat refreshes it after asking the hosted sockets whether they still answer.
@@ -1405,6 +1419,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
 
   const timer = setInterval(() => {
     heartbeatAt = now().toISOString();
+    try {
+      faultInbox.consume(faultTargets);
+    } catch (error) {
+      appendDaemonLog(home, `fault request: ${(error as Error).message}`, now());
+    }
     // A tick releases only the waits whose own due instant has passed and returns at once: a
     // pass that is still running is never awaited here, so one slow or hanging route cannot
     // stop the daemon's liveness or another route's cycles. Each route is isolated.
@@ -1594,6 +1613,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       }
       writeState(true);
       await Promise.all(admissions);
+      // Every watch stop above has settled, so a fault that had not reached its seam when the
+      // close began can never reach one now: its writer is answered `not reached` instead of
+      // being left to a later daemon that did not receive the request.
+      faultInbox.close();
     }
     // Presence drain: the in-flight pass of each route (an ingester step and the activity write
     // that follows it) finishes, then every ingester's own truthful close. No timeout races the

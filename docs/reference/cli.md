@@ -455,6 +455,7 @@ Usage:
     team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
     team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]
     team daemon uninstall [--json]
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -468,6 +469,33 @@ Usage:
 | `-h` | no | no | yes |
 
 ### Positionals
+
+None.
+
+### `fault-watch`
+
+Hidden: no
+
+Usage:
+
+    team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]
+
+#### Who may run it
+
+`owner-only` — the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner's dev-mode admission for a placed lead; it starts, stops and kills no process
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--root` | yes | no | no |
+| `--route` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
 
 None.
 
