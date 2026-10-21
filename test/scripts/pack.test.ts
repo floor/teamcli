@@ -9,9 +9,21 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 const repo = join(import.meta.dir, '..', '..');
 const areas: string[] = [];
+
+function commandOutput(command: string, args: string[]): string {
+  return spawnSync(command, args, { encoding: 'utf8' }).stdout?.trim() ?? '';
+}
+
+// pack.ts may run only with the pinned compressor and tar builder. A machine
+// without that pair still runs the refusal scenes; CI installs the pair.
+const NODE_VERSION = commandOutput('node', ['--version']);
+const NODE_ZLIB = commandOutput('node', ['-p', 'process.versions.zlib']);
+const NPM_VERSION = commandOutput('npm', ['--version']);
+const PINNED = NODE_VERSION === 'v22.23.3' && NODE_ZLIB === '1.3.1-e00f703' && NPM_VERSION === '10.9.9';
 
 function area(): string {
   const dir = mkdtempSync(join(tmpdir(), 'team-pack-stamp-'));
@@ -78,7 +90,7 @@ function run(root: string, out: string) {
   return { status: result.status, stdout: result.stdout, output: `${result.stdout}${result.stderr}` };
 }
 
-test('a clean tree packs with the commit as gitHead and writes the stamp', () => {
+test.skipIf(!PINNED)('a clean tree packs with the commit as gitHead and writes the stamp', () => {
   const root = project();
   const out = join(area(), 'out');
   const result = run(root, out);
@@ -87,15 +99,41 @@ test('a clean tree packs with the commit as gitHead and writes the stamp', () =>
   // The report is one machine-readable line on stdout, whatever the build printed.
   const lines = result.stdout.trim().split('\n');
   expect(lines.length).toBe(1);
-  const stamp = JSON.parse(lines[0] as string) as { tarball: string; version: string; gitHead: string; sha256: string; bytes: number };
+  const stamp = JSON.parse(lines[0] as string) as {
+    tarball: string;
+    version: string;
+    gitHead: string;
+    sha256: string;
+    bytes: number;
+    tarSha256: string;
+    compressor: Record<string, unknown>;
+  };
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
   expect(stamp.gitHead).toBe(head);
   expect(stamp.version).toBe('1.0.0');
 
   const tarball = join(out, stamp.tarball);
   expect(existsSync(`${tarball}.stamp.json`)).toBe(true);
-  const sha256 = createHash('sha256').update(readFileSync(tarball)).digest('hex');
+  const compressed = readFileSync(tarball);
+  const sha256 = createHash('sha256').update(compressed).digest('hex');
   expect(stamp.sha256).toBe(sha256);
+  expect(stamp.bytes).toBe(compressed.length);
+
+  // The gzip frame is the fixed one, and the tar bytes under it are unchanged
+  // by the recompression: the stamp's tarSha256 names those exact bytes.
+  expect(compressed.subarray(0, 10).toString('hex')).toBe('1f8b08000000000002ff');
+  const tar = gunzipSync(compressed);
+  expect(stamp.tarSha256).toBe(createHash('sha256').update(tar).digest('hex'));
+  expect(stamp.compressor).toEqual({
+    implementation: 'node:zlib',
+    node: 'v22.23.3',
+    zlib: '1.3.1-e00f703',
+    level: 9,
+    windowBits: 15,
+    memLevel: 8,
+    strategy: 0,
+    gzipHeader: '1f8b08000000000002ff',
+  });
 
   const packed = JSON.parse(spawnSync('tar', ['-xzOf', tarball, 'package/package.json'], { encoding: 'utf8' }).stdout) as {
     version: string;
@@ -112,7 +150,15 @@ test('a clean tree packs with the commit as gitHead and writes the stamp', () =>
   // The tracked manifest was not left altered by the stamp.
   const status = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).stdout;
   expect(status.trim()).toBe('');
-}, 30_000);
+
+  // The same commit packs to the same compressed bytes: builtAt lives in the
+  // sidecar, not the archive.
+  const again = run(root, join(area(), 'again'));
+  expect(again.status).toBe(0);
+  const second = JSON.parse(again.stdout.trim()) as { sha256: string; tarSha256: string };
+  expect(second.sha256).toBe(stamp.sha256);
+  expect(second.tarSha256).toBe(stamp.tarSha256);
+}, 60_000);
 
 test('an uncommitted version bump refuses (the .25 case)', () => {
   const root = project();
@@ -132,4 +178,15 @@ test('a changed working tree refuses', () => {
   const result = run(root, join(area(), 'out'));
   expect(result.status).toBe(2);
   expect(result.output).toContain('working tree has changes');
+}, 30_000);
+
+test.skipIf(PINNED)('an unpinned compressor or tar builder refuses, naming what it found', () => {
+  const root = project();
+  const result = run(root, join(area(), 'out'));
+  expect(result.status).toBe(2);
+  if (NODE_VERSION !== 'v22.23.3' || NODE_ZLIB !== '1.3.1-e00f703') {
+    expect(result.output).toContain('pinned to Node v22.23.3');
+    expect(result.output).toContain(NODE_VERSION);
+  }
+  if (NPM_VERSION !== '10.9.9') expect(result.output).toContain('npm must be 10.9.9');
 }, 30_000);
