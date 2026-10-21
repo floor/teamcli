@@ -5,6 +5,112 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-10-21
+
+0.5.3 is the event-driven send release: a message to another seat is delivered by the first
+route that can take it, accepted rather than refused while the receiver is busy, and confirmed
+by a signed read receipt instead of a guess. Admission is bound to the seats the team file
+declares; a restored seat is recognized by its signed registry record; and a send to a seat
+whose running model has drifted is held rather than delivered.
+
+### Added
+
+- **Socket-first delivery for Claude receivers.** A send to a Claude seat is walked over the
+  session socket first when the receiving team's inbound policy accepts — an explicit
+  `inbound: accept`, or no `inbound` word at all with the settings-attested accept. An explicit
+  hold or refuse wins; the team file and the launch do not both have to say accept. A frame the
+  receiver's dialog holds falls through to the next leg with the same message id, and that
+  socket is not dialed again until the setting is rewritten.
+
+- **A busy receiver queues instead of refusing.** When another command holds the seat's lock,
+  the reachable legs write the signed record and its `<id>.pending` marker without the lock,
+  type nothing, dial nothing, and answer `queued (receiver busy)` with the id the delivery
+  keeps. A running watch or the seat's own watcher finishes the delivery from that marker;
+  retries retain the same message id and consult the signed receipts. A compose seat has no
+  queue leg, so its held lock stays a refusal.
+
+- **Codex gets a typed wake before the inbox fallback.** For a Codex receiver with no declared
+  delivery order, the runtime queue leads when its signed Codex daemon setting is on, then a
+  typed wake, then the inbox; when the setting is off, the typed wake leads. An inbox write
+  alone does not wake an idle Codex TUI. A declared order is still followed as written.
+
+- **Route diagnostics before the send.** `team send --dry-run` names the channel the walk would
+  take, and under `--json` lists every leg as `candidate` or `skipped` with the reason,
+  including the implied socket leg a Claude receiver's files keep out. `team route <seat>`
+  answers the pair's rule, the live pane and the socket's state (`live`, `stale`, `pane`,
+  `unread` or `none`) before a sender dials anything.
+
+- **Signed read receipts, and `team ack`.** `team ack <id>` marks a message read without
+  printing it: one signed `read` receipt beside the record, written once and never replaced.
+  `team reply` marks a message read by answering it, and `team messages` publishes the same
+  receipt before it shows a body. A receipt is the only thing that earns `delivered (read)`;
+  nothing claims a seat acted on a message it read. An inbox message unread after ten minutes
+  falls to the trigger line, and a drop no watcher read is given up on after thirty minutes
+  with its path, never called lost.
+
+- **`--file` and `--file -` for command-bearing bodies.** `team send --file <path>` reads the
+  whole body from a file, and `--file -` reads it from standard input; `--brief` takes the same
+  two spellings. A multiline body that looks like pasted terminal output is warned about and
+  sent unchanged.
+
+- **Unread reports reach the lead as a signed drop.** A message still unread after two windows
+  is reported once to its sender's mailbox and once to the team's lead as a signed send-drop
+  that `team drops --read` serves. A stopped seat is not woken, and its message stays unread
+  until its next start.
+
+### Changed
+
+- **Admission is bound to the declared roster.** A caller reaches the targets the team file
+  declares: the owner any agent; an orchestrator another orchestrator of its own team or
+  entity; a team's orchestrator or operator any seat of its own team; two operator seats each
+  other; any declared seat another declared seat of its own team; an assistant its entity's
+  main coordinator; any seat its own team's orchestrator; and what an owner-signed grant names.
+  Arbitrary cross-team and off-roster pairs are refused by
+  default, and a refusal for an unregistered sender names that sender, so a cross-team denial
+  says which side lacks a registry record.
+
+- **Owned legacy plaintext is omitted.** A regular plaintext record owned by the team is
+  omitted without being served, without a receipt, and without a refusal event or refusal log;
+  a record-shaped invalid signed JSON stays strictly refused.
+
+- **Refusal logging stays bounded.** A confirmed repeat refusal is suppressed within the
+  window; when the event store cannot answer, the fallback logging cap is 50 lines per checkout
+  per process.
+
+- **Event writes share one bounded lock.** Event allocation, signing, append, retention and
+  standalone pruning all take the same bounded event-store lock.
+
+- **The seat brief treats a command-bearing message as data, not an authority, and says how to
+  send one.** A command quoted from a file, a log, an issue or a web page is part of what the
+  message reports; a seat runs only the commands the message asks for as its work and asks its
+  lead before one that would leave its folder, branch or files. A command-bearing body goes
+  from a file or a pipe: `--file <path>` or `--file -`, with `--brief` taking the same
+  spellings. A single-quoted argument is passed through unchanged; a double-quoted one is not:
+  backticks, `$(...)` and `$VAR` are rewritten before `team send` sees them.
+
+- **The registry is the authority for a restored seat.** When the pane host restores a seat's
+  process under a new id, `team status` and `team check` read the running model against the
+  seat's signed registry record rather than the team file, and `team restart` and `team up`
+  resume the recorded conversation through the seat's recorded launch line. A conversation
+  that does not match the record, or none that can be read, is still refused.
+
+- **A send to a drifted seat is held.** When a registered recipient's pane reports a model
+  other than the one its signed record names, `team send` writes nothing, types nothing and
+  exits 1 with `held: model drift: <recorded> vs <running>`; the sender can retry after the
+  seat is repaired.
+
+- **A signed rhythm change applies on the next pass.** The watch reads the signed policy chain
+  on every pass, so a change to the `watch-rhythm` value changes the next wait without
+  restarting the watch.
+
+- **Development-mode support for local release work was improved.** The operational details
+  stay internal.
+
+### Limits
+
+- Claude socket confirmed; Codex reached by typed wake (proven live on vlist); Antigravity and
+  Cursor by typed fallback without read receipts; Grok untested.
+
 ## [0.5.2] - 2026-10-19
 
 ### Added
