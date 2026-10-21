@@ -316,6 +316,31 @@ describe('reload preserves work without an approved copy', () => {
     expect(readState(dir).sessions.acme?.seats.worker?.presence_binding).toBe('prs_aaaaaaaaaaaa');
     noApproval();
   });
+
+  test('a reload that launched but never reached its prompt keeps the successor binding', async () => {
+    remember('worker', 'low');
+    updateState(dir, (state) => {
+      const seat = state.sessions.acme?.seats.worker;
+      if (seat !== undefined) seat.presence_binding = 'prs_aaaaaaaaaaaa';
+    });
+    const made = world([agent('worker', 'idle')]);
+    // The planning and pre-close reads see idle; the relaunched pane never shows its prompt.
+    let reads = 0;
+    made.launch.paneText = () => (++reads <= 2 ? IDLE : WORKING);
+    const io = testIo(root, OWNER);
+    expect(await runReload(['worker'], io, { launch: made.launch, home, now: () => NOW }), io.err + io.out).toBe(1);
+    expect(io.err).toContain('the close happened and the new launch did not reach ready');
+    // The line ran and its process is still in the new pane: the record keeps the binding that
+    // process's settings file names, never the closed seat's.
+    const after = readState(dir).sessions.acme?.seats.worker;
+    expect(after?.stage).not.toBe('ready');
+    expect(after?.presence_binding).toMatch(/^prs_[0-9a-f]{12}$/);
+    expect(after?.presence_binding).not.toBe('prs_aaaaaaaaaaaa');
+    const settings = /--settings ([^ ]+)/.exec(made.commands[0] ?? '')?.[1];
+    expect(settings).toBeDefined();
+    expect(readFileSync(settings!, 'utf8')).toContain(after!.presence_binding!);
+    noApproval();
+  });
 });
 
 describe('the granted caller has no additional unasked-close path', () => {
