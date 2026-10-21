@@ -2,18 +2,28 @@
 // clone, one minimal team of my own, one real unix socket per scene. The window is the create's
 // empty file — a foreign or older writer's entry, or one a writer killed before it wrote its pid
 // left behind — which must be waited on while it is too young to judge and taken over once it has
-// aged past the window. The schedule below is narrowed on purpose: the empty entry's age is set
-// 900 ms into the documented 1000 ms window, so only ~100 ms of the young wait remains. That keeps
-// the age assertion exact (the entry may not change before its age reaches 1000 ms) while leaving
-// the whole-wait deadline nearly two seconds of margin, where a loaded machine's stall cannot
-// stand in for the behavior under test. The actual-main b071 hosted read is that hazard's own
-// record: a start starved across the deadline answered `locked` before the takeover its wait was
-// for, and the scene's wall-clock assertion could not tell that from the product it meant to pin.
-// Nothing here asserts an upper bound on real elapsed time; the only deadline asserted is the
-// product's own, fail-closed one, and it is asserted as a lower bound (a start cannot answer
-// `locked` on a live holder sooner than that deadline) plus the state the refusal must leave.
-import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+// aged past the window.
+//
+// The young wait is proved on a controlled clock, not by sampling a race. The lock is written
+// empty, its real mtime is read, and this process's clock is frozen so the entry's age is 999 ms —
+// positive, just inside the window. While it is frozen the start must still be pending and the
+// entry must still be the very entry that was written — the same dev and inode, the same empty
+// bytes — checked over six of the product's poll turns, each seeing the same 999 ms. The clock
+// then steps to 1001 ms and the start must recover the entry and serve. The product's own 2000 ms
+// whole-wait deadline is measured on this same clock, so freezing it leaves the deadline 1998 ms
+// away: the boundary is the only thing that moves, and no host stall can stand in for it. A
+// product that took over below 999 ms would change the entry or settle during the hold, so the
+// positive pre-boundary age rejects a lowered threshold; the stepped 1001 ms rejects one raised
+// past the boundary. The clock is restored in each scene's finally, and the live deadline
+// controls below run on the real clock. Each test file is its own process under the runner, so
+// the mock never reaches another file.
+//
+// The actual-main b071 hosted run failed this area. A separate stall harness, kept with its own
+// raw output and outside this file, reproduces the failure's shape by stopping the event loop
+// across the deadline. The saved hosted log records the failure, not its cause: the reading that a
+// load stall carried a poll past the deadline is an inference, not an established history.
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -56,6 +66,7 @@ tasks:
 
 const leadRequest: BrokerRequest = { op: 'read', seat: 'lead', pane: 'p1:1' };
 
+type Identity = { dev: number; ino: number };
 type Started = Awaited<ReturnType<typeof startBroker>>;
 const openHandles: { close(): Promise<void> }[] = [];
 let base: string | undefined;
@@ -93,6 +104,81 @@ function starting(path: string): Promise<Started> {
   });
 }
 
+function identityOf(path: string): Identity {
+  const entry = lstatSync(path);
+  return { dev: entry.dev, ino: entry.ino };
+}
+
+/** An empty lock and the real mtime its age is measured from; the caller freezes the clock. */
+function emptyEntry(lockPath: string): number {
+  writeFileSync(lockPath, '');
+  return statSync(lockPath).mtimeMs;
+}
+
+/** Freeze this process's clock at a chosen age past the entry's real mtime. The product and this
+ *  test read the same frozen `Date.now`; the entry's mtime is the real one the filesystem wrote. */
+function freezeAtAge(mtime: number, ageMs: number): void {
+  setSystemTime(new Date(Math.floor(mtime) + ageMs));
+}
+
+/** Bound an await on the real timer, which the frozen clock does not touch: a start that does not
+ *  recover inside the budget is a failed scene with its own message, never a hung file. */
+function within<T>(pending: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((done, fail) => {
+    const timer = setTimeout(() => fail(new Error(message)), ms);
+    pending.then(
+      (value) => {
+        clearTimeout(timer);
+        done(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        fail(error);
+      },
+    );
+  });
+}
+
+/** Hold the frozen 999 ms state and prove it: over six of the product's 20 ms poll turns the entry
+ *  must still be the same dev and inode carrying the same empty bytes, the logical age must still
+ *  be positive and inside the window, and the start must still be pending. `extra` pins a dead
+ *  taker's claim the same way while the lock is held. */
+async function holdsYoung(
+  lockPath: string,
+  entry: Identity,
+  mtime: number,
+  pending: Promise<Started>,
+  extra?: { path: string; entry: Identity; bytes: string },
+): Promise<void> {
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let turn = 0; turn < 6; turn++) {
+    await new Promise((tick) => setTimeout(tick, 20));
+    const age = Date.now() - mtime;
+    expect(age).toBeGreaterThan(0);
+    expect(age).toBeLessThan(YOUNG_MS);
+    const now = lstatSync(lockPath, { throwIfNoEntry: false });
+    if (!now) throw new Error('the young empty entry changed before the boundary');
+    expect({ dev: now.dev, ino: now.ino }).toEqual(entry);
+    expect(readFileSync(lockPath, 'utf8')).toBe('');
+    if (extra) {
+      const held = lstatSync(extra.path, { throwIfNoEntry: false });
+      if (!held) throw new Error('the dead taker\'s claim disappeared before the boundary');
+      expect({ dev: held.dev, ino: held.ino }).toEqual(extra.entry);
+      expect(readFileSync(extra.path, 'utf8')).toBe(extra.bytes);
+    }
+    if (settled) throw new Error('the start settled inside the young window');
+  }
+  expect(settled).toBe(false);
+}
+
 /** One read over the served socket, bounded by the scene's budget rather than left to hang. */
 function ask(path: string, request: BrokerRequest): Promise<BrokerAnswer> {
   return new Promise((done, fail) => {
@@ -128,32 +214,8 @@ function temps(path: string): string[] {
   return readdirSync(dirname(path)).filter((name) => name.startsWith(prefix) && name.endsWith('.new'));
 }
 
-/** Watch an empty entry until it first changes (the takeover republishes the name with a pid, or
- *  the unlink and the next create land between reads). Returns the moment the change was seen. */
-async function firstChange(path: string, until: number): Promise<number | undefined> {
-  while (Date.now() < until) {
-    let bytes: string | undefined;
-    try {
-      bytes = readFileSync(path, 'utf8');
-    } catch {
-      return Date.now();
-    }
-    if (bytes !== '') return Date.now();
-    await new Promise((tick) => setTimeout(tick, 2));
-  }
-  return undefined;
-}
-
-/** The narrowed schedule: the entry is already 900 ms old, so the young wait that remains is
- *  ~100 ms and the product's whole-wait deadline still has ~1900 ms of margin. */
-function agedEmpty(lockPath: string): number {
-  const mtime = Date.now() - (YOUNG_MS - 100);
-  writeFileSync(lockPath, '');
-  utimesSync(lockPath, new Date(mtime), new Date(mtime));
-  return mtime;
-}
-
 afterEach(async () => {
+  setSystemTime();
   for (const handle of openHandles.splice(0)) await handle.close();
   if (base) rmSync(base, { recursive: true, force: true });
   base = undefined;
@@ -164,30 +226,32 @@ const scene = (name: string, fn: () => Promise<void>): void => {
 };
 
 describe('the start lock over an independent world', () => {
-  scene('a young empty lock is not taken over before its age window, then serves', async () => {
+  scene('a young empty lock is held at 999 ms, then recovered at 1001 ms and served', async () => {
     const path = world();
     const lockPath = `${path}.lock`;
-    const mtime = agedEmpty(lockPath);
-    const started = starting(path);
-    const changedAt = await firstChange(lockPath, mtime + WAIT_MS + 3000);
-    const result = await started;
-    if (changedAt === undefined) throw new Error('the empty lock was never taken over');
-    // The behavioral pin: whatever the schedule does, the entry the start judged stayed the empty
-    // entry it was until its age passed the documented window. A product that takes over inside
-    // the window changes the name at ~899 ms and fails here.
-    expect(changedAt - mtime).toBeGreaterThanOrEqual(YOUNG_MS);
-    expect(result.kind).toBe('serving');
-    expect(await ask(path, leadRequest)).toMatchObject({ ok: true, read: { kind: 'records' } });
-    if (result.kind === 'serving') openHandles.push(result.handle);
-    expect(failures).toEqual([]);
-    // The start served on its own lock, released when the listen landed; the takeover left no
-    // claim and no private temp behind.
-    expect(existsSync(lockPath)).toBe(false);
-    expect(existsSync(`${lockPath}.takeover`)).toBe(false);
-    expect(temps(lockPath)).toEqual([]);
+    const mtime = emptyEntry(lockPath);
+    const entry = identityOf(lockPath);
+    try {
+      freezeAtAge(mtime, YOUNG_MS - 1);
+      const started = starting(path);
+      await holdsYoung(lockPath, entry, mtime, started);
+      freezeAtAge(mtime, YOUNG_MS + 1);
+      const result = await within(started, 5000, 'the start did not recover past the young boundary');
+      expect(result.kind).toBe('serving');
+      expect(await ask(path, leadRequest)).toMatchObject({ ok: true, read: { kind: 'records' } });
+      if (result.kind === 'serving') openHandles.push(result.handle);
+      expect(failures).toEqual([]);
+      // The start served on its own lock, released when the listen landed; the takeover left no
+      // claim and no private temp behind.
+      expect(existsSync(lockPath)).toBe(false);
+      expect(existsSync(`${lockPath}.takeover`)).toBe(false);
+      expect(temps(lockPath)).toEqual([]);
+    } finally {
+      setSystemTime();
+    }
   });
 
-  scene('a dead holder\'s lock is taken over without a young wait', async () => {
+  scene('a dead holder\'s lock is taken over and serves', async () => {
     const path = world();
     const lockPath = `${path}.lock`;
     writeFileSync(lockPath, `${DEAD_PID}\n`);
@@ -201,24 +265,35 @@ describe('the start lock over an independent world', () => {
     expect(temps(lockPath)).toEqual([]);
   });
 
-  scene('a dead taker\'s claim is evicted and its empty lock recovered after the window', async () => {
+  scene('a dead taker\'s claim is held at 999 ms, then evicted at 1001 ms and its lock recovered', async () => {
     const path = world();
     const lockPath = `${path}.lock`;
     const claimPath = `${lockPath}.takeover`;
-    const mtime = agedEmpty(lockPath);
-    writeFileSync(claimPath, `${DEAD_PID}\n`);
-    const started = starting(path);
-    const changedAt = await firstChange(lockPath, mtime + WAIT_MS + 3000);
-    const result = await started;
-    if (changedAt === undefined) throw new Error('the empty lock was never taken over');
-    expect(changedAt - mtime).toBeGreaterThanOrEqual(YOUNG_MS);
-    expect(result.kind).toBe('serving');
-    expect(await ask(path, leadRequest)).toMatchObject({ ok: true, read: { kind: 'records' } });
-    if (result.kind === 'serving') openHandles.push(result.handle);
-    expect(failures).toEqual([]);
-    expect(existsSync(lockPath)).toBe(false);
-    expect(existsSync(claimPath)).toBe(false);
-    expect(temps(lockPath)).toEqual([]);
+    const mtime = emptyEntry(lockPath);
+    const entry = identityOf(lockPath);
+    const claimBytes = `${DEAD_PID}\n`;
+    writeFileSync(claimPath, claimBytes);
+    // The dead taker's claim is already past its own window: on the frozen clock an entry made
+    // this instant would stay young forever and the eviction would never be due.
+    const longAgo = new Date(Date.now() - 3000);
+    utimesSync(claimPath, longAgo, longAgo);
+    const claimEntry = identityOf(claimPath);
+    try {
+      freezeAtAge(mtime, YOUNG_MS - 1);
+      const started = starting(path);
+      await holdsYoung(lockPath, entry, mtime, started, { path: claimPath, entry: claimEntry, bytes: claimBytes });
+      freezeAtAge(mtime, YOUNG_MS + 1);
+      const result = await within(started, 5000, 'the dead claim was not evicted past the young boundary');
+      expect(result.kind).toBe('serving');
+      expect(await ask(path, leadRequest)).toMatchObject({ ok: true, read: { kind: 'records' } });
+      if (result.kind === 'serving') openHandles.push(result.handle);
+      expect(failures).toEqual([]);
+      expect(existsSync(lockPath)).toBe(false);
+      expect(existsSync(claimPath)).toBe(false);
+      expect(temps(lockPath)).toEqual([]);
+    } finally {
+      setSystemTime();
+    }
   });
 
   scene('a live holder is never evicted: the deadline refuses and touches nothing', async () => {
@@ -226,6 +301,7 @@ describe('the start lock over an independent world', () => {
     const lockPath = `${path}.lock`;
     const bytes = `${process.pid}\n`;
     writeFileSync(lockPath, bytes);
+    const before = identityOf(lockPath);
     const began = Date.now();
     const result = await starting(path);
     const waited = Date.now() - began;
@@ -234,6 +310,8 @@ describe('the start lock over an independent world', () => {
     // is not asserted — scheduling can only make a loaded machine later, never earlier.
     expect(result).toEqual({ kind: 'locked' });
     expect(waited).toBeGreaterThanOrEqual(WAIT_MS - 100);
+    // The holder's entry is the very entry it was: same dev and inode, same bytes.
+    expect(identityOf(lockPath)).toEqual(before);
     expect(readFileSync(lockPath, 'utf8')).toBe(bytes);
     expect(existsSync(`${lockPath}.takeover`)).toBe(false);
     expect(temps(lockPath)).toEqual([]);
@@ -245,9 +323,11 @@ describe('the start lock over an independent world', () => {
     const path = world();
     const lockPath = `${path}.lock`;
     const claimPath = `${lockPath}.takeover`;
-    agedEmpty(lockPath);
+    writeFileSync(lockPath, '');
     const bytes = `${process.pid}\n`;
     writeFileSync(claimPath, bytes);
+    const lockBefore = identityOf(lockPath);
+    const claimBefore = identityOf(claimPath);
     const began = Date.now();
     const result = await starting(path);
     const waited = Date.now() - began;
@@ -255,7 +335,9 @@ describe('the start lock over an independent world', () => {
     expect(waited).toBeGreaterThanOrEqual(WAIT_MS - 100);
     // Neither the claim nor the lock it guards moved: the empty entry is not recoverable while a
     // live taker holds the claim, and the deadline is the only way out.
+    expect(identityOf(claimPath)).toEqual(claimBefore);
     expect(readFileSync(claimPath, 'utf8')).toBe(bytes);
+    expect(identityOf(lockPath)).toEqual(lockBefore);
     expect(readFileSync(lockPath, 'utf8')).toBe('');
     expect(temps(lockPath)).toEqual([]);
     expect(existsSync(path)).toBe(false);
