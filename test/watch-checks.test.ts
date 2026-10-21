@@ -236,7 +236,7 @@ describe('a pass with checks turned off', () => {
     now.screens['w1:p1'] = busy.replace('Opus 5.5', 'Fable 5.1');
     const reported = texts(pass({ team: smuggled, watch: smuggled.watch, state: emptySession(), live: now, machine: fine, now: 0, memory: newMemory(), approval: ['`rules` changed'] }));
     expect(reported).toContain('deepseek-acme-2 is in the file and is not running');
-    expect(reported).toContain('claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)');
+    expect(reported).toContain('claude-coordinator-acme runs Claude Fable 5.1; the registry says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)');
     expect(reported).toContain("deepseek-acme waits at a permission prompt: its owner's to answer");
     expect(reported).toContain('the file has changed since the last approval: `rules` changed');
   });
@@ -394,7 +394,7 @@ describe('a label change is not a check', () => {
     const scene = live({ 'codex-acme': { status: 'working', screen } });
     const result = pass({ team: teamFile(), watch: teamFile().watch, state: emptySession(), live: scene, machine: fine, now: 0, memory: newMemory() });
     expect(result.reports.map((report) => report.text)).toEqual([
-      'codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme',
+      'codex-acme runs GPT Terra 5.6; the registry says GPT Sol 6: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme',
     ]);
     expect(result.labels.find((label) => label.name === 'codex-acme')?.displayAgent).toBe('GPT Terra 5.6 medium');
     expect(result.reports.some((report) => report.text.includes('display'))).toBe(false);
