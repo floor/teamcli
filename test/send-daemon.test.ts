@@ -668,16 +668,19 @@ describe('working seat retry and seat-lock coexistence', () => {
     // The seat is in a turn at acceptance: the send is answered at once as queued and waits in
     // the seat's FIFO for the turn to end, instead of spending the caller's wait budget.
     expect(io.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    const queuedId = /id ([0-9a-f-]+)\)/.exec(io.out)?.[1];
+    if (queuedId === undefined) throw new Error('no queued id in the answer');
     await until(() => host.enters.length === 1);
     expect(polls).toBeGreaterThanOrEqual(3);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
     // The Enter is observed inside the worker's delivery, before it has verified the take and
     // appended its history line: on a loaded host the poll above can return in that window, so
-    // wait for the line itself — the delivery's last step — before reading its outcome.
+    // wait for this send's own record — the delivery's last step — before reading its outcome.
+    // Waiting for its presence, not for the expected outcome, still fails on a wrong outcome.
     await until(() => {
       const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.length >= 1;
+      return h.ok && h.entries.some((e) => e.id === queuedId);
     });
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);
