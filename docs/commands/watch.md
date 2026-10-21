@@ -77,9 +77,9 @@ screen; it paints them on its first cycle and again when the title, the model or
 changes.
 
 The pane watch is the path this build ships. A daemon-hosted watch lifecycle — the same pass
-driven by the daemon's fixed heartbeat tick, with an existing pane watch held as a standby until
-the transfer is proven — is forthcoming: it is not released, and its live activation is not
-proven.
+driven by the daemon's fixed heartbeat tick, with an existing pane watch asked to hand over
+through its own loop and stood by honestly when it does not answer — is forthcoming: it is not
+released, and its live activation is not proven.
 
 The readings are only written when the watch's session is the file's own `session`: `up` and `add`
 count the state as the project's, so a watch on another session — `--session <other>`, which anyone

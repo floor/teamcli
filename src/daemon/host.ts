@@ -26,6 +26,7 @@ import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { loadTeamFile } from '../file/load.ts';
 import type { TeamFile } from '../file/types.ts';
+import { paneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { isSeatId, pidAlive, readState } from '../state.ts';
@@ -1113,6 +1114,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           route,
           teamFile,
           log,
+          // Proving a recorded pane watch is the process in its own pane needs this route's
+          // session; a pane herdr cannot read stays `unproven` and is never asked to hand over.
+          processInfo: (pane) => paneProcesses(pane, route.session),
           ...(presence === undefined
             ? {}
             : {
