@@ -5,18 +5,18 @@
 // aged past the window.
 //
 // The young wait is proved on a controlled clock, not by sampling a race. The lock is written
-// empty, its real mtime is read, and this process's clock is frozen so the entry's age is 999 ms —
-// positive, just inside the window. While it is frozen the start must still be pending and the
-// entry must still be the very entry that was written — the same dev and inode, the same empty
-// bytes — checked over six of the product's poll turns, each seeing the same 999 ms. The clock
-// then steps to 1001 ms and the start must recover the entry and serve. The product's own 2000 ms
-// whole-wait deadline is measured on this same clock, so freezing it leaves the deadline 1998 ms
-// away: the boundary is the only thing that moves, and no host stall can stand in for it. A
-// product that took over below 999 ms would change the entry or settle during the hold, so the
-// positive pre-boundary age rejects a lowered threshold; the stepped 1001 ms rejects one raised
-// past the boundary. The clock is restored in each scene's finally, and the live deadline
-// controls below run on the real clock. Each test file is its own process under the runner, so
-// the mock never reaches another file.
+// empty, its mtime is set to an exact whole second, and this process's clock is frozen so the
+// entry's age is exactly 999 ms — positive, just inside the window. While it is frozen the start
+// must still be pending and the entry must still be the very entry that was written — the same
+// dev and inode, the same empty bytes — checked over six of the product's poll turns, each
+// reading exactly 999 ms. The clock then steps to exactly 1001 ms and the start must recover the
+// entry and serve. The product's own 2000 ms whole-wait deadline is measured on this same clock, so
+// freezing it leaves the deadline 1998 ms away: the boundary is the only thing that moves, and no
+// host stall can stand in for it. A product that took over below 999 ms would change the entry or
+// settle during the hold, so the positive pre-boundary age rejects a lowered threshold; the
+// stepped 1001 ms rejects one raised past the boundary. The clock is restored in each scene's
+// finally, and the live deadline controls below run on the real clock. Each test file is its own
+// process under the runner, so the mock never reaches another file.
 //
 // The actual-main b071 hosted run failed this area. A separate stall harness, kept with its own
 // raw output and outside this file, reproduces the failure's shape by stopping the event loop
@@ -109,16 +109,21 @@ function identityOf(path: string): Identity {
   return { dev: entry.dev, ino: entry.ino };
 }
 
-/** An empty lock and the real mtime its age is measured from; the caller freezes the clock. */
+/** An empty lock and the real mtime its age is measured from; the caller freezes the clock. The
+ *  mtime is set to an exact whole second so the frozen ages are exactly 999 and 1001 ms on any
+ *  filesystem timestamp granularity; the entry keeps its inode and its empty bytes. */
 function emptyEntry(lockPath: string): number {
   writeFileSync(lockPath, '');
+  const exact = new Date(Math.floor(Date.now() / 1000) * 1000 - 5000);
+  utimesSync(lockPath, exact, exact);
   return statSync(lockPath).mtimeMs;
 }
 
-/** Freeze this process's clock at a chosen age past the entry's real mtime. The product and this
- *  test read the same frozen `Date.now`; the entry's mtime is the real one the filesystem wrote. */
+/** Freeze this process's clock at an exact age past the entry's whole-second mtime. The product
+ *  and this test read the same frozen `Date.now`; the entry's mtime is the real one the
+ *  filesystem stores. */
 function freezeAtAge(mtime: number, ageMs: number): void {
-  setSystemTime(new Date(Math.floor(mtime) + ageMs));
+  setSystemTime(new Date(mtime + ageMs));
 }
 
 /** Bound an await on the real timer, which the frozen clock does not touch: a start that does not
@@ -162,8 +167,7 @@ async function holdsYoung(
   for (let turn = 0; turn < 6; turn++) {
     await new Promise((tick) => setTimeout(tick, 20));
     const age = Date.now() - mtime;
-    expect(age).toBeGreaterThan(0);
-    expect(age).toBeLessThan(YOUNG_MS);
+    expect(age).toBe(YOUNG_MS - 1);
     const now = lstatSync(lockPath, { throwIfNoEntry: false });
     if (!now) throw new Error('the young empty entry changed before the boundary');
     expect({ dev: now.dev, ino: now.ino }).toEqual(entry);
@@ -273,10 +277,6 @@ describe('the start lock over an independent world', () => {
     const entry = identityOf(lockPath);
     const claimBytes = `${DEAD_PID}\n`;
     writeFileSync(claimPath, claimBytes);
-    // The dead taker's claim is already past its own window: on the frozen clock an entry made
-    // this instant would stay young forever and the eviction would never be due.
-    const longAgo = new Date(Date.now() - 3000);
-    utimesSync(claimPath, longAgo, longAgo);
     const claimEntry = identityOf(claimPath);
     try {
       freezeAtAge(mtime, YOUNG_MS - 1);
