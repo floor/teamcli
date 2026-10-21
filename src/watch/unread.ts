@@ -6,7 +6,7 @@
 // looking. Its unread pass counts from `watch.unread_after` (N): a message still without a
 // receipt N after it landed gets one wake — the seat's own drop read typed into its pane — and a
 // message still unread at twice that window is reported to its sender and to the team's lead.
-// The report is a mailbox record (`team messages` reads it), never a keystroke into another
+// The lead gets one signed drop (`team drops --read` serves it), never a keystroke into another
 // seat's pane. The sender's own mailbox is the one its signed agent id resolves to through this
 // home's agent and team registries — a teammate in another checkout is written in that team's
 // root and session — and a sender those registries cannot pin to one team, seat and session is
@@ -33,6 +33,7 @@ import {
   fsyncSync,
   linkSync,
   openSync,
+  realpathSync,
   readFileSync,
   unlinkSync,
   writeSync,
@@ -48,7 +49,7 @@ import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from 
 import { appendHistory } from '../send/history.ts';
 import { dropMessage, readTriggerLine } from '../send/native.ts';
 import { pendingDropPath } from '../send/pending.ts';
-import { readRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
+import { readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
 import { wakeSender } from '../send/wake.ts';
 import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
@@ -209,6 +210,9 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   for (const seat of scene.team.seats) {
     // A person's drop is read by a person, and nothing is typed into a human's pane.
     if (seat.human === true) continue;
+    // A stopped seat keeps its unread messages until its next start; a stale pane sighting does
+    // not turn a stopped roster entry into an invitation to wake it.
+    if (seat.stopped === true) continue;
     // A held seat is not woken: its native presence proves a turn, a person wait, a session end,
     // or a projection this pass cannot trust. The message stays unread and the later report
     // still speaks; no reservation is taken and nothing is typed.
@@ -353,6 +357,37 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
  *  session; both teams on this home share the message key the record is signed with. */
 type ReportTarget = { root: string; session: string; to: string; label: string };
 
+/** A report addressed to this team's lead is a signed send-drop: its own `team drops --read`
+ *  trigger can serve the body, unlike a legacy mailbox record that the drops command cannot see. */
+function writeLeadReportDrop(
+  target: ReportTarget,
+  home: string,
+  id: string,
+  text: string,
+  at: string,
+): { ok: true; path: string; existing?: true } | { ok: false; error: string } {
+  const dropDir = join(target.root, '.agents', 'send-drops', target.session, target.to);
+  const path = join(dropDir, id);
+  if (existsSync(path)) return { ok: true, path, existing: true };
+  let record: ReturnType<typeof signRecord>;
+  try {
+    record = signRecord({
+      kind: 'message', id, to: target.to, to_id: null, root: sceneRoot(target.root), session: target.session,
+      at, body: text, from: 'runtime', from_id: null, rule: "the team's unread-message report", thread: id,
+    }, home);
+    dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+  return { ok: true, path };
+}
+
+function sceneRoot(root: string): string {
+  // Registry roots and the watch's root are normally canonical; the signed record always binds
+  // the same canonical checkout the inbox reader verifies.
+  return realpathSync(root);
+}
+
 type ReportResolution = {
   targets: ReportTarget[];
   /** Why the sender's own mailbox could not be named; null when it was. The lead is still
@@ -454,9 +489,9 @@ function reportTargets(scene: RetryScene, payload: RecordPayload, home: string):
 
 /**
  * Reports every message still unread at twice the window to its sender and the team's lead, once.
- * The record is the Runtime's own (`from: runtime`, the writer owner delivery already uses), so
- * it reaches the mailbox `team messages` reads and the seat's watch rings it — no pane is
- * touched, which is why a watch without nudges runs this too. The sender's mailbox is the one its
+ * The lead receives a signed send-drop (`team drops --read` serves it); the sender receives the
+ * Runtime mailbox record. No pane is touched, which is why a watch without nudges runs this too.
+ * The sender's mailbox is the one its
  * signed `from_id` resolves to through this home's registries; a sender they cannot pin is
  * reported to the lead only, and the reason is said there and in the line. The words keep the
  * three wake states apart: a message with a wake marker says its wake line was sent; one without
@@ -505,16 +540,21 @@ export function reportUnreadDrops(scene: RetryScene, window: UnreadWindow): void
       let existed = 0;
       let failure: string | null = null;
       for (const target of targets) {
-        const outcome = writeRuntimeMailboxRecord({
-          root: target.root,
-          home,
-          to: target.to,
-          id: `unread-${message.id}`,
-          text,
-          session: target.session,
-          at,
-          once: true,
-        });
+        const reportId = `unread-${message.id}`;
+        const lead = scene.team.orchestrator !== '' ? scene.team.orchestrator : scene.team.operator;
+        const isLeadMailbox = target.root === scene.root && target.session === scene.session && target.to === lead;
+        const outcome = isLeadMailbox
+          ? writeLeadReportDrop(target, home, reportId, text, at)
+          : writeRuntimeMailboxRecord({
+            root: target.root,
+            home,
+            to: target.to,
+            id: reportId,
+            text,
+            session: target.session,
+            at,
+            once: true,
+          });
         if (!outcome.ok) {
           failure = `${target.label}: ${outcome.error}`;
           continue;

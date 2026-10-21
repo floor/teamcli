@@ -9,10 +9,11 @@
 // The pane here is a scripted screen; no live session is touched.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listUnacked } from '../src/commands/messages.ts';
+import { listDrops } from '../src/commands/drops.ts';
 import { runAck } from '../src/commands/ack.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -26,6 +27,7 @@ import { readHistory } from '../src/send/history.ts';
 import { dropMessage, readTriggerLine } from '../src/send/native.ts';
 import { markPending, pendingDropPath } from '../src/send/pending.ts';
 import { signReceiptPayload, signRecord, writeReceipt } from '../src/send/record.ts';
+import { messageKeyOf } from '../src/store/keys.ts';
 import { takenDropPath } from '../src/send/taken.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -221,7 +223,13 @@ function sceneOf(
 }
 
 function mailboxBody(root: string, seat: string, id: string): { from: string; to: string; body: string } {
-  const text = readFileSync(join(root, '.agents', 'messages', seat, `${id}.json`), 'utf8');
+  const legacy = join(root, '.agents', 'messages', seat, `${id}.json`);
+  const dropRoot = join(root, '.agents', 'send-drops');
+  const drop = existsSync(dropRoot)
+    ? readdirSync(dropRoot).map((session) => join(dropRoot, session, seat, id)).find(existsSync)
+    : undefined;
+  const path = existsSync(legacy) ? legacy : drop ?? join(dropRoot, 'acme', seat, id);
+  const text = readFileSync(path, 'utf8');
   const parsed = JSON.parse(text) as { payload: { from: string; to: string; body: string } };
   return parsed.payload;
 }
@@ -590,7 +598,7 @@ describe('wakeUnreadDrops', () => {
 });
 
 describe('reportUnreadDrops', () => {
-  test('at twice the window the sender and the lead are told once, and no wake was typed', () => {
+  test('at twice the window the sender and the lead are told once, and the lead gets a signed drop', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nnobody came', new Date(NOW.getTime() - 21 * MIN));
@@ -607,14 +615,45 @@ describe('reportUnreadDrops', () => {
     expect(toOwner.body).toContain('lead: a message from owner has been unread for 21 min');
     expect(toOwner.body).toContain('no wake line was typed');
     expect(toOwner.body).toContain(join(dropDir, UNREAD_A));
-    const toLead = mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`);
-    expect(toLead.body).toBe(toOwner.body);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const listing = listDrops(leadDir, messageKeyOf(made.home), {
+      to: 'lead', root: realpathSync(made.root), session: 'acme',
+    });
+    expect(listing.kind === 'ok' && listing.rows.some((row) => row.id === `unread-${UNREAD_A}` && row.from === 'runtime')).toBe(true);
+    expect(mailboxBody(made.root, 'lead', `unread-${UNREAD_A}`).body).toBe(toOwner.body);
     expect(said).toEqual(['lead: a message from owner was still unread after 21 min; reported to owner and lead']);
 
     // One report per message: the marker is the memory, and a later pass says nothing new.
     const again: string[] = [];
     reportUnreadDrops(sceneOf(made, team, one, again), { unreadAfter: N });
     expect(again).toEqual([]);
+  });
+
+  test('a stopped seat stays unwoken, gets one report drop, and its original message waits', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const lead = team.seats.find((seat) => seat.name === 'lead');
+    if (!lead) throw new Error('the fixture has no lead seat');
+    lead.stopped = true;
+    const sourceDir = seedMessage(made, 'acme', 'lead', UNREAD_B, 'from the owner\n\nwait for restart', new Date(NOW.getTime() - 21 * MIN));
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    const scene = sceneOf(made, team, one, said, { live: liveWith('lead', 'w1:p1') });
+
+    await wakeUnreadDrops(scene, { unreadAfter: N });
+    expect(one.typed).toEqual([]);
+    expect(existsSync(wakePath(sourceDir, UNREAD_B))).toBe(false);
+    reportUnreadDrops(scene, { unreadAfter: N });
+    reportUnreadDrops(sceneOf(made, team, one, [], { live: liveWith('lead', 'w1:p1') }), { unreadAfter: N });
+
+    expect(existsSync(reportedPath(sourceDir, UNREAD_B))).toBe(true);
+    expect(existsSync(join(sourceDir, UNREAD_B))).toBe(true);
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const rows = listDrops(leadDir, messageKeyOf(made.home), {
+      to: 'lead', root: realpathSync(made.root), session: 'acme',
+    });
+    expect(rows.kind === 'ok' && rows.rows.some((row) => row.id === `unread-${UNREAD_B}` && row.from === 'runtime')).toBe(true);
+    expect(said).toHaveLength(1);
   });
 
   test('a woken message says its wake line was sent, and a seat sender is told in its own mailbox', async () => {
