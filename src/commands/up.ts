@@ -1685,6 +1685,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     const running: Running[] = [];
     // The planned seats whose launch line the pane actually ran (`sessionStarted`).
     const startedSeats = new Set<string>();
+    // The seats whose state entry the plan took away before their line ran — a repair closes the
+    // old pane and drops the record first — with the binding that entry held at that moment.
+    const droppedSeats = new Set<string>();
+    const droppedBindings = new Map<string, string | undefined>();
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
       for (const agent of agents) {
@@ -1911,6 +1915,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           if (!current) return;
           const prior = current.seats[name];
           pane = prior?.pane;
+          // The binding this entry holds now goes out with the drop. For a planned launch it is
+          // the successor the fresh install wrote; the pass after the plan puts it back on the
+          // record the relaunch writes, and only when that launch's line ran.
+          droppedSeats.add(name);
+          droppedBindings.set(name, prior?.presence_binding);
           if (prior?.id && !prior.temporary) {
             (current.retained_seats ??= {})[name] = {
               id: prior.id,
@@ -2057,8 +2066,21 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // line never ran — refused before it, or its step left out — never loaded the settings file
     // that names the successor, so it keeps the binding it held. The same rule `add` and `reload`
     // apply follows here; a seat the install itself created goes back out with no record.
+    //
+    // A repair is the exception. Its close took the seat's state entry away, and the binding that
+    // entry held with it: the old process is gone, so no process carries that binding any more
+    // and the entry must not be given it back when the relaunch never ran. Only a line the pane
+    // actually ran loaded the settings file naming the successor, so only then does the record
+    // the plan wrote get the binding put back.
     for (const name of launchedSeats) {
-      if (!startedSeats.has(name)) restorePresenceBinding(dir, session, name, priorBindings.get(name));
+      if (startedSeats.has(name)) {
+        const successor = droppedBindings.get(name);
+        if (successor !== undefined) restorePresenceBinding(dir, session, name, successor);
+      } else if (droppedSeats.has(name)) {
+        restorePresenceBinding(dir, session, name, undefined);
+      } else {
+        restorePresenceBinding(dir, session, name, priorBindings.get(name));
+      }
     }
     // The reach projection, after the plan's effects and outside the lobby's identity rechecks
     // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
