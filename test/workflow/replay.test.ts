@@ -369,6 +369,20 @@ function failed(result: ReplayResult, code: ReplayFailure['code'], step?: number
   return result.fail;
 }
 
+function snapshot(run: RunState) {
+  return {
+    runId: run.runId,
+    definitionId: run.definitionId,
+    state: run.state,
+    revision: run.revision,
+    activation: run.activation,
+    occurrences: [...run.occurrences],
+    requests: [...run.requests],
+    waits: run.waits,
+    blocked: run.blocked ?? null,
+  };
+}
+
 // Common journal pieces for the demo definition.
 
 function demoStep0(fixture: World, overrides: Partial<StepParts> = {}) {
@@ -1299,6 +1313,16 @@ describe('waits', () => {
     expect(run.waits).toEqual([{ state: 'waiting', activation: 1, status: 'pending' }]);
     expect(run.blocked).toBeUndefined();
   });
+
+  test('D3 an approval wait left open by exhaustion stays pending', () => {
+    const demo = world(DEMO);
+    const run = okRun(
+      runReplay(demo, journalOf(demo, { steps: [demoStep0(demo)] }), demoEvidence(demo)),
+    );
+    expect(run.state).toBe('reviewed');
+    expect(run.waits).toEqual([{ state: 'reviewed', activation: 2, status: 'pending' }]);
+    expect(run.blocked).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -1507,6 +1531,15 @@ describe('the replay boundary', () => {
     for (const entry of imports) {
       expect(entry.specifier).not.toMatch(/bus|daemon|grant|approval|ledger|dispatch|commands|cli/);
     }
+  });
+
+  test('E1 replaying the same journal twice is deep-equal', () => {
+    const demo = world(DEMO);
+    const journal = journalOf(demo, { steps: [demoStep0(demo), demoStep1(demo)] });
+    const evidence = { ...demoEvidence(demo), ...demoEvidence2(demo) };
+    const first = okRun(runReplay(demo, journal, evidence));
+    const second = okRun(runReplay(demo, journal, evidence));
+    expect(snapshot(second)).toEqual(snapshot(first));
   });
 
   test('E5 replay adds no step, adds no occurrence and never dispatches', () => {
