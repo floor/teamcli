@@ -1,0 +1,8 @@
+API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00
+✻ Cooked for 4s · done 11:07 AM
+
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
