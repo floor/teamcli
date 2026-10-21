@@ -1,0 +1,24 @@
+format: 1
+target: project://dry-acceptance
+artifact:
+  kind: none
+settings: {}
+inputs:
+  request: dry-acceptance
+evidence: {}
+signals:
+  - signal: pr-opened
+    at: 2026-10-21T00:00:00.000Z
+    request-id: req-1
+    expected-revision: 0
+    evidence: [step-1, stamp-1]
+  - signal: pr-merged
+    at: 2026-10-21T00:01:00.000Z
+    request-id: req-2
+    expected-revision: 1
+    evidence: [merge-1, stamp-2]
+  - signal: pr-opened
+    at: 2026-10-21T00:02:00.000Z
+    request-id: req-3
+    expected-revision: 2
+    evidence: [step-1, stamp-3]

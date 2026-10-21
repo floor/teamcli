@@ -1,0 +1,17 @@
+format: 1
+target: project://dry-acceptance
+artifact:
+  kind: none
+settings:
+  release-date: 2026-10-21T00:00:00.000Z
+inputs: {}
+evidence:
+  timer-1:
+    type: timer
+    target: project://dry-acceptance
+signals:
+  - signal: time-reached
+    at: 2026-10-21T12:00:00.000Z
+    request-id: req-1
+    expected-revision: 0
+    evidence: [timer-1]

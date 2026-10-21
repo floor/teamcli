@@ -1,0 +1,22 @@
+workflow: dry-acceptance-cycle
+version: 1
+initial: ready
+states:
+  ready:
+    on-enter: [stamp]
+  resting:
+    on-enter: [stamp]
+effects:
+  stamp:
+    run: changelog-stamp
+    role: builder
+    capability: write
+transitions:
+  - from: ready
+    to: resting
+    on: pr-opened
+    role: builder
+  - from: resting
+    to: ready
+    on: pr-merged
+    role: builder
