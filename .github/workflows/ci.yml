@@ -64,6 +64,7 @@ jobs:
         id: pack
         run: |
           report="$(bun scripts/pack.ts --pack-destination .)"
+          printf '%s\n' "$report"
           filename="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
           sha256="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).sha256')"
           test -f "$filename" || { echo "pack reported '$filename', which is not a file" >&2; exit 1; }
