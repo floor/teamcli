@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runApprove } from '../../src/approve/command.ts';
+import { saveReadings, type Seen } from '../../src/budgets/readings.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import type { Launch, UpSources } from '../../src/commands/up.ts';
 import { setHerdrRun, type HerdrAgent, type HerdrWorkspace, type PaneProcesses } from '../../src/herdr.ts';
@@ -50,6 +51,14 @@ seats:
     version: "5.5"
     launch: claude
 `;
+}
+
+/** The same file with the worker's account under a budget that the stored reading spends past. */
+function budgetText(): string {
+  return teamText().replace(
+    'seats:',
+    'budgets:\n  accounts:\n    anthropic: { kind: subscription, reserve: 10%, sources: [status_line] }\nseats:',
+  );
 }
 
 beforeEach(() => {
@@ -254,6 +263,46 @@ describe('the daemon restore sweep for one route', () => {
     expect(made.starts).toBe(0);
     expect(made.closes).toEqual([]);
     expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+  });
+
+  test('a refusal on a seat whose record says ready is held, and its record is left as it is', async () => {
+    recordSeat();
+    writeFileSync(teamFile, budgetText());
+    const reading: Seen = {
+      account: 'anthropic',
+      window: 'weekly',
+      left: 5,
+      used: 95,
+      changedAt: NOW.getTime() - 60_000,
+      resetsAt: NOW.getTime() + 3_600_000,
+      seat: 'anthropic',
+      source: 'status_line',
+      confirmed: true,
+    };
+    saveReadings(stateDir, [reading], NOW.getTime());
+    await approve();
+    const made = world();
+    // The recorded pane is gone and no agent is named: the pass has to launch the seat, and the
+    // budget refuses it before any workspace is made. The record it found still says ready.
+    made.launch.agentPanes = () => [];
+    made.launch.agents = () => [];
+    made.launch.workspacePanes = () => [];
+    made.launch.processInfo = () => null;
+    const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: sources(made) });
+    expect(result.kind).toBe('ran');
+    if (result.kind !== 'ran') return;
+    expect(result.summary.refused_seats).toEqual([
+      { seat: 'worker', reason: expect.stringContaining('left 5%') },
+    ]);
+    expect(result.failed).toBe(true);
+    // Only the watch workspace is made: the refused seat starts nowhere.
+    expect(made.creates).toEqual(['Watch · sweep']);
+    expect(made.closes).toEqual([]);
+    // The refusal is the run's, not the record's: the state is left exactly as it was found.
+    const state = JSON.parse(readFileSync(join(stateDir, 'team.state.json'), 'utf8')) as {
+      sessions: { sweep: { seats: Record<string, { stage?: string }> } };
+    };
+    expect(state.sessions.sweep.seats.worker?.stage).toBe('ready');
   });
 
   test('a dialog at a seat with no terminal is recorded waiting, never prompted or closed', async () => {
