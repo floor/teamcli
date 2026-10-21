@@ -134,7 +134,7 @@ const alive = () => [
 ];
 
 /** An approved first run, whose state is then edited to the watch record under test. */
-async function baseline(watch: { pid?: number; heartbeat: string } | null): Promise<World> {
+async function baseline(watch: { pid?: number; pane?: string; heartbeat: string } | null): Promise<World> {
   await approve();
   const made = world();
   expect(await runUp(FILE, testIo(root, { kind: 'owner' }), sources({}, made))).toBe(0);
@@ -148,16 +148,24 @@ async function baseline(watch: { pid?: number; heartbeat: string } | null): Prom
 }
 
 /** A second run with every seat already standing, as the two-run scenes run it. */
-async function second(made: World, extra: Partial<UpSources>): Promise<number> {
+async function second(
+  made: World,
+  extra: Partial<UpSources>,
+  io = testIo(root, { kind: 'owner' }),
+): Promise<number> {
   made.launch.agents = alive;
   made.creates.length = 0;
   made.kills.length = 0;
-  return runUp(FILE, testIo(root, { kind: 'owner' }), sources({
+  return runUp(FILE, io, sources({
     sessionState: () => 'running',
     agents: alive,
     ...extra,
   }, made));
 }
+
+/** The watch's own pane reading: the recorded pid is the pane's foreground process. */
+const inWatchPane = (watchPane: string, pid: number) => (_session: string, pane: string) =>
+  pane === watchPane ? { shell: 900, foreground: [900, pid] } : null;
 
 const watchCreates = (made: World) => made.creates.filter((label) => label.startsWith('Watch · ')).length;
 
@@ -223,12 +231,77 @@ describe('a missing or dead pane watch is replaced once', () => {
   });
 });
 
-describe('a live process behind an old heartbeat is stale and is replaced', () => {
-  test('the plan kills the recorded pid before starting the replacement', async () => {
-    const made = await baseline({ pid: 4242, heartbeat: OLD });
-    expect(await second(made, { alive: (pid) => pid === 4242, daemonHealth: daemon(health()) })).toBe(0);
+describe('a live process behind an old heartbeat is stale and is replaced once', () => {
+  test('the recorded pid is killed, confirmed gone, and only then replaced', async () => {
+    const made = await baseline({ pid: 4242, pane: 'w9:p1', heartbeat: OLD });
+    made.launch.processInfo = inWatchPane('w9:p1', 4242);
+    const io = testIo(root, { kind: 'owner' });
+    expect(await second(made, {
+      alive: (pid) => pid === 4242 && !made.kills.includes(4242),
+      daemonHealth: daemon(health()),
+    }, io)).toBe(0);
     expect(made.kills).toEqual([4242]);
     expect(watchCreates(made)).toBe(1);
+    expect(`${io.out}${io.err}`).toContain('watch: stopped');
+  });
+
+  test('a refused termination holds and starts no replacement', async () => {
+    const made = await baseline({ pid: 4242, pane: 'w9:p1', heartbeat: OLD });
+    made.launch.processInfo = inWatchPane('w9:p1', 4242);
+    made.launch.kill = (pid) => {
+      made.kills.push(pid);
+      return false;
+    };
+    const io = testIo(root, { kind: 'owner' });
+    expect(await second(made, { alive: (pid) => pid === 4242, daemonHealth: daemon(health()) }, io)).toBe(1);
+    expect(made.kills).toEqual([4242]);
+    expect(watchCreates(made)).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('watch: pid 4242 did not stop');
+    expect(`${io.out}${io.err}`).toContain('the old watch is not confirmed gone');
+  });
+
+  test('a process still running after the signal holds and starts no replacement', async () => {
+    const made = await baseline({ pid: 4242, pane: 'w9:p1', heartbeat: OLD });
+    made.launch.processInfo = inWatchPane('w9:p1', 4242);
+    const io = testIo(root, { kind: 'owner' });
+    // The signal is delivered and the process stays: the wait times out and the replacement is
+    // held, never created beside the watch that is still writing there.
+    expect(await second(made, { alive: (pid) => pid === 4242, daemonHealth: daemon(health()) }, io)).toBe(1);
+    expect(made.kills).toEqual([4242]);
+    expect(watchCreates(made)).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('watch: pid 4242 is still running; no replacement is started');
+    expect(`${io.out}${io.err}`).toContain('the old watch is not confirmed gone');
+  });
+});
+
+describe('a stale pid that cannot be shown to be the watch is never signalled', () => {
+  test('a record with no pane is held', async () => {
+    const made = await baseline({ pid: 4242, heartbeat: OLD });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await second(made, { alive: (pid) => pid === 4242, daemonHealth: daemon(health()) }, io)).toBe(1);
+    expect(made.kills).toEqual([]);
+    expect(watchCreates(made)).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('watch: pid 4242 is recorded with no pane; nothing was signalled and no replacement is started');
+  });
+
+  test('a pane that cannot be read is held', async () => {
+    const made = await baseline({ pid: 4242, pane: 'w9:p1', heartbeat: OLD });
+    made.launch.processInfo = () => null;
+    const io = testIo(root, { kind: 'owner' });
+    expect(await second(made, { alive: (pid) => pid === 4242, daemonHealth: daemon(health()) }, io)).toBe(1);
+    expect(made.kills).toEqual([]);
+    expect(watchCreates(made)).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('which cannot be read; nothing was signalled and no replacement is started');
+  });
+
+  test('another process in the recorded pane is held, not signalled', async () => {
+    const made = await baseline({ pid: 4242, pane: 'w9:p1', heartbeat: OLD });
+    made.launch.processInfo = () => ({ shell: 900, foreground: [900, 5151] });
+    const io = testIo(root, { kind: 'owner' });
+    expect(await second(made, { alive: (pid) => pid === 4242, daemonHealth: daemon(health()) }, io)).toBe(1);
+    expect(made.kills).toEqual([]);
+    expect(watchCreates(made)).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('watch: pid 4242 is not the process in its recorded pane w9:p1; nothing was signalled and no replacement is started');
   });
 });
 

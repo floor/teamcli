@@ -85,7 +85,7 @@ import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
+import { emptySession, mintSeatId, pidAlive, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -93,7 +93,7 @@ import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel } from '../status/statusline.ts';
 import { watchSitting } from '../watch/liveness.ts';
-import { watchLabel } from '../watch/pane.ts';
+import { watchIdentity, watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
@@ -1425,7 +1425,22 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
   });
   const paneHealth = sitting.kind === 'hosted' ? null : sitting.health;
   const watchAlive = sitting.kind === 'hosted' || paneHealth?.state === 'live';
-  const watchPid = paneHealth?.state === 'stale' ? paneHealth.pid : null;
+  // A live pid behind an old beat is only the watch's when the pane its own record names still
+  // shows it as that pane's process. A pid alone cannot tell a reused process from the watch, so
+  // an unprovable record is held: nothing is signalled and no replacement is started.
+  const identity = paneHealth?.state === 'stale' && paneHealth.pid !== null
+    ? watchIdentity(
+        { pid: paneHealth.pid, ...(paneHealth.pane ? { pane: paneHealth.pane } : {}) },
+        {
+          alive: (pid) => sources.alive?.(pid) ?? false,
+          processInfo: (pane) => sources.launch?.processInfo?.(session, pane) ?? null,
+        },
+      )
+    : null;
+  const watchPid = identity?.kind === 'verified' ? identity.pid : null;
+  const watchHold = sitting.kind === 'pane' && identity?.kind === 'unproven'
+    ? `watch: ${identity.why}; nothing was signalled and no replacement is started`
+    : null;
   const watchUnknown = sitting.kind === 'unknown' && !watchAlive;
   // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
   // this file, or read another one, the resolved path is recorded for the pane.
@@ -1451,6 +1466,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     watchLabel: watchLabel(team.project),
     watchAlive,
     ...(watchPid !== null ? { watchPid } : {}),
+    ...(watchHold !== null ? { watchHold } : {}),
     ...(watchUnknown ? { watchUnknown: true } : {}),
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
@@ -1826,6 +1842,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       closeWorkspace: launch.closeWorkspace,
       stopSession: (session) => launch.stopSession?.(session) ?? false,
       kill: (pid) => launch.kill?.(pid) ?? false,
+      // The replacement's exit wait reads the same process table the plan did.
+      alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid),
       agentPanes: launch.agentPanes,
       agentList: launch.agents,
       // The session's workspaces with their labels now; the pause compares the label of the pane's
