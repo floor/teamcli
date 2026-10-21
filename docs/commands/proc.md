@@ -199,6 +199,7 @@ team beacon, session "beacon"
   claude-keeper  idle   Claude Opus 5.5  w1:p1  typed
   claude-desk    idle   Claude Opus 5.5  w2:p1  typed
 note: watch: pane w9:p1, pid 4242, last heartbeat 0s ago
+note: proc release-build: claude-desk since 2026-10-04T09:00:00.000Z, pid 4243
 note: proc release-watch: owner since 2026-10-04T09:00:00.000Z
 no differences
 ```

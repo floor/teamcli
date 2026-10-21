@@ -207,6 +207,13 @@ the `key_isolation` field in JSON: `key isolation: not enforced (pane guard pend
 
 ```fixture
 briefs: delivered-and-read
+watch: none
+state:
+  watch:
+    pid: 4242
+    heartbeat: "2026-10-04T09:00:00.000Z"
+    pane: w9:p1
+    workspace: w9
 ```
 
 ```yaml file=.agents/team.yaml

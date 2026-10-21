@@ -71,7 +71,7 @@ import { emptySession, readState, updateState } from '../../src/state.ts';
 import { blocksOf, EXIT_SUFFIX, transcript, type Block } from './blocks.ts';
 import { createFixture, type Fixture } from './fixture.ts';
 import { DEFAULT_SPEC, specOf, type ScreenKind, type Spec, type ToolState } from './spec.ts';
-import { createWorld, projectsAt, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
+import { createWorld, PROC_PID, projectsAt, RUN_WATCH_PID, WATCH_PID, type World } from './world.ts';
 
 export type Failure = { page: string; line: number; message: string };
 
@@ -290,10 +290,6 @@ async function setup(page: Page): Promise<void> {
   }
   page.ready = true;
 }
-
-/** The one pid the fixture's `team proc` records call running; every other number is a process
- *  that is gone. A page records this one, or a number that is clearly not running. */
-const PROC_PID = 4243;
 
 async function command(page: Page, line: string, io: Io, answer?: string, waiting: Waiting = 'empty', reply?: string): Promise<number> {
   const [first, ...argv] = words(line);
