@@ -153,6 +153,15 @@ seats:
     launch: agy
 
   - role: operator
+    name: operator-argon
+    cli: antigravity
+    vendor: google
+    model: Gemini Argon
+    version: "4"
+    display: Gemini 4 Argon
+    launch: agy
+
+  - role: operator
     name: operator
     cli: antigravity
     vendor: google
