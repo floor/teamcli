@@ -723,7 +723,8 @@ export function upPlan(input: UpInput): Step[] {
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
       const said = takeNotice();
       const watched = watcherNote(watcher);
-      const launchNote = [said, resumeGap, 'would launch', watched]
+      // `would launch` joins a notice or a resume gap; a plain watcher note stands alone.
+      const launchNote = [said, resumeGap, said === undefined && resumeGap === undefined ? undefined : 'would launch', watched]
         .filter((part): part is string => part !== undefined)
         .join('; ');
       steps.push({
