@@ -1,4 +1,4 @@
-import { paneProcesses, workspaceList, workspacePanes } from '../herdr.ts';
+import { paneProcesses, workspaceList, workspacePanes, type PaneProcesses } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { isWatchEpoch } from './epoch.ts';
 
@@ -62,6 +62,32 @@ export function paneWatchHealth(
     heartbeat,
     ...place,
   };
+}
+
+/** Whether a recorded pid is still the watch it claims to be: the process in the pane the watch
+ *  itself recorded, read through the pane's own process list. A live pid behind an old heartbeat
+ *  cannot tell the watch from a reused pid; a record with no pane, a pane that cannot be read, or
+ *  a pane whose process is another one is `unproven`, and nothing may be signalled on it. A pid
+ *  that is no longer alive is `gone`: there is nothing to stop before its replacement. */
+export type WatchIdentity =
+  | { kind: 'verified'; pid: number; pane: string }
+  | { kind: 'gone' }
+  | { kind: 'unproven'; why: string };
+
+export function watchIdentity(
+  watch: { pid: number; pane?: string },
+  options: { alive(pid: number): boolean; processInfo(pane: string): PaneProcesses | null },
+): WatchIdentity {
+  if (!options.alive(watch.pid)) return { kind: 'gone' };
+  if (!watch.pane) return { kind: 'unproven', why: `pid ${watch.pid} is recorded with no pane` };
+  const info = options.processInfo(watch.pane);
+  if (info === null) {
+    return { kind: 'unproven', why: `pid ${watch.pid} is recorded in pane ${watch.pane}, which cannot be read` };
+  }
+  if (info.foreground.includes(watch.pid) || info.shell === watch.pid) {
+    return { kind: 'verified', pid: watch.pid, pane: watch.pane };
+  }
+  return { kind: 'unproven', why: `pid ${watch.pid} is not the process in its recorded pane ${watch.pane}` };
 }
 
 /** The hand-over guard's question: whether a recorded watch still holds its pane. It stays

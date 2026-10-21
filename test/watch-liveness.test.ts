@@ -10,7 +10,7 @@ import type { DaemonRootState } from '../src/daemon/state.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { paneWatchCheckNotes } from '../src/daemon/watch_display.ts';
 import { watchSitting, type PaneWatchRecord } from '../src/watch/liveness.ts';
-import { paneWatchHealth, watchRunning } from '../src/watch/pane.ts';
+import { paneWatchHealth, watchIdentity, watchRunning } from '../src/watch/pane.ts';
 
 const NOW = Date.parse('2026-10-21T12:00:00Z');
 const INTERVAL = 60;
@@ -199,4 +199,39 @@ test('a root reached through a link is read as its canonical route', () => {
   const record = hosted({ root: real });
   expect(sitting(health({ roots: [root({ root: real, watch: record })] }), undefined, link))
     .toEqual({ kind: 'hosted', root: real, watch: record });
+});
+
+test('a recorded pid is verified only through the pane its own record names', () => {
+  const inPane = (pane: string, foreground: number[], shell = 900) => (_pane: string) =>
+    _pane === pane ? { shell, foreground } : null;
+  expect(watchIdentity(
+    { pid: 4242, pane: 'w1:p1' },
+    { alive: () => true, processInfo: inPane('w1:p1', [4242]) },
+  )).toEqual({ kind: 'verified', pid: 4242, pane: 'w1:p1' });
+  expect(watchIdentity(
+    { pid: 4242, pane: 'w1:p1' },
+    { alive: () => true, processInfo: (_pane) => ({ shell: 4242, foreground: [900] }) },
+  )).toEqual({ kind: 'verified', pid: 4242, pane: 'w1:p1' });
+});
+
+test('a pid that is gone has nothing to stop, and cannot be a foreign process', () => {
+  expect(watchIdentity(
+    { pid: 4242, pane: 'w1:p1' },
+    { alive: () => false, processInfo: () => null },
+  )).toEqual({ kind: 'gone' });
+});
+
+test('a pid that cannot be shown to be the watch is unproven, never signalled', () => {
+  expect(watchIdentity(
+    { pid: 4242 },
+    { alive: () => true, processInfo: () => ({ shell: 900, foreground: [4242] }) },
+  )).toEqual({ kind: 'unproven', why: 'pid 4242 is recorded with no pane' });
+  expect(watchIdentity(
+    { pid: 4242, pane: 'w1:p1' },
+    { alive: () => true, processInfo: () => null },
+  )).toEqual({ kind: 'unproven', why: 'pid 4242 is recorded in pane w1:p1, which cannot be read' });
+  expect(watchIdentity(
+    { pid: 4242, pane: 'w1:p1' },
+    { alive: () => true, processInfo: () => ({ shell: 900, foreground: [900, 5151] }) },
+  )).toEqual({ kind: 'unproven', why: 'pid 4242 is not the process in its recorded pane w1:p1' });
 });
