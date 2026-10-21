@@ -181,6 +181,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'registering the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',
     },
+    'daemon:fault-watch': {
+      kind: 'owner-only',
+      why: 'the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner\'s dev-mode admission for a placed lead; it starts, stops and kills no process',
+    },
     'daemon:uninstall': {
       kind: 'owner-only',
       why: 'removing the user service unit is the owner\'s act; the owner\'s dev-mode admission for a placed lead is the one other way',

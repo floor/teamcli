@@ -1089,6 +1089,20 @@
     {
       "code": 0,
       "command": "daemon",
+      "id": "daemon.fault-dry-run",
+      "meaning": "the fault plan was printed and no request was written",
+      "trigger": "team daemon fault-watch --root <folder> --route <id> --dry-run"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
+      "id": "daemon.faulted",
+      "meaning": "the one named route's hosted run ended as a counted fault and restarts on the next heartbeat",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 0,
+      "command": "daemon",
       "id": "daemon.installed",
       "meaning": "the user service unit was written and registered, and the system service manager starts the daemon",
       "trigger": "team daemon install"
@@ -1120,6 +1134,55 @@
       "id": "daemon.entry-missing",
       "meaning": "the CLI entry cannot be found, so the service unit cannot be written",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fault-daemon",
+      "meaning": "the machine daemon is not running, so there is no hosted watch to fault",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fault-not-reached",
+      "meaning": "the daemon did not fault the watch: it answered not reached, or the wait ended first; nothing was killed",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fault-pending",
+      "meaning": "a fault request is already waiting for the daemon, so no second request was written",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fault-refused",
+      "meaning": "the daemon refused the fault request: another home, daemon run or route, a non-private request, or no hosted run to fault",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fault-route",
+      "meaning": "the route id does not name this checkout's own canonical route",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fault-watch",
+      "meaning": "the daemon record carries no hosted watch for this checkout's route",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fault-watch-state",
+      "meaning": "the route's hosted watch was not started as required, is standing down, or has stopped",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
     },
     {
       "code": 1,
@@ -1162,6 +1225,20 @@
       "id": "daemon.uninstall-failed",
       "meaning": "the system service manager refused to stop or remove the unit",
       "trigger": "team daemon uninstall"
+    },
+    {
+      "code": 2,
+      "command": "daemon",
+      "id": "daemon.fault-root",
+      "meaning": "a checkout named on fault-watch cannot be read, so no request was written",
+      "trigger": "team daemon fault-watch --root <folder> --route <id>"
+    },
+    {
+      "code": 2,
+      "command": "daemon",
+      "id": "daemon.fault-usage",
+      "meaning": "the invocation cannot be read, or the route id is not one a hosted watch records",
+      "trigger": "team daemon fault-watch --route nope"
     },
     {
       "code": 2,

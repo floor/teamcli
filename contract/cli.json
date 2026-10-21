@@ -723,6 +723,57 @@
             },
             {
               "hidden": false,
+              "name": "--root",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--route",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "fault-watch",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the diagnostic asks the running daemon to end one hosted run under the install/uninstall admission: the owner, or the owner's dev-mode admission for a placed lead; it starts, stops and kills no process"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry-run",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--presence",
               "repeatable": false,
               "takesValue": false
@@ -880,7 +931,8 @@
         "team daemon status [--json]",
         "team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]",
         "team daemon install [--root <folder>] [--presence] [--watch] [--dry-run] [--json]",
-        "team daemon uninstall [--json]"
+        "team daemon uninstall [--json]",
+        "team daemon fault-watch --root <folder> --route <routeId> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",
