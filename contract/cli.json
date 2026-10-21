@@ -4673,14 +4673,117 @@
             "gate": "any-caller",
             "why": "checks a workflow definition and its transition graph: read-only, so any seat, CI or the owner may run it"
           }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--evidence",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "replay",
+          "positionals": [
+            {
+              "name": "definition",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "journal",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team workflow replay <definition> <journal> --evidence <path> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "re-evaluates a dry-run journal against a workflow definition and supplied evidence: read-only, so any seat, CI or the owner may run it"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--dry",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--script",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "run",
+          "positionals": [
+            {
+              "name": "path",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team workflow run <path> --dry --script <path> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "runs a workflow definition in pure in-memory dry mode against a script: writes no state or ledger, so any seat, CI or the owner may run it"
+          }
         }
       ],
       "usage": [
-        "team workflow check <path> [--json]"
+        "team workflow check <path> [--json]",
+        "team workflow run <path> --dry --script <path> [--json]",
+        "team workflow replay <definition> <journal> --evidence <path> [--json]"
       ],
       "who": {
         "gate": "any-caller",
-        "why": "the workflow subcommand group: checking a workflow definition needs no session and no seat"
+        "why": "the workflow subcommand group: checking, dry-running, or replaying a workflow definition needs no session and no seat"
       }
     },
     {
