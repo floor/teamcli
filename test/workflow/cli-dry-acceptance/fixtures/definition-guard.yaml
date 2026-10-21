@@ -1,0 +1,12 @@
+workflow: dry-cli-guard
+version: 1
+initial: draft
+states:
+  draft: {}
+  complete: {}
+transitions:
+  - from: draft
+    to: complete
+    on: pr-opened
+    guard: ci-green-on-head
+    role: builder

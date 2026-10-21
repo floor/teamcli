@@ -1,0 +1,22 @@
+format: 1
+target: project://dry-cli
+artifact:
+  kind: none
+settings: {}
+inputs: {}
+evidence:
+  step-1:
+    type: step
+    target: project://dry-cli
+  ci-1:
+    type: outcome
+    operation: ci-suite
+    effect: run/1/stamp
+    target: project://dry-cli
+    result: unknown
+signals:
+  - signal: pr-opened
+    at: 2026-10-21T00:00:00.000Z
+    request-id: req-1
+    expected-revision: 0
+    evidence: [step-1, ci-1]

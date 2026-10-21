@@ -1,0 +1,10 @@
+workflow: dry-cli-refused
+version: 1
+initial: nowhere
+states:
+  draft: {}
+transitions:
+  - from: draft
+    to: draft
+    on: pr-opened
+    role: builder

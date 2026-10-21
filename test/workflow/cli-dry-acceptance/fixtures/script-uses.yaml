@@ -1,0 +1,8 @@
+format: 1
+target: project://dry-cli
+artifact:
+  kind: none
+settings: {}
+inputs: {}
+evidence: {}
+signals: []
