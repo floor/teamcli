@@ -729,13 +729,14 @@ function seatPlan(
   // A program is in front and the session cannot be shown. Leave the record. Do not close.
   // A working or unsent screen keeps the refusal the close used to give.
   if (continuity === 'doubt' && recorded.workspace && recorded.pane && recorded.launched) {
-    const refusal = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
+    const held = replacedScreenRefusal(seat, recorded.pane, screenOf, onRecordedPane?.status);
+    const refusal = held?.why;
     return {
       ...planned,
       stage: recorded.stage,
-      sessionDoubt: refusal?.why ?? 'its pane holds a process this record cannot tie to the launch',
-      ...(refusal ? { doubtHeld: true } : {}),
-      ...(refusal?.working ? { doubtWorking: true } : {}),
+      sessionDoubt: refusal ?? 'its pane holds a process this record cannot tie to the launch',
+      ...(held ? { doubtHeld: true } : {}),
+      ...(held?.working ? { doubtWorking: true } : {}),
     };
   }
   // The shell is in front. The seat's name surviving on the pane does not make it the CLI.
