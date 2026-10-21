@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: 22.23.3
 
       # A dispatch has no tag. These three checks stay on a tag push, and the
       # install, the gate and the pack still run.
@@ -85,17 +85,28 @@ jobs:
 
       - run: bun run ci
 
-      # Packed once, here, with the npm the Node 22 above ships; this exact file
-      # is what publish uploads and npm gets. The filename comes from the
-      # stamped pack's own report, never a glob over whatever tarballs happen
-      # to be around. scripts/pack.ts refuses a dirty tree or an uncommitted
-      # version and writes the full HEAD SHA into the tarball's manifest.
+      # Packed once, here, with the pinned Node and its npm; this exact file is
+      # what publish uploads and npm gets. The filename and SHA256 come from the
+      # stamped pack's own report, never a glob over whatever tarballs happen to
+      # be around. scripts/pack.ts refuses a dirty tree, an uncommitted version
+      # or an unpinned compressor, and writes the full HEAD SHA into the
+      # tarball's manifest. Both matrix systems print the SHA256: the same
+      # commit must print the same value on Linux and macOS.
       - name: Pack the tarball
         id: pack
         run: |
-          filename="$(bun scripts/pack.ts --pack-destination . | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
+          report="$(bun scripts/pack.ts --pack-destination .)"
+          printf '%s\n' "$report"
+          filename="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
+          sha256="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).sha256')"
           test -f "$filename" || { echo "pack reported '$filename', which is not a file" >&2; exit 1; }
           echo "tarball=$filename" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "Reproducible tarball SHA256: $sha256"
+            echo "Compressor: Node $(node --version), zlib $(node -p 'process.versions.zlib')"
+            echo "Tar builder: npm $(npm --version)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # A tarball is public the moment it is published, so nothing in it may
       # carry an internal ticket reference. The same script also checks the
@@ -130,7 +141,7 @@ jobs:
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 22
+          node-version: 22.23.3
           registry-url: https://registry.npmjs.org
 
       # Trusted publishing needs npm 11.5.1 or later; pinned, bump on purpose.

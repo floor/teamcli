@@ -8,7 +8,7 @@ const PINNED = "github.event_name == 'push' && startsWith(github.ref, 'refs/tags
 
 type Context = { eventName: string; ref: string };
 
-type Step = { run?: unknown; uses?: unknown };
+type Step = { run?: unknown; uses?: unknown; with?: Record<string, unknown> };
 
 type Job = {
   if?: unknown;
@@ -61,6 +61,7 @@ function jobPublishes(job: Job): boolean {
 }
 
 const workflow = parseYaml(readFileSync(join(import.meta.dir, '..', '.github', 'workflows', 'release.yml'), 'utf8'));
+const ci = parseYaml(readFileSync(join(import.meta.dir, '..', '.github', 'workflows', 'ci.yml'), 'utf8'));
 
 test("each publishing job's condition is the pinned tag-push expression", () => {
   expect(workflow.on).toEqual({
@@ -96,4 +97,18 @@ test('the verify job packs with the stamped script and checks the stamp against 
   const check = steps.find((step) => typeof step.run === 'string' && step.run.includes('scripts/check-pack.ts'));
   expect(check).toBeDefined();
   expect(check?.run as string).toContain('GITHUB_SHA');
+});
+
+test('both pack workflows run the pinned Node and print the reproducible tarball SHA256', () => {
+  for (const parsed of [workflow, ci]) {
+    const steps = Object.values(parsed.jobs ?? {}).flatMap((job) => job.steps ?? []);
+    const setups = steps.filter((step) => typeof step.uses === 'string' && step.uses.includes('actions/setup-node'));
+    expect(setups.length).toBeGreaterThan(0);
+    for (const setup of setups) expect(setup.with?.['node-version']).toBe('22.23.3');
+
+    const pack = steps.find((step) => typeof step.run === 'string' && step.run.includes('scripts/pack.ts'));
+    expect(pack).toBeDefined();
+    expect(pack?.run as string).toContain('sha256');
+    expect(pack?.run as string).toContain('GITHUB_STEP_SUMMARY');
+  }
 });
