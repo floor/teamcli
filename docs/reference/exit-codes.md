@@ -698,6 +698,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `watch.file-invalid` | `watch` | 2 | the team file can't be parsed | `team watch --file team.yaml` |
 | `watch.invocation` | `watch` | 2 | the invocation can't be read | `team watch extra` |
 | `watch.not-a-repo` | `watch` | 2 | not inside a git repository | `team watch` |
+| `workflow.check.passed` | `workflow` | 0 | the workflow passed validation | `team workflow check workflow.yaml` |
+| `workflow.check.refused` | `workflow` | 1 | at least one finding is a refusal | `team workflow check workflow.yaml` |
+| `workflow.check.file` | `workflow` | 2 | the workflow file can't be read | `team workflow check missing.yaml` |
+| `workflow.check.file-invalid` | `workflow` | 2 | the workflow file can't be parsed as a YAML mapping | `team workflow check workflow.yaml` |
+| `workflow.check.invocation` | `workflow` | 2 | the invocation can't be read | `team workflow check` |
 | `worktree.created` | `worktree` | 0 | the worktree was created | `team worktree new task --kind fix` |
 | `worktree.listed` | `worktree` | 0 | the recorded worktrees were listed | `team worktree list` |
 | `worktree.record-gone` | `worktree` | 0 | the record was removed after the folder was already gone | `team worktree remove task` |

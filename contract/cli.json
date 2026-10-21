@@ -4580,6 +4580,73 @@
         }
       ],
       "hidden": false,
+      "name": "workflow",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "check",
+          "positionals": [
+            {
+              "name": "path",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team workflow check <path> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "checks a workflow definition and its transition graph: read-only, so any seat, CI or the owner may run it"
+          }
+        }
+      ],
+      "usage": [
+        "team workflow check <path> [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "the workflow subcommand group: checking a workflow definition needs no session and no seat"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
       "name": "worktree",
       "positionals": [],
       "subcommands": [

@@ -460,6 +460,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-change',
       why: 'the owner, the orchestrator\'s seat or the operator\'s seat removes a worktree; --session and --file are the owner\'s',
     },
+    workflow: {
+      kind: 'any-caller',
+      why: 'the workflow subcommand group: checking a workflow definition needs no session and no seat',
+    },
+    'workflow:check': {
+      kind: 'any-caller',
+      why: 'checks a workflow definition and its transition graph: read-only, so any seat, CI or the owner may run it',
+    },
   };
   for (const word of READ_SURFACES) {
     gates[word] = {

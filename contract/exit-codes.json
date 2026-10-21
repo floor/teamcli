@@ -4847,6 +4847,41 @@
     },
     {
       "code": 0,
+      "command": "workflow",
+      "id": "workflow.check.passed",
+      "meaning": "the workflow passed validation",
+      "trigger": "team workflow check workflow.yaml"
+    },
+    {
+      "code": 1,
+      "command": "workflow",
+      "id": "workflow.check.refused",
+      "meaning": "at least one finding is a refusal",
+      "trigger": "team workflow check workflow.yaml"
+    },
+    {
+      "code": 2,
+      "command": "workflow",
+      "id": "workflow.check.file",
+      "meaning": "the workflow file can't be read",
+      "trigger": "team workflow check missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "workflow",
+      "id": "workflow.check.file-invalid",
+      "meaning": "the workflow file can't be parsed as a YAML mapping",
+      "trigger": "team workflow check workflow.yaml"
+    },
+    {
+      "code": 2,
+      "command": "workflow",
+      "id": "workflow.check.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team workflow check"
+    },
+    {
+      "code": 0,
       "command": "worktree",
       "id": "worktree.created",
       "meaning": "the worktree was created",
