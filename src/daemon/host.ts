@@ -29,6 +29,7 @@ import type { TeamFile } from '../file/types.ts';
 import { paneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import { runRestoreSweepForRoute, type RestoreSweepResult } from '../launch/restore-sweep.ts';
 import { isSeatId, pidAlive, readState } from '../state.ts';
 import { probeDaemonSocket, startSendDaemon, realDaemonHost, type DaemonHost, type SendDaemonHandle } from '../send/daemon.ts';
 import { formatDaemonResponse, parseDaemonRequest, answerDaemonRequest, DAEMON_FRAME_LIMIT, DAEMON_PROTOCOL_VERSION, type DaemonErrorCode, type DaemonHealthSnapshot, type DaemonRequest, type DaemonResponse, type DaemonRootHealthSnapshot } from './protocol.ts';
@@ -219,6 +220,15 @@ export type StartMachineDaemonInput = {
   nextHandler?: NextDispatchHandler;
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
+  /**
+   * The daemon-start restore sweep: after the sockets, routes, state record and
+   * shutdown machinery are wired, one guarded pass per canonical route repairs the seats its
+   * recorded session lost. On by default, because a host restart is exactly when it is needed;
+   * `false` turns it off, and a function replaces the runner for a test that must observe the
+   * schedule without launching. A route with no recorded seats, or whose session is not running,
+   * is skipped, and the sweep never cold-starts a team.
+   */
+  restoreSweep?: boolean | ((root: string, teamFile: string) => Promise<RestoreSweepResult>);
 };
 
 export type StartMachineDaemonResult =
@@ -423,6 +433,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   }[] = [];
   const presenceRuns = new Map<string, Promise<void>>();
   const presenceLogged = new Set<string>();
+  /** The one-flight daemon-start restore sweep. `closeOnce` drains it beside the presence
+   *  passes; the sweep reads the daemon's closing flag to stop between seat steps. */
+  let restoreSweepRun: Promise<void> | null = null;
   // The hosted send server may take a delivery while this start is still wiring the presence
   // answers. Until the verdict helper below exists the per-seat answer is false, which holds
   // typing instead of reading a helper that is not initialised yet.
@@ -1624,8 +1637,14 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     // Presence drain: the in-flight pass of each route (an ingester step and the activity write
     // that follows it) finishes, then every ingester's own truthful close. No timeout races the
-    // teardown: a write that cannot finish is the honest reason ownership is not released.
-    await Promise.allSettled([...presenceRuns.values()]);
+    // teardown: a write that cannot finish is the honest reason ownership is not released. The
+    // restore sweep is part of the same drain: its closing flag stopped it between seat steps
+    // (or cut a seat's wait), the stop pass closed what that run made, and ownership is released
+    // only after the tracked run settles.
+    await Promise.allSettled([
+      ...presenceRuns.values(),
+      ...(restoreSweepRun === null ? [] : [restoreSweepRun]),
+    ]);
     // Source pumps are part of the same drain: their steps were already cancelled in the
     // admission block, and no new pump starts once `closed` is set. A pump that still cannot
     // finish keeps its route unsettled below, exactly as a non-quiesced source close does.
@@ -1699,6 +1718,52 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     closeRun = run;
     return run;
   };
+
+  // The daemon-start restore sweep: after the sockets, canonical routes, state
+  // record and shutdown machinery are wired, one guarded pass per accepted route repairs the
+  // seats its recorded session lost. It is never awaited here, so readiness does not wait on a
+  // launch; `closeOnce` drains the tracked run, and the run's own `isClosing` stops it between
+  // seat steps. Only canonical routes are swept: raw input roots can repeat, name a folder with
+  // no accepted route, or differ in spelling from the route's own root.
+  if (input.restoreSweep !== false && routes.length > 0) {
+    const runner = typeof input.restoreSweep === 'function'
+      ? input.restoreSweep
+      : (root: string, teamFile: string) =>
+          runRestoreSweepForRoute({ home, root, teamFile, now, isClosing: () => closed });
+    restoreSweepRun = (async (): Promise<void> => {
+      for (const route of routes) {
+        if (closed) return;
+        const teamFile = teamFiles.get(route.root);
+        if (teamFile === undefined) continue;
+        try {
+          const result = await runner(route.root, teamFile);
+          if (result.kind === 'ran') {
+            appendDaemonLog(home, `restore ${route.root}: ${result.summary.line}`, now());
+          } else if (result.kind === 'lock-held') {
+            appendDaemonLog(home, `restore ${route.root}: another session-mutating run holds the session; skipped`, now());
+          } else if (result.kind === 'not-running') {
+            appendDaemonLog(home, `restore ${route.root}: the session is ${result.state ?? 'unreadable'}; skipped`, now());
+          } else if (result.kind === 'unreadable') {
+            appendDaemonLog(home, `restore ${route.root}: ${result.reason}`, now());
+          } else if (result.kind === 'refused') {
+            const detail = result.detail === undefined ? '' : `: ${result.detail}`;
+            appendDaemonLog(home, `restore ${route.root}: the run exited ${String(result.exit)} before it planned a seat${detail}`, now());
+          }
+        } catch (error) {
+          appendDaemonLog(home, `restore ${route.root}: ${messageOf(error)}`, now());
+        }
+      }
+    })().catch((error: unknown) => {
+      // The loop above already logs each route's failure; this catches the log write itself (or
+      // anything outside the loop), so the tracked run never rejects into an unhandled rejection
+      // that could bring the daemon down. Serving must not depend on the sweep's bookkeeping.
+      try {
+        appendDaemonLog(home, `restore: ${messageOf(error)}`, now());
+      } catch {
+        // The log is unavailable too; there is nowhere left to say it.
+      }
+    });
+  }
 
   return {
     kind: 'serving',

@@ -175,7 +175,7 @@ describe('parallel launch window boundaries', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 2 });
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['a'] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['a'], restoreBuckets: [] });
     expect(t).toBe(30000);
     // a and b took the two slots at once; c entered only after b settled, d only after c and
     // while a still held its own slot to the deadline. With a's slot held throughout, that
@@ -246,7 +246,7 @@ describe('parallel launch window boundaries', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 2 });
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['b'] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['b'], restoreBuckets: [] });
     // b got no workspace at all; the same window pass took c in its place, and d entered as soon
     // as one of the two waiting seats settled.
     expect(events).toEqual([
@@ -316,7 +316,7 @@ describe('parallel launch window boundaries', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 4 });
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['b'] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: ['b'], restoreBuckets: [] });
     // The failed launch closed no workspace — not b's own, and never another seat's.
     expect(closed).toEqual([]);
     // a and c were launched in the same first pass; b's failure pushed neither aside.
@@ -382,7 +382,7 @@ describe('parallel launch window boundaries', () => {
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 4 });
     // The run says what it could not do, and b is the only seat it gave up on.
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: true, dropped: ['b'] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: true, dropped: ['b'], restoreBuckets: [] });
     expect(closed).toEqual(['b-ws']);
     expect(out.join('')).toBe(
       'a: ready\nb: left out: vendor notice; its workspace did not close; left as it is\nc: ready\n',
@@ -444,7 +444,7 @@ describe('parallel launch window boundaries', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 8 });
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [], restoreBuckets: [] });
     // Every seat settled before the run's end — d and e settled well before a — yet not one
     // line reached stdout ahead of the first seat in the file.
     expect(outWhen.map((entry) => entry.seat)).toEqual(['e', 'd', 'c', 'b', 'a']);
@@ -504,7 +504,7 @@ describe('parallel launch window boundaries', () => {
     };
 
     const report = await executePlan(plan, 'acme', host);
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [], restoreBuckets: [] });
     // No seat's create ran until the seat before it had settled: a's whole launch, then b's,
     // then c's, in file order with no interleaving. Each pane is named at create now, so its
     // rename event comes before its own launch.

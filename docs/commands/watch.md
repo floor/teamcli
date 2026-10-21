@@ -658,6 +658,7 @@ claude-keeper: ready
 claude-beacon: ready
   already ready; left as it is
 watch: started
+0 seats repaired, 0 skipped (working), 0 refused
 exit 0
 $ team watch ; echo "exit $?"
 team watch: a watch already runs for the session "beacon" (pid 4242)

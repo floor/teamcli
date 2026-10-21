@@ -182,7 +182,7 @@ describe('parallel launch execution', () => {
     };
 
     const report = await executePlan(plan, 'acme', host, { concurrency: 8 });
-    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [] });
+    expect(report).toEqual({ serverFailed: false, watchFailed: false, held: false, dropped: [], restoreBuckets: [] });
 
     // All 6 seats complete in 6 s (3 shared polls of 2 s), well under 10 s, instead of 36 s.
     expect(t).toBe(6000);
