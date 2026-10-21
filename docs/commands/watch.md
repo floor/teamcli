@@ -67,7 +67,9 @@ readings and the money the spend checks read), `.agents/team.log` (every line it
 owner's mailbox `.agents/messages/owner/` when this watch is the owner's delivery path (one signed
 record per event delivered to the owner, at once or as the pass's digest), the direct send's
 signed record and its transport marker under `.agents/send-drops/<session>/<seat>/` when the
-dispatcher pushes an idle seat, and, through herdr: the typed line and its Enter — a pause
+dispatcher pushes an idle seat, the unread report's signed drop under
+`.agents/send-drops/<session>/<lead>` when a message stays unread past twice the window, and,
+through herdr: the typed line and its Enter — a pause
 notice's line naming its drop, a held send's retry, the unread wake, or the ring — and the seats'
 sidebar lines — the workspace title from the file, and the
 display line from the file and the pane's
@@ -201,7 +203,7 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> has been idle for <n> minutes` | quiet for `watch.idle_first` since its last turn (reported to its lead once per idle period; repeated every `watch.idle_repeat` when set) |
 | `<seat> has been idle for <n> minutes — reported to the owner` (or `… since the watch started — reported to the owner`) | the same idle period, quiet for `watch.idle_owner`: said once per idle period, and it is the owner's |
 | `every agent is idle` | every seat that is not the orchestrator, the operator or parked, quiet for `watch.team_idle` |
-| `<seat> runs <model> <version>; the file says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the seat's `display` spelling) | the running model or version is not the file's. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
+| `<seat> runs <model> <version>; the registry says <declared>: it signs with the wrong model — <repair>` (`<declared>` is the model and version the seat's signed registry record keeps) | the running model or version is not the one the seat's signed registry record keeps; the team file is only the roster projection and is not read as a fallback here, so a seat with no signed record has no baseline in this check and is not reported. `<repair>` is `team remove <seat> --keep, then team add <seat>`; a lead is not removed, so it is `team down, then team up` (to restart the whole team). The watch does not start the seat |
 | `<seat>: declares vendor <vendor>, which the entity model rule <rule> refuses; <action>` | the entity's model rule (Policies rule 10) refuses the vendor the seat's file declares. `<action>` is `a swap to <cli> <model> <version> from <team>/<seat> is proposed`, or the reason no recipe is proposed; the swap is queued with `team swap queue <seat>`. The same breach is a `team check` difference in this team; a rule that cannot be read is said once to the owner, and no breach is judged |
 | `<name> (<pane>) is running and is not in the file` | an agent in the session no seat claims, a workspace labelled `Watch · <project>` aside |
 | `<name> (<pane>) runs <model> <version>, of the lab <lab>, which the entity model rule <rule> refuses for an unclaimed seat — reported, never closed` | an agent in the session no seat claims, whose screen names a model of a lab the rule's `*` entry refuses for a pane no seat answers for. Reported to its lead and by `team check`, and never closed: the pane may be doing work someone started by hand. Only a model a shipped profile reads is judged; an unread pane is the plain extra report |
@@ -318,7 +320,7 @@ what it did instead. The lines around them:
 | `<seat>: a held send from <from> was sent on retry (trigger taken, no read receipt yet)` / `<seat>: an inbox send from <from> was sent on retry (trigger taken, no read receipt yet)` | this pass typed the drop's trigger line and sent it: a held send once the box was free, or an inbox message still unread past its ten-minute fallback window; the history records `sent (unconfirmed)`, never a read; when the retry moved an unsent draft, its receipt follows on the same line (`; the unsent text was pasted back`, or `; the unsent text could not be put back; its copy is at <path>`) and in the history note |
 | `<seat>: a held send from <from> was read on retry (receipt)` / `<seat>: an inbox send from <from> was read on retry (receipt)` | the retry's line is the seat's own `team drops --read`, and its signed receipt landed inside the retry's window: the history records `delivered (read)`, the marker is cleared, and nothing is ever typed again |
 | `<seat>: a message from <from> was unread and one wake line was sent (trigger taken, no read receipt yet)` / `<seat>: a message from <from> was unread and was read on the wake (receipt)` | a message still without a signed receipt `watch.unread_after` after it landed (ten minutes by default): the pass typed the seat's own drop read — the same `Run team drops --read --seat <seat> --session <session> and do that.` a retry types — into a free box; the history records `sent (unconfirmed)` with `trigger taken, no read receipt yet`, or `delivered (read)` when the signed receipt verifies; a draft the wake moved is pasted back, as a retry's is |
-| `<seat>: a message from <from> was still unread after <n> min; reported to <sender> and <lead>` / `<seat>: a message from <from> was still unread after <n> min; reported to <lead> only: the sender's own mailbox could not be resolved (<why>)` | the message is still unread at twice `watch.unread_after`: one signed Runtime mailbox record per target — its sender's own, resolved through the signed record's agent id and this home's agent and team registries (the owner's own for the owner's messages), and the team's lead — is written under `.agents/messages/`, and `team messages` lists it; nothing is typed, so `--no-nudge` writes it too. A sender the registries cannot pin to one team, seat and session is never routed by name: the record goes to the lead alone, and the line and the record carry the reason |
+| `<seat>: a message from <from> was still unread after <n> min; reported to <sender> and <lead>` / `<seat>: a message from <from> was still unread after <n> min; reported to <lead> only: the sender's own mailbox could not be resolved (<why>)` | the message is still unread at twice `watch.unread_after`: its sender gets one signed Runtime mailbox record under `.agents/messages/`, resolved through the signed record's agent id and this home's agent and team registries (the owner's own for the owner's messages), which `team messages` lists; the team's lead gets one signed send-drop under `.agents/send-drops/<session>/<lead>`, which `team drops --read` serves — never a keystroke into a pane. Nothing is typed, so `--no-nudge` writes both too. A sender the registries cannot pin to one team, seat and session is never routed by name: only the lead's drop is written, and the line and the drop carry the reason |
 | `<seat>: a held send from <from> was not delivered (<why>); the drop file is at <path>; send it again` (the word is `an inbox send` for the fallback) | the retry's bound ended — three typed tries, thirty minutes, a trigger that would not fit in a pane, or a drop file moved away — and the message waits where the line names it |
 | `the watch's pane is gone; the watch ends with it` | the pane this watch recorded is no longer in the session; the watch stops, and the stopped line follows |
 | `the watch of "<session>" stopped` | the last line, on Ctrl-C or a stop signal |
@@ -347,10 +349,12 @@ interrupted is never typed a second time, a wake the box held or did not submit 
 reservation back so a later pass may type it, and one whose delivery reached the pane but could
 not be confirmed keeps it, because the attempt is spent. The wake records `sent (unconfirmed)`
 until a signed receipt verifies, never a read before one. At twice `watch.unread_after` a message
-still unread is reported once to its sender and to the team's lead as a signed Runtime mailbox
-record — never by typing into a pane — after a report reservation of its own, so a crash between
-the record and its marker neither drops the report nor writes it twice, and a mailbox already
-holding the record is left byte for byte. The words keep the states apart: a wake that was typed
+still unread is reported once: a signed Runtime mailbox record for its sender under
+`.agents/messages/`, and a signed send-drop for the team's lead under
+`.agents/send-drops/<session>/<lead>` that `team drops --read` serves — never by typing into a
+pane — after a report reservation of its own, so a crash between a report and its marker neither
+drops it nor writes it twice, and a record or drop already there is left byte for byte. The
+words keep the states apart: a wake that was typed
 says when its line was sent, one whose attempt was interrupted says it was reserved at that
 instant and its outcome is unconfirmed, and one never attempted says no wake line was typed.
 `--no-nudge` skips the wake but still writes the report.
