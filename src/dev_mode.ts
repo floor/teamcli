@@ -15,7 +15,7 @@
 // root strictly contains the target's, whose file names the same entity and makes the caller its
 // orchestrator, in that team's own session. The second is what admits the main orchestrator
 // across teams: it runs a project team's command from the main team's session, where its own
-// approved file and state place it. A lead outside that scope — a sibling team's, another
+// team file and state place it. A lead outside that scope — a sibling team's, another
 // entity's — is no admission. The role alone is never the proof: the caller must be placed on
 // the pane its own team's state records for it, in that team's session. Swap guards, load
 // guards, the public-action refusals and every other owner gate are untouched; with dev mode
@@ -258,7 +258,7 @@ export function devModeState(io: Pick<Io, 'env'>, context: DevModeContext = {}):
  *  target team's own file is asked first; a lead the registry places in another team (the main
  *  orchestrator, above the project teams) is admitted too, because the command it runs may
  *  belong to any team. Any other seat, the operator included, is no admission: the file names
- *  exactly one lead, and the registry silently mirrors it, so the approved file — not a possibly
+ *  exactly one lead, and the registry silently mirrors it, so the team file — not a possibly
  *  stale derived record — is what the gate reads. */
 export type DevModeOwnerRole = 'orchestrator';
 

@@ -163,7 +163,7 @@ function readySeat(team: TeamFile, root: string, input: SliceInput): { ok: true;
 
 /**
  * Who may record an install: the owner, or the one seat the file designates, on its recorded
- * pane, while that designation is the approved one or dev mode is on at this team's place. A
+ * pane, while that designation has been approved or dev mode is on at this team's place. A
  * designation the owner has not approved — a hand edit since the last approval, or no approval in
  * force at all — admits nobody but the owner: the file cannot make itself an installer. Under
  * dev mode the live file's validated designation stands instead, and the admission is logged with

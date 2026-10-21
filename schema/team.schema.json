@@ -613,7 +613,7 @@
               "hold",
               "refuse"
             ],
-            "$comment": "the seat accepts cross-session socket frames: accept makes it eligible for the socket leg, and a send also needs the receiving launch itself to declare crossSessionInbound accept; hold and refuse never dial it"
+            "$comment": "the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch's crossSessionInbound accept, and any other launch still needs accept here"
           },
           "count": {
             "type": "integer",

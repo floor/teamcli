@@ -55,7 +55,7 @@ describe('what limits a key', () => {
 describe('defaults and application', () => {
   test('the delivery order falls back to the release order', () => {
     expect(CONFIG_REGISTRY.delivery_order.fallback).toEqual(DELIVERY_ORDER.fallback);
-    expect(CONFIG_REGISTRY.delivery_order.fallback).toEqual(['mcp-inbox', 'drop', 'typed']);
+    expect(CONFIG_REGISTRY.delivery_order.fallback).toEqual(['mcp-inbox', 'typed', 'drop']);
   });
 
   test('human falls back to false, and effort, nickname and model have no fallback', () => {
