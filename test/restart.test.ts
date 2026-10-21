@@ -1061,6 +1061,49 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('has a process in its old pane that is not the signed seat; left as it is');
   });
 
+  test('--abandon replaces a doubt pane herdr names on the recorded pane, without typing', async () => {
+    // The live reviewer shape: herdr names the seat on its recorded pane, the pids are not the
+    // launched ones, and no recorded session can prove what came back. The caller's own
+    // `--abandon` takes the pane: it is closed without a key, and the launcher starts a fresh one.
+    const { fixture, run } = seeded({ registry: 'ses_codex', declaredCli: 'codex', workerSession: 'ses_other', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.screenText = (_session, pane) => (pane === 'pane-old' ? CODEX_OLD_IDLE : CODEX_NEW_IDLE);
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--abandon'], io, run.sources)).toBe(0);
+    expect(run.did.typed).toEqual([]);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
+    expect(io.err).toBe('');
+  });
+
+  test('--abandon still leaves a doubt pane herdr does not name as this seat', async () => {
+    // The process on the recorded pane is not tied to the seat by herdr, so even the explicit
+    // flag has nothing to take: closing it could end a stranger's turn.
+    const { fixture, run } = seeded({ registry: 'ses_codex', declaredCli: 'codex', workerSession: 'ses_other', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.agents = () => [{
+      name: 'worker', agent: 'codex', pane: 'pane-else', workspace: 'ws-else', status: 'idle', cwd: fixture.root, session: 'ses_other',
+    }];
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--abandon'], io, run.sources)).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(io.err).toContain('has a process in its old pane that is not the signed seat; left as it is');
+  });
+
+  test('the plain refusal names --abandon when herdr names the seat on the recorded pane', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_codex', declaredCli: 'codex', workerSession: 'ses_other', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker', '--json'], io, run.sources)).toBe(1);
+    const doc = JSON.parse(io.out) as { error: { id: string; repair: string | null } };
+    expect(doc.error.id).toBe('restart.replaced');
+    expect(doc.error.repair).toBe('team restart worker --abandon');
+  });
+
   test('a state naming another session is never resumed, and the run says why', async () => {
     const { fixture, run } = seeded({ registry: 'ses_keep', state: 'ses_other' });
     const io = testIo(fixture.root, { kind: 'owner' });

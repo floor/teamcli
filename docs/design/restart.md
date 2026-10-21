@@ -66,6 +66,11 @@ Before typing an exit sequence or closing a live pane, `team restart` checks `se
   ```
   team restart: <seat> has a process in its old pane that is not the signed seat; left as it is
   ```
+  The `--json` refusal's `repair` names `team restart <seat> --abandon` when herdr still names
+  the seat on the recorded pane. With that flag the run closes the pane's workspace without
+  typing into it — no exit text, no key, no draft — and relaunches the seat in a fresh
+  workspace through its launcher. A `replaced` pane herdr does not name as this seat is refused
+  with or without the flag.
 
 ### Safe states vs busy states
 
