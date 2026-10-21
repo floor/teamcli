@@ -86,7 +86,10 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   `owner` alone and delivered at once, and they are not privileged — the command's caller rule,
   not a subscription ban, is what keeps the line the lead's. A refusal carries its rule and its
   object — the record id, the seat, the path — and never the refused content; the producer raises
-  one event per rule and object in an hour and counts the repeats in `.agents/team.log`.
+  one event per rule and object in an hour and writes one `.agents/team.log` line for that first
+  occurrence. A repeat the event log confirms in the same window raises no second event and
+  writes no second line; when the store cannot answer, the line is the fallback, bounded per
+  checkout and process so a broken store cannot relay a loop.
 - **Recipients and how a seat is named**: a kind's recipients are positions — `lead` (the
   orchestrator's seat and every seat marked `leads`), `operator`, `sender` and `subject` (the
   record's own fields), `entity` (the lead of the entity's own team, the one whose `project` is the

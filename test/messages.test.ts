@@ -211,7 +211,8 @@ difference: lead/m1 does not verify: the signature is not the message key's
     });
     expect(JSON.stringify(refused[0]!.payload)).not.toContain(BODY);
 
-    // The same refusal in the same window is counted in the log, not raised again.
+    // The same refusal in the same window is not raised again, and writes no second log line:
+    // the first occurrence is the one the operational log carries.
     const again = await run();
     expect(again.code).toBe(1);
     const later = readEvents('acme', root, home);
@@ -219,7 +220,7 @@ difference: lead/m1 does not verify: the signature is not the message key's
     if (!later.ok) return;
     expect(later.events.filter((event) => event.payload.kind === 'record.invalid')).toHaveLength(1);
     const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
-    expect(log.split('\n').filter((line) => line.includes('refusal [lead] record.invalid signature')).length).toBe(2);
+    expect(log.split('\n').filter((line) => line.includes('refusal [lead] record.invalid signature')).length).toBe(1);
   });
 
   test('a copy under a new id does not verify', async () => {

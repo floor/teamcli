@@ -90,8 +90,13 @@ root, session, at}, signature}` at `<id>.read.json`, signed with the same messag
 module answers for the inbox, `team drops`, `team messages` and the watch, and each verifies the
 receipt rather than trusting the file's presence. A file that is not a signed record, or whose
 signature does not verify, is refused with a tool error and no receipt: a receipt never proves a
-read of something the server could not authenticate. It says the seat *read* the message, not
-that it acted on it. So:
+read of something the server could not authenticate. A plain-text drop an earlier build wrote is
+one such file: `inbox_check` does not list it, and a read of it answers the same tool error and
+writes no receipt, but it raises no refusal event to the owner — it is not a record anything could
+have admitted, and listing it every turn would only repeat the refusal. A regular file that opens
+as a record keeps both the refusal and the event, however it fails; a link, a FIFO or a directory
+at a drop's name never reaches that read — the answer is a tool error with no receipt and no
+refusal event. It says the seat *read* the message, not that it acted on it. So:
 
 - a receipt is `delivered (read)`, in the console, the JSON, the history and `team feed`;
 - no receipt is `sent (unconfirmed)`, with the drop kept;
