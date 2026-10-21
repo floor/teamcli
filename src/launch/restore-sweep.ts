@@ -1,4 +1,4 @@
-// The daemon's restore sweep for one hosted route (FLO-1061 item 4): after a host restart the
+// The daemon's restore sweep for one hosted route: after a host restart the
 // daemon runs the same guarded pass `team up` runs, once per accepted route, without ever
 // cold-starting a team that was never up or was deliberately `team down`'d.
 //
