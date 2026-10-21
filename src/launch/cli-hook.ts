@@ -336,13 +336,41 @@ function ensureFolder(path: string): boolean {
   return held.isDirectory() && mine(held) && (held.mode & 0o777) === 0o700;
 }
 
+/** Whether the file already holds exactly this text, read without following a link. False on
+ *  every fault, and on any byte the write would change. */
+function holdsText(path: string, text: string): boolean {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | NOFOLLOW);
+  } catch {
+    return false;
+  }
+  try {
+    const wanted = Buffer.from(text, 'utf8');
+    const buffer = Buffer.alloc(wanted.length + 1);
+    const read = readSync(fd, buffer, 0, buffer.length, 0);
+    return read === wanted.length && buffer.subarray(0, read).equals(wanted);
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Writes one settings file without following a link: the name may hold this user's regular
  *  file or nothing at all, the open carries `O_NOFOLLOW`, and the mode is set on the descriptor
  *  so an existing wider file comes out `0600`. False on every fault — the seat then launches
- *  without the flag, exactly as it does today. */
+ *  without the flag, exactly as it does today.
+ *
+ *  A file already holding this text at `0600` is left untouched. Its mtime is the seat's
+ *  `declaredAt` (`src/send/inbound.ts` compares it with a running seat's socket), so a rewrite
+ *  of identical bytes would make a live session look stale — the fault `up` hit when it
+ *  installed hooks for every seat, launched or not. A real change, a fresh launch's new
+ *  binding, or a wider mode is still written. */
 function writeSettings(path: string, text: string): boolean {
   const held = lstatOrNull(path);
   if (held !== null && (!held.isFile() || !mine(held))) return false;
+  if (held !== null && (held.mode & 0o777) === 0o600 && holdsText(path, text)) return true;
   let fd;
   try {
     fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | NOFOLLOW, 0o600);
