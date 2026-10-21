@@ -12,6 +12,8 @@ import type { Seat, TeamFile } from '../src/file/types.ts';
 import { rulesOf } from '../src/launch/rules.ts';
 import { rulesFileHash, rulesFilePathOf, writeRulesFile } from '../src/launch/rules-file.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
@@ -1071,7 +1073,9 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(readable.out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
     expect(readable.out).toContain(
       'difference: codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol; the process in its pane is not the one team launched\n' +
-        '  repair: team restart codex-acme\n' +
+        // Herdr still names the seat on the pane the state recorded, so the repair is the form
+        // that really takes that process: `--abandon`, never a plain restart that would refuse.
+        '  repair: team restart codex-acme --abandon\n' +
         "  who: the team's lead\n",
     );
     expect(readable.out).not.toContain('note: codex-acme: its pane runs');
@@ -1123,6 +1127,92 @@ describe('a pane that no longer holds the process team launched', () => {
     expect(out).toMatch(/codex-acme\s+idle/);
   });
 
+  // The registry record's own binding is the proof of continuity where a seat has one: a state
+  // written before the session was recorded names none, and the pane is still recognized. A
+  // record that is not this seat's own — another session, another CLI — refuses, and the state
+  // copy that would have agreed is never allowed to overrule it.
+  describe('the registry record proves the pane', () => {
+    afterEach(() => {
+      delete sources.home;
+    });
+
+    /** The pane scene every case here shares: `codex-acme`'s recorded launch, and a process in
+     *  its pane that is not the launched one, under the session herdr reports. */
+    function replacedPane(liveSession: string) {
+      return built().agents.map((one) => one.name === 'codex-acme' ? { ...one, session: liveSession } : one);
+    }
+
+    function registerRecord(fields: { cli?: string; agentSession: string }) {
+      const home = join(dir, 'home');
+      mkdirSync(home, { recursive: true });
+      sources.home = home;
+      registerAgent(home, {
+        name: 'codex-acme',
+        signing: { model: 'GPT Sol', version: '6', role: 'builder' },
+        lab: 'openai',
+        cli: fields.cli ?? 'codex',
+        launcher: null,
+        launch: 'codex -m gpt-6-sol -c model_reasoning_effort=high',
+        reach: {
+          team: teamIdOf(dir),
+          seat: 'codex-acme',
+          session: 'acme-web',
+          pane: 'w2:p1',
+          address: null,
+          agent_session: fields.agentSession,
+        },
+        mcp: [],
+        skills: [],
+        lifecycle: 'running',
+        by: 'team up',
+      });
+    }
+
+    test('the state naming no session is recognized from the record alone', async () => {
+      recordCodex();
+      registerRecord({ agentSession: 'kept' });
+      live = {
+        ...built(),
+        agents: replacedPane('kept'),
+        processes: { 'w2:p1': { shell: 500, foreground: [501] } },
+      };
+      const { out } = await status();
+      expect(out).not.toMatch(/codex-acme\s+restored, not launched by team/);
+      // The home turns the rules-file reading on, so other differences may appear; what must not
+      // is one tying this pane to the launch.
+      expect(out).not.toContain('difference: codex-acme: its pane holds a process this record cannot tie to the launch');
+      expect(out).toMatch(/codex-acme\s+idle/);
+    });
+
+    test('a state copy that agrees with the pane does not overrule a record that disagrees', async () => {
+      // The state says `kept`, which is what herdr reports; the record says `other`. The two
+      // team-owned records disagree, so nothing ties the pane to the launch.
+      recordCodex({ agent_session: 'kept' });
+      registerRecord({ agentSession: 'other' });
+      live = {
+        ...built(),
+        agents: replacedPane('kept'),
+        processes: { 'w2:p1': { shell: 500, foreground: [501] } },
+      };
+      const { out } = await status();
+      expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
+      expect(out).toContain('difference: codex-acme: its pane holds a process this record cannot tie to the launch');
+    });
+
+    test('a record that ran another CLI refuses, even under a state copy that agrees', async () => {
+      recordCodex({ agent_session: 'kept' });
+      registerRecord({ agentSession: 'kept', cli: 'claude-code' });
+      live = {
+        ...built(),
+        agents: replacedPane('kept'),
+        processes: { 'w2:p1': { shell: 500, foreground: [501] } },
+      };
+      const { out } = await status();
+      expect(out).toMatch(/codex-acme\s+restored, not launched by team\s+-\s+w2:p1/);
+      expect(out).toContain('difference: codex-acme: its pane holds a process this record cannot tie to the launch');
+    });
+  });
+
   test('a restored launcher is named, and nothing starts the seat', async () => {
     updateState(join(dir, '.agents'), (state) => {
       const session = (state.sessions['acme-web'] ??= emptySession());
@@ -1169,7 +1259,8 @@ describe('a pane that no longer holds the process team launched', () => {
     // The registry signing is authoritative; the pane's Claude Code footer is the running model.
     expect(out).toContain(
       'difference: deepseek-acme runs Claude Opus 5.5; the file says DeepSeek V4.1 Flash; its launch line starts a launcher; the process in its pane is not the one team launched\n' +
-        '  repair: team restart deepseek-acme\n' +
+        // The same pane the state recorded: `--abandon` is the restart that runs here.
+        '  repair: team restart deepseek-acme --abandon\n' +
         "  who: the team's lead\n",
     );
     expect(out).not.toContain('team down, then team up');

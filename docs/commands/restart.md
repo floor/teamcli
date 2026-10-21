@@ -37,7 +37,7 @@ the restart goes on; [`team check`](check.md) names the seat.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--abandon` | — | close the workspace of a stuck seat without typing into its pane; a seat caller cannot abandon a `working` seat or a lead seat |
+| `--abandon` | — | close the workspace of a stuck seat without typing into its pane, and replace a `replaced` pane herdr still names as the seat; a seat caller cannot abandon a `working` seat or a lead seat |
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
@@ -120,8 +120,18 @@ agents: all
 A seat mid-turn is not interrupted — its work would be lost — and `restart` says which state it was
 in. If the pane host restored the process under a new pid, `restart` treats it as the same seat only
 when herdr still names that seat on the recorded pane and the live conversation id matches the
-agent registry's recorded `reach.agent_session`; it then resumes that recorded conversation through
-the seat's launch line. A different or unreadable conversation remains refused:
+agent registry's recorded `reach.agent_session`. The registry record is the proof on its own: a
+state file written before the id was recorded is no bar to recognizing the seat, and no bar to
+resuming it either. The seat is then relaunched with that recorded conversation through its
+launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `codex … resume
+<id>`; a CLI with no measured resume form, or a state that names another id, is relaunched
+without one, and a conversation that differs or cannot be read remains refused (`<seat> has a
+process in its old pane that is not the signed seat; left as it is`, exit 1).
+
+That refusal's `--json` `repair` names `team restart <seat> --abandon` when herdr still names
+the seat on the recorded pane. With the flag the run closes that pane's workspace without typing
+into it — the conversation there is not this run's to answer — and launches the seat again in a
+fresh workspace. A pane herdr does not name as the seat is refused with or without the flag.
 
 ```console screens="claude-beacon=working"
 $ team restart claude-beacon ; echo "exit $?"

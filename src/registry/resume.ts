@@ -5,7 +5,7 @@
 // agent, seat, team, CLI and id: a record that does not is foreign or stale, and no resume is
 // offered from it. No CLI home, transcript, credential or session file is read here.
 import type { SeatState } from '../state.ts';
-import { findAgent } from './agents.ts';
+import { findAgent, type Agent } from './agents.ts';
 import { teamIdOf } from './teams.ts';
 
 /** A recorded resume id is one token: `withResume` appends it to the launch line unquoted, so
@@ -72,6 +72,112 @@ export function recordedSeatSession(input: {
   seat: { name: string; cli: string };
   state: SeatState | undefined;
 }): RecordedSeatSessionRead {
+  const read = readSeatBinding(input);
+  if (read.kind !== 'bound') return read;
+  // A resume writes the id into a new launch line: the state copy must name it too, so a
+  // record the launch did not write is never resumed. Continuity reads the binding directly.
+  if (!read.stateAgrees) return { kind: 'none', why: 'the seat state names no agent session' };
+  return { kind: 'bound', recorded: recordedOf(read) };
+}
+
+/**
+ * The registry's binding of a seat to its conversation, for continuity of a process already in
+ * the seat's pane — never for a resume. The checks are {@link recordedSeatSession}'s, with one
+ * difference: a seat state that names no session does not withhold the registry's id, because a
+ * restored pane is proven by the live agent's session equalling the recorded one, not by the
+ * launch line this run would write. A state naming another id still refuses: the two records
+ * disagree, and neither is allowed to speak for the seat.
+ *
+ * A CLI that cannot carry one in a measured form (every profile but the ones
+ * {@link withResume} knows) has no resume id at all; this reader is what lets a restart
+ * recognize its restored pane anyway.
+ */
+export function recordedSeatContinuity(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seat: { name: string; cli: string };
+  state: SeatState | undefined;
+}): RecordedSeatSessionRead {
+  const read = readSeatBinding(input);
+  if (read.kind !== 'bound') return read;
+  return { kind: 'bound', recorded: recordedOf(read) };
+}
+
+/**
+ * The id a pane may be compared with, for continuity: the registry's bound id when the record is
+ * this seat's own, the state's copy when there is no record at all, and nothing when a record
+ * exists but is not this seat's — a record naming another session than the state does, another
+ * herdr session, another CLI, or an orphaned one is a doubt, and the state's copy is not allowed
+ * to overrule it. `null` is a refusal: the caller treats the pane as not tied to the launch.
+ */
+export function continuityIdOf(read: RecordedSeatSessionRead, state: SeatState | undefined): string | null {
+  if (read.kind === 'bound') return read.recorded.sessionId;
+  if (read.kind === 'refused') return null;
+  const own = state?.agent_session;
+  return own === undefined || own === '' ? null : own;
+}
+
+/** One continuity id per declared seat, read the way `up`, `status` and the watch read a pane:
+ *  the registry's binding where it exists, the state's own copy where no record does. */
+export function continuityIdOfSeat(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seat: { name: string; cli: string };
+  state: SeatState | undefined;
+}): string | null {
+  return continuityIdOf(recordedSeatContinuity(input), input.state);
+}
+
+/** {@link continuityIdOfSeat} for every declared seat of one session's state. */
+export function continuityIdsOf(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seats: readonly { name: string; cli: string }[];
+  states: Readonly<Record<string, SeatState | undefined>>;
+}): Map<string, string | null> {
+  const ids = new Map<string, string | null>();
+  for (const seat of input.seats) {
+    ids.set(seat.name, continuityIdOfSeat({
+      home: input.home,
+      root: input.root,
+      herdrSession: input.herdrSession,
+      seat,
+      state: input.states[seat.name],
+    }));
+  }
+  return ids;
+}
+
+/** The session one seat's pane may be compared with: the map's own verdict when the seat is in
+ *  it (`null`: the records refuse), else the caller's fallback — a temporary seat's state copy,
+ *  or a run that read no registry. */
+export function continuitySessionOf(
+  ids: ReadonlyMap<string, string | null> | undefined,
+  seat: string,
+  fallback: string | undefined,
+): string | undefined {
+  if (ids === undefined) return fallback;
+  const id = ids.get(seat);
+  if (id === null) return undefined;
+  return id ?? fallback;
+}
+
+/** The binding both readers agree on, with the state's own copy still undecided. */
+type SeatBindingRead =
+  | { kind: 'bound'; agent: Agent; id: string; stateAgrees: boolean }
+  | { kind: 'none'; why: string }
+  | { kind: 'refused'; why: string };
+
+function readSeatBinding(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seat: { name: string; cli: string };
+  state: SeatState | undefined;
+}): SeatBindingRead {
   const team = teamIdOf(input.root);
   const agent = findAgent(input.home, {
     team,
@@ -100,24 +206,27 @@ export function recordedSeatSession(input: {
   if (id === null || id === undefined || id === '') return { kind: 'none', why: 'the record names no agent session' };
   if (!SESSION_TOKEN.test(id)) return { kind: 'refused', why: 'the recorded id is not one session token' };
   const live = state?.agent_session;
-  if (live === undefined || live === '') return { kind: 'none', why: 'the seat state names no agent session' };
-  if (live !== id) return { kind: 'refused', why: 'the seat state and the agent record name different sessions' };
+  if (live !== undefined && live !== '' && live !== id) {
+    return { kind: 'refused', why: 'the seat state and the agent record name different sessions' };
+  }
+  return { kind: 'bound', agent, id, stateAgrees: live !== undefined && live !== '' };
+}
+
+function recordedOf(read: { agent: Agent; id: string }): RecordedSeatSession {
+  const { agent, id } = read;
   return {
-    kind: 'bound',
-    recorded: {
-      agentId: agent.id,
-      seatHandle: agent.seat_handle ?? null,
-      sessionId: id,
-      team: agent.reach.team,
-      seat: agent.reach.seat,
-      cli: agent.cli,
-      launch: agent.launch,
-      model: agent.signing.model,
-      version: agent.signing.version,
-      lab: agent.lab,
-      herdrSession: agent.reach.session,
-      pane: agent.reach.pane,
-      address: agent.reach.address,
-    },
+    agentId: agent.id,
+    seatHandle: agent.seat_handle ?? null,
+    sessionId: id,
+    team: agent.reach.team,
+    seat: agent.reach.seat,
+    cli: agent.cli,
+    launch: agent.launch,
+    model: agent.signing.model,
+    version: agent.signing.version,
+    lab: agent.lab,
+    herdrSession: agent.reach.session,
+    pane: agent.reach.pane,
+    address: agent.reach.address,
   };
 }

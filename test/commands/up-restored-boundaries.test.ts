@@ -198,9 +198,9 @@ const SEATS = {
   'deepseek-acme-2': { pane: 'w94:p1', workspace: 'w94', label: 'DeepSeek V4.1 Flash', shell: 440, cli: 441, kind: 'claude' },
 } as const;
 
-/** Writes the four-seat state. `session` is deepseek-acme's stored agent session, when a scene
- *  stores one; the other three never carry one (they read `same`, which does not need it). */
-function writeState(session?: string, drift = false): void {
+/** Writes the four-seat state alone. `session` is deepseek-acme's stored agent session, when a
+ *  scene stores one; the other three never carry one (they read `same`, which does not need it). */
+function writeSeats(session?: string): void {
   const seats: Record<string, unknown> = {};
   for (const [name, s] of Object.entries(SEATS)) {
     seats[name] = {
@@ -215,22 +215,39 @@ function writeState(session?: string, drift = false): void {
     join(root, '.agents/team.state.json'),
     JSON.stringify({ format: 1, sessions: { 'acme-web': { seats, worktrees: {} } } }),
   );
+}
+
+/** deepseek-acme's registry record, written through the registry's own writer. */
+function registerSeat(
+  session: string,
+  fields: { model?: string; version?: string; lab?: string; launch?: string; cli?: string } = {},
+) {
+  return registerAgent(home, {
+    name: 'deepseek-acme',
+    signing: {
+      model: fields.model ?? 'Claude Opus',
+      version: fields.version ?? '5.5',
+      role: 'implementer',
+    },
+    lab: fields.lab ?? 'anthropic',
+    cli: fields.cli ?? 'claude-code',
+    launcher: null,
+    launch: fields.launch ?? 'claude --model claude-opus-5-5',
+    reach: { team: teamIdOf(root), seat: 'deepseek-acme', session: 'acme-web', agent_session: session, pane: 'w93:p1', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'test',
+  });
+}
+
+/** The state and its record together, as most scenes need them. */
+function writeState(session?: string, drift = false): void {
+  writeSeats(session);
   if (session) {
-    const registered = registerAgent(home, {
-      name: 'deepseek-acme',
-      signing: drift
-        ? { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }
-        : { model: 'Claude Opus', version: '5.5', role: 'implementer' },
-      lab: drift ? 'deepseek' : 'anthropic',
-      cli: 'claude-code',
-      launcher: null,
-      launch: drift ? 'team-deepseek' : 'claude --model claude-opus-5-5',
-      reach: { team: teamIdOf(root), seat: 'deepseek-acme', session: 'acme-web', agent_session: session, pane: 'w93:p1', address: null },
-      mcp: [],
-      skills: [],
-      lifecycle: 'running',
-      by: 'test',
-    });
+    const registered = registerSeat(session, drift
+      ? { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' }
+      : {});
     if (drift) updateAgent(home, registered.id, { reach: { pane: 'w93:p1' } });
   }
 }
@@ -427,6 +444,158 @@ describe('team up, a restored session: boundaries', () => {
     const record = findAgent(home, { team: teamIdOf(root), seat: 'deepseek-acme' });
     expect(record?.signing).toMatchObject({ model: 'DeepSeek Flash', version: 'V4.1' });
     expect(record?.reach.agent_session).toBe('kept');
+  });
+
+  // The release's recognition gap, closed through `up`: the state copy names no session (an
+  // older record, or one written before the id was known), and the registry's binding is the
+  // only proof the pane is the seat. The pane is adopted, nothing is closed or typed, and the
+  // state heals to the conversation the record holds.
+  test('a restored seat is recognized from the registry record when the state names no session', async () => {
+    await approve();
+    writeSeats();
+    registerSeat('kept');
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    made.launch.agents = live;
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(keys).toEqual([]);
+    expect(io.err).toContain('  restored; left as it is\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({
+      stage: 'ready',
+      pane: 'w93:p1',
+      launched: { shell: 900, cli: [901] },
+      agent_session: 'kept',
+    });
+    // The record the adoption read is still the seat's own, on the pane it was launched on.
+    expect(findAgent(home, { team: teamIdOf(root), seat: 'deepseek-acme' })?.reach.agent_session).toBe('kept');
+  });
+
+  // The registry id alone never adopts a pane: the live session must be that id. A record
+  // naming 'kept' beside a pane running 'other' is a doubt, and the state is not written.
+  test('a registry record naming another session than the pane runs is not adopted', async () => {
+    await approve();
+    writeSeats();
+    registerSeat('kept');
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'other' } : a));
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
+    expect(seatsOf()['deepseek-acme']?.agent_session).toBeUndefined();
+  });
+
+  // The state copy and the record disagree on the conversation. The state copy happens to equal
+  // the live pane; that is not enough: neither record may speak for the seat, and nothing is
+  // adopted, closed or written.
+  test('a state copy naming another session than the record is still refused', async () => {
+    await approve();
+    writeSeats('state-copy');
+    registerSeat('kept');
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'state-copy' } : a));
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({
+      pane: 'w93:p1',
+      launched: { shell: 430, cli: [431] },
+      agent_session: 'state-copy',
+    });
+  });
+
+  // The record belongs to another CLI. It is not this seat's record, so the state copy is not
+  // allowed to overrule it either: no adoption, no write.
+  test('a record for another CLI refuses even when the state copy matches the pane', async () => {
+    await approve();
+    writeSeats('kept');
+    registerSeat('kept', { cli: 'codex' });
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    made.launch.agents = live;
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+  });
+
+  // Item 3 through `up` with no state copy: a restored seat whose model drifted is closed
+  // without input and relaunched through the record's launcher, never the bare CLI. The state
+  // names no session, but the pane's live agent carries the record's id: the live proof is what
+  // the relaunch resumes, so the conversation comes back with the model.
+  test("a drifted restored seat relaunches through the record's launcher and resumes the conversation the pane proves", async () => {
+    await approve();
+    writeSeats();
+    registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek' });
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => {
+      const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
+      return launched
+        ? [...list().filter((a) => a.name !== 'deepseek-acme'), { ...agent('deepseek-acme', launched.pane), session: 'kept' }]
+        : list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    };
+    made.launch.agents = live;
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual(['w93']);
+    const seatLaunches = made.runs.filter((run) => run.command.includes('team-deepseek'));
+    expect(seatLaunches).toHaveLength(1);
+    // The record's launcher, then the id the live pane proved next to it.
+    expect(seatLaunches[0]?.command).toContain('team-deepseek --resume kept');
+    expect(keys).toEqual([]);
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', agent_session: 'kept' });
+    expect(findAgent(home, { team: teamIdOf(root), seat: 'deepseek-acme' })?.signing).toMatchObject({
+      model: 'DeepSeek Flash',
+      version: 'V4.1',
+    });
   });
 
   // Scene 6 — a dry run touches nothing. deepseek-acme restored, deepseek-acme-2 doubt, and the

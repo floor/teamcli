@@ -151,11 +151,15 @@ all — the project folder is home for a lead too.
 
 A ready seat whose recorded process is still in its pane, and that pane is still named as the
 seat, is read once while the plan is built. The model is taken the way `status` takes it. When
-it matches the file, or the screen names no model this version can read, the seat is left ready
+it matches the seat's record — the signed registry where there is one, the file otherwise — or
+the screen names no model this version can read, the seat is left ready
 exactly as above — an unreadable model is a note, never a cycle, the same convention as
 `<seat>: its screen doesn't show a model this version knows; not checked` on a launch. When it
 differs, and herdr reports the seat idle or done, `up` closes that workspace without input and
-launches the seat fresh at the file's line. Nothing is typed, the seat is not renamed, and it
+launches the seat again through its own `launch` line, resuming the conversation the pane's own
+agent names where the CLI has a measured resume form — `--resume <id>` for Claude Code, `codex …
+resume <id>` for Codex. A pane that names no session, or one that is not the record's, launches
+without a resume id. Nothing is typed, the seat is not renamed, and it
 keeps its name. A box that holds unsent text does not stop the close. The record stays
 `<seat>: ready`, and the detail says `  its model drifted; closed without input and launched
 again`. A seat herdr reports working, or whose screen shows a running turn, is not closed: the
@@ -178,11 +182,13 @@ without a key and without input, and the seat is launched fresh with its rules. 
 still being listed does not keep that pane. Its record is `<seat>: ready`, and the detail under it
 says `  its pane held no CLI; closed without input and launched again`.
 
-A pane that holds a program, and whose agent session is the one stored at launch, is the seat.
-Nothing is closed and nothing is typed. The record stays `<seat>: ready`, the detail says
+A pane that holds a program, and whose agent session is the one the seat's records bind (the
+signed registry's, otherwise the state's), is the seat. Nothing is closed and nothing is typed
+while it is working. The record stays `<seat>: ready`, the detail says
 `  restored; left as it is`, and the stored process ids become the ones the pane holds now. A
-model on that screen that differs from the file is named on the same detail (`its model drifted;
-left as it is`) and is not closed.
+model on that screen that differs from the seat's record is named on the same detail (`its model
+drifted; left as it is`) and is not closed — unless the seat is idle or done and not a lead, where
+the same close and relaunch as above repairs it, resuming the conversation the pane proves.
 
 A pane that holds a program the record cannot tie to the launch — no stored agent session, a
 different one, or an agent list that could not be read — is left as it is. Nothing is closed. A

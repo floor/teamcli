@@ -72,7 +72,7 @@ import { dropMessage } from '../send/native.ts';
 import { shellQuote, withResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
-import { recordedSeatSession } from '../registry/resume.ts';
+import { recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -315,6 +315,21 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     state: recordedSeat,
   });
   let resume: string | undefined;
+  // The pane's continuity is proven by the session the registry binds to the seat, whatever
+  // resume form the new launch line can carry: a CLI with none has no resume id, and its
+  // state copy may predate the id a restore kept. The live agent's session must still be the
+  // recorded one; `inspectSeat` makes that comparison. A state naming another id, or a record
+  // that is not this seat's, binds nothing.
+  const boundSession = recordedSeatContinuity({
+    home,
+    root,
+    herdrSession: session,
+    seat: declared,
+    state: recordedSeat,
+  });
+  const continuity = boundSession.kind === 'bound' && boundSession.recorded.launch
+    ? boundSession.recorded.sessionId
+    : undefined;
   const noResume = (why: string): void => {
     const said = `${name}: not resuming its recorded session (${why})`;
     if (json) notes.push(said);
@@ -322,19 +337,27 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     else out.stderr(`team restart: ${plainText(said)}\n`);
     if (!dry) logLine(dir, 'restart', describeCaller(caller), said, sources.now());
   };
+  // The id to resume is the one the records bind, not one the state copy must also agree with:
+  // the registry record is the proof, and a state copy naming no id is a copy that predates the
+  // id, not a disagreement. A state naming another id is refused above by both readers.
+  const resumeCandidate = ownSession.kind === 'bound' && ownSession.recorded.launch
+    ? { id: ownSession.recorded.sessionId, launch: ownSession.recorded.launch }
+    : boundSession.kind === 'bound' && boundSession.recorded.launch
+      ? { id: boundSession.recorded.sessionId, launch: boundSession.recorded.launch }
+      : undefined;
   if (ownSession.kind === 'refused') {
     noResume(ownSession.why);
-  } else if (ownSession.kind === 'bound' && ownSession.recorded.launch) {
+  } else if (resumeCandidate !== undefined) {
     const recordedPane = recordedSeat?.pane;
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
-    if (listed?.session !== undefined && listed.session !== '' && listed.session !== ownSession.recorded.sessionId) {
+    if (listed?.session !== undefined && listed.session !== '' && listed.session !== resumeCandidate.id) {
       // The live pane is another conversation: resuming the recorded one would put two live
       // copies of the seat's history beside each other. The restart proceeds fresh.
       noResume('its live agent session is not the recorded one');
-    } else if (withResume(declared.cli, ownSession.recorded.launch, ownSession.recorded.sessionId) !== null) {
-      resume = ownSession.recorded.sessionId;
+    } else if (withResume(declared.cli, resumeCandidate.launch, resumeCandidate.id) !== null) {
+      resume = resumeCandidate.id;
     }
   }
 
@@ -363,7 +386,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
-    ...(ownSession.kind === 'bound' && ownSession.recorded.launch ? { registryLaunch: ownSession.recorded.launch } : {}),
+    ...(continuity === undefined ? {} : { continuity }),
+    ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
     now: sources.now,
     sources,
   });
@@ -377,7 +401,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         notes,
       });
     case 'replaced':
-      return replacedRefused(out, json, name);
+      return replacedRefused(out, json, name, performed.takeable);
     case 'abandon-working':
       return abandonWorkingRefused(out, json, name);
     case 'busy':
@@ -455,6 +479,10 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** The registry-bound session id this restart proves a restored pane against. Absent when no
+   *  binding exists, or the CLI has no measured resume form and the state copy names no id: the
+   *  pane is then never tied to the launch, and a replaced process is left as it is. */
+  continuity?: string;
   /** Registry recipe bound to the resume id. */
   registryLaunch?: string;
   /** The handover the new conversation reads first: the seat is asked to write this path before
@@ -478,7 +506,7 @@ export type ReadBack =
 
 export type PerformResult =
   | { kind: 'dry'; text: string; plan: PlanStep[] }
-  | { kind: 'replaced' }
+  | { kind: 'replaced'; takeable: boolean }
   | { kind: 'abandon-working' }
   | { kind: 'busy'; message: string }
   | { kind: 'not-ready'; message: string }
@@ -530,9 +558,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     : out;
 
   // Inspect the target seat's current pane before any preflight or stop.
-  let continuitySession = input.command === 'restart' ? input.resume : undefined;
+  let continuitySession = input.command === 'restart' ? (input.continuity ?? input.resume) : undefined;
   const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
-  if (inspected.kind === 'replaced') return { kind: 'replaced' };
+  if (inspected.kind === 'replaced') return { kind: 'replaced', takeable: inspected.takeable };
   if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
   if (inspected.kind === 'busy') return { kind: 'busy', message: inspected.message };
 
@@ -643,7 +671,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     // and this one no longer names the conversation this run would start with, so the launch goes
     // out fresh and says why. A restart never resumes an id the current records do not bind.
     if (input.command === 'restart' && resumed !== undefined) {
-      const freshOwn = recordedSeatSession({
+      // The same reader the resume was chosen with: the registry binding, refused by a state
+      // that names another id. A state copy that merely names none no longer cancels the resume.
+      const freshOwn = recordedSeatContinuity({
         home,
         root,
         herdrSession: session,
@@ -664,7 +694,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       }
     }
     const rechecked = inspectSeat(session, name, declared, freshRecorded, freshAgents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
-    if (rechecked.kind === 'replaced') return { kind: 'replaced' };
+    if (rechecked.kind === 'replaced') return { kind: 'replaced', takeable: rechecked.takeable };
     if (rechecked.kind === 'abandon-working') return { kind: 'abandon-working' };
     if (rechecked.kind === 'busy') return { kind: 'busy', message: rechecked.message };
 
@@ -738,7 +768,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         const fresh = sources.agents(session);
         if (fresh === null) return { kind: 'herdr' };
         const seen = inspectSeat(session, name, declared, readState(dir).sessions[session]?.seats[name], fresh, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
-        if (seen.kind === 'replaced') return { kind: 'replaced' };
+        if (seen.kind === 'replaced') return { kind: 'replaced', takeable: seen.takeable };
         if (seen.kind === 'abandon-working') return { kind: 'abandon-working' };
         if (seen.kind === 'busy') return { kind: 'busy', message: seen.message };
         stopObs = seen;
@@ -768,6 +798,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
             state: stopObs.where === 'free' ? 'free' : stopObs.where,
             ...(stopObs.exitInBox ? { exitInBox: true } : {}),
             ...(stopObs.atExitQuestion ? { atExitQuestion: true } : {}),
+            // A doubt pane the caller's `--abandon` takes is closed without typing: nothing is
+            // read from it, no exit text is sent, and no key answers whatever is in front.
+            ...(stopObs.taken === true ? { unproven: true as const } : {}),
           },
           keep: false,
           // An unrecognised screen on a seat herdr calls idle is closed, not typed into: `abandon`
@@ -1107,7 +1140,8 @@ export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
 }
 
 type InspectedSeat =
-  | { kind: 'replaced' }
+  /** `takeable`: herdr names this seat on the recorded pane, so `--abandon` would replace it. */
+  | { kind: 'replaced'; takeable: boolean }
   | { kind: 'abandon-working' }
   | { kind: 'busy'; message: string }
   | {
@@ -1124,6 +1158,8 @@ type InspectedSeat =
       /** The screen reads as the CLI's rate limit or provider error and the caller observed it:
        *  the pane cannot answer, so it is closed without typing and never refused as busy. */
       brokenScreen: boolean;
+      /** The pane was a `replaced` doubt the caller's `--abandon` takes: close it without typing. */
+      taken?: boolean;
     };
 
 function inspectSeat(
@@ -1156,8 +1192,17 @@ function inspectSeat(
     recordedSession: draftCapture ? continuitySession : recorded?.agent_session,
     liveSession: listedOnRecorded?.session,
   });
-  if ((verdict === 'replaced' && continuity !== 'restored') || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched)) {
-    return { kind: 'replaced' };
+  // A pane whose process is not the recorded one is taken only by an explicit `--abandon`, and
+  // only while herdr still names this seat on the recorded pane: the pane is the seat's own, and
+  // the caller has said what to do with whatever now runs in front of the launch line. Every
+  // other doubt — no name on that pane, or no flag — is left as it is.
+  const takeable = abandon && listedOnRecorded !== undefined;
+  if (
+    ((verdict === 'replaced' && continuity !== 'restored')
+      || (continuity === 'doubt' && recorded?.workspace && recorded.pane && recorded.launched))
+    && !takeable
+  ) {
+    return { kind: 'replaced', takeable: listedOnRecorded !== undefined };
   }
 
   const matched = agents.filter((item) => item.name === name);
@@ -1207,6 +1252,7 @@ function inspectSeat(
       atExitQuestion: false,
       unrecognised: agent.status,
       brokenScreen: false,
+      taken: takeable,
     };
   }
   // Unsent text is not a block: the box is read now, the text is copied under the run lock
@@ -1227,6 +1273,7 @@ function inspectSeat(
           atExitQuestion: false,
           draftScreen: raw ?? '',
           brokenScreen,
+          taken: takeable,
         };
       }
       return {
@@ -1259,6 +1306,7 @@ function inspectSeat(
     exitInBox: clearable,
     atExitQuestion: screen.kind === 'exit question',
     brokenScreen,
+    taken: takeable,
   };
 }
 
@@ -1793,11 +1841,12 @@ function noSessionRefused(out: Io, json: boolean, session: string): number {
   return 1;
 }
 
-function replacedRefused(out: Io, json: boolean, name: string): number {
+function replacedRefused(out: Io, json: boolean, name: string, takeable = false): number {
   refuse(out, json, 'restart', {
     id: 'restart.replaced',
     message: `${name} has a process in its old pane that is not the signed seat; left as it is`,
-    repair: null,
+    // herdr names the seat on that pane: the caller's own `--abandon` replaces it, without a key.
+    repair: takeable ? `team restart ${name} --abandon` : null,
   });
   // exit: restart.replaced
   return 1;
