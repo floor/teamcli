@@ -31,9 +31,11 @@ const oldError = [
   claudeBox(''),
 ].join('\n');
 
-// The error is the newest turn's own row, and the turn's result line is the one touching the
-// box: the region is the whole run, so the error is still the live screen.
-const newestTurn = `${LOST}\n✻ Sautéed for 2s · done 5:25 PM\n${claudeBox('')}`;
+// The error is the newest turn's own row, but the turn's result line comes after it: the turn
+// ended after the error, so the error is history and the empty box under the result line is the
+// current prompt. The current contract (2026-10-21) supersedes the old expectation — a
+// completion after the error moves the read from provider error to the current screen.
+const endedAfterError = `${LOST}\n✻ Sautéed for 2s · done 5:25 PM\n${claudeBox('')}`;
 
 describe('a provider error in scrollback above an idle prompt', () => {
   test('the error two turns up is not the dialog, and the prompt is free', () => {
@@ -42,9 +44,10 @@ describe('a provider error in scrollback above an idle prompt', () => {
     expect(classifyComposer('claude-code', oldError.split('\n')).kind).toBe('idle');
   });
 
-  test('the error is still the live screen while it is the newest turn, result line and all', () => {
-    expect(readScreen('claude-code', newestTurn)).toEqual({ kind: 'provider error' });
-    expect(dialogKind('claude-code', newestTurn)).toBe('provider error');
+  test('the turn ended after the error, so the empty prompt is the current screen', () => {
+    expect(readScreen('claude-code', endedAfterError)).toEqual({ kind: 'idle' });
+    expect(dialogKind('claude-code', endedAfterError)).toBeNull();
+    expect(classifyComposer('claude-code', endedAfterError.split('\n')).kind).toBe('idle');
   });
 
   test('the captured provider-error screen still reads as one', () => {
