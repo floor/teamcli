@@ -423,6 +423,33 @@ describe('a restored Codex seat resumes the conversation the registry recorded',
     expect(stateSession(fixture)).toBe(FRESH);
     expect(recordedSession(fixture)).toBe(FRESH);
   });
+
+  test('--abandon refuses a line that pins the recorded conversation', async () => {
+    // The flag promises a fresh start. A line that pins a conversation cannot give one without
+    // clearing that selection, so the repair refuses before the pane is touched rather than run
+    // the pinned conversation again under the name of a fresh start.
+    const launch = `codex -m gpt-6.1-sol --profile recorded resume ${SESSION_ID}`;
+    const { fixture, run } = restored({ launch });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart([SEAT, '--abandon'], io, run.sources)).toBe(1);
+    expect(run.did.runs).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.typed).toEqual([]);
+    expect(stateSession(fixture)).toBeUndefined();
+    expect(recordedSession(fixture)).toBe(SESSION_ID);
+  });
+
+  test('--abandon refuses a line that pins another conversation', async () => {
+    const launch = `codex -m gpt-6.1-sol --profile recorded resume ${OTHER}`;
+    const { fixture, run } = restored({ launch });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart([SEAT, '--abandon'], io, run.sources)).toBe(1);
+    expect(run.did.runs).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.typed).toEqual([]);
+    expect(stateSession(fixture)).toBeUndefined();
+    expect(recordedSession(fixture)).toBe(SESSION_ID);
+  });
 });
 
 describe('a recorded launcher that already names a resume', () => {
