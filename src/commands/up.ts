@@ -78,6 +78,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { registerRun } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { findAgent } from '../registry/agents.ts';
+import { recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -89,7 +90,7 @@ import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
-import { canShowModel, modelDiffers, seatModel } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, runningModel, seatModel } from '../status/statusline.ts';
 import { watchLabel, watchRunning } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
@@ -324,17 +325,21 @@ function modelDrift(
   processes: Readonly<Record<string, PaneProcesses | null>>,
   screenOf: (pane: string) => string | null,
   owner: boolean,
+  expected: { model: string; version: string } = seat,
+  restored = false,
 ): { kind: 'skip' } | { kind: 'hold'; detail: string } | { kind: 'cycle'; way: string } {
   if (isLeadSeat(team, seat.name)) return { kind: 'skip' };
   if (!recorded.launched || !recorded.pane || !recorded.workspace || !seat.version) return { kind: 'skip' };
-  if (seatProcessVerdict(recorded.launched, processes[seat.name] ?? null) !== 'same') return { kind: 'skip' };
+  if (!restored && seatProcessVerdict(recorded.launched, processes[seat.name] ?? null) !== 'same') return { kind: 'skip' };
   const listed = agents.find((agent) => agent.pane === recorded.pane);
   if (!listed || listed.name !== seat.name) return { kind: 'skip' };
-  if (!canShowModel(seat)) return { kind: 'skip' };
   const text = screenOf(recorded.pane);
   if (text == null || text === '') return { kind: 'skip' };
-  const running = seatModel(seat, text);
-  if (!running || !modelDiffers(running, { model: seat.model, version: seat.version })) return { kind: 'skip' };
+  // Registry signing governs even a model that the team file says a different CLI hosts (for
+  // example DeepSeek via Claude Code). `seatModel` intentionally hides that case for legacy
+  // team-file comparisons; the signed registry comparison must read the CLI's status directly.
+  const running = expected === seat ? seatModel(seat, text) : runningModel(seat.cli, text);
+  if (!running || !modelDiffers(running, expected)) return { kind: 'skip' };
   const kind = readScreen(seat.cli, text).kind;
   const way = driftWay(owner, seat.name);
   // Herdr's word and the screen: either one saying the seat is mid-turn keeps the pane.
@@ -415,15 +420,22 @@ function seatPlan(
   /** Dev-mode mount: a message seat's rules come from the live file, with no approval in force. */
   liveRules = false,
 ): UpSeat {
+  const binding = recorded
+    ? recordedSeatSession({ home, root, herdrSession: session, seat, state: recorded })
+    : { kind: 'none' as const, why: 'no state record' };
+  const registry = binding.kind === 'bound' && binding.recorded.launch && binding.recorded.model && binding.recorded.version
+    ? binding.recorded as typeof binding.recorded & { launch: string; model: string; version: string }
+    : undefined;
   const planned: UpSeat = {
     name: seat.name,
     cli: seat.cli,
-    launch: seat.launch,
+    launch: registry?.launch ?? seat.launch,
     cwd: seat.cwd,
     label: workspaceLabel(seat),
     displayAgent: displayAgent(seat),
-    model: seat.model,
-    version: seat.version,
+    model: registry?.model ?? seat.model,
+    version: registry?.version ?? seat.version,
+    ...(registry ? { registry: { launch: registry.launch, model: registry.model, version: registry.version, sessionId: registry.sessionId } } : {}),
     ...(seat.effort ? { effort: seat.effort } : {}),
     // The team file's own repair for this seat — a lead seat is told only the whole-team
     // sequence, never a `remove --keep` its file refuses (`lead.ts`).
@@ -498,7 +510,7 @@ function seatPlan(
   const continuity = replacedSeat(verdict, {
     asked,
     namedOnPane: Boolean(onRecordedPane),
-    recordedSession: recorded.agent_session,
+    recordedSession: registry?.sessionId,
     liveSession: onRecordedPane?.session,
   });
   // A program is in front and its agent session is the one stored at launch. The pids changed;
@@ -506,13 +518,29 @@ function seatPlan(
   if (continuity === 'restored' && recorded.agent_session && recorded.pane && recorded.workspace && recorded.launched) {
     const next = launchedIdentity(processes[seat.name] ?? null);
     if (next) {
+      const drift = registry
+        ? modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry, true)
+        : { kind: 'skip' as const };
+      if (drift.kind === 'cycle') {
+        return {
+          ...planned,
+          repair: {
+            pane: recorded.pane,
+            workspace: recorded.workspace,
+            launched: next,
+            cli: seat.cli,
+            drift: { way: drift.way },
+          },
+        };
+      }
+      if (drift.kind === 'hold') return { ...planned, stage: 'ready', driftHold: drift.detail };
       return {
         ...planned,
         stage: 'ready',
         restored: {
           launched: next,
           session: recorded.agent_session,
-          detail: restoredDetail(seat, recorded, screenOf),
+          detail: restoredDetail({ ...seat, model: registry?.model ?? seat.model, version: registry?.version ?? seat.version }, recorded, screenOf),
         },
       };
     }
@@ -539,7 +567,7 @@ function seatPlan(
   const onPane = recorded.pane ? known.some((agent) => agent.pane === recorded.pane) : false;
   if (recorded.stage === 'ready') {
     if (named || onPane) {
-      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner);
+      const drift = modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry ?? seat);
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
         return {
           ...planned,

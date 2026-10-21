@@ -52,6 +52,7 @@ import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import { classifyWith, overridesInForceOf, quotaWith, type OverrideForce } from '../profiles/overrides.ts';
 import { ofTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { findAgent } from '../registry/agents.ts';
 import type { StateThresholds } from '../settings/inherit.ts';
 import { machineLiveness, watchWords } from '../settings/declared.ts';
 import { entityLiveness } from '../entities.ts';
@@ -882,6 +883,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const modelRule = modelRuleOfPass(team, root, sources.home);
         const run = (stored: readonly Seen[]) => pass({
           machineAccounts,
+          signing: sources.home === undefined ? undefined : new Map(team.seats.map((seat) => {
+            const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
+            return [seat.name, agent?.signing ?? null] as const;
+          })),
           team, state, live, machine, now, memory,
           // The team's pause is the project's, not this session's: every watch of the project
           // stops nudging, and a foreign watch's notice is dropped where every other work drop
@@ -1065,7 +1070,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // A read that landed since the pass read the mailbox is the seat's own word: the signed
           // receipt is read again here, and an already-read message is not reminded. The snapshot
           // held it only because the read came after that read.
-          else if (!listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id)) {
+          else if (!listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id && one.to === ring.to)) {
             say(`ring not typed: message ${ring.id} is already read`, false);
           } else await deliver({
             pane: ring.pane,

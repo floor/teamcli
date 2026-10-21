@@ -55,6 +55,7 @@ import {
 import { profileFor } from '../profiles/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
+import { findAgent } from '../registry/agents.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { APPROVAL_REPAIR, compare, orderAndAnnotateDifferences } from '../status/compare.ts';
@@ -373,6 +374,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // The owner's live grant, read fresh: the `team answer` repair line appears only while the
     // team grant carries `dialogs.trust`.
     dialogsTrustInForce(sources.home ?? homedir(), root, now),
+    sources.home === undefined ? undefined : new Map(team.seats.flatMap((seat) => {
+      const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
+      return agent ? [[seat.name, agent.signing] as const] : [];
+    })),
   );
   const all = args.flags.has('all');
   // One probe of the machine daemon for the whole run: the line below, the document's `daemon`

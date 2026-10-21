@@ -91,6 +91,34 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
 
+test('a registered recipient with model drift is held before any send leg writes or types', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const leadId = teamIdOf(made.root);
+  registerAgent(made.home, {
+    name: 'lead',
+    // Claude Code can run a non-Claude model through a wrapper; its status footer still needs
+    // to be compared directly with the registry signing, not filtered by seatModel's CLI rule.
+    signing: { model: 'DeepSeek Flash', version: '4.1', role: 'coordinator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: leadId, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [], skills: [], lifecycle: 'running', by: 'up',
+  });
+  const pane = scripted(['idle', 'working'], `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`);
+  const host = fake(made, { native: pane });
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+  expect(io.err).toContain('model drift: DeepSeek Flash 4.1 vs Claude Opus 4.6');
+  expect(pane.typed).toEqual([]);
+  expect(pane.enters).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;

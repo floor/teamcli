@@ -26,6 +26,12 @@ export type RecordedSeatSession = {
   seat: string;
   /** The CLI the recorded launch ran. */
   cli: string;
+  /** The recorded launch recipe is authoritative for a bound seat. */
+  launch?: string;
+  /** The model the agent was signed to run. */
+  model?: string;
+  version?: string;
+  lab?: string;
   /** The herdr session the record was written in. */
   herdrSession: string;
   /** The pane the record last pointed at: the endpoint a caller reaches the seat through. */
@@ -105,6 +111,10 @@ export function recordedSeatSession(input: {
       team: agent.reach.team,
       seat: agent.reach.seat,
       cli: agent.cli,
+      launch: agent.launch,
+      model: agent.signing.model,
+      version: agent.signing.version,
+      lab: agent.lab,
       herdrSession: agent.reach.session,
       pane: agent.reach.pane,
       address: agent.reach.address,

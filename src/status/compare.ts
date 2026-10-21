@@ -13,7 +13,7 @@ import type { SeatState, SessionState } from '../state.ts';
 import { pluralCount, type DifferenceWho } from '../output/text.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
-import { launchModelWhenUnread, modelDiffers, seatModel } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, runningModel, seatModel } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -184,6 +184,7 @@ export function compare(
   watch: TeamFile['watch'] = team.watch,
   sockets: string | readonly string[] = defaultSocketsDirs(),
   trust = false,
+  signing?: ReadonlyMap<string, { model: string; version: string }>,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -195,7 +196,7 @@ export function compare(
   for (const declared of team.seats) {
     const agent = live.agents.find((candidate) => candidate.name === declared.name);
     const recorded = state.seats[declared.name];
-    const seat: Seat = recorded?.model && recorded?.version && recorded?.launch_line && recorded.launch_line !== declared.launch
+    const priorSeat: Seat = recorded?.model && recorded?.version && recorded?.launch_line && recorded.launch_line !== declared.launch
       ? {
           ...declared,
           model: recorded.model,
@@ -205,6 +206,10 @@ export function compare(
           launch: recorded.launch_line,
         }
       : declared;
+    const registered = signing?.get(declared.name);
+    const seat: Seat = registered
+      ? { ...priorSeat, model: registered.model, version: registered.version, display: defaultLabel(registered.model, registered.version) }
+      : priorSeat;
     const seatId = recorded?.id ?? state.retained_seats?.[seat.name]?.id;
     const idField = seatId ? { id: seatId } : {};
     if (agent) {
@@ -253,7 +258,7 @@ export function compare(
       const shell = noIdentity && paneHoldsShell(live.processes?.[agent.pane] ?? null);
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
-      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified);
+      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered !== undefined);
       const held = waitingView(seat.name, recorded, trust);
       if (held) {
         rows.push({
@@ -612,7 +617,7 @@ function cannotTie(
   screen: string | undefined,
   team: TeamFile,
 ): { row: Row; difference?: Difference; note?: string } {
-  const running = seatModel(seat, screen);
+  const running = runningModel(seat.cli, screen ?? '');
   const launcher = usesLauncher(seat);
   const shown = running
     ? `${seat.name}: its pane runs ${running.model} ${running.version}; that process is not the one team launched`
@@ -725,9 +730,10 @@ function modelOf(
   team: TeamFile,
   /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
   unidentified: boolean,
+  registered: boolean,
 ): string {
   const screen = live.screens[agent.pane];
-  const running = seatModel(seat, screen);
+  const running = registered ? runningModel(seat.cli, screen ?? '') : seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.
@@ -751,7 +757,7 @@ function modelOf(
   const observed = `${running.model} ${running.version}${seen ? ` ${seen}` : ''}`;
   const file = `${declared}${seat.effort ? ` ${seat.effort}` : ''}`;
   const detail = modelDrifts
-    ? `running ${observed}, file says ${file}`
+    ? `running ${observed}, ${registered ? 'registry' : 'file'} says ${file}`
     : `effort ${seen}, file says ${seat.effort}`;
   differences.push(unidentified
     ? {

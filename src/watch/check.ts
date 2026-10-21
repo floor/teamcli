@@ -72,6 +72,8 @@ export type SeatObservation = {
   name: string;
   // The seat the file declares; undefined for a temporary seat, which signs with no file model.
   seat: { cli: string; model: string; version: string; display: string } | undefined;
+  /** Registry signing baseline when the caller supplied an authoritative registry snapshot. */
+  signing?: { model: string; version: string } | null;
   // The entity model rule's breach for a declared seat of this team, when the pass read one.
   rule: ModelRuleBreachReading | undefined;
   // The agent herdr lists for the seat; undefined when no agent answers for it.

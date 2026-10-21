@@ -80,7 +80,7 @@ import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, t
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
 import { heldAt } from '../launch/rules-file.ts';
-import { modelDiffers, seatModel } from '../status/statusline.ts';
+import { modelDiffers, runningModel } from '../status/statusline.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { Standing } from '../store/store.ts';
 import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
@@ -340,7 +340,16 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   // reported as a note rather than silently replaced.
   const watchPace = watchPaceOf({ team, root, home: sources.home, now: sources.now(), standing });
   const inForce = watchInForceWithPace(standing, team, watchPace);
-  const comparison = compare(team, session, state, live, sources.now(), inForce, undefined, dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()));
+  const comparison = compare(
+    team,
+    session,
+    state,
+    live,
+    sources.now(),
+    inForce,
+    undefined,
+    dialogsTrustInForce(sources.home ?? homedir(), root, sources.now()),
+  );
   // Dev mode is the local override, read from the caller's place: under it the approval and
   // overrides state rows fold into quiet notes, and a seat recorded under it is counted rather
   // than named seat by seat — `team seats` keeps the mark, and `team status --all --json` keeps
@@ -755,7 +764,7 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
     const recorded = state.seats[seat.name]?.pane;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (!agent || agent.pane !== recorded) continue;
-    const running = seatModel(seat, live.screens[agent.pane]);
+    const running = runningModel(seat.cli, live.screens[agent.pane] ?? '');
     if (!running) continue;
     const record = findAgent(home, { team: teamId, seat: seat.name });
     if (!record) continue;

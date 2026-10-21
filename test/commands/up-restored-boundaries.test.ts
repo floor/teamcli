@@ -19,6 +19,8 @@ import { runUp, type Launch, type UpSources } from '../../src/commands/up.ts';
 import type { DoctorSources } from '../../src/commands/doctor.ts';
 import { setHerdrRun, type HerdrAgent, type HerdrWorkspace, type PaneProcesses } from '../../src/herdr.ts';
 import { readState } from '../../src/state.ts';
+import { findAgent, registerAgent, updateAgent } from '../../src/registry/agents.ts';
+import { teamIdOf } from '../../src/registry/teams.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
 
@@ -198,7 +200,7 @@ const SEATS = {
 
 /** Writes the four-seat state. `session` is deepseek-acme's stored agent session, when a scene
  *  stores one; the other three never carry one (they read `same`, which does not need it). */
-function writeState(session?: string): void {
+function writeState(session?: string, drift = false): void {
   const seats: Record<string, unknown> = {};
   for (const [name, s] of Object.entries(SEATS)) {
     seats[name] = {
@@ -213,6 +215,24 @@ function writeState(session?: string): void {
     join(root, '.agents/team.state.json'),
     JSON.stringify({ format: 1, sessions: { 'acme-web': { seats, worktrees: {} } } }),
   );
+  if (session) {
+    const registered = registerAgent(home, {
+      name: 'deepseek-acme',
+      signing: drift
+        ? { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }
+        : { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: drift ? 'deepseek' : 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: drift ? 'team-deepseek' : 'claude --model claude-opus-5-5',
+      reach: { team: teamIdOf(root), seat: 'deepseek-acme', session: 'acme-web', agent_session: session, pane: 'w93:p1', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'test',
+    });
+    if (drift) updateAgent(home, registered.id, { reach: { pane: 'w93:p1' } });
+  }
 }
 
 /** The readings for the three seats that must stay `same`, plus the agent list and workspaces
@@ -372,6 +392,41 @@ describe('team up, a restored session: boundaries', () => {
       launched: { shell: 900, cli: [901] },
       agent_session: 'kept',
     });
+  });
+
+  test('a bare resume and one team up restore the signed model and the seat conversation without typing', async () => {
+    await approve();
+    writeState('kept', true);
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) =>
+      pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane);
+    const live = () => {
+      const launched = made.runs.find((run) => run.command.includes('team-deepseek'));
+      return launched
+        ? [...list().filter((a) => a.name !== 'deepseek-acme'), { ...agent('deepseek-acme', launched.pane), session: 'kept' }]
+        : list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    };
+    made.launch.agents = live;
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual(['w93']);
+    const seatLaunches = made.runs.filter((run) => run.command.includes('team-deepseek'));
+    expect(seatLaunches).toHaveLength(1);
+    expect(seatLaunches[0]?.command).toContain('--resume kept');
+    expect(keys).toEqual([]);
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', agent_session: 'kept' });
+    const record = findAgent(home, { team: teamIdOf(root), seat: 'deepseek-acme' });
+    expect(record?.signing).toMatchObject({ model: 'DeepSeek Flash', version: 'V4.1' });
+    expect(record?.reach.agent_session).toBe('kept');
   });
 
   // Scene 6 — a dry run touches nothing. deepseek-acme restored, deepseek-acme-2 doubt, and the

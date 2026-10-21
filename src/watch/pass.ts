@@ -22,7 +22,7 @@ import type { Tempo } from '../file/sections/tempo.ts';
 import { pauseText, type PauseRecord, type SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
-import { seatModel, runningModel } from '../status/statusline.ts';
+import { runningModel, seatModel } from '../status/statusline.ts';
 import { liveDisplayAgent } from './seat-label.ts';
 import {
   ALWAYS_ON,
@@ -262,6 +262,8 @@ export type PassInput = {
   // its pane's reading: `gone`/`replaced` is no longer the seat. A null, or a pane the map
   // doesn't hold, is exactly a seat with no record: the restored check reports nothing.
   processes?: Readonly<Record<string, PaneProcesses | null>>;
+  /** Registry signing model/version by seat; null means no current registry record. */
+  signing?: ReadonlyMap<string, { model: string; version: string } | null>;
   /** Screen readings with the approved overrides applied. The shipped profiles, when omitted. */
   readScreen?: (cli: string, screen: string | undefined) => Screen;
   /** The seats this pass must not type at or count idle: their native presence proves a turn, a
@@ -303,6 +305,7 @@ export function pass({
   machineAccounts = [],
   foreground,
   processes,
+  signing,
   readScreen: read = readScreen,
   nativeHeld,
   quotaFor: patternsOf = shippedQuota,
@@ -459,6 +462,7 @@ export function pass({
     observations.push({
       name,
       seat,
+      ...(signing === undefined ? {} : { signing: signing.get(name) ?? null }),
       rule: rule !== null && rule.ok ? rule.breaches.get(name) : undefined,
       agent,
       herdr: live.running,
@@ -484,7 +488,11 @@ export function pass({
       parked,
       stopped,
       attention: attentionOf(screen, agent.status, quiet, theirWord),
-      model: seat ? seatModel(seat, live.screens[agent.pane]) : null,
+      model: seat
+        ? signing?.get(name)
+          ? runningModel(seat.cli, live.screens[agent.pane] ?? '')
+          : seatModel(seat, live.screens[agent.pane])
+        : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,
     });

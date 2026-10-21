@@ -201,15 +201,14 @@ describe('the signing drift', () => {
     expect(out).not.toContain('signs as');
   });
 
-  test('a screen the reader cannot name a model from is never a signing drift', () => {
+  test('a foreign-vendor model in Claude Code is compared with the registry signing', () => {
     record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, 'w3:p1', {
       cli: 'claude-code',
       lab: 'deepseek',
     });
-    // Claude Code's line names Claude's families only: the DeepSeek seat's own screen says nothing
-    // to compare, so the record stands rather than being called wrong.
+    // The team file names the foreign model, but Claude Code's footer still names the running model.
     const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
     const { out } = check(live);
-    expect(out).not.toContain('deepseek-acme: signs as');
+    expect(out).toContain('difference: deepseek-acme: signs as DeepSeek V4.1 Flash, runs Claude Opus 5.5');
   });
 });

@@ -16,7 +16,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import type { Standing } from '../src/store/store.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
-import type { Live } from '../src/status/compare.ts';
+import { compare, type Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { testIo, withWas } from './helpers.ts';
@@ -107,6 +107,26 @@ function approveOnDisk() {
 }
 
 describe('team status', () => {
+  test('a registry DeepSeek baseline reads the Claude Code status line and reports drift', () => {
+    const parsed = validateTeamFile(example);
+    if (!parsed.ok) throw new Error('the example fixture does not validate');
+    const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    const result = compare(
+      parsed.team,
+      'acme-web',
+      emptySession(),
+      live,
+      NOW,
+      parsed.team.watch,
+      undefined,
+      false,
+      new Map([['deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1' }]]),
+    );
+    expect(result.differences.some((difference) => difference.what.includes(
+      'deepseek-acme: running Claude Opus 5.5, registry says deepseek flash v4.1',
+    ))).toBe(true);
+  });
+
   test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
     const { code, out } = await status();
     expect(out).toContain('team acme-web, session "acme-web"');
@@ -1146,15 +1166,14 @@ describe('a pane that no longer holds the process team launched', () => {
     };
     const { out } = await status();
     expect(out).toMatch(/deepseek-acme\s+restored, not launched by team\s+-\s+w3:p1/);
-    // Claude Code's status line cannot name this seat's model, so the screen is not a difference.
-    // The launch line is: it starts a launcher, and this process is not the one team launched.
+    // The registry signing is authoritative; the pane's Claude Code footer is the running model.
     expect(out).toContain(
-      'difference: deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched\n' +
+      'difference: deepseek-acme runs Claude Opus 5.5; the file says DeepSeek V4.1 Flash; its launch line starts a launcher; the process in its pane is not the one team launched\n' +
         '  repair: team restart deepseek-acme\n' +
         "  who: the team's lead\n",
     );
     expect(out).not.toContain('team down, then team up');
-    expect(out).not.toContain('deepseek-acme runs');
+    expect(out).toContain('deepseek-acme runs Claude Opus 5.5');
     expect(out).not.toContain('repair: look at the pane\n');
     expect(out).not.toContain('repair: team up\n');
   });

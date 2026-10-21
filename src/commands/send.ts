@@ -62,6 +62,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { deliveryTimeoutInForce } from '../policy/delivery.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
+import { modelDiffers, runningModel } from '../status/statusline.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -826,6 +827,25 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const receiving = to.cross ? loadTeamFile(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
+  // The registry's signing model is the running seat's authority. A pane whose live status
+  // names another model is held before the body is read and before any delivery leg is walked;
+  // the team file is only the roster projection and cannot override that signed record.
+  const registeredTarget = readAgents(host.home).find((agent) =>
+    agent.reach.team === teamIdOf(to.root) && agent.reach.seat === to.seat &&
+    agent.reach.session === to.session && agent.lifecycle !== 'retired'
+  );
+  if (registeredTarget !== undefined) {
+    const live = findAgent(host, to.session, to.seat);
+    if (live.ok) {
+      const screen = host.native.paneText?.(to.session, live.pane) ?? null;
+      const running = screen === null ? null : runningModel(registeredTarget.cli, screen);
+      if (modelDiffers(running, registeredTarget.signing)) {
+        const declaredModel = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
+        const runningLabel = `${running.model} ${running.version}`;
+        return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
+      }
+    }
+  }
   // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
   // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
   // send — the walk is the same one — while `memory` is refused with nothing written on either

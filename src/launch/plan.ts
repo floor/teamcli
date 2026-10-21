@@ -3,7 +3,7 @@ import { DISPLAY_AGENT_SOURCE } from '../herdr.ts';
 import { selfRunner } from '../mcp/register.ts';
 import { codexDaemonForSeat, type CodexDaemonValue } from '../policy/codex-daemon.ts';
 import { profileFor } from '../profiles/index.ts';
-import { launchCommand, shellQuote } from '../profiles/profile.ts';
+import { launchCommand, shellQuote, withResume } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -263,6 +263,8 @@ export interface UpSeat {
    * closed. `launched` is the process in the pane now; the record stores it.
    */
   restored?: { launched: LaunchedIdentity; session: string; detail: string };
+  /** A bound registry policy. Its launch/model are authoritative over the team file. */
+  registry?: { launch: string; model: string; version: string; sessionId: string };
   /**
    * The pane holds a program this record cannot tie to the launch. Nothing is closed and
    * the stored process is left as it is.
@@ -660,7 +662,10 @@ export function upPlan(input: UpInput): Step[] {
         session,
       });
     }
-    const command = launchCommand(profile, seat.launch, seat.rules, input.cliHooks?.[seat.name], {
+    const recordedLine = seat.registry?.sessionId
+      ? withResume(profile.cli, seat.launch, seat.registry.sessionId) ?? seat.launch
+      : seat.launch;
+    const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),

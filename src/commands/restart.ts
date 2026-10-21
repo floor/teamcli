@@ -324,7 +324,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   };
   if (ownSession.kind === 'refused') {
     noResume(ownSession.why);
-  } else if (ownSession.kind === 'bound') {
+  } else if (ownSession.kind === 'bound' && ownSession.recorded.launch) {
     const recordedPane = recordedSeat?.pane;
     const listed = recordedPane === undefined
       ? undefined
@@ -333,7 +333,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
       // The live pane is another conversation: resuming the recorded one would put two live
       // copies of the seat's history beside each other. The restart proceeds fresh.
       noResume('its live agent session is not the recorded one');
-    } else if (withResume(declared.cli, declared.launch, ownSession.recorded.sessionId) !== null) {
+    } else if (withResume(declared.cli, ownSession.recorded.launch, ownSession.recorded.sessionId) !== null) {
       resume = ownSession.recorded.sessionId;
     }
   }
@@ -363,6 +363,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
+    ...(ownSession.kind === 'bound' && ownSession.recorded.launch ? { registryLaunch: ownSession.recorded.launch } : {}),
     now: sources.now,
     sources,
   });
@@ -454,6 +455,8 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** Registry recipe bound to the resume id. */
+  registryLaunch?: string;
   /** The handover the new conversation reads first: the seat is asked to write this path before
    *  the stop, and the wait is bounded. */
   handover?: { path: string; waitMs: number };
@@ -577,6 +580,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
 
   const liveRules = standing.kind !== 'verified' || owner;
   const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules);
+  if (input.registryLaunch) planSeat.launch = input.registryLaunch;
   const declaredLaunch = planSeat.launch;
   // The recorded conversation, resumed on the new declaration. The profile decides whether the
   // CLI can carry the id at all; the attempt is the log's fact, never a claim that it resumed

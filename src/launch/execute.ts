@@ -2,7 +2,7 @@ import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
-import { canShowModel, modelDiffers, seatModel, type Running } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
 import { IDLE_POLL_MS, type Step } from './plan.ts';
@@ -1485,8 +1485,8 @@ export async function executePlan(
             break;
           }
           const text = host.paneText?.(session, op.pane) ?? null;
-          const running = text === null || text === '' ? null : seatModel({ cli: op.cli, model: op.drift.model }, text);
-          if (text === null || text === '' || running === null || !canShowModel({ cli: op.cli, model: op.drift.model, version: op.drift.version })) {
+          const running = text === null || text === '' ? null : runningModel(op.cli, text);
+          if (text === null || text === '' || running === null) {
             refuse('its pane could not be read; nothing closed', true);
             break;
           }

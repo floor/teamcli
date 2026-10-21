@@ -412,7 +412,7 @@ describe('a pass of the watch', () => {
     const screen = readFileSync(new URL('./fixtures/codex/0.157.0/working.txt', import.meta.url), 'utf8');
     const drift = live({ 'codex-acme': { status: 'working', screen } });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: drift, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
-    expect(texts).toEqual(['codex-acme runs GPT Terra 5.6; the file says GPT-6 Sol: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme']);
+    expect(texts).toEqual(['codex-acme runs GPT Terra 5.6; the registry says GPT Sol 6: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme']);
   });
 
   test('a stopped seat that runs is watched like a parked one: its permission prompt is reported', () => {
@@ -559,7 +559,7 @@ describe('a pass of the watch', () => {
     now.workspaces.push({ id: 'w8', label: 'x' }, { id: 'w9', label: watchLabel('acme-web') });
     const texts = pass({ team: team(), watch: team().watch, state: emptySession(), live: now, machine: fine, now: 0, memory: newMemory() }).reports.map((report) => report.text);
     expect(texts).toEqual([
-      'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)',
+      'claude-coordinator-acme runs Claude Fable 5.1; the registry says Claude Opus 5.5: it signs with the wrong model — team down, then team up (to restart the whole team)',
       'deepseek-acme-2 is in the file and is not running',
       'stranger (w8:p1) is running and is not in the file',
     ]);
@@ -2049,6 +2049,41 @@ describe('team watch', () => {
     expect(typed).toEqual([]);
     expect(io.out).toContain('ring not typed: message m1 is already read');
     expect(io.out).not.toContain('rang claude-operator-acme');
+  });
+
+  test('an idle report for another seat cannot keep a read drop alive by reusing its id', async () => {
+    const target = planted('deepseek-acme', 'target body', '2026-10-03T13:59:00.000Z');
+    const start = Date.parse('2026-10-03T14:00:00Z');
+    const operatorIdle = live({
+      'deepseek-acme': { status: 'working', screen: busy },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    const bothIdle = live({
+      'deepseek-acme': { status: 'idle', screen: idle },
+      'deepseek-acme-2': { status: 'idle', screen: idle },
+    });
+    const io = testIo(dir, { kind: 'owner' });
+    let passes = 4;
+    const code = await runWatch(['--file', file], io, sources(4, {
+      live: () => clock >= start + 6 * 60_000 ? bothIdle : operatorIdle,
+      wait: async (seconds) => {
+        clock += seconds * 1000;
+        return --passes > 0;
+      },
+      notify: (text) => {
+        notified.push(text);
+        if (text.includes('deepseek-acme-2 has been idle')) {
+          readMailbox(target);
+          // A different seat can have the same message id. Its unread record must not
+          // authorize ringing the target whose receipt just appeared.
+          planted('deepseek-acme-2', 'other body', '2026-10-03T14:05:00.000Z');
+        }
+      },
+    }));
+    expect(code).toBe(0);
+    expect(notified.some((text) => text.includes('deepseek-acme-2 has been idle'))).toBe(true);
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme:');
   });
 
   test('a waiting report is never the typed line: the ring is', async () => {
