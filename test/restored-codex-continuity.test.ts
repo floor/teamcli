@@ -304,7 +304,11 @@ describe('a host-restored Codex seat keeps its registry conversation', () => {
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.created).toBe(1);
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
-    expect(io.err).toBe('');
+    // Fresh start, and the run says why: the record no longer binds the live session, so the
+    // resume was dropped under the run lock before the launch.
+    expect(io.err).toBe(
+      'team restart: worker: not resuming its recorded session (its live agent session is not the recorded one)\n',
+    );
   });
 
   test('the refusal names the command that would take the pane', async () => {
