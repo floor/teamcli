@@ -467,6 +467,10 @@ export async function executePlan(
   const leftOutReasons = new Map<string, string>();
   const skippedWorking = new Set<string>();
   const provedRestored = new Set<string>();
+  /** The seats this run is restoring, when the caller named them. A plan-time refusal is held
+   *  only for one of these: an ordinary launch already reports the left-out seat, while a
+   *  refused restore would otherwise end zero with the seat's stale record untouched. */
+  const restoreSeatNames = new Set((options?.restoreSeats ?? []).map((seat) => seat.name));
 
   // Concurrent seats polling at the same timestamp share one sleep call, so virtual clocks
   // and real timers advance once per poll interval rather than once per concurrent seat.
@@ -916,8 +920,9 @@ export async function executePlan(
       } else if (op?.do === 'refuse') {
         // The record carries the reason in words; the full finding — the start folder it names —
         // follows as the record's detail, on stderr alone. The seat's recorded state is left
-        // exactly as it was, and the run exits nonzero: nothing was repaired.
-        held = true;
+        // exactly as it was; a restored seat's refusal also ends the run nonzero, because
+        // nothing was repaired.
+        if (restoreSeatNames.has(op.seat)) held = true;
         final(op.seat, { kind: 'left out', reason: `refused: ${op.why}` }, op.detail ? `  ${op.detail}\n` : '');
       } else if (op?.do === 'hold') {
         held = true;
@@ -988,7 +993,7 @@ export async function executePlan(
         if (op.seat) {
           const why = host.allow(op.seat);
           if (why) {
-            held = true;
+            if (restoreSeatNames.has(op.seat)) held = true;
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: why });
             break;
