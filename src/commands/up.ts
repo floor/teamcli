@@ -51,7 +51,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
-import { executePlan, type Report } from '../launch/execute.ts';
+import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
 import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
@@ -2409,6 +2409,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       if (seat.stopped || seat.human || !profileFor(seat.cli)) return false;
       return afterwards[seat.name]?.stage !== 'ready';
     });
+    // The sweep's outcome summary: ready-confirmed repairs, working skips, and refusals with
+    // per-seat reasons, emitted once per pass even on 0/0/0.
+    const restoreSummary = restoreSummaryOf(report.restoreBuckets);
+    const summaryLine = plainText(restoreSummary.line);
+    const cleanedRestoreSummary: RestoreSweepSummary = {
+      ...restoreSummary,
+      refused_seats: restoreSummary.refused_seats.map((entry) => ({
+        seat: entry.seat,
+        reason: plainText(entry.reason),
+      })),
+      line: summaryLine,
+    };
+    logLine(dir, 'up', callerLabel(caller), summaryLine, now());
+    if (!json) out.stderr(`${summaryLine}\n`);
     // A seat the plan left behind (a repair it would not close, a dialog it timed out at) is a
     // seat left short of ready even when its state still says ready: `held` makes that exit 1.
     const failed = pending.length > 0 || report.serverFailed || report.watchFailed || report.held;
@@ -2420,22 +2434,22 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           ? 'up.pending'
           : report.serverFailed ? 'up.server' : report.watchFailed ? 'up.watch' : 'up.pending';
         const message = pending.length > 0
-          ? `${pending.length} seat${pending.length === 1 ? '' : 's'} not ready: ${pending.map((seat) => seat.name).join(', ')}`
+          ? `${pending.length} seat${pending.length === 1 ? '' : 's'} not ready: ${pending.map((seat) => seat.name).join(', ')} (${summaryLine})`
           : report.serverFailed ? 'the herdr server did not start'
-            : report.watchFailed ? 'the watch did not start' : 'a step was held';
+            : report.watchFailed ? 'the watch did not start'
+              : restoreSummary.refused > 0 ? summaryLine : `a step was held (${summaryLine})`;
         refuse(io, true, 'up', { id, message, repair: null });
       } else {
         writeJson(io, 'team.up', {
           format: 1,
           dry_run: false,
           status: 'ready',
-          // The last record is the run's closing line (`<seat>: ready`); with no record at all
-          // the file's own outcome is said.
-          action_summary: finalRecords.at(-1) ?? 'the team is ready',
+          action_summary: summaryLine,
           project: team.project,
           session,
           seats: [...new Set(team.seats.map((seat) => seat.name))],
-          notes: [...jsonNotes, ...finalRecords.slice(0, -1)],
+          notes: [...jsonNotes, ...finalRecords],
+          restore_summary: cleanedRestoreSummary,
         });
       }
     }

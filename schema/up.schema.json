@@ -115,6 +115,72 @@
       "items": {
         "type": "string"
       }
+    },
+    "restore_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repaired",
+        "skipped_working",
+        "refused",
+        "repaired_seats",
+        "skipped_working_seats",
+        "refused_seats",
+        "line"
+      ],
+      "properties": {
+        "repaired": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_working": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "refused": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repaired_seats": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "skipped_working_seats": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "refused_seats": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "seat",
+              "reason"
+            ],
+            "properties": {
+              "seat": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "line": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   }
 }
