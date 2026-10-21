@@ -37,6 +37,16 @@ test('package.json files allows the shipped entries only', () => {
   ]);
 });
 
+// No measured consumer imports the CLI's types, so the package ships none: the manifest
+// names no types file and the build emits no declarations. The relay's hand-written
+// declarations under packages/relay are its own surface and still ship beside dist.
+test('the package ships no CLI declarations or declaration maps', () => {
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'));
+  expect(pkg.exports).toEqual({ '.': { default: './dist/index.js' } });
+  const build = JSON.parse(readFileSync(join(repo, 'tsconfig.build.json'), 'utf8'));
+  expect(build.compilerOptions.declaration).toBe(false);
+});
+
 test('the packed tarball ships the schema and nothing it should not', () => {
   const home = mkdtempSync(join(tmpdir(), 'team-pack-home-'));
   try {
@@ -52,6 +62,8 @@ test('the packed tarball ships the schema and nothing it should not', () => {
     }
     if (existsSync(join(repo, 'dist'))) {
       expect(paths).toContain('dist/cli.js');
+      // A built tree ships no CLI declaration or map; only the relay's own .d.ts remain.
+      expect(paths.filter((path) => path.startsWith('dist/') && (path.endsWith('.d.ts') || path.endsWith('.map')))).toEqual([]);
     }
 
     // Every packed path under the allowed top-level entries…
