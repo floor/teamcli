@@ -2,7 +2,11 @@
 
 Checks one workflow definition (`version: 1`) and its transition graph: structural schema rules,
 reachability, transition ordering and ambiguity, hook effects, and resolved role references
-(`owner`, `lead`, `integrator`, and the `role:` strings declared on seats in `.agents/team.yaml`).
+(`owner`, `lead`, `integrator`, and the `role:` strings declared on seats in `.agents/team.yaml`,
+read from the working directory first and from `<path>`'s folder when the working directory has no
+team file). Transition `on:` entries accept the twelve transition signals (`pr-opened`,
+`pr-merged`, `sha-verified`, `gate-passed`, `approved`, `tag-outcome`, `publish-outcome`,
+`deploy-outcome`, `time-reached`, `goals-set`, `diverged`, `accepted`).
 Read-only: nothing writes, and no herdr session is needed.
 
 ## Synopsis
