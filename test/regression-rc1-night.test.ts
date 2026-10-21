@@ -338,7 +338,7 @@ describe('a failed send is no seat activity', () => {
 function record(w: World, seatName: 'lead' | 'helper', role: string, pane: string): Agent {
   return registerAgent(w.home, {
     name: seatName,
-    signing: { model: 'Test', version: '1', role },
+    signing: { model: 'Claude Opus', version: '5.5', role },
     lab: 'test-lab',
     cli: 'claude-code',
     launcher: null,
