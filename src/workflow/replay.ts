@@ -20,10 +20,11 @@ import {
   payloadDigest,
 } from './canonical.ts';
 import type { CoreDecision, CoreInput, StepDecision } from './core.ts';
-import type { OccurrenceRecord, RunState, RunWait } from './core-state.ts';
+import type { OccurrenceRecord, RunState } from './core-state.ts';
 import type { EvidenceSource, GuardCatalogue, SettingSource } from './registry.ts';
 import { isSignalName } from './signals.ts';
 import type { SignalName } from './signals.ts';
+import { fireRecordedWait, waitsAfterStep, waitsAtEntry } from './waits.ts';
 import type {
   DryEffectRecord,
   DryRunJournal,
@@ -173,7 +174,7 @@ export function replay(input: ReplayInput): ReplayResult {
     activation: 1,
     occurrences,
     requests: new Map(),
-    waits: initial.wait !== undefined ? [{ state: journal.initial, activation: 1, status: 'pending' }] : [],
+    waits: waitsAtEntry(definition, journal.initial, 1),
   };
 
   for (let index = 0; index < journal.steps.length; index += 1) {
@@ -253,7 +254,11 @@ export function replay(input: ReplayInput): ReplayResult {
     }
 
     // A recorded time wait is fired at its setting; the core owns every other wait verdict.
-    const decisionRun = fireRecordedWait(run, definition, journal, step.signal, step.at);
+    const decisionRun = fireRecordedWait(run, definition, {
+      signal: step.signal,
+      at: step.at,
+      settings: settingsSource,
+    });
     let decision: CoreDecision;
     try {
       decision = decide({
@@ -312,7 +317,11 @@ export function replay(input: ReplayInput): ReplayResult {
       activation: decision.next.activation,
       occurrences: nextOccurrences,
       requests,
-      waits: waitsAfterStep(decisionRun, definition, step.signal, decision.next.state, decision.next.activation),
+      waits: waitsAfterStep(decisionRun, definition, {
+        signal: step.signal,
+        nextState: decision.next.state,
+        nextActivation: decision.next.activation,
+      }),
     };
   }
 
@@ -383,7 +392,11 @@ export function replay(input: ReplayInput): ReplayResult {
     artifact: journal.artifact,
     evidence: stop.evidence,
   };
-  const stopRun = fireRecordedWait(run, definition, journal, stop.signal, stop.at);
+  const stopRun = fireRecordedWait(run, definition, {
+    signal: stop.signal,
+    at: stop.at,
+    settings: settingsSource,
+  });
 
   let stopDecision: CoreDecision;
   try {
@@ -893,48 +906,6 @@ function planOccurrences(decision: StepDecision, run: RunState): OccurrenceRecor
     });
   }
   return out;
-}
-
-/** A time wait is fired once the recorded instant reaches its setting; other verdicts stay core's. */
-function fireRecordedWait(
-  run: RunState,
-  definition: Workflow,
-  journal: DryRunJournal,
-  signal: SignalName,
-  at: string,
-): RunState {
-  const wait = definition.states[run.state]?.wait;
-  if (wait === undefined || wait.for !== 'time' || signal !== 'time-reached') return run;
-  const reachedAt = hasOwn(journal.settings, wait.at.name) ? journal.settings[wait.at.name] : undefined;
-  if (reachedAt === undefined || at < reachedAt) return run;
-  const index = run.waits.findIndex(
-    (candidate) => candidate.state === run.state && candidate.activation === run.activation,
-  );
-  if (index < 0) return run;
-  const waits = run.waits.map((candidate, position) =>
-    position === index ? { ...candidate, status: 'fired' as const } : candidate,
-  );
-  return { ...run, waits };
-}
-
-function waitsAfterStep(
-  run: RunState,
-  definition: Workflow,
-  signal: SignalName,
-  nextState: string,
-  nextActivation: number,
-): RunWait[] {
-  const wait = definition.states[run.state]?.wait;
-  const fired =
-    wait !== undefined && (wait.for === 'approval' ? signal === 'approved' : signal === 'time-reached');
-  const waits = run.waits.map((candidate) => {
-    if (candidate.state !== run.state || candidate.activation !== run.activation) return candidate;
-    return fired && candidate.status === 'pending' ? { ...candidate, status: 'fired' as const } : candidate;
-  });
-  if (definition.states[nextState]?.wait !== undefined) {
-    waits.push({ state: nextState, activation: nextActivation, status: 'pending' });
-  }
-  return waits;
 }
 
 function decisionView(decision: CoreDecision): unknown {
