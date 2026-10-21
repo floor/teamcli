@@ -96,15 +96,30 @@ dialog records it in the same write as its waiting record) — is shown as it al
 as a prompt at all: a dialog left in a shell's scrollback is not a seat waiting at one, for a
 declared seat and a temporary seat alike (`paneShowsSeat`).
 
+A replaced pid is not the last word on a pane: an agent session ties a process `team` did not
+launch back to the seat, and every reading that asks whether a pane is the seat's asks the same
+question the same way (`continuityIdsOf` in `src/registry/resume.ts`). The session is the one the
+seat's registry record binds — `reach.agent_session`, taken only when the record names this team,
+seat and herdr session and the CLI the file now declares, and when the state names no other
+session — and, for a seat no record covers, the copy the state stored with the launch. Where the
+record exists and is refused for any reason, no state copy stands in for it. When that session is
+the one the pane reports, the row is the ordinary running seat: the conversation came back, the
+process did not, and nothing in the reading starts anything. The classification only recognizes;
+a resume id is still read from the two records' agreement alone, and a state naming no session
+offers none.
+
 The comparison is wrong in the safe direction, but it is wrong: a CLI that replaces its own process
-— an updater that re-executes, a wrapper that hands over — changes the foreground pids, and the
-seat then reads `restored, not launched by team` although nothing was restored and its conversation
-is intact. `up` acts on that reading: it closes the pane without input and launches the seat fresh,
-and the conversation in it is lost. No reading of a CLI after its first message was taken when this
-record was made; a review's runs of a CLI that starts a helper beside itself and of one behind a
-pipeline kept every pid in front, so all of them were recorded. Before running `up` over such a
-row — `status` names the seat — the owner looks at the pane: it says whether the CLI there is the
-one `team` launched, and `up`'s own guards are in `docs/commands/up.md`.
+— an updater that re-executes, a wrapper that hands over — changes the foreground pids, and where
+nothing ties the pane to the seat's session the seat reads `restored, not launched by team`
+although nothing was restored and its conversation is intact. `up` acts on that reading: it closes
+the pane without input and launches the seat fresh, and the conversation in it is lost. The
+session proof above keeps every CLI that reports its session through such a replacement out of
+this case; what is left is a seat whose session no record binds or whose pane reports none. No
+reading of a CLI after its first message was taken when this record was made; a review's runs of a
+CLI that starts a helper beside itself and of one behind a pipeline kept every pid in front, so
+all of them were recorded. Before running `up` over such a row — `status` names the seat — the
+owner looks at the pane: it says whether the CLI there is the one `team` launched, and `up`'s own
+guards are in `docs/commands/up.md`.
 
 The model is the seat's `display` when the running model matches the file, and
 `<model> <version> (file: <display>)` when it doesn't. An effort word alone does not move the
@@ -164,9 +179,9 @@ here.
 | `<seat>: its pane runs no CLI (the CLI ended or the session was restored)` | `team up` (it closes the pane without input and launches the seat fresh; the map admits the owner and the team's leads, so `who:` names the team's lead) |
 | `<seat>: the process in its pane is not the one team launched; nothing checks its model, account or rules` | `team up` (it closes the pane without input and launches the seat fresh; the map admits the owner and the team's leads, so `who:` names the team's lead) |
 | `<seat>: its pane holds a process this record cannot tie to the launch` | `look at the pane`. The row is `restored, not launched by team` and its model is `-`. A screen that names a model adds a note; it is not shown as the model running |
-| `<seat> runs <model> <version>; the file says <declared>; the process in its pane is not the one team launched` | `team restart <seat>` for a seat that is not a lead (its `who:` line names the team's lead). A lead's own seat draws a note with no difference, in the same words — a lead is never restarted alone, and the whole-team restart is not this repair. The row stays `-`. `status` does not start the seat |
-| `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched` | `team restart <seat>` for a seat that is not a lead (its `who:` line names the team's lead). A lead's own seat draws a note with no difference: `<seat>: started by a launcher; team cannot tell its process from the one it launched` — a lead is never restarted alone, and the whole-team restart is not this repair. Said when the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model, and the process is not the one `team` launched — including when the stored agent session is still the live one, in which case the row stays the running seat |
-| `<seat> runs <model> <version>; the file says <declared>; its launch line starts a launcher; the process in its pane is not the one team launched` | `team restart <seat>` for a seat that is not a lead (its `who:` line names the team's lead). A lead's own seat draws a note with no difference, in the same words as the difference — a lead is never restarted alone, and the whole-team restart is not this repair. Said when the screen's model is not the file's and the launch line names a launcher |
+| `<seat> runs <model> <version>; the file says <declared>; the process in its pane is not the one team launched` | `team restart <seat> --abandon` for a seat that is not a lead while herdr still names that seat on the pane the state recorded (its `who:` line names the team's lead), and `look at the pane` where it does not — the flag is what takes a process a plain restart leaves in place. A lead's own seat draws a note with no difference, in the same words — a lead is never restarted alone, and the whole-team restart is not this repair. The row stays `-`. `status` does not start the seat |
+| `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched` | `team restart <seat>` for a seat that is not a lead (its `who:` line names the team's lead) while the stored agent session still ties the pane to the seat; where nothing ties it, `team restart <seat> --abandon` while herdr still names the seat on the recorded pane, and `look at the pane` where it does not. A lead's own seat draws a note with no difference: `<seat>: started by a launcher; team cannot tell its process from the one it launched` — a lead is never restarted alone, and the whole-team restart is not this repair. Said when the launch line starts a program other than the CLI's own binary, or the file says the launcher chooses the model, and the process is not the one `team` launched — including when the stored agent session is still the live one, in which case the row stays the running seat |
+| `<seat> runs <model> <version>; the file says <declared>; its launch line starts a launcher; the process in its pane is not the one team launched` | `team restart <seat> --abandon` for a seat that is not a lead while herdr still names that seat on the pane the state recorded (its `who:` line names the team's lead), `look at the pane` where it does not. A lead's own seat draws a note with no difference, in the same words as the difference — a lead is never restarted alone, and the whole-team restart is not this repair. Said when the screen's model is not the file's and the launch line names a launcher |
 | `<seat>: the agent in <pane> is named "x"` | `herdr --session <s> agent rename <pane> <seat>` |
 | `<seat>: running <model> <version> <effort>, file says <declared> <effort>` — the model not matching the file (each side printing its effort word only when it has one; `<declared>` is the seat's `display` spelling); or `<seat>: effort <seen>, file says <effort>` when the model matches and an effort word the pane printed differs from the seat's declared `effort` (when the file declares no effort, a seen word is not a drift, and a pane that printed none leaves the file's word standing) | `restart the seat on the file's model (<command>), or correct the file`. `<command>` is `team remove <seat> --keep, then team add <seat>`, or, for a lead, `team down, then team up` (to restart the whole team) |
 | `<seat> is marked stopped in the file and is running` | `team remove <seat> --keep`, or take `stopped: true` off the seat |

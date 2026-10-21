@@ -19,24 +19,30 @@ reading decides the quiet a mark above needs, and `team check` and the watch tak
 attention from it too.
 
 A pane that no longer holds the process `team` launched is not by itself a difference: when a
-program `team` did not launch is in front and the agent session stored at its launch is the
+program `team` did not launch is in front and the agent session the seat's records bind — its
+registry record where one exists, the copy stored with its launch where none does — is the
 session the pane reports now — a herdr restart brings the pane back under a new shell pid — the
-row is the ordinary one. Otherwise a pane with no CLI left reads `missing` (the CLI ended, or a
-restore left the shell in front) and a pane fronted by any other program reads `restored, not
-launched by team`; both carry a difference, and the second's model is `-`, never the file's.
+row is the ordinary one. The two records must agree: a record for another team, seat, CLI or
+herdr session, or a state naming another session than the record, binds nothing, and a state's
+copy never overrules a record it disagrees with. Otherwise a pane with no CLI left reads `missing`
+(the CLI ended, or a restore left the shell in front) and a pane fronted by any other program
+reads `restored, not launched by team`; both carry a difference, and the second's model is `-`,
+never the file's.
 
 That pane is not silent, though: when the seat's launch line starts a launcher — a program other
 than the CLI's own binary, or a file that says the launcher chooses the model — a seat that is
 not a lead adds a difference of its own, `<seat>: its launch line starts a launcher, and the
-process in its pane is not the one team launched`, repaired with `team restart <seat>`; the row
-stays the one the live session gives it. A lead's own seat is never restarted alone, so its
-line is a note and not a difference: `<seat>: started by a launcher; team cannot tell its
-process from the one it launched`, with no command that stops the team. And a pane this
-record cannot tie is repaired the same way — `team restart <seat>` for a seat that is not a
-lead, or, for a lead's own seat, a note naming what the pane runs and no difference at all —
-when its screen names a model the file does not carry, or its launch line starts a launcher; a
-pane it can say nothing about is repaired by looking at it. Nothing either report says starts a
-seat.
+process in its pane is not the one team launched`, repaired with `team restart <seat>` while that
+session still ties the pane to the seat; the row stays the one the live session gives it. A
+lead's own seat is never restarted alone, so its line is a note and not a difference: `<seat>:
+started by a launcher; team cannot tell its process from the one it launched`, with no command
+that stops the team. And a pane nothing ties is repaired the same way — `team restart <seat>
+--abandon` for a seat that is not a lead while herdr still names that seat on the pane the state
+recorded, `look at the pane` where it does not, and, for a lead's own seat, a note naming what the
+pane runs and no difference at all — when its screen names a model the file does not carry, or
+its launch line starts a launcher; a pane it can say nothing about is repaired by looking at it.
+The flag is named in the repair, never assumed: a plain restart only leaves that pane as it is,
+and `--abandon` is what takes the process in front. Nothing either report says starts a seat.
 
 A seat no source has heard from past the blind threshold — five minutes shipped, tightened by the
 machine, an entity, a project, the team or the seat, and opened again only by a project — counts
