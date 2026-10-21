@@ -1,0 +1,18 @@
+format: 1
+target: project://dry-acceptance
+artifact:
+  kind: none
+settings: {}
+inputs: {}
+evidence:
+  approval-1:
+    type: approval
+    target: project://dry-acceptance
+    signature: forged
+    verified: true
+signals:
+  - signal: approved
+    at: 2026-10-21T00:00:00.000Z
+    request-id: req-1
+    expected-revision: 0
+    evidence: [approval-1]

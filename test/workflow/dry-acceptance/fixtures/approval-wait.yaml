@@ -1,0 +1,14 @@
+workflow: dry-acceptance-approval
+version: 1
+initial: review
+states:
+  review:
+    wait:
+      for: approval
+      role: owner
+  done: {}
+transitions:
+  - from: review
+    to: done
+    on: approved
+    role: owner
