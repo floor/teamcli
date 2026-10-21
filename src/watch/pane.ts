@@ -10,19 +10,70 @@ export function watchLabel(project: string): string {
   return `Watch · ${project}`;
 }
 
-/** Whether a recorded watch is still running: the pid while that process lives, or — for the
- *  moment before its pane's first pass records a pid, and for a record whose process is gone — a
- *  pane whose heartbeat is no older than two in-force intervals. A record with neither is no
- *  watch. */
+/** A recorded watch's health, from the record and the process table alone. `live` carries a
+ *  process that is alive with a heartbeat no older than two in-force intervals, or — before its
+ *  pane's first pass records a pid — a pane with a fresh beat. `dead` is a recorded pid that is
+ *  not alive. `stale` is a live process whose heartbeat is old or unreadable, or a record with
+ *  neither a pid nor a pane to say what runs. `missing` is no record at all. */
+export type PaneWatchHealth =
+  | { state: 'missing' }
+  | { state: 'live'; pid: number | null; heartbeat: string; pane?: string; workspace?: string }
+  | { state: 'dead'; pid: number; heartbeat: string | null; pane?: string; workspace?: string }
+  | {
+      state: 'stale';
+      why: 'heartbeat-old' | 'unreadable' | 'no-process';
+      pid: number | null;
+      heartbeat: string | null;
+      pane?: string;
+      workspace?: string;
+    };
+
+export function paneWatchHealth(
+  watch: { pid?: number; heartbeat: string; pane?: string; workspace?: string } | undefined,
+  options: { alive(pid: number): boolean; now: number; interval: number },
+): PaneWatchHealth {
+  if (!watch) return { state: 'missing' };
+  const beat = Date.parse(watch.heartbeat);
+  const fresh = Number.isFinite(beat) && options.now - beat <= 2 * options.interval * 1000;
+  const place = {
+    ...(watch.pane ? { pane: watch.pane } : {}),
+    ...(watch.workspace ? { workspace: watch.workspace } : {}),
+  };
+  const heartbeat = Number.isFinite(beat) ? watch.heartbeat : null;
+  if (watch.pid !== undefined) {
+    if (!options.alive(watch.pid)) return { state: 'dead', pid: watch.pid, heartbeat, ...place };
+    if (fresh) return { state: 'live', pid: watch.pid, heartbeat: watch.heartbeat, ...place };
+    return {
+      state: 'stale',
+      why: Number.isFinite(beat) ? 'heartbeat-old' : 'unreadable',
+      pid: watch.pid,
+      heartbeat,
+      ...place,
+    };
+  }
+  // Before the pane's first pass records a pid, its place and beat are the only proof a watch
+  // was placed. Without a place there is nothing a reader could repair by pid.
+  if (!watch.pane) return { state: 'stale', why: 'no-process', pid: null, heartbeat };
+  if (fresh) return { state: 'live', pid: null, heartbeat: watch.heartbeat, ...place };
+  return {
+    state: 'stale',
+    why: Number.isFinite(beat) ? 'heartbeat-old' : 'unreadable',
+    pid: null,
+    heartbeat,
+    ...place,
+  };
+}
+
+/** The hand-over guard's question: whether a recorded watch still holds its pane. It stays
+ *  deliberate about a pid — a live process counts even when its heartbeat is old, because another
+ *  `team watch` must not hand over to a pane that is still writing there. `paneWatchHealth` is
+ *  the reading `up` and `check` use when they decide whether to repair. */
 export function watchRunning(
   watch: { pid?: number; heartbeat: string; pane?: string } | undefined,
   options: { alive(pid: number): boolean; now: number; interval: number },
 ): boolean {
-  if (!watch) return false;
-  if (watch.pid !== undefined) return options.alive(watch.pid);
-  if (!watch.pane) return false;
-  const beat = Date.parse(watch.heartbeat);
-  return Number.isFinite(beat) && options.now - beat <= 2 * options.interval * 1000;
+  const health = paneWatchHealth(watch, options);
+  return health.state === 'live' || (health.state === 'stale' && health.pid !== null);
 }
 
 /** The pane this process is running in, from herdr. The shell that `pane run` typed into is

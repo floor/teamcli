@@ -6,6 +6,7 @@ import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../app
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
@@ -91,7 +92,8 @@ import { blocksLaunch, doctorFindings, realSources as doctorSources, type Doctor
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel } from '../status/statusline.ts';
-import { watchLabel, watchRunning } from '../watch/pane.ts';
+import { watchSitting } from '../watch/liveness.ts';
+import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
@@ -113,6 +115,9 @@ export type UpSources = {
   sleep?(ms: number): Promise<void>;
   alive?(pid: number): boolean;
   watchCommand?(session: string): string;
+  /** The machine daemon's reading, for the hosted watch that may own this team's route. Absent in
+   *  a world that does not probe it, and then no pane watch is suppressed by a hosted one. */
+  daemonHealth?(home: string): Promise<DaemonHealth>;
   // The owner's terminal, for the pause at a dialog. Absent: Node's own stdin, read in raw
   // mode for one key at a time (`terminal.ts`). A dry run and a caller without a terminal
   // never read it.
@@ -182,6 +187,9 @@ export type Launch = {
   stopSession?(session: string): boolean;
   /** Clears a stopped session this team's state records, so the run can start it. */
   deleteSession?(session: string): boolean | Promise<boolean>;
+  /** Stops a process this run is replacing: the stale pane watch the plan kills before it starts
+   *  the replacement. Absent on a fake launch, which then cannot repair a live stale watch. */
+  kill?(pid: number): boolean;
   sleep(ms: number): Promise<void>;
   now(): Date;
 }
@@ -249,6 +257,16 @@ const realLaunch: Launch = {
   focus: (session, pane) => focusAgent(pane, aim(session)),
   stopSession: (session) => sessionStop(session),
   deleteSession: sessionDelete,
+  kill(pid) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      return true;
+    } catch (error) {
+      // A process that died on its own between the reading and this call is already the
+      // outcome the caller wanted; only a refusal that leaves it running is a failure.
+      return (error as NodeJS.ErrnoException).code === 'ESRCH';
+    }
+  },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
 };
@@ -273,6 +291,7 @@ export const realSources: UpSources = {
     }
   },
   watchCommand,
+  daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
 };
 
@@ -1390,14 +1409,24 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     } else if (launchingIntoLobby) createLobby = !dry;
   }
   const watch = recorded?.watch;
-  // A recorded watch is running while its process lives; right after a start, before the pane's
-  // first pass records the pid, its pane and a heartbeat no older than two in-force intervals
-  // are what say so.
-  const watchAlive = watchRunning(watch, {
+  // Which watch owns this route now. A hosted watch the daemon carries — anything but standing
+  // by — is doing the job, and this run starts no second one beside it. Otherwise the pane
+  // record decides: a live process with a fresh beat is left alone, a dead or missing one starts
+  // one, and a live process behind an old beat is stale and the plan replaces it. A daemon
+  // reading that cannot say whether a hosted watch exists starts nothing.
+  const daemon = sources.daemonHealth === undefined ? undefined : await sources.daemonHealth(sources.home);
+  const sitting = watchSitting({
+    daemon,
+    root,
+    pane: watch,
     alive: (pid) => sources.alive?.(pid) ?? false,
     now: (sources.now?.() ?? new Date()).getTime(),
     interval: watchInForceOf(standing, team).interval,
   });
+  const paneHealth = sitting.kind === 'hosted' ? null : sitting.health;
+  const watchAlive = sitting.kind === 'hosted' || paneHealth?.state === 'live';
+  const watchPid = paneHealth?.state === 'stale' ? paneHealth.pid : null;
+  const watchUnknown = sitting.kind === 'unknown' && !watchAlive;
   // The watch starts in `root` and runs `watch` with no `--file`. When that load would miss
   // this file, or read another one, the resolved path is recorded for the pane.
   const watchFile = watchWouldRead(root, loaded.path, sources.home) ? undefined : loaded.path;
@@ -1421,6 +1450,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     seats,
     watchLabel: watchLabel(team.project),
     watchAlive,
+    ...(watchPid !== null ? { watchPid } : {}),
+    ...(watchUnknown ? { watchUnknown: true } : {}),
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
     teamFile: loaded.path,
@@ -1794,7 +1825,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       renameAgent: launch.renameAgent,
       closeWorkspace: launch.closeWorkspace,
       stopSession: (session) => launch.stopSession?.(session) ?? false,
-      kill: () => false,
+      kill: (pid) => launch.kill?.(pid) ?? false,
       agentPanes: launch.agentPanes,
       agentList: launch.agents,
       // The session's workspaces with their labels now; the pause compares the label of the pane's
