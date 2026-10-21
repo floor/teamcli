@@ -81,7 +81,7 @@ function publishedTeam(dest: string, home: string): string {
     version: teamDependencyVersion(),
     type: 'module',
     bin: { team: 'dist/cli.js' },
-    exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
+    exports: { '.': { default: './dist/index.js' } },
     files: ['dist'],
   }, null, 2)}\n`);
   writeFileSync(join(dir, 'dist/index.js'), 'export {};\n');
@@ -212,7 +212,7 @@ function instrumentedTeam(dest: string, home: string): string {
     version: teamDependencyVersion(),
     type: 'module',
     bin: { team: 'dist/cli.js' },
-    exports: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } },
+    exports: { '.': { default: './dist/index.js' } },
     files: ['dist'],
   }, null, 2)}\n`);
   writeFileSync(join(dir, 'dist/index.js'), 'export {};\n');
