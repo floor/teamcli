@@ -710,6 +710,34 @@ describe('a pass of the watch', () => {
     expect(at({ 'w3:p1': { shell: 400, foreground: [400] } })).toEqual([restored]);
   });
 
+  test('a restored agent session is recognized while its observed model drift is still reported', () => {
+    const state = emptySession();
+    state.seats['codex-acme'] = {
+      stage: 'ready', pane: 'w2:p1', workspace: 'w2', launched: { shell: 400, cli: [401] }, agent_session: 'kept',
+    };
+    const seen = live({
+      'codex-acme': {
+        status: 'working',
+        screen: readFileSync(new URL('./fixtures/codex/0.157.0/working.txt', import.meta.url), 'utf8'),
+      },
+    });
+    const codex = seen.agents.find((candidate) => candidate.name === 'codex-acme');
+    if (!codex) throw new Error('fixture is missing codex-acme');
+    codex.session = 'kept';
+
+    const result = pass({
+      team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory: newMemory(),
+      processes: { 'w2:p1': { shell: 500, foreground: [501] } },
+      signing: new Map([['codex-acme', { model: 'GPT Sol', version: '6' }]]),
+    });
+
+    // The pane's new pid is recognized as the same agent conversation, so no generic restored
+    // warning is emitted. The live model still differs from its signing record and is reported.
+    expect(result.reports.map((report) => report.text)).toEqual([
+      'codex-acme runs GPT Terra 5.6; the registry says GPT Sol 6: it signs with the wrong model — team remove codex-acme --keep, then team add codex-acme',
+    ]);
+  });
+
   test('a reading herdr can\'t give is no change: it never clears the report-once mark', () => {
     const state = emptySession();
     state.seats['deepseek-acme'] = { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 400, cli: [401] } };
