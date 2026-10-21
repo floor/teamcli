@@ -572,19 +572,20 @@ function seatPlan(
       return text != null && text !== '' && readScreen(seat.cli, text).kind === 'working';
     };
     if (named.length === 0) {
-      // The pane is gone and no name survived: its conversation is resumed on a fresh pane when
-      // the launch line can carry it — never replaced by a blank one. A line that cannot carry
-      // it stops before anything is launched, and the recorded workspace, when the host still
-      // lists it, is named and left.
-      if (continuitySession !== null) {
-        const resumeHold = uncarryableResume(planned, continuitySession);
-        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
-      }
+      // The pane is gone and no name survived. A recorded conversation is resumed on a fresh
+      // pane when the launch line can carry it — never replaced by a blank one — and the
+      // replaced pane is named only on that path: a record with no conversation to protect
+      // takes the ordinary fresh launch, with no notice about a pane nothing was resumed from.
+      // A line that cannot carry the conversation stops before anything is launched, and the
+      // recorded workspace, when the host still lists it, is named and left.
+      if (continuitySession === null) return planned;
+      const resumeHold = uncarryableResume(planned, continuitySession);
+      if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
       const leftWorkspace = workspaces?.some((item) => item.id === movedWorkspace) ? movedWorkspace : undefined;
       return {
         ...planned,
         replacedPane: movedPane,
-        ...(continuitySession === null ? {} : { resume: continuitySession }),
+        resume: continuitySession,
         ...(leftWorkspace ? { leftWorkspace } : {}),
       };
     }
