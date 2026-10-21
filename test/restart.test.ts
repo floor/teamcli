@@ -1032,9 +1032,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(io.err).toContain('has a process in its old pane that is not the signed seat; left as it is');
   });
 
-  test('a restored Codex seat is proven by the registry binding, with no state copy and no resume flag', async () => {
-    // The profile has no `--resume`, and this state predates the id: the registry record is the
-    // only proof, and the live agent's own session is what it is compared against.
+  test('a restored Codex seat is proven by the registry binding and resumes that conversation through its launcher', async () => {
+    // The state predates the id, and this profile resumes by subcommand, not by a flag: the
+    // registry record is the only proof, the live agent's own session is what it is compared
+    // against, and the relaunch carries the recorded id as a word after `resume`.
     const { fixture, run } = seeded({ registry: 'ses_codex', declaredCli: 'codex', workerSession: 'ses_codex', launched: true });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
     // The old pane draws its exit text once the stop types it; the new pane draws the idle
@@ -1045,7 +1046,9 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.closed).toContain('ws-old');
-    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
+    // The recorded recipe, then Codex's own resume subcommand with the id the pane proved.
+    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol resume ses_codex');
+    // Not a flag: the id is a word after `resume`, as `codex resume --help` measures it.
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toBe('');
   });
@@ -1074,7 +1077,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.typed).toEqual([]);
     expect(run.did.closed).toContain('ws-old');
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
-    expect(io.err).toBe('');
+    // The live pane runs another conversation, so that id is not resumed; the run says so and
+    // the flag's fresh start goes ahead.
+    expect(run.did.runs.join('\n')).not.toContain('resume ses_');
+    expect(io.err).toContain('worker: not resuming its recorded session (its live agent session is not the recorded one)');
   });
 
   test('--abandon still leaves a doubt pane herdr does not name as this seat', async () => {

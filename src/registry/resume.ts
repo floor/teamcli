@@ -88,8 +88,9 @@ export function recordedSeatSession(input: {
  * launch line this run would write. A state naming another id still refuses: the two records
  * disagree, and neither is allowed to speak for the seat.
  *
- * A CLI that cannot carry a resume flag (every profile but the one {@link withResume} knows) has
- * no resume id at all; this reader is what lets a restart recognize its restored pane anyway.
+ * A CLI that cannot carry one in a measured form (every profile but the ones
+ * {@link withResume} knows) has no resume id at all; this reader is what lets a restart
+ * recognize its restored pane anyway.
  */
 export function recordedSeatContinuity(input: {
   home: string;
