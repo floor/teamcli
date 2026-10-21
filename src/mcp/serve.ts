@@ -10,6 +10,7 @@
 // Nothing here is a push: MCP is client-pull, so the seat notices a message when it calls
 // `inbox_check`. The drop-folder watch is the bounded fall-back, not this process.
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { loadTeamFile } from '../file/load.ts';
@@ -18,6 +19,7 @@ import { version } from '../version.ts';
 import {
   ensureInboxFolder,
   inboxFolderHeld,
+  legacyDropAt,
   listUnread,
   readMessage,
   removeListener,
@@ -120,13 +122,15 @@ function callTool(params: unknown, serving: Serving): unknown {
     if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
       return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
     }
-    return toolText(JSON.stringify({
-      unread: listUnread(
-        serving.dropDir,
-        { to: serving.seat, root: serving.root, session: serving.session },
-        serving.home,
-      ),
-    }));
+    // A plain-text drop an earlier build wrote is not a message this inbox can ever serve: listing
+    // it every turn would only invite a refused `inbox_read` and the owner event that follows. The
+    // file stays where it is; `team drops --read` still counts it as unserved.
+    const unread = listUnread(
+      serving.dropDir,
+      { to: serving.seat, root: serving.root, session: serving.session },
+      serving.home,
+    ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id)));
+    return toolText(JSON.stringify({ unread }));
   }
   if (name === 'inbox_read') {
     const id = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).id : undefined;
@@ -140,7 +144,11 @@ function callTool(params: unknown, serving: Serving): unknown {
       serving.home,
     );
     if (!read.ok) {
-      if (read.refusal !== undefined) {
+      // A drop an earlier build wrote is refused like any file that is not a record, but it is not
+      // a record that could have been admitted: it is not raised to the owner. A record-shaped file
+      // that fails — tampered, truncated or foreign — keeps its refusal and its event.
+      const legacy = read.refusal?.rule === 'shape' && legacyDropAt(read.refusal.path);
+      if (read.refusal !== undefined && !legacy) {
         // The owner hears the rule and the object, never the record's content.
         raiseRefusalEvent({
           project: serving.project,
