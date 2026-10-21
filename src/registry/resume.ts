@@ -5,7 +5,7 @@
 // agent, seat, team, CLI and id: a record that does not is foreign or stale, and no resume is
 // offered from it. No CLI home, transcript, credential or session file is read here.
 import type { SeatState } from '../state.ts';
-import { findAgent } from './agents.ts';
+import { findAgent, type Agent } from './agents.ts';
 import { teamIdOf } from './teams.ts';
 
 /** A recorded resume id is one token: `withResume` appends it to the launch line unquoted, so
@@ -72,6 +72,50 @@ export function recordedSeatSession(input: {
   seat: { name: string; cli: string };
   state: SeatState | undefined;
 }): RecordedSeatSessionRead {
+  const read = readSeatBinding(input);
+  if (read.kind !== 'bound') return read;
+  // A resume writes the id into a new launch line: the state copy must name it too, so a
+  // record the launch did not write is never resumed. Continuity reads the binding directly.
+  if (!read.stateAgrees) return { kind: 'none', why: 'the seat state names no agent session' };
+  return { kind: 'bound', recorded: recordedOf(read) };
+}
+
+/**
+ * The registry's binding of a seat to its conversation, for continuity of a process already in
+ * the seat's pane — never for a resume. The checks are {@link recordedSeatSession}'s, with one
+ * difference: a seat state that names no session does not withhold the registry's id, because a
+ * restored pane is proven by the live agent's session equalling the recorded one, not by the
+ * launch line this run would write. A state naming another id still refuses: the two records
+ * disagree, and neither is allowed to speak for the seat.
+ *
+ * A CLI that cannot carry a resume flag (every profile but the one {@link withResume} knows) has
+ * no resume id at all; this reader is what lets a restart recognize its restored pane anyway.
+ */
+export function recordedSeatContinuity(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seat: { name: string; cli: string };
+  state: SeatState | undefined;
+}): RecordedSeatSessionRead {
+  const read = readSeatBinding(input);
+  if (read.kind !== 'bound') return read;
+  return { kind: 'bound', recorded: recordedOf(read) };
+}
+
+/** The binding both readers agree on, with the state's own copy still undecided. */
+type SeatBindingRead =
+  | { kind: 'bound'; agent: Agent; id: string; stateAgrees: boolean }
+  | { kind: 'none'; why: string }
+  | { kind: 'refused'; why: string };
+
+function readSeatBinding(input: {
+  home: string;
+  root: string;
+  herdrSession: string;
+  seat: { name: string; cli: string };
+  state: SeatState | undefined;
+}): SeatBindingRead {
   const team = teamIdOf(input.root);
   const agent = findAgent(input.home, {
     team,
@@ -100,24 +144,27 @@ export function recordedSeatSession(input: {
   if (id === null || id === undefined || id === '') return { kind: 'none', why: 'the record names no agent session' };
   if (!SESSION_TOKEN.test(id)) return { kind: 'refused', why: 'the recorded id is not one session token' };
   const live = state?.agent_session;
-  if (live === undefined || live === '') return { kind: 'none', why: 'the seat state names no agent session' };
-  if (live !== id) return { kind: 'refused', why: 'the seat state and the agent record name different sessions' };
+  if (live !== undefined && live !== '' && live !== id) {
+    return { kind: 'refused', why: 'the seat state and the agent record name different sessions' };
+  }
+  return { kind: 'bound', agent, id, stateAgrees: live !== undefined && live !== '' };
+}
+
+function recordedOf(read: { agent: Agent; id: string }): RecordedSeatSession {
+  const { agent, id } = read;
   return {
-    kind: 'bound',
-    recorded: {
-      agentId: agent.id,
-      seatHandle: agent.seat_handle ?? null,
-      sessionId: id,
-      team: agent.reach.team,
-      seat: agent.reach.seat,
-      cli: agent.cli,
-      launch: agent.launch,
-      model: agent.signing.model,
-      version: agent.signing.version,
-      lab: agent.lab,
-      herdrSession: agent.reach.session,
-      pane: agent.reach.pane,
-      address: agent.reach.address,
-    },
+    agentId: agent.id,
+    seatHandle: agent.seat_handle ?? null,
+    sessionId: id,
+    team: agent.reach.team,
+    seat: agent.reach.seat,
+    cli: agent.cli,
+    launch: agent.launch,
+    model: agent.signing.model,
+    version: agent.signing.version,
+    lab: agent.lab,
+    herdrSession: agent.reach.session,
+    pane: agent.reach.pane,
+    address: agent.reach.address,
   };
 }

@@ -27,6 +27,12 @@ import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/outpu
 
 const NOW = new Date('2026-10-16T02:00:00Z');
 const IDLE = CLAUDE_IDLE;
+// The old pane's own Codex screens: idle before the stop, its composer holding `/exit` after the
+// one text this scene types. Captured from codex 0.161.0, the version its launch line declares.
+const CODEX_OLD_IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8');
+const CODEX_EXIT_TYPED = readFileSync(new URL('./fixtures/codex/0.161.0/exit-typed.txt', import.meta.url), 'utf8');
+// The same screen naming this scene's recipe: model GPT Sol, version 6.1.
+const CODEX_NEW_IDLE = CODEX_OLD_IDLE.replace('gpt-5.6-terra', 'gpt-6.1-sol').replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
 
 const TEAM_YAML = `format: 1
 project: acme
@@ -72,6 +78,27 @@ seats:
     launch: claude --model claude-opus-5-5
     stopped: true
 `;
+
+// The same team with a Codex worker: its profile carries no resume flag, so a restored pane can
+// only be recognized through the registry binding, never through the launch line a resume writes.
+const CODEX_TEAM_YAML = TEAM_YAML.replace(
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`,
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    launch: codex -m gpt-6.1-sol`,
+);
 
 // The live restart reading: the file asks for 0.5 GB free swap — which no longer refuses a
 // launch — and the OS's own pressure level is what the gate acts on.
@@ -130,6 +157,10 @@ function makeHarness(
     /** The text the unsent box draws, when `workerScreen` is `unsent`. */
     workerDraft?: string;
     workerSession?: string;
+    /** The foreground program the faked herdr reports: the CLI the scene declares. */
+    foregroundArgv0?: string;
+    /** The screen a relaunched pane draws: another CLI's idle screen, when the scene declares one. */
+    newPaneScreen?: string;
     /** The relaunched pane never draws the paste: the restore's read-back fails. */
     pasteDrops?: boolean;
     closeFails?: boolean;
@@ -144,6 +175,9 @@ function makeHarness(
   let workerAlive = opts.initialRunning ?? true;
   let boxedText = opts.workerScreen === 'unsent' ? claudeBox(opts.workerDraft ?? 'draft') : claudeBox('');
   let shelled = false;
+  // The delivered rules line is this seat's first turn: a CLI whose rules arrive as a message
+  // (Codex's line cannot carry them) starts working once Enter takes it.
+  let turnStarted = false;
   const newPanes = new Map<string, { text: string; agent: boolean; name: string | null; workspace: string }>();
 
   const currentAgents = (): HerdrAgent[] => {
@@ -210,7 +244,7 @@ function makeHarness(
       did.created += 1;
       const pane = did.created === 1 ? 'pane-new' : `pane-new-${did.created}`;
       const workspace = did.created === 1 ? 'ws-new' : `ws-new-${did.created}`;
-      newPanes.set(pane, { text: IDLE, agent: false, name: null, workspace });
+      newPanes.set(pane, { text: opts.newPaneScreen ?? IDLE, agent: false, name: null, workspace });
       return { pane, workspace };
     },
     paneRun(_session, pane, command) {
@@ -234,12 +268,23 @@ function makeHarness(
       did.pasted.push(text);
       const slot = newPanes.get(pane);
       const pasted = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
-      if (slot && pasted && !opts.pasteDrops) slot.text = claudeBox(pasted[1] ?? '');
+      if (!slot || opts.pasteDrops) return true;
+      if (opts.newPaneScreen?.includes('› Ask Codex to do anything')) {
+        // The CLI's own composer: the first line replaces the grey placeholder, and Enter sends it.
+        slot.text = opts.newPaneScreen.replace('› Ask Codex to do anything', `› ${pasted ? (pasted[1] ?? '') : text}`);
+      } else if (pasted) slot.text = claudeBox(pasted[1] ?? '');
       return true;
     },
-    pressEnter: () => true,
-    agentStatus: () => 'idle',
-    foreground: () => ['claude'],
+    pressEnter(_session, pane) {
+      const slot = newPanes.get(pane);
+      if (slot) {
+        slot.text = opts.newPaneScreen ?? IDLE;
+        if (opts.newPaneScreen !== undefined) turnStarted = true;
+      }
+      return true;
+    },
+    agentStatus: () => (turnStarted ? 'working' : 'idle'),
+    foreground: () => [opts.foregroundArgv0 ?? 'claude'],
     sleep: async () => {},
     now: () => NOW,
   };
@@ -271,7 +316,7 @@ function makeHarness(
     },
     screenText: () => boxedText,
     status: () => opts.workerStatus ?? (screenKind === 'working' ? 'working' : 'idle'),
-    foreground: (_session, pane) => (pane === 'pane-old' && shelled ? ['zsh'] : ['claude']),
+    foreground: (_session, pane) => (pane === 'pane-old' && shelled ? ['zsh'] : [opts.foregroundArgv0 ?? 'claude']),
     now: () => NOW,
     sleep: async () => {},
     launch: downLaunch,
@@ -902,8 +947,8 @@ describe('team restart <seat>', () => {
 // herdr session. A record that does not agree is never resumed: the restart says why and
 // launches fresh, exactly as it did before the records were read.
 describe('team restart resumes the seat\'s own recorded session', () => {
-  function seeded(opts: { registry?: string; state?: string; cli?: string; workerSession?: string; launched?: boolean } = {}) {
-    const fixture = makeFixture();
+  function seeded(opts: { registry?: string; state?: string; cli?: string; declaredCli?: 'claude-code' | 'codex'; workerSession?: string; launched?: boolean } = {}) {
+    const fixture = makeFixture(opts.declaredCli === 'codex' ? CODEX_TEAM_YAML : TEAM_YAML);
     updateState(fixture.dir, (state) => {
       const session = (state.sessions.acme ??= emptySession());
       session.seats.worker = {
@@ -919,11 +964,13 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     if (opts.registry !== undefined) {
       agentId = registerAgent(fixture.home, {
         name: 'worker',
-        signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+        signing: opts.declaredCli === 'codex'
+          ? { model: 'GPT Sol', version: '6.1', role: 'implementer' }
+          : { model: 'Claude Opus', version: '5.5', role: 'implementer' },
         lab: 'anthropic',
-        cli: opts.cli ?? 'claude-code',
+        cli: opts.cli ?? opts.declaredCli ?? 'claude-code',
         launcher: null,
-        launch: 'claude --model claude-opus-5-5',
+        launch: opts.declaredCli === 'codex' ? 'codex -m gpt-6.1-sol' : 'claude --model claude-opus-5-5',
         reach: {
           team: teamIdOf(fixture.root),
           seat: 'worker',
@@ -939,7 +986,14 @@ describe('team restart resumes the seat\'s own recorded session', () => {
         by: 'team up',
       }).id;
     }
-    return { fixture, run: makeHarness(fixture, { workerSession: opts.workerSession }), agentId };
+    return {
+      fixture,
+      run: makeHarness(fixture, {
+        workerSession: opts.workerSession,
+        ...(opts.declaredCli === 'codex' ? { foregroundArgv0: 'codex', newPaneScreen: CODEX_NEW_IDLE } : {}),
+      }),
+      agentId,
+    };
   }
 
   test('both records agreeing on one id resume it on the new declaration', async () => {
@@ -969,6 +1023,35 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
   test('a state-file session alone cannot prove a host-restored process when the registry disagrees', async () => {
     const { fixture, run } = seeded({ registry: 'ses_registry', state: 'ses_state', workerSession: 'ses_state', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.created).toBe(0);
+    expect(io.err).toContain('has a process in its old pane that is not the signed seat; left as it is');
+  });
+
+  test('a restored Codex seat is proven by the registry binding, with no state copy and no resume flag', async () => {
+    // The profile has no `--resume`, and this state predates the id: the registry record is the
+    // only proof, and the live agent's own session is what it is compared against.
+    const { fixture, run } = seeded({ registry: 'ses_codex', declaredCli: 'codex', workerSession: 'ses_codex', launched: true });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    // The old pane draws its exit text once the stop types it; the new pane draws the idle
+    // prompt this declaration's model names.
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
+    expect(io.err).toBe('');
+  });
+
+  test('a restored Codex seat running another conversation is still left as it is', async () => {
+    const { fixture, run } = seeded({ registry: 'ses_codex', declaredCli: 'codex', workerSession: 'ses_other', launched: true });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
     const io = testIo(fixture.root, { kind: 'owner' });
 

@@ -72,7 +72,7 @@ import { dropMessage } from '../send/native.ts';
 import { shellQuote, withResume } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
-import { recordedSeatSession } from '../registry/resume.ts';
+import { recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -315,6 +315,21 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     state: recordedSeat,
   });
   let resume: string | undefined;
+  // The pane's continuity is proven by the session the registry binds to the seat, whatever
+  // flag the new launch line can carry: a CLI with no resume flag has no resume id, and its
+  // state copy may predate the id a restore kept. The live agent's session must still be the
+  // recorded one; `inspectSeat` makes that comparison. A state naming another id, or a record
+  // that is not this seat's, binds nothing.
+  const boundSession = recordedSeatContinuity({
+    home,
+    root,
+    herdrSession: session,
+    seat: declared,
+    state: recordedSeat,
+  });
+  const continuity = boundSession.kind === 'bound' && boundSession.recorded.launch
+    ? boundSession.recorded.sessionId
+    : undefined;
   const noResume = (why: string): void => {
     const said = `${name}: not resuming its recorded session (${why})`;
     if (json) notes.push(said);
@@ -363,7 +378,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     endReason: 'restart',
     dry,
     ...(resume === undefined ? {} : { resume }),
-    ...(ownSession.kind === 'bound' && ownSession.recorded.launch ? { registryLaunch: ownSession.recorded.launch } : {}),
+    ...(continuity === undefined ? {} : { continuity }),
+    ...(boundSession.kind === 'bound' && boundSession.recorded.launch ? { registryLaunch: boundSession.recorded.launch } : {}),
     now: sources.now,
     sources,
   });
@@ -455,6 +471,10 @@ export type PerformInput = {
   /** The recorded CLI session id the new launch resumes, where a swap keeps the conversation.
    *  Absent when the CLI changed or cannot resume: the run asks for a handover instead. */
   resume?: string;
+  /** The registry-bound session id this restart proves a restored pane against. Absent when no
+   *  binding exists, or the CLI cannot write a resume flag and the state copy names no id: the
+   *  pane is then never tied to the launch, and a replaced process is left as it is. */
+  continuity?: string;
   /** Registry recipe bound to the resume id. */
   registryLaunch?: string;
   /** The handover the new conversation reads first: the seat is asked to write this path before
@@ -530,7 +550,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     : out;
 
   // Inspect the target seat's current pane before any preflight or stop.
-  let continuitySession = input.command === 'restart' ? input.resume : undefined;
+  let continuitySession = input.command === 'restart' ? (input.continuity ?? input.resume) : undefined;
   const inspected = inspectSeat(session, name, declared, recordedSeat, agents, abandon, owner, sources, input.broken === true, input.command === 'restart', continuitySession);
   if (inspected.kind === 'replaced') return { kind: 'replaced' };
   if (inspected.kind === 'abandon-working') return { kind: 'abandon-working' };
