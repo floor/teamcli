@@ -72,7 +72,7 @@ import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lob
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
-import { shellQuote } from '../profiles/profile.ts';
+import { resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
@@ -306,6 +306,17 @@ function overCeiling(ceilings: Ceilings, running: readonly Running[], seat: Seat
   return null;
 }
 
+/** The refusal a proven conversation gets when the line the repair would actually run cannot
+ *  carry it — the record's own launch where there is one, the declared line otherwise. The
+ *  repair is not attempted, because its close would destroy a conversation the launch cannot
+ *  put back. A line naming another id, or resuming without naming one, is never rewritten. */
+function uncarryableResume(seat: { name: string; cli: string; launch: string }, session: string): string | undefined {
+  const carried = resumeCarry(seat.cli, seat.launch, session);
+  return carried.kind === 'refuse'
+    ? `its recorded conversation cannot be resumed: ${carried.why}; left as it is (team restart ${seat.name} --abandon for a fresh start)`
+    : undefined;
+}
+
 /** What a caller is told when a drifted seat is working and this `up` will not close it. */
 function driftWay(owner: boolean, name: string): string {
   return owner
@@ -534,6 +545,11 @@ function seatPlan(
         ? modelDrift(team, seat, recorded, known, processes, screenOf, owner, registry, true)
         : { kind: 'skip' as const };
       if (drift.kind === 'cycle') {
+        // A proven conversation this seat's own launch line cannot carry stops the repair before
+        // its close: the conversation would not come back. The line checked is the one the
+        // repair would run — the record's launch, not the line the file was declared with.
+        const resumeHold = uncarryableResume(planned, restoredSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
         return {
           ...planned,
           repair: {
@@ -592,6 +608,10 @@ function seatPlan(
         ? continuitySession
         : undefined;
       if (drift.kind === 'cycle' && recorded.pane && recorded.workspace && recorded.launched) {
+        // The line checked is the one the repair would run — the record's launch where there is
+        // one — so a record naming another conversation is refused before the close.
+        const resumeHold = provenSession === undefined ? undefined : uncarryableResume(planned, provenSession);
+        if (resumeHold) return { ...planned, stage: 'ready', resumeHold };
         return {
           ...planned,
           repair: {

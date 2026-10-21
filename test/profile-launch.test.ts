@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
-import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, startupReadsList, withResume } from '../src/profiles/profile.ts';
+import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, namedResumeTarget, resumeCarry, startupReadsList, withResume } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
@@ -437,5 +437,49 @@ describe('the resume line a launch appends', () => {
 
   test('a CLI with no measured resume form takes no id', () => {
     expect(withResume('cursor', 'cursor-agent --model x', 'ses_1')).toBeNull();
+  });
+});
+
+describe('a launch line that already selects a conversation', () => {
+  test('the id it names is read from the measured form', () => {
+    expect(namedResumeTarget('claude-code', 'claude --resume ses_9')).toBe('ses_9');
+    expect(namedResumeTarget('claude-code', 'claude -r ses_9')).toBe('ses_9');
+    expect(namedResumeTarget('claude-code', 'claude --resume=ses_9')).toBe('ses_9');
+    expect(namedResumeTarget('codex', 'codex -m gpt-6-sol resume ses_9')).toBe('ses_9');
+  });
+
+  test('a selection that names no id reads as empty', () => {
+    for (const line of ['claude --continue', 'claude -c', 'claude --resume']) {
+      expect(namedResumeTarget('claude-code', line)).toBe('');
+    }
+    for (const line of ['codex resume', 'codex resume --last', 'codex resume --all']) {
+      expect(namedResumeTarget('codex', line)).toBe('');
+    }
+  });
+
+  test('a line with no resume form reads as none', () => {
+    expect(namedResumeTarget('claude-code', 'claude --model x')).toBeNull();
+    expect(namedResumeTarget('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high')).toBeNull();
+    expect(namedResumeTarget('cursor', 'cursor-agent --resume ses_1')).toBeNull();
+  });
+
+  test('a proven id is carried only when the line selects it or names none', () => {
+    expect(resumeCarry('claude-code', 'claude --resume ses_1', 'ses_1'))
+      .toEqual({ kind: 'line', line: 'claude --resume ses_1' });
+    expect(resumeCarry('claude-code', 'claude --model x', 'ses_1'))
+      .toEqual({ kind: 'line', line: 'claude --model x --resume ses_1' });
+    expect(resumeCarry('claude-code', 'claude --resume ses_9', 'ses_1'))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes a different conversation' });
+    expect(resumeCarry('claude-code', 'claude --continue', 'ses_1'))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes without naming the recorded conversation' });
+    expect(resumeCarry('codex', 'codex resume ses_9', 'ses_1'))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes a different conversation' });
+    expect(resumeCarry('codex', 'codex resume --last', 'ses_1'))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes without naming the recorded conversation' });
+    expect(resumeCarry('cursor', 'cursor-agent --model x', 'ses_1'))
+      .toEqual({ kind: 'refuse', why: 'its launch line has no measured resume form' });
+    // A line that starts a named new session is not a resume form for the recorded one.
+    expect(resumeCarry('claude-code', 'claude --session-id 7f1c2a53-0e5a-4f4c-9a4b-1d2e3f4a5b6c', 'ses_1'))
+      .toEqual({ kind: 'refuse', why: 'its launch line already sets a new session id' });
   });
 });

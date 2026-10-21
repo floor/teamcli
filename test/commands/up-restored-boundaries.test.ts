@@ -598,6 +598,36 @@ describe('team up, a restored session: boundaries', () => {
     });
   });
 
+  // The record's launcher names a conversation of its own. A repair through it would resume
+  // something nothing proved and lose the one the pane does: the repair stops before its close,
+  // the record stays as it was, and the fresh start is named as the caller's explicit choice.
+  test('a drifted restored seat whose launcher selects another conversation is left as it is, never closed', async () => {
+    await approve();
+    writeSeats();
+    registerSeat('kept', { model: 'DeepSeek Flash', version: 'V4.1', lab: 'deepseek', launch: 'team-deepseek --resume other' });
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    made.launch.agents = live;
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(1);
+    expect(made.closes).toEqual([]);
+    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+    expect(keys).toEqual([]);
+    expect(io.err).toContain('  its recorded conversation cannot be resumed: its launch line resumes a different conversation; left as it is (team restart deepseek-acme --abandon for a fresh start)\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', launched: { shell: 430, cli: [431] } });
+    expect(seatsOf()['deepseek-acme']?.agent_session).toBeUndefined();
+  });
+
   // Scene 6 — a dry run touches nothing. deepseek-acme restored, deepseek-acme-2 doubt, and the
   // coordinator gone: the plan prints the leave-it line for the first two and the close line only
   // for the gone one, and the state file is byte for byte what it was.
