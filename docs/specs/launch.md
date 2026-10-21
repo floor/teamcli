@@ -349,10 +349,13 @@ map), `src/lobby/gate.ts` (the gate), `src/launch/pretrust.ts` (the trust record
    `test/launch/rules-file.test.ts`.
 5. **The typed line names the file and its hash, and Enter follows the read-back alone.** A path
    MUST be refused, never quoted, unless it is in the typeable characters; the line MUST be read
-   back row by row before one Enter; a box the run cannot verify MUST NOT be cleared. *Source:*
+   back row by row before every Enter; a key the CLI did not take MUST be retried, never
+   re-typed, at most the measured number of tries while the box still reads back as the line; a
+   box the run cannot verify MUST NOT be cleared. *Source:*
    `src/launch/rules-file.ts` (`rulesLine`, `typeablePath`, `rulesFileHolds`),
-   `src/launch/execute.ts`. *Proof:* `test/launch/launch.test.ts`,
-   `test/agy-rules-readback-boundaries.test.ts`.
+   `src/launch/deliver.ts` (`deliverRules`), `src/launch/execute.ts`. *Proof:*
+   `test/launch/launch.test.ts`, `test/agy-rules-readback-boundaries.test.ts`,
+   `test/launch/codex.test.ts`.
 6. **A profile is data the tool ships and validates.** Each profile MUST name its CLI, binary,
    tested range and rules delivery, and MUST be read by the loader's own parser; the JSON Schema
    MUST remain the documented shape the tests check the shipped profiles against; a CLI with no

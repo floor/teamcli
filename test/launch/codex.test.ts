@@ -4,7 +4,7 @@ import { profileFor } from '../../src/profiles/index.ts';
 import { launchCommand, versionVerdict } from '../../src/profiles/profile.ts';
 import { classify, classifyComposer, readScreen } from '../../src/watch/screen.ts';
 import { runningModel } from '../../src/status/statusline.ts';
-import { boxHoldsText, deliverRules, refusalReport, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
+import { boxHoldsText, deliverRules, refusalReport, RULES_ENTER_TRIES, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
 import { rulesLine } from '../../src/launch/rules-file.ts';
 import { upPlan } from '../../src/launch/plan.ts';
 import { SAMPLE_RULES, wordWrap } from '../helpers.ts';
@@ -834,6 +834,130 @@ describe('Codex rules delivery of the one line (0.160.0 capture)', () => {
   test('a resumed seat with an empty box is typed once, verified and sent', async () => {
     const d = lineDelivery();
     expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(true);
+    expect(d.calls).toEqual([capturedLine, 'Enter']);
+  });
+});
+
+/** A Codex pane 54 by 23 that answers Enter as a submit the CLI may not take: `takes(enters)`
+ *  says which press it accepts; until then the line stays in the box, as an unsent submit. */
+function submitRetryDelivery(takes: (enters: number) => boolean) {
+  let raw = capture('idle');
+  let status = 'idle';
+  let clock = 0;
+  let presses = 0;
+  const calls: string[] = [];
+  const refusals: Refusal[] = [];
+  const io: Delivery = {
+    screen: () => raw,
+    status: () => status,
+    report: (why) => { refusals.push(why); },
+    file: () => true,
+    type(text) {
+      calls.push(text);
+      raw = capture('rules-line');
+      return true;
+    },
+    enter() {
+      calls.push('Enter');
+      presses += 1;
+      if (takes(presses)) {
+        raw = fixture('working');
+        status = 'working';
+      }
+      return true;
+    },
+    foreground: () => ['codex'],
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
+  };
+  return {
+    io, calls, refusals,
+    presses: () => presses,
+    show: (screen: string) => { raw = screen; },
+    status: (value: string) => { status = value; },
+  };
+}
+
+describe('Codex rules delivery retries a submit the CLI did not take', () => {
+  test('the second Enter is accepted; the line is typed once and every retry still waits for the acknowledgement', async () => {
+    const d = submitRetryDelivery((enters) => enters >= 2);
+    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(true);
+    expect(d.calls).toEqual([capturedLine, 'Enter', 'Enter']);
+  });
+
+  test('the third Enter is the last try, and it can be the one accepted', async () => {
+    const d = submitRetryDelivery((enters) => enters >= RULES_ENTER_TRIES);
+    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(true);
+    expect(d.calls).toEqual([capturedLine, ...Array<string>(RULES_ENTER_TRIES).fill('Enter')]);
+    expect(d.presses()).toBe(RULES_ENTER_TRIES);
+  });
+
+  test('three Enters the CLI does not take end the delivery: the line sits unsent, and the report says so', async () => {
+    const d = submitRetryDelivery(() => false);
+    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(false);
+    expect(d.calls).toEqual([capturedLine, ...Array<string>(RULES_ENTER_TRIES).fill('Enter')]);
+    const why = d.refusals.at(-1);
+    expect(why?.stop).toBe('ack');
+    expect(why?.typed).toBe(true);
+    expect(why?.sent).toBe(true);
+    expect(why?.kind).toBe('unsent');
+    expect(refusalReport(why!)).toBe(
+      'rules typed, not sent: its box still holds the line after Enter; '
+      + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again',
+    );
+  });
+
+  test('no retry ever types the line again', async () => {
+    const d = submitRetryDelivery(() => false);
+    await deliverRules('codex', capturedLine, 30, d.io);
+    expect(d.calls.filter((call) => call !== 'Enter')).toEqual([capturedLine]);
+  });
+
+  // Each of these changes the world after the first Enter did not take: the retry's gates read
+  // the change, and the next key is never pressed.
+  test.each([
+    ['the box text changed', (d: ReturnType<typeof submitRetryDelivery>) => d.show(capture('rules-line').replace('wait for your brief.', 'wait for your brief!')), 'unsent', false],
+    ['a dialog appeared', (d: ReturnType<typeof submitRetryDelivery>) => d.show(fixture('trust')), 'trust', false],
+    ['the seat went busy', (d: ReturnType<typeof submitRetryDelivery>) => d.status('working'), 'unsent', false],
+    ['the rules file moved', (d: ReturnType<typeof submitRetryDelivery>) => { d.io.file = () => false; }, 'unsent', false],
+    ['the launched CLI lost the foreground', (d: ReturnType<typeof submitRetryDelivery>) => { d.io.foreground = () => ['zsh']; }, 'none', 'no-agent'],
+  ] as const)('after a failed Enter, %s: no second Enter', async (_what, change, kind, outcome) => {
+    const d = submitRetryDelivery(() => false);
+    const plain = d.io.enter;
+    d.io.enter = () => { const taken = plain(); change(d); return taken; };
+    const delivered = await deliverRules('codex', capturedLine, 30, d.io);
+    if (outcome === 'no-agent') {
+      expect(delivered).toBe('no-agent');
+      expect(d.refusals).toEqual([]);
+    } else {
+      expect(delivered).toBe(false);
+      const why = d.refusals.at(-1);
+      expect(why?.stop).toBe('ack');
+      if (kind !== 'none') expect(why?.kind).toBe(kind);
+    }
+    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    expect(d.presses()).toBe(1);
+  });
+
+  test('a box that changed reads as its own reading, not as the line still sitting in it', async () => {
+    const d = submitRetryDelivery(() => false);
+    const plain = d.io.enter;
+    d.io.enter = () => { const taken = plain(); d.show(capture('rules-line').replace('wait for your brief.', 'wait for your brief!')); return taken; };
+    await deliverRules('codex', capturedLine, 30, d.io);
+    expect(refusalReport(d.refusals.at(-1)!)).toBe(
+      'the seat did not come back to its idle prompt (unsent); read its box, then run up again',
+    );
+  });
+
+  test('the caller\'s check before the key is asked before each retry, and a refusal presses nothing', async () => {
+    const d = submitRetryDelivery(() => false);
+    const asked: string[] = [];
+    d.io.beforeInput = (action) => {
+      asked.push(action);
+      return asked.filter((entry) => entry === 'enter').length < 2;
+    };
+    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(false);
+    expect(asked).toEqual(['type', 'enter', 'enter']);
     expect(d.calls).toEqual([capturedLine, 'Enter']);
   });
 });

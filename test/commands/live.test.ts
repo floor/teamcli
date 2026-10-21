@@ -17,6 +17,7 @@ import { teamIdOf } from '../../src/registry/teams.ts';
 import { parseMemoryPressure, parseSwapUsage, type Machine } from '../../src/watch/machine.ts';
 import type { Key } from '../../src/launch/terminal.ts';
 import { seatLockPath } from '../../src/launch/seat-lock.ts';
+import { RULES_ENTER_TRIES } from '../../src/launch/deliver.ts';
 import { defaultFs } from '../../src/lobby/gate.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
 import { beginSession, readStoreSessions, sessionsPath } from '../../src/sessions/registry.ts';
@@ -1650,9 +1651,10 @@ describe('team up, live', () => {
       'codex-acme: left out: rules typed, not sent: its box still holds the line after Enter; '
       + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again\n',
     );
-    // The resume verifies the box and sends the one Enter; this stub's pane never takes the
-    // key — the box is read again after it, to the deadline, and nothing else is ever typed.
-    expect(sent).toEqual(['Enter']);
+    // The resume verifies the box and presses Enter; this stub's pane never takes the key, so
+    // the submit is retried while the box still reads back as the line — RULES_ENTER_TRIES
+    // presses in all — and nothing else is ever typed.
+    expect(sent).toEqual(Array<string>(RULES_ENTER_TRIES).fill('Enter'));
     expect(again.closes).toEqual([]);
     expect(JSON.parse(readFileSync(join(root, '.agents/team.state.json'), 'utf8'))).toEqual(namedState());
     const enter = calls.indexOf('pressEnter w2:p1');
@@ -1671,8 +1673,8 @@ describe('team up, live', () => {
     ]);
     const after = calls.slice(enter + 1);
     expect(after).not.toContain('typeText w2:p1');
-    expect(after).not.toContain('pressEnter w2:p1');
-    expect([...new Set(after)].sort()).toEqual(['agentStatus w2:p1', 'paneText w2:p1']);
+    expect(after.filter((call) => call === 'pressEnter w2:p1').length).toBe(RULES_ENTER_TRIES - 1);
+    expect([...new Set(after)].sort()).toEqual(['agentStatus w2:p1', 'foreground w2:p1', 'paneText w2:p1', 'pressEnter w2:p1']);
   });
 
   test('a resumed seat is checked where its pane runs, not where the file would put it; its record and log hold no folder', async () => {
