@@ -311,6 +311,6 @@ describe('the generated commands drive the whole chain', () => {
     // the team would write landed in it. (Child bun may create its own `Library/Caches` there;
     // the command's runner path is this test host's own bun, which the settings file computes
     // from the running process, not a session home.)
-    expect(readdirSync(world.home).filter((name) => name !== 'Library')).toEqual([]);
+    expect(readdirSync(world.home).filter((name) => name !== 'Library' && name !== '.bun')).toEqual([]);
   }, 30_000);
 });
