@@ -915,7 +915,9 @@ export async function executePlan(
         finishReady(op.seat);
       } else if (op?.do === 'refuse') {
         // The record carries the reason in words; the full finding — the start folder it names —
-        // follows as the record's detail, on stderr alone.
+        // follows as the record's detail, on stderr alone. The seat's recorded state is left
+        // exactly as it was, and the run exits nonzero: nothing was repaired.
+        held = true;
         final(op.seat, { kind: 'left out', reason: `refused: ${op.why}` }, op.detail ? `  ${op.detail}\n` : '');
       } else if (op?.do === 'hold') {
         held = true;
@@ -986,6 +988,7 @@ export async function executePlan(
         if (op.seat) {
           const why = host.allow(op.seat);
           if (why) {
+            held = true;
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: why });
             break;
