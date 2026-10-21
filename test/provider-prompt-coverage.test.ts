@@ -63,12 +63,15 @@ const quotedPrompt = pane([`⏺ ${LOST}`, '❯']);
 const doneTypedInBox = pane([`⏺ ${LOST}`], DONE);
 const historicalErrorUnsent = pane([`⏺ ${LOST}`, DONE], 'finish the coverage run');
 const historicalErrorWorking = pane([`⏺ ${LOST}`, DONE, '✽ Mustering… (0s · thinking with high effort)']);
+// The captured rate-limit screen (fixtures/claude-code/rate-limit.txt) keeps its documented
+// composer frame under the error rows, so the constructed pane carries that same frame.
 const rateLimitAfterCompletion = [
   `⏺ ${LOST}`,
   DONE,
   'API Error: Request rejected (429)',
   'Usage limit reached',
   'Your limit will reset at 11:00',
+  ...box(),
 ].join('\n');
 const permissionAfterCompletion = [
   `⏺ ${LOST}`,
