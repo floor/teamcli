@@ -6,13 +6,20 @@
 // down or has failed. Nothing here types into a pane, writes a bus event or places an owner:
 // the hosted source set closes every mutating source. Outbound effects are recorded as
 // `blocked` until a verified admitted sender is injected, and the record says so.
+//
+// A run that leaves without the host asking is a fault, not an intention. The host counts it,
+// says why in the record, and starts a fresh run on its next heartbeat tick. That beat is five
+// seconds, half the ten-second sweep floor, so the next pass is always due within one in-force
+// watch interval. A deliberate stop, a loop that stood down to a live pane watch, and a run a
+// pulse closed are the host's own decisions: they are never counted and never restarted.
 
 import { routeId, type HostedRoute } from './routes.ts';
 import type { HostedLoop, HostedWatchHandle, HostedWatchState } from '../watch/hosted.ts';
 
 export type HostedWatchInput = {
   route: HostedRoute;
-  /** Runs the shared watch loop under this host; resolves with the loop's own exit code. */
+  /** Runs the shared watch loop under this host; resolves with the loop's own exit code. A
+   *  fresh run is started on the next heartbeat tick whenever this one leaves unexpectedly. */
   run(loop: HostedLoop): Promise<number>;
   /** Whether a route may emit an effect now. A getter makes the recorded state truthful: a
    *  route that has not acquired its authority, or has lost it, reads `blocked`. Absent reads
@@ -50,8 +57,28 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
   let lastCycleOutcome: HostedWatchState['lastCycleOutcome'] = null;
   let cycles = 0;
   let failures = 0;
+  // A deliberate stop was requested: authoritative, and nothing starts again.
   let stopped = false;
+  // The current run is being ended by the host itself — its pulse closed effects, or its pulse
+  // threw. Neither is an unexpected exit, so neither is restarted.
+  let pulseClosed = false;
+  let terminalFailure = false;
+  // A run left without the host asking. Its replacement waits for the next heartbeat tick, so
+  // a loop that leaves at once is restarted at the beat cadence, never in a busy loop.
+  let restartPending = false;
+  let inFlight = false;
+  let current: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
+  let doneSettled = false;
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+  const settleDone = (): void => {
+    if (doneSettled) return;
+    doneSettled = true;
+    resolveDone();
+  };
   const controller = new AbortController();
   const waiters = new Set<Waiter>();
 
@@ -61,10 +88,6 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       waiter.resolve(ok);
     }
   };
-
-  // A run that ends must not overwrite a host already stood down or failed by a pulse. Read
-  // through a function so a tick's write is seen here, not a narrowing from construction time.
-  const settled = (): boolean => stopped || phase === 'standby' || phase === 'failed';
 
   const loop: HostedLoop = {
     signal: controller.signal,
@@ -77,10 +100,12 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       });
     },
     cycled(at) {
-      if (stopped || phase === 'standby') return;
+      if (stopped || phase === 'standby' || terminalFailure) return;
       cycles += 1;
       lastCycleAt = at.toISOString();
       lastCycleOutcome = 'pass';
+      // A completed pass answers the failure reason a restarted run was carrying.
+      why = null;
       if (phase === 'starting') phase = 'running';
     },
     standby(reason) {
@@ -93,28 +118,70 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     },
   };
 
-  // One flight: the run is started once and its passes are the loop's own sequence; the host
-  // never starts a second run while one is in flight.
-  const runPromise = input.standby !== undefined
-    ? Promise.resolve()
-    : (async () => {
+  /**
+   * One run left. Whoever ended it decides what the record says: a deliberate stop, a standby,
+   * a pulse closure or a pulse failure is the host's own decision; anything else is a fault and
+   * earns a counted failure and one restart on the next beat.
+   */
+  const recordExit = (code: number | undefined, error?: unknown): void => {
+    inFlight = false;
+    current = undefined;
+    settleWaiters(false);
+    if (stopped) return; // stop() owns the reason and settles `done`
+    if (phase === 'standby') {
+      settleDone();
+      return;
+    }
+    if (terminalFailure) {
+      settleDone();
+      return;
+    }
+    if (pulseClosed) {
+      // The host closed effects and ended this run itself: a stand-down it chose, so neither a
+      // failed cycle nor an exit to recover from.
+      pulseClosed = false;
+      phase = 'stopped';
+      why = code === undefined || code === 0
+        ? 'the watch loop ended'
+        : `the watch loop ended with code ${String(code)}`;
+      settleDone();
+      return;
+    }
+    failures += 1;
+    lastCycleOutcome = 'failed';
+    phase = 'failed';
+    why = error !== undefined
+      ? (error instanceof Error ? error.message : 'the watch loop failed')
+      : (code === 0 ? 'the watch loop ended' : `the watch loop ended with code ${String(code)}`);
+    restartPending = true;
+  };
+
+  /**
+   * Starts one run. Only ever called with no run in flight, so one hosted loop never doubles;
+   * a fresh run reuses the same host handle and the same waits.
+   */
+  const begin = (): void => {
+    if (stopped || phase === 'standby' || terminalFailure) return;
+    restartPending = false;
+    pulseClosed = false;
+    inFlight = true;
+    let result: Promise<number>;
+    try {
+      result = Promise.resolve(input.run(loop));
+    } catch (error) {
+      result = Promise.reject(error);
+    }
+    current = (async () => {
       try {
-        const code = await input.run(loop);
-        if (settled()) return;
-        // The loop ended on its own — its own reasons reached the log. That is a stop, not a
-        // failure, and the host never silently restarts a loop that chose to leave.
-        phase = 'stopped';
-        why = code === 0 ? 'the watch loop ended' : `the watch loop ended with code ${String(code)}`;
+        recordExit(await result);
       } catch (error) {
-        if (settled()) return;
-        failures += 1;
-        lastCycleOutcome = 'failed';
-        phase = 'failed';
-        why = error instanceof Error ? error.message : 'the watch loop failed';
-      } finally {
-        settleWaiters(false);
+        recordExit(undefined, error);
       }
     })();
+  };
+
+  if (input.standby === undefined) begin();
+  else settleDone();
 
   const tick = (at: Date): void => {
     // While this daemon is closing there is no further beat to ride: the run's own cleanup
@@ -128,21 +195,38 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
       live = input.onTick?.(at) !== false;
     } catch (error) {
       // A throwing pulse is not a line to log and keep acting past: effects close and the loop
-      // drains. The failure stays in the host's state for the daemon's own status.
+      // drains. The failure stays in the host's state for the daemon's own status, and recovery
+      // is explicit: a pulse that cannot be trusted is not restarted under.
+      terminalFailure = true;
+      restartPending = false;
       failures += 1;
       lastCycleOutcome = 'failed';
       phase = 'failed';
       why = error instanceof Error ? error.message : 'the watch tick failed';
       controller.abort();
       settleWaiters(false);
+      settleDone();
       return;
     }
-    // Recheck after the pulse: it may have stood this host down, ended it, or closed effects.
-    // A closed pulse settles every outstanding wait false now — an aborted signal alone never
-    // resolves an inner wait.
-    if (!live || phase === 'standby' || phase === 'stopped' || phase === 'failed') {
+    if (!live) {
+      // A pulse that closed effects is ending this run on purpose. Mark it only for a run that
+      // exists; with none in flight the pending restart simply waits for a beat that renews
+      // authority.
+      if (inFlight) pulseClosed = true;
       settleWaiters(false);
       return;
+    }
+    // Recheck after the pulse: it may have stood this host down or failed it.
+    if (phase === 'standby' || phase === 'stopped' || terminalFailure) {
+      settleWaiters(false);
+      return;
+    }
+    // One restart per beat, under the authority this very beat renewed. A replacement that
+    // leaves again re-arms and waits for the next beat, so the repair cadence is the heartbeat,
+    // never a hot spin.
+    if (restartPending && !inFlight) {
+      phase = 'starting';
+      begin();
     }
     const ms = at.getTime();
     for (const waiter of [...waiters]) {
@@ -171,16 +255,22 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
   const stop = (reason: string): Promise<void> => {
     if (stopPromise !== undefined) return stopPromise;
     stopped = true;
-    if (phase !== 'failed') {
+    restartPending = false;
+    if (terminalFailure) {
+      // A pulse that failed is the state; closing does not write over it.
+      phase = 'failed';
+    } else {
       why = reason;
       if (phase !== 'stopped' && phase !== 'standby') phase = 'stopping';
     }
     controller.abort();
     settleWaiters(false);
-    stopPromise = runPromise.then(() => {
-      if (phase === 'failed') return;
-      phase = 'stopped';
-      why = reason;
+    stopPromise = (current ?? Promise.resolve()).then(() => {
+      if (!terminalFailure) {
+        phase = 'stopped';
+        why = reason;
+      }
+      settleDone();
     });
     return stopPromise;
   };
@@ -190,6 +280,6 @@ export function createHostedWatch(input: HostedWatchInput): HostedWatch {
     state,
     tick,
     stop,
-    done: runPromise.then(() => undefined),
+    done,
   };
 }
