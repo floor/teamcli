@@ -2,8 +2,8 @@
 // clock. A hosted route is the shared `runWatch` loop running inside the daemon: the host owns
 // the liveness tick, the wait and the cancellation; the loop owns one serial pass. This file
 // proves, independently of the focused tests, that a tick never awaits or doubles a pass, two
-// routes cycle on their own ticks and one failure stays on its route (a fresh host, never an
-// automatic restart, recovers), a pass waits the team file's own 10-second rhythm, a stop
+// routes cycle on their own ticks and one fault is counted and restarted by that route's own
+// next beat without touching the other route, a pass waits the team file's own 10-second rhythm, a stop
 // resolves the current and every later wait false and leaves ticks inert, a live recorded pane
 // watch makes the loop stand down without touching it, a route with no injected admitted sender
 // runs with blocked effects and zero mutations, and an injected admitted sender pushes through
@@ -405,7 +405,7 @@ describe('hosted watch lifecycle', () => {
     await serial.stop('the daemon is closing');
   });
 
-  test('two routes cycle only on their own ticks, and one failure stays on its route', async () => {
+  test('two routes cycle only on their own ticks, and one fault recovers on its own route', async () => {
     const cycling = (count: { passes: number }) => async (loop: HostedLoop) => {
       for (;;) {
         count.passes += 1;
@@ -433,13 +433,21 @@ describe('hosted watch lifecycle', () => {
     expect(a.state().cycles).toBe(2);
 
     let threw = false;
+    let badAttempts = 0;
     const bad = createHostedWatch({
       route: routeOf('/repo/bad', 'bad', 'bad', ['three']),
       now: () => new Date(clock),
-      run: async () => {
-        await Promise.resolve();
-        threw = true;
-        throw new Error('the route read failed');
+      run: async (loop) => {
+        badAttempts += 1;
+        if (badAttempts === 1) {
+          await Promise.resolve();
+          threw = true;
+          throw new Error('the route read failed');
+        }
+        for (;;) {
+          loop.cycled(new Date(clock));
+          if (!(await loop.wait(INTERVAL_MS))) return 0;
+        }
       },
     });
     await flush();
@@ -448,33 +456,41 @@ describe('hosted watch lifecycle', () => {
       phase: 'failed', failures: 1, lastCycleOutcome: 'failed', cycles: 0, why: 'the route read failed',
     });
 
-    // The failed host is terminal and its tick is inert; the other two keep cycling.
+    // The fault stays on its route: that route's own beat restarts it while the other two keep
+    // their own cycles. The failure stays in the record after the watch is cycling again.
     clock += INTERVAL_MS;
     bad.tick(new Date(clock));
     a.tick(new Date(clock));
     b.tick(new Date(clock));
     await flush();
-    expect(bad.state().phase).toBe('failed');
-    expect(bad.state().cycles).toBe(0);
+    expect(badAttempts).toBe(2);
+    expect(bad.state()).toMatchObject({
+      phase: 'running', failures: 1, cycles: 1, lastCycleOutcome: 'pass', why: null,
+    });
     expect(a.state().cycles).toBe(3);
     expect(b.state().cycles).toBe(3);
 
-    // There is no automatic restart; a fresh host on the same route recovers explicitly.
-    const fresh = createHostedWatch({
-      route: routeOf('/repo/bad', 'bad', 'bad', ['three']),
+    // A stop while a fault is awaiting its restart is still the end; the count is kept.
+    const pending = createHostedWatch({
+      route: routeOf('/repo/pending', 'pending', 'pending', ['four']),
       now: () => new Date(clock),
-      run: async (loop) => {
-        loop.cycled(new Date(clock));
-        return 0;
+      run: async () => {
+        throw new Error('the route read failed');
       },
     });
     await flush();
-    expect(fresh.state()).toMatchObject({
-      phase: 'stopped', cycles: 1, failures: 0, lastCycleOutcome: 'pass',
+    expect(pending.state()).toMatchObject({ phase: 'failed', failures: 1 });
+    await pending.stop('the daemon is closing');
+    clock += INTERVAL_MS;
+    pending.tick(new Date(clock));
+    await flush();
+    expect(pending.state()).toMatchObject({
+      phase: 'stopped', why: 'the daemon is closing', failures: 1,
     });
-    await fresh.done;
+    await pending.done;
+
     await bad.stop('the daemon is closing');
-    expect(bad.state().phase).toBe('failed'); // a failure is not written over by a close
+    expect(bad.state()).toMatchObject({ phase: 'stopped', failures: 1 });
     await a.stop('the daemon is closing');
     await b.stop('the daemon is closing');
     expect(a.state().phase).toBe('stopped');
