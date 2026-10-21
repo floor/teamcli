@@ -395,6 +395,10 @@ describe('synthetic effects and the closing drain', () => {
     running.push({ close: () => started.daemon.close() });
     await waitUntil(() => ended !== '');
     expect(ended).toBe('settled-false');
+    // The loop's settle and the record are two steps: the beat that settles the wait writes the
+    // root before the run's continuation reaches `stopped`, so the next beat is what records it.
+    // Wait for the record's own terminal phase instead of sampling between the two beats.
+    await waitUntil(() => started.daemon.roots[0]?.watch?.phase === 'stopped');
     // The synthetic pulse is the route's own clock and it is the only thing that ended the pass.
     expect(started.daemon.roots[0]?.watch).toMatchObject({ phase: 'stopped', why: 'the watch loop ended' });
     await started.daemon.close();
