@@ -303,14 +303,16 @@ test('a working seat the registry proves is left as it is: nothing closed and no
   expect(seatState()?.agent_session).toBe(SESSION_ID);
 });
 
-test('a working pane nothing ties is still refused, nothing closed and nothing typed', async () => {
+test('a working pane nothing ties is left out as a working skip, nothing closed and nothing typed', async () => {
   record(RECORD);
-  // The pane runs another conversation and reads working: this is the doubt the refusal exists
-  // for, and the working screen keeps the refusal the close would otherwise give.
+  // The pane runs another conversation and reads working: this is the doubt the close refuses
+  // to resolve. A working doubt is a restore skip, not a failed run: the record stays ready,
+  // the reason is on stderr, and the run exits clean (FLO-1061 restore buckets; `skipped
+  // (working)` is M in the owner summary).
   const made = sources('ses_other', { status: 'working' });
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(1);
-  expect(io.out).toContain(`${SEAT}: left out: ${WORKING}`);
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(io.err).toContain(`  ${WORKING}`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
   expect(seatState()?.agent_session).toBeUndefined();
 });
