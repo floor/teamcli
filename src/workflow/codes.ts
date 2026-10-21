@@ -18,6 +18,9 @@ export const DECISION_CODES = {
   waitNotReached: 'core.wait-not-reached',
   waitPending: 'core.wait-pending',
   entryEffectFailed: 'core.entry-effect-failed',
+  // The accepted envelope identity checks, ahead of request acceptance (T3 G-IDENTITY).
+  runMismatch: 'core.run-mismatch',
+  definitionMismatch: 'core.definition-mismatch',
   // The one spelling for supplied evidence that is absent. No core.evidence-missing exists.
   evidenceMissing: 'evidence.missing',
   evidenceCorrupt: 'evidence.corrupt',
