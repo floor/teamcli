@@ -707,10 +707,12 @@ test('a held frame is marked once, and the socket stays out until the declaratio
 
   // The declaration is re-confirmed: the file is rewritten at a new time and the restarted host
   // exposes a fresh socket. The socket is dialed again, and this frame is taken.
-  const reworded = new Date();
+  const reworded = new Date(Math.max(Date.now(), (mark.declaredAt ?? 0) + 1000));
   writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
   utimesSync(settings, reworded, reworded);
-  writeFileSync(join(made.sockets, '222.sock'), '');
+  const socket = join(made.sockets, '222.sock');
+  writeFileSync(socket, '');
+  utimesSync(socket, reworded, reworded);
   expect(await runSend(['lead', 'third'], owner(made.root), host)).toBe(0);
   expect(dials).toHaveLength(2);
   expect(pane.typed).toHaveLength(2);
