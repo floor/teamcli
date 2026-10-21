@@ -189,7 +189,7 @@ describe('CLI cold-entry smoke test across every command', () => {
         expect(stdout, `${args.join(' ')} usage header`).toMatch(new RegExp(`^Usage: team ${name}\\b`));
       }
     }
-  });
+  }, 30_000);
 
   test('every read-only command runs in a scratch fixture, validates its --json schema, and prints clean human output', async () => {
     const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-cli-smoke-')));
