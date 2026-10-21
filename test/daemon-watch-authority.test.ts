@@ -553,6 +553,9 @@ describe('the authority under the hosted watch', () => {
       standby: () => {},
     };
     const running = build.run(loop);
+    // The first pass folds its readings under the state lock (withLock waits 5s) before it
+    // reaches loop.wait. Plant the lock only after that rendezvous: otherwise the file that
+    // stands for the pending release also blocks the pass's first read on a slow runner.
     await waitUntil(() => record()?.epoch !== undefined && releaseWait !== undefined);
     const held = record()?.epoch;
     writeFileSync(join(agents, LOCK_FILE), '1\n');
