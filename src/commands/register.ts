@@ -375,6 +375,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // carries `dev_mode: true` — `team check` shows it as a difference — until a run in force
   // writes the seat's record again.
   const warning: string[] = [];
+  // Whether a gate was folded this run: the caller gate below, or the delegate gate's
+  // approval precondition. The record the run writes says so, the same mark `add` keeps.
+  let devFolded = false;
   // The caller gate is the one refusal with a command of its own behind it: nothing in the file
   // changes who may run this; a seat of this team runs it from its own pane, or the owner runs it
   // in this folder from a terminal outside herdr. `up`'s sentence, for this command.
@@ -456,8 +459,22 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           flags: [...args.flags, ...Object.keys(args.values)],
           io,
           home: sources.home,
+          // Dev mode folds the delegation's approval precondition, exactly as it does for
+          // `add` and `remove`: the live file counts as approved, and the passed verdict
+          // carries the warning naming it. The evidence, the placement, the entry, its
+          // command list and the owner's flags still refuse.
+          dev,
+          file: path,
         });
   const delegated = verdict?.kind === 'passed' ? verdict.pane : null;
+  if (verdict?.kind === 'passed' && verdict.devApproval !== undefined) {
+    devFolded = true;
+    const said = plainText(verdict.devApproval);
+    if (json) out.stderr(`${said}\n`);
+    else if (dry) out.stdout(`! ${said}\n`);
+    else out.stderr(`team register: ${said}\n`);
+    if (!dry) logDevMode(dir, 'register', callerLabel(walked), verdict.devApproval, sources.now());
+  }
   // `up`'s own fallback: a delegate refusal that is not the plain "not a listed pane" is final,
   // and a file that omits `grant` does not ask.
   const delegateMissed = verdict === null || (verdict.kind === 'refused' && verdict.id === 'up.delegate');
@@ -642,7 +659,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // The record names the caller the run admitted, not the process the walk saw: a seat under
       // a pane override walks as unplaced and is judged as the seat its pane proves it is, and
       // `registered_by` must say the seat.
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId, listed?.session);
+      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId, listed?.session);
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -856,7 +873,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
 
   // The judged caller, as above: `registered_by` is the seat the admission found, never the
   // unplaced process the walk saw under a pane override.
-  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, id, listed?.session);
+  const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, id, listed?.session);
   if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, now);
   else {
     // The address: the live session socket this seat answers at, recorded on the agent the way a
