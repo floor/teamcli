@@ -120,8 +120,13 @@ agents: all
 A seat mid-turn is not interrupted — its work would be lost — and `restart` says which state it was
 in. If the pane host restored the process under a new pid, `restart` treats it as the same seat only
 when herdr still names that seat on the recorded pane and the live conversation id matches the
-agent registry's recorded `reach.agent_session`; it then resumes that recorded conversation through
-the seat's launch line. A different or unreadable conversation remains refused:
+agent registry's recorded `reach.agent_session`. The registry record is the proof on its own: a
+CLI whose launch line has no resume flag (Codex) keeps its conversation through the restored
+process, and a state file written before the id was recorded is no bar to recognizing it — it
+simply carries nothing to resume. A CLI with a resume flag is then relaunched with that recorded
+conversation through the seat's launch line; a CLI without one, or a state that names another
+id, is relaunched without one, and a conversation that differs or cannot be read remains refused (`<seat> has a process in its old
+pane that is not the signed seat; left as it is`, exit 1).
 
 ```console screens="claude-beacon=working"
 $ team restart claude-beacon ; echo "exit $?"

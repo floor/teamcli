@@ -5,13 +5,17 @@
 // refusals: no resume id is ever taken from a record that is not this seat's own current one.
 // A missing record is not a refusal — it is a fresh launch, exactly as before.
 //
+// The continuity read shares the binding but never writes a launch line: a state that carries no
+// session copy does not stop a restored pane from being recognized, and a state that names
+// another id still refuses.
+//
 // Synthetic homes and state objects only: no live registry, session or CLI home is read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerAgent } from '../src/registry/agents.ts';
-import { recordedSeatSession } from '../src/registry/resume.ts';
+import { recordedSeatContinuity, recordedSeatSession } from '../src/registry/resume.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import type { SeatState } from '../src/state.ts';
 
@@ -82,6 +86,16 @@ function state(fields: Partial<SeatState> = {}): SeatState {
 
 function read(w: World, seat: { name: string; cli: string }, recorded: SeatState | undefined, herdrSession = 'acme') {
   return recordedSeatSession({
+    home: w.home,
+    root: w.root,
+    herdrSession,
+    seat,
+    state: recorded,
+  });
+}
+
+function continuity(w: World, seat: { name: string; cli: string }, recorded: SeatState | undefined, herdrSession = 'acme') {
+  return recordedSeatContinuity({
     home: w.home,
     root: w.root,
     herdrSession,
@@ -196,5 +210,72 @@ describe('what is never resumed', () => {
     record(w, 'worker', { agentSession: 'ses bound', seatHandle: SEAT_ID });
     const readBack = read(w, WORKER, state({ id: SEAT_ID, agent_session: 'ses bound' }));
     expect(readBack).toEqual({ kind: 'refused', why: 'the recorded id is not one session token' });
+  });
+});
+
+// The continuity read: the same binding, for a process already in the seat's pane rather than a
+// launch line this run would write. A CLI with no resume flag has no resume id at all, and an
+// older state may carry no session copy; neither may stop the pane from being recognized.
+describe('the continuity binding', () => {
+  test('the registry alone binds the seat, and the resume reader still withholds it', () => {
+    const w = world();
+    record(w, 'worker', { agentSession: 'ses_bound', seatHandle: SEAT_ID });
+    const readBack = continuity(w, WORKER, state({ id: SEAT_ID }));
+    expect(readBack.kind).toBe('bound');
+    if (readBack.kind !== 'bound') return;
+    expect(readBack.recorded.sessionId).toBe('ses_bound');
+    expect(read(w, WORKER, state({ id: SEAT_ID }))).toEqual({
+      kind: 'none',
+      why: 'the seat state names no agent session',
+    });
+  });
+
+  test('no state record at all still binds the registry record', () => {
+    const w = world();
+    record(w, 'worker', { agentSession: 'ses_bound', seatHandle: SEAT_ID });
+    const readBack = continuity(w, WORKER, undefined);
+    expect(readBack.kind).toBe('bound');
+    if (readBack.kind !== 'bound') return;
+    expect(readBack.recorded.sessionId).toBe('ses_bound');
+  });
+
+  test('the state naming the same id binds with it', () => {
+    const w = world();
+    record(w, 'worker', { agentSession: 'ses_bound', seatHandle: SEAT_ID });
+    expect(continuity(w, WORKER, state({ id: SEAT_ID, agent_session: 'ses_bound' })).kind).toBe('bound');
+  });
+
+  test('a state naming another session is still refused: the records disagree', () => {
+    const w = world();
+    record(w, 'worker', { agentSession: 'ses_bound', seatHandle: SEAT_ID });
+    expect(continuity(w, WORKER, state({ id: SEAT_ID, agent_session: 'ses_other' }))).toEqual({
+      kind: 'refused',
+      why: 'the seat state and the agent record name different sessions',
+    });
+  });
+
+  test('a record for another herdr session or another CLI is still refused', () => {
+    const elsewhere = world();
+    record(elsewhere, 'worker', { agentSession: 'ses_bound' });
+    expect(continuity(elsewhere, WORKER, state({ id: SEAT_ID }), 'other')).toEqual({
+      kind: 'refused',
+      why: 'the record was written in herdr session acme',
+    });
+    const otherCli = world();
+    record(otherCli, 'worker', { cli: 'codex', agentSession: 'ses_bound' });
+    expect(continuity(otherCli, WORKER, state({ id: SEAT_ID }))).toEqual({
+      kind: 'refused',
+      why: 'the record ran codex, the seat now declares claude-code',
+    });
+  });
+
+  test('nothing recorded is a fresh launch, not a binding', () => {
+    const w = world();
+    expect(continuity(w, WORKER, state({ id: SEAT_ID }))).toEqual({ kind: 'none', why: 'no agent record for this seat' });
+    record(w, 'worker', { agentSession: null });
+    expect(continuity(w, WORKER, state({ id: SEAT_ID }))).toEqual({
+      kind: 'none',
+      why: 'the record names no agent session',
+    });
   });
 });
