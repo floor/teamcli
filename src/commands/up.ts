@@ -1675,6 +1675,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
       }
     }
     cliHooks = installed;
+    // The successor binding this install minted for each launch, when it is not the one the seat
+    // already held. The settings files name it, and a repair's close drops the state record the
+    // install put it on: this map is the only copy left for a process that runs to carry.
+    const afterInstall = readState(dir).sessions[session]?.seats ?? {};
+    const mintedBindings = new Map<string, string>();
+    for (const name of launchedSeats) {
+      const held = afterInstall[name]?.presence_binding;
+      if (held !== undefined && held !== priorBindings.get(name)) mintedBindings.set(name, held);
+    }
     const plan = buildPlan();
     // A relaunch starts from no reading at all: the `working` a killed turn left behind says
     // nothing about the seat this run starts.
@@ -1686,9 +1695,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     // The planned seats whose launch line the pane actually ran (`sessionStarted`).
     const startedSeats = new Set<string>();
     // The seats whose state entry the plan took away before their line ran — a repair closes the
-    // old pane and drops the record first — with the binding that entry held at that moment.
+    // old pane and drops the record first.
     const droppedSeats = new Set<string>();
-    const droppedBindings = new Map<string, string | undefined>();
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
       for (const agent of agents) {
@@ -1889,6 +1897,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
         const seat = team.seats.find((item) => item.name === name);
         if (!seat) return;
         startedSeats.add(name);
+        // The pane ran this seat's launch line: the settings file the install wrote is in a
+        // process now, so its minted successor is the seat's from here on, whatever the run
+        // reaches afterwards. A repair's close dropped the record the install put it on; it is
+        // written back before the launch's own records, so every later record carries it.
+        const successor = mintedBindings.get(name);
+        if (successor !== undefined) {
+          updateState(dir, (file) => {
+            const one = (file.sessions[session] ??= emptySession());
+            const current = one.seats[name];
+            if (current === undefined) one.seats[name] = { stage: 'launched', presence_binding: successor };
+            else current.presence_binding = successor;
+          });
+        }
         const began = beginSession({
           home: sources.home,
           root,
@@ -1915,11 +1936,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
           if (!current) return;
           const prior = current.seats[name];
           pane = prior?.pane;
-          // The binding this entry holds now goes out with the drop. For a planned launch it is
-          // the successor the fresh install wrote; the pass after the plan puts it back on the
-          // record the relaunch writes, and only when that launch's line ran.
+          // The binding this entry holds goes out with the drop. A line that runs afterwards has
+          // the successor the install minted written back by `sessionStarted`; a line that never
+          // runs must not be given the closed process's binding back by the rollback below.
           droppedSeats.add(name);
-          droppedBindings.set(name, prior?.presence_binding);
           if (prior?.id && !prior.temporary) {
             (current.retained_seats ??= {})[name] = {
               id: prior.id,
@@ -2063,24 +2083,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources): Promise
     });
     const report = await executePlan(plan, session, host, { concurrency, continuityIds });
     // A fresh install minted a binding for every seat this run planned to launch. A seat whose
-    // line never ran — refused before it, or its step left out — never loaded the settings file
-    // that names the successor, so it keeps the binding it held. The same rule `add` and `reload`
-    // apply follows here; a seat the install itself created goes back out with no record.
+    // line ran keeps the successor `sessionStarted` wrote back. A seat whose line never ran —
+    // refused before it, or its step left out — never loaded the settings file that names the
+    // successor, so it keeps the binding it held. The same rule `add` and `reload` apply follows
+    // here; a seat the install itself created goes back out with no record.
     //
-    // A repair is the exception. Its close took the seat's state entry away, and the binding that
-    // entry held with it: the old process is gone, so no process carries that binding any more
-    // and the entry must not be given it back when the relaunch never ran. Only a line the pane
-    // actually ran loaded the settings file naming the successor, so only then does the record
-    // the plan wrote get the binding put back.
+    // A repair is the exception. Its close took the seat's state entry away, and the old process
+    // went with its pane, so no process carries that binding any more: an entry the relaunch wrote
+    // must not be given it back when the line never ran.
     for (const name of launchedSeats) {
-      if (startedSeats.has(name)) {
-        const successor = droppedBindings.get(name);
-        if (successor !== undefined) restorePresenceBinding(dir, session, name, successor);
-      } else if (droppedSeats.has(name)) {
-        restorePresenceBinding(dir, session, name, undefined);
-      } else {
-        restorePresenceBinding(dir, session, name, priorBindings.get(name));
-      }
+      if (startedSeats.has(name)) continue;
+      if (droppedSeats.has(name)) restorePresenceBinding(dir, session, name, undefined);
+      else restorePresenceBinding(dir, session, name, priorBindings.get(name));
     }
     // The reach projection, after the plan's effects and outside the lobby's identity rechecks
     // (its temporary is a declared lobby file): the owner-approved `reach` grants written where
