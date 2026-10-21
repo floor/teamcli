@@ -130,6 +130,46 @@ function written(w: World): { state: boolean; agents: number; log: boolean; pane
 
 const NOTHING = { state: false, agents: 0, log: false, panes: false };
 
+/** A team file naming one delegate pane for `up` — the section that asks the approval gate. */
+function withDelegate(w: World): void {
+  const file = join(w.dir, 'team.yaml');
+  writeFileSync(file, `${readFileSync(file, 'utf8')}delegates:
+  - pane: floor/w2:p1
+    commands: [up, add, remove]
+`);
+}
+
+/** The caller the delegate section names: a seat on the file's delegate pane, outside the team's
+ *  own session. The delegation gates past approval still judge this placement. */
+const DELEGATE = { kind: 'seat' as const, name: 'lead', pane: 'w2:p1', session: 'floor' };
+
+test('TEAMCLI_DEV_MODE=1: the delegate approval precondition folds exactly as add and remove fold it', async () => {
+  const w = world();
+  withDelegate(w);
+  // Herdr answers with no agents: the delegate evidence passes, and the caller is the file's
+  // delegate pane, so the only gate in the way is the approval precondition.
+  setHerdrRun(() => ({ agents: [] }));
+  const r = await register(w, ['lead'], { caller: DELEGATE, dev: true });
+  expect(r.code).toBe(0);
+  // The live complaint, now a warning: the approval precondition is folded, and the run says so.
+  expect(r.err).toContain('team register: warning: delegation needs a verified approval: the file was never approved on this machine; the live team file ');
+  expect(r.err).toContain('counts as approved; dev mode continues');
+  // The record the run writes carries the fold, the mark `add` and `remove` keep.
+  expect(r.err).not.toContain('team register: delegation needs a verified approval');
+  expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('warning: delegation needs a verified approval: the file was never approved on this machine');
+  expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('ready');
+});
+
+test('without dev mode the same delegate file is still refused by the approval gate', async () => {
+  const w = world();
+  withDelegate(w);
+  setHerdrRun(() => ({ agents: [] }));
+  const r = await register(w, ['lead'], { caller: DELEGATE });
+  expect(r.code).toBe(1);
+  expect(r.err).toBe('team register: delegation needs a verified approval: the file was never approved on this machine\n');
+  expect(written(w)).toEqual(NOTHING);
+});
+
 test('TEAMCLI_DEV_MODE=1: an unplaced caller registers with the caller gate as a warning', async () => {
   const w = world();
   const r = await register(w, ['lead'], { caller: UNPLACED, dev: true });
