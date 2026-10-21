@@ -65,6 +65,7 @@ const ANSI_STYLE: TtyStyle = {
       || trimmed.startsWith('waiting')
       || trimmed.startsWith('trust sent')
       || trimmed.includes('(unsent text)')
+      || trimmed.startsWith('quota out')
       || trimmed.includes('(rate limit')
       || trimmed.includes('(screen not recognised)')
       || trimmed.endsWith(', parked')

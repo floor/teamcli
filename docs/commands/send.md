@@ -117,6 +117,18 @@ hint can submit while herdr stays idle; that run is reported sent as taken, neve
 The drop leg never types: there the run ends `sent (unconfirmed)` once the signed record and its
 marker are in place, and no box, status or transcript is read.
 
+A seat whose live screen is its provider's usage wall is refused before the walk: no leg is
+tried, no drop file or record is written, no socket frame is sent and nothing is typed, whether
+or not the host still reports the seat working — a wall the screen proves holds on its own. The
+line is `team send: refused: <seat>: quota out on <account>, resets at <time>; nothing was sent`
+(exit 1, `send.refused`), with the reset exactly as the screen words it — `resets in <span>` for
+a span — or `the screen names no reset time` when it words none. The wall is read only where
+the CLI draws it, in the block directly above the composer: a sentence quoted inside a turn, or
+one the pane has scrolled past, is not the wall, and the send walks its legs as ever. A pane
+whose composer cannot be read falls back to the whole window, so a wall already held stays
+held. The send daemon takes the same read at its queue: a walled seat is answered `refused`
+with that detail, and no drop is staged and no worker started.
+
 A seat the team file marks `human: true` walks the drop leg alone, whatever its delivery order or
 the default says: every other leg — the typed trigger, the native frame, the seat's own inbox — is
 skipped, each one's reason recorded on the history line, and the message arrives in the record

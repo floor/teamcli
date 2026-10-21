@@ -1,16 +1,17 @@
 import { reported, type SeatCheck, type SeatObservation } from '../check.ts';
-import type { Screen } from '../screen.ts';
+import type { Reset, Screen } from '../screen.ts';
 
 // A seat stopped on its CLI's provider error or usage limit. herdr calls that seat done, and the
 // pane is back at its prompt, so without this reading it looks idle. Reported once, to the
 // operator and to the owner, and cleared when the seat leaves the state: a pass that stops
 // calling `once` drops the key. A seat that is working is not this report, even while the
 // sentence is still in the window: the key clears, and a later stop is reported again. Nothing
-// is typed. The report names a retry only when a capture has shown one. None has. A rate limit
-// names the account the seat spends — its pool — and the reset time the screen gives, when it
-// gives one.
+// is typed. The report names a retry only when a capture has shown one. None has. A usage limit
+// is reported as quota out, naming the account the seat spends — its pool — and the reset
+// exactly as the screen words it (a clock after `at`, a span after `in`), or saying plainly that
+// the screen names none.
 
-type Held = { kind: 'provider error' } | { kind: 'rate limit'; reset: string | null };
+type Held = { kind: 'provider error' } | { kind: 'rate limit'; reset: Reset | null };
 
 function held(screen: Screen): Held | null {
   if (screen.kind === 'provider error') return screen;
@@ -27,8 +28,8 @@ function accountOf(seat: SeatObservation): string | null {
 function textOf(name: string, account: string | null, state: Held): string {
   if (state.kind === 'provider error') return `${name} shows a provider error: connection lost, and no capture names a retry`;
   const on = account === null ? '' : ` on ${account}`;
-  if (state.reset) return `${name} is at a rate limit${on}: usage limit, resets at ${state.reset}`;
-  return `${name} is at a rate limit${on}: usage limit, and the screen names no reset time`;
+  if (state.reset) return `${name} is out of quota${on}: usage limit, resets ${state.reset.kind} ${state.reset.value}`;
+  return `${name} is out of quota${on}: usage limit, and the screen names no reset time`;
 }
 
 export const providerError: SeatCheck = {

@@ -135,6 +135,41 @@ test('a quota screen is named with the reset time it shows', () => {
   expect(code).toBe(1);
 });
 
+// The exhausted Codex screen: a synthetic frame built from the wording Codex's own upstream source
+// prints at the tested tags (no capture exists), drawn where the CLI draws it — the block directly
+// above the composer. The row is inserted there in the retained idle capture's own frame.
+const CODEX_IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8');
+const codexScreen = (row: string): string => {
+  const lines = CODEX_IDLE.split('\n');
+  const at = lines.findIndex((line) => line.startsWith('›'));
+  return [...lines.slice(0, at), row, ...lines.slice(at)].join('\n');
+};
+
+test('a quota screen is named with the clock it shows, as the screen words it', () => {
+  live = {
+    ...built(),
+    screens: {
+      'w2:p1': codexScreen('You’ve hit your usage limit for 5h. Switch to another model now, or try again at 3:05 PM.'),
+    },
+  };
+  recordSeat('codex-acme', 'w2:p1', 'w2', 'codex');
+  const { out, code } = check();
+  expect(out).toContain('difference: codex-acme: stuck at a quota prompt (last active 4m ago): resets at 3:05 PM\n');
+  expect(out).toContain('  repair: the owner waits for the reset; team never types into that screen\n');
+  expect(code).toBe(1);
+});
+
+test('a quota screen that names no reset says so, rather than leaving the time to guess', () => {
+  live = {
+    ...built(),
+    screens: { 'w2:p1': codexScreen('Quota exceeded. Check your plan and billing details.') },
+  };
+  recordSeat('codex-acme', 'w2:p1', 'w2', 'codex');
+  const { out, code } = check();
+  expect(out).toContain('difference: codex-acme: stuck at a quota prompt (last active 4m ago): the screen names no reset time\n');
+  expect(code).toBe(1);
+});
+
 test('the CLI\'s own exit question is a confirm prompt, repaired by the owner or an abandon', () => {
   live = { ...built(), screens: { 'w3:p1': EXIT_QUESTION } };
   recordSeat('deepseek-acme', 'w3:p1', 'w3', 'claude-code');

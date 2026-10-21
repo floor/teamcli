@@ -333,6 +333,26 @@
               ]
             }
           }
+        },
+        {
+          "if": {
+            "required": ["at_composer"],
+            "properties": { "at_composer": { "const": true } }
+          },
+          "then": {
+            "anyOf": [{ "required": ["any"] }, { "required": ["all"] }],
+            "not": {
+              "anyOf": [
+                { "required": ["footer"] },
+                { "required": ["on_footer"] },
+                { "required": ["below_last_rule"] },
+                { "required": ["without_rule"] },
+                { "required": ["none_after"] },
+                { "required": ["only_after"] },
+                { "required": ["block"] }
+              ]
+            }
+          }
         }
       ],
       "properties": {
@@ -343,6 +363,7 @@
         "below_last_rule": { "type": "string", "maxLength": 200 },
         "without_rule": { "type": "boolean" },
         "live": { "type": "boolean", "description": "an any/all rule read on the live region alone: the composer's own rows and the newest turn above them, never a turn the window has scrolled past" },
+        "at_composer": { "type": "boolean", "description": "an any/all rule read on the block of rows directly above the composer alone: blanks are skipped, every non-blank row of the block must match the rule, and the block ends at the first row that does not (or at the profile's turn_end). A composer that cannot be read leaves the whole window to the rule, so a wall already held stays held" },
         "none_after": {
           "type": "object",
           "additionalProperties": false,

@@ -18,12 +18,12 @@ describe('Claude Code provider errors', () => {
   });
 
   test('a 429 above an idle box is a rate limit and carries the reset time', () => {
-    expect(readScreen('claude-code', limit)).toEqual({ kind: 'rate limit', reset: '11:00' });
+    expect(readScreen('claude-code', limit)).toEqual({ kind: 'rate limit', reset: { kind: 'at', value: '11:00' } });
     expect(classifyComposer('claude-code', limit.split('\n')).kind).toBe('unknown');
   });
 
   test('the rejected line is the same limit screen with 403, the other class the field report names', () => {
-    expect(readScreen('claude-code', limit.replace('(429)', '(403)'))).toEqual({ kind: 'rate limit', reset: '11:00' });
+    expect(readScreen('claude-code', limit.replace('(429)', '(403)'))).toEqual({ kind: 'rate limit', reset: { kind: 'at', value: '11:00' } });
   });
 
   test('a working line does not hide the error', () => {
@@ -34,6 +34,6 @@ describe('Claude Code provider errors', () => {
 
 describe('Gemini quota dialogs', () => {
   test('the captured exhausted-quota dialog is a rate limit, and the reset time it prints is read', () => {
-    expect(readScreen('gemini', geminiDialog)).toEqual({ kind: 'rate limit', reset: '2:10 PM GMT+2' });
+    expect(readScreen('gemini', geminiDialog)).toEqual({ kind: 'rate limit', reset: { kind: 'at', value: '2:10 PM GMT+2' } });
   });
 });

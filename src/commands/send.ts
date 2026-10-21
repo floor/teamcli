@@ -49,6 +49,7 @@ import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
+import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { frameFor, frameReplyFor } from '../send/frame.ts';
 import {
@@ -844,6 +845,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         const runningLabel = `${running.model} ${running.version}`;
         return held(io, dir, who, to.seat, `model drift: ${declaredModel} vs ${runningLabel}`, host, report);
       }
+    }
+  }
+  // The quota preflight: a walled seat is refused before the body is read into a send, before
+  // a drop file, a socket frame or a key exists. Only a positive read of the seat's own pane
+  // refuses; an absent agent or a pane that does not read leaves the existing delivery-time
+  // cautions, and that gap is the named limitation, not a safe outcome. The host's status is
+  // not consulted: a wall the screen proves holds even while the terminal host still calls the
+  // seat working, so no socket or drop effect can start ahead of the old caution.
+  {
+    const live = findAgent(host, to.session, to.seat);
+    if (live.ok) {
+      const text = host.native.paneText?.(to.session, live.pane);
+      const quota = quotaOutOf(to.cli, text);
+      if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);
     }
   }
   // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or

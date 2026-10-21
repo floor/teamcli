@@ -92,8 +92,9 @@ state records for it through the watch's own screen reader. A pane that no longe
 process team launched — back at its shell, or replaced by one the state's stored session does not
 vouch for — is not read for a prompt: the check's own process line already says what the pane is,
 and a dialog left in its scrollback is not a seat held at one. The line names the seat, the prompt's
-kind — a permission prompt, a trust prompt, a quota prompt (a usage limit, with the reset time the
-screen shows), a confirm prompt (the CLI's own exit question), or an unrecognised prompt — the
+kind — a permission prompt, a trust prompt, a quota prompt (a usage limit, with the reset the
+screen words — `resets at 11:00`, `resets in 47h31m` — or `the screen names no reset time`), a
+confirm prompt (the CLI's own exit question), or an unrecognised prompt — the
 command the screen shows when the profile's trace reader finds one, and the age the state's clock
 gives it: `<seat>: stuck at a permission prompt (last active 4m ago): Write(note.txt)`. The age is
 the seat's last active moment, the only instant its record carries: the prompt stood up after it,
