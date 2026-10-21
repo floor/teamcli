@@ -162,6 +162,6 @@ test('a dev-mode dry run previews the folded precondition and writes nothing', a
   const r = await register(w, ['lead', '--dry-run'], { dev: true, caller: DELEGATE });
   expect(r.code).toBe(0);
   expect(r.out).toContain(`! warning: ${APPROVAL}`);
-  expect(r.out).toContain('dry run');
+  expect(r.out).toContain('nothing would be launched');
   expect(written(w)).toEqual(NOTHING);
 });
