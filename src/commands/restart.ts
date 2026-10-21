@@ -352,6 +352,18 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     const listed = recordedPane === undefined
       ? undefined
       : agents.find((agent) => agent.name === name && agent.pane === recordedPane);
+    // The recorded launcher's own selection, read before anything is stopped: `--abandon` is the
+    // caller's fresh start, and a line that itself names a conversation — the recorded id or any
+    // other — cannot be run fresh. It is never rewritten, so the flag is refused here rather than
+    // pretending the line it would run is a fresh one.
+    const pinned = namedResumeTarget(declared.cli, resumeCandidate.launch) !== null;
+    if (pinned && abandon) {
+      return notReadyRefused(
+        out,
+        json,
+        `${name}: its launch line itself names a conversation, so --abandon cannot start a fresh one; left as it is (clear the resume selection from its launch line for a fresh start)`,
+      );
+    }
     if (listed?.session !== undefined && listed.session !== '' && listed.session !== resumeCandidate.id) {
       // The live pane is another conversation: resuming the recorded one would put two live
       // copies of the seat's history beside each other. The restart proceeds fresh.
@@ -359,20 +371,24 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     } else {
       const carried = resumeCarry(declared.cli, resumeCandidate.launch, resumeCandidate.id);
       if (carried.kind === 'line') {
-        resume = resumeCandidate.id;
-      } else if (namedResumeTarget(declared.cli, resumeCandidate.launch) !== null) {
-        // The recorded launcher names a conversation of its own (another id, or a selection
-        // without one): stopping the seat and running that line would resume something nothing
-        // proved. Nothing is stopped unless the caller abandons the conversation with
-        // `--abandon`; the record's own recipe is then the line the run is left with.
-        if (!abandon) {
-          return notReadyRefused(
-            out,
-            json,
-            `${name}: its recorded launcher does not select the recorded conversation; left as it is (team restart ${name} --abandon for a fresh start)`,
-          );
-        }
-      } else if (!abandon) {
+        // The line selects the recorded id, or names none and takes it appended — never under
+        // the caller's `--abandon`, which starts fresh.
+        if (!abandon) resume = resumeCandidate.id;
+      } else if (pinned) {
+        // The recorded launcher names another conversation, or resumes without naming one:
+        // stopping the seat and running that line would resume something nothing proved. Nothing
+        // is stopped, and the fresh start is not the caller's `--abandon` either: that line would
+        // run the same selection.
+        return notReadyRefused(
+          out,
+          json,
+          `${name}: its recorded launcher does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
+        );
+      } else if (abandon) {
+        // The caller's fresh start: the id the records bind is not put on the line. The line
+        // names no conversation of its own here, so running it as it is starts one.
+        if (carried.kind === 'refuse') noResume(carried.why);
+      } else {
         // No measured resume form on this CLI: stopping the seat would destroy a conversation
         // nothing could put back. The fresh start is the caller's explicit choice.
         return notReadyRefused(
@@ -380,9 +396,6 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
           json,
           `${name}: its recorded conversation cannot be resumed (${carried.why}); left as it is (team restart ${name} --abandon for a fresh start)`,
         );
-      } else {
-        // The caller abandons the recorded conversation: there is no form to carry it.
-        noResume(carried.why);
       }
     }
   }
@@ -648,10 +661,11 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       resumed = input.resume;
     } else if (namedResumeTarget(next.cli, planSeat.launch) !== null) {
       // The line this launch would run names a conversation of its own: stopping the seat would
-      // destroy one nothing proved while resuming another. The stop is not made.
+      // destroy one nothing proved while resuming another. The stop is not made, and `--abandon`
+      // is no way out either: it would run the same line.
       return {
         kind: 'not-ready',
-        message: `${name}: its launch line does not select the recorded conversation; left as it is (team restart ${name} --abandon for a fresh start)`,
+        message: `${name}: its launch line does not select the recorded conversation; left as it is (its launch line names a conversation of its own: clear that selection from its launch line for a fresh start)`,
       };
     }
     // A CLI with no measured resume form runs fresh; the caller already said so.

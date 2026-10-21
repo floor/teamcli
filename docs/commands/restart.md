@@ -124,9 +124,15 @@ agent registry's recorded `reach.agent_session`. The registry record is the proo
 state file written before the id was recorded is no bar to recognizing the seat, and no bar to
 resuming it either. The seat is then relaunched with that recorded conversation through its
 launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `codex … resume
-<id>`; a CLI with no measured resume form, or a state that names another id, is relaunched
-without one, and a conversation that differs or cannot be read remains refused (`<seat> has a
-process in its old pane that is not the signed seat; left as it is`, exit 1).
+<id>`; a CLI with no measured resume form is left as it is unless the caller abandons the
+conversation with `--abandon`, a state that names another id is relaunched without one, and a
+conversation that differs or cannot be read remains refused (`<seat> has a process in its old
+pane that is not the signed seat; left as it is`, exit 1).
+
+A launch line that itself names a conversation — another id, `--last`, or a resume with no id —
+is never run: the repair is refused before the stop, and `--abandon` does not start it fresh
+either, because that line would run the same selection. Clear the selection from the seat's
+launch line for a fresh start.
 
 That refusal's `--json` `repair` names `team restart <seat> --abandon` when herdr still names
 the seat on the recorded pane. With the flag the run closes that pane's workspace without typing

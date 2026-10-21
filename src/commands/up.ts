@@ -72,7 +72,7 @@ import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lob
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
-import { resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
@@ -309,12 +309,16 @@ function overCeiling(ceilings: Ceilings, running: readonly Running[], seat: Seat
 /** The refusal a proven conversation gets when the line the repair would actually run cannot
  *  carry it — the record's own launch where there is one, the declared line otherwise. The
  *  repair is not attempted, because its close would destroy a conversation the launch cannot
- *  put back. A line naming another id, or resuming without naming one, is never rewritten. */
+ *  put back. A line naming another id, or resuming without naming one, is never rewritten; a
+ *  fresh start there is the caller's own edit of the launch line, not `--abandon`, which would
+ *  run the same selection. */
 function uncarryableResume(seat: { name: string; cli: string; launch: string }, session: string): string | undefined {
   const carried = resumeCarry(seat.cli, seat.launch, session);
-  return carried.kind === 'refuse'
-    ? `its recorded conversation cannot be resumed: ${carried.why}; left as it is (team restart ${seat.name} --abandon for a fresh start)`
-    : undefined;
+  if (carried.kind !== 'refuse') return undefined;
+  const way = namedResumeTarget(seat.cli, seat.launch) !== null
+    ? 'its launch line names a conversation of its own: clear that selection from its launch line for a fresh start'
+    : `team restart ${seat.name} --abandon for a fresh start`;
+  return `its recorded conversation cannot be resumed: ${carried.why}; left as it is (${way})`;
 }
 
 /** What a caller is told when a drifted seat is working and this `up` will not close it. */
