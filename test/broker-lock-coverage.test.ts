@@ -4,37 +4,40 @@
 // left behind — which must be waited on while it is too young to judge and taken over once it has
 // aged past the window.
 //
-// The young wait is proved on a controlled clock, not by sampling a race. The lock is written
-// empty, its mtime is set to an exact whole second, and this process's clock is frozen so the
-// entry's age is exactly 999 ms — positive, just inside the window. While it is frozen the start
-// must still be pending and the entry must still be the very entry that was written — the same
-// dev and inode, the same empty bytes — checked over six of the product's poll turns, each
-// reading exactly 999 ms. The clock then steps to exactly 1001 ms and the start must recover the
-// entry and serve. The product's own 2000 ms whole-wait deadline is measured on this same clock, so
-// freezing it leaves the deadline 1998 ms away: the boundary is the only thing that moves, and no
-// host stall can stand in for it. A product that took over below 999 ms would change the entry or
-// settle during the hold, so the positive pre-boundary age rejects a lowered threshold; the
-// stepped 1001 ms rejects one raised past the boundary. The clock is restored in each scene's
-// finally, and the live deadline controls below run on the real clock. Each test file is its own
-// process under the runner, so the mock never reaches another file.
+// The clock-controlled boundary scenes run in a child process of their own
+// (`fixtures/broker-lock-clock-child.ts`), started below with this runtime's own binary and that
+// path. The runner does not give each test file a process of its own — files share one process
+// and its globals — so a clock mock installed here would change `Date.now` for everything else in
+// the run. The child installs the mock itself: the empty entry's mtime is pinned to a whole
+// second, the clock is frozen at exactly 999 ms past it, six of the product's 20 ms poll turns
+// must find the start pending and the entry the same dev, inode and empty bytes at exactly
+// 999 ms, then the clock steps to exactly 1001 ms and the start must take the entry over, serve
+// and answer a read. The product's own 2000 ms whole-wait deadline is read from that same clock,
+// so at the crossing it is still 1998 ms away: the boundary is the only thing that moves, and no
+// host stall can stand in for it. The child restores the clock and exits. This file asserts its
+// exact CLOCK lines, that its pid is not this process's, and that this process's clock still
+// advanced with real time across the spawn, so the mock stayed in the child.
+//
+// The scenes that follow run in this process on the real clock: a dead holder's lock is recovered,
+// and a live holder and a live taker claim each drive the product's own 2000 ms deadline to its
+// fail-closed `locked` while their entries keep the same dev, inode and bytes.
 //
 // The actual-main b071 hosted run failed this area. A separate stall harness, kept with its own
 // raw output and outside this file, reproduces the failure's shape by stopping the event loop
 // across the deadline. The saved hosted log records the failure, not its cause: the reading that a
 // load stall carried a poll past the deadline is an inference, not an established history.
-import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { brokerSocket, encodeLine, parseAnswer, type BrokerAnswer, type BrokerRequest } from '../src/broker/protocol.ts';
 import { startBroker } from '../src/broker/server.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { emptySession, updateState } from '../src/state.ts';
-
-/** The empty-entry window the start protocol documents (`LOCK_YOUNG_MS` in the server). */
-const YOUNG_MS = 1000;
 
 /** The whole-wait deadline the start protocol documents (`LOCK_WAIT_MS` in the server). */
 const WAIT_MS = 2000;
@@ -109,80 +112,6 @@ function identityOf(path: string): Identity {
   return { dev: entry.dev, ino: entry.ino };
 }
 
-/** An empty lock and the real mtime its age is measured from; the caller freezes the clock. The
- *  mtime is set to an exact whole second so the frozen ages are exactly 999 and 1001 ms on any
- *  filesystem timestamp granularity; the entry keeps its inode and its empty bytes. */
-function emptyEntry(lockPath: string): number {
-  writeFileSync(lockPath, '');
-  const exact = new Date(Math.floor(Date.now() / 1000) * 1000 - 5000);
-  utimesSync(lockPath, exact, exact);
-  return statSync(lockPath).mtimeMs;
-}
-
-/** Freeze this process's clock at an exact age past the entry's whole-second mtime. The product
- *  and this test read the same frozen `Date.now`; the entry's mtime is the real one the
- *  filesystem stores. */
-function freezeAtAge(mtime: number, ageMs: number): void {
-  setSystemTime(new Date(mtime + ageMs));
-}
-
-/** Bound an await on the real timer, which the frozen clock does not touch: a start that does not
- *  recover inside the budget is a failed scene with its own message, never a hung file. */
-function within<T>(pending: Promise<T>, ms: number, message: string): Promise<T> {
-  return new Promise<T>((done, fail) => {
-    const timer = setTimeout(() => fail(new Error(message)), ms);
-    pending.then(
-      (value) => {
-        clearTimeout(timer);
-        done(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        fail(error);
-      },
-    );
-  });
-}
-
-/** Hold the frozen 999 ms state and prove it: over six of the product's 20 ms poll turns the entry
- *  must still be the same dev and inode carrying the same empty bytes, the logical age must still
- *  be positive and inside the window, and the start must still be pending. `extra` pins a dead
- *  taker's claim the same way while the lock is held. */
-async function holdsYoung(
-  lockPath: string,
-  entry: Identity,
-  mtime: number,
-  pending: Promise<Started>,
-  extra?: { path: string; entry: Identity; bytes: string },
-): Promise<void> {
-  let settled = false;
-  void pending.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-  for (let turn = 0; turn < 6; turn++) {
-    await new Promise((tick) => setTimeout(tick, 20));
-    const age = Date.now() - mtime;
-    expect(age).toBe(YOUNG_MS - 1);
-    const now = lstatSync(lockPath, { throwIfNoEntry: false });
-    if (!now) throw new Error('the young empty entry changed before the boundary');
-    expect({ dev: now.dev, ino: now.ino }).toEqual(entry);
-    expect(readFileSync(lockPath, 'utf8')).toBe('');
-    if (extra) {
-      const held = lstatSync(extra.path, { throwIfNoEntry: false });
-      if (!held) throw new Error('the dead taker\'s claim disappeared before the boundary');
-      expect({ dev: held.dev, ino: held.ino }).toEqual(extra.entry);
-      expect(readFileSync(extra.path, 'utf8')).toBe(extra.bytes);
-    }
-    if (settled) throw new Error('the start settled inside the young window');
-  }
-  expect(settled).toBe(false);
-}
-
 /** One read over the served socket, bounded by the scene's budget rather than left to hang. */
 function ask(path: string, request: BrokerRequest): Promise<BrokerAnswer> {
   return new Promise((done, fail) => {
@@ -219,7 +148,6 @@ function temps(path: string): string[] {
 }
 
 afterEach(async () => {
-  setSystemTime();
   for (const handle of openHandles.splice(0)) await handle.close();
   if (base) rmSync(base, { recursive: true, force: true });
   base = undefined;
@@ -230,29 +158,25 @@ const scene = (name: string, fn: () => Promise<void>): void => {
 };
 
 describe('the start lock over an independent world', () => {
-  scene('a young empty lock is held at 999 ms, then recovered at 1001 ms and served', async () => {
-    const path = world();
-    const lockPath = `${path}.lock`;
-    const mtime = emptyEntry(lockPath);
-    const entry = identityOf(lockPath);
-    try {
-      freezeAtAge(mtime, YOUNG_MS - 1);
-      const started = starting(path);
-      await holdsYoung(lockPath, entry, mtime, started);
-      freezeAtAge(mtime, YOUNG_MS + 1);
-      const result = await within(started, 5000, 'the start did not recover past the young boundary');
-      expect(result.kind).toBe('serving');
-      expect(await ask(path, leadRequest)).toMatchObject({ ok: true, read: { kind: 'records' } });
-      if (result.kind === 'serving') openHandles.push(result.handle);
-      expect(failures).toEqual([]);
-      // The start served on its own lock, released when the listen landed; the takeover left no
-      // claim and no private temp behind.
-      expect(existsSync(lockPath)).toBe(false);
-      expect(existsSync(`${lockPath}.takeover`)).toBe(false);
-      expect(temps(lockPath)).toEqual([]);
-    } finally {
-      setSystemTime();
-    }
+  scene('the controlled young boundary runs in its own process', async () => {
+    const childPath = fileURLToPath(new URL('./fixtures/broker-lock-clock-child.ts', import.meta.url));
+    const child = spawnSync(process.execPath, [childPath], { encoding: 'utf8', timeout: 30_000 });
+    const output = `${child.stdout ?? ''}${child.stderr ?? ''}`;
+    if (child.status !== 0) throw new Error(`the clock child failed (status ${child.status}): ${output}`);
+    const pid = /CLOCK scene=young pid=(\d+)/.exec(output)?.[1];
+    if (pid === undefined) throw new Error(`the clock child printed no pid line: ${output}`);
+    expect(Number(pid)).not.toBe(process.pid);
+    expect(output).toContain(`CLOCK scene=young pid=${pid} held age=999 turns=6 pending=1 same-entry=1`);
+    expect(output).toContain('CLOCK scene=young crossed age=1001 serving=1 read=1 lock-released=1 claim-absent=1 temps=0');
+    expect(output).toContain(`CLOCK scene=claim pid=${pid} held age=999 turns=6 pending=1 same-lock=1 same-claim=1`);
+    expect(output).toContain('CLOCK scene=claim crossed age=1001 serving=1 read=1 lock-released=1 claim-released=1 temps=0');
+    expect(output).toContain(`CLOCK done pid=${pid} scenes=2`);
+    // The mock stayed in the child: this process's clock still advances with real time.
+    const began = Date.now();
+    await new Promise((tick) => setTimeout(tick, 60));
+    const advanced = Date.now() - began;
+    expect(advanced).toBeGreaterThanOrEqual(40);
+    expect(advanced).toBeLessThan(10_000);
   });
 
   scene('a dead holder\'s lock is taken over and serves', async () => {
@@ -267,33 +191,6 @@ describe('the start lock over an independent world', () => {
     expect(existsSync(lockPath)).toBe(false);
     expect(existsSync(`${lockPath}.takeover`)).toBe(false);
     expect(temps(lockPath)).toEqual([]);
-  });
-
-  scene('a dead taker\'s claim is held at 999 ms, then evicted at 1001 ms and its lock recovered', async () => {
-    const path = world();
-    const lockPath = `${path}.lock`;
-    const claimPath = `${lockPath}.takeover`;
-    const mtime = emptyEntry(lockPath);
-    const entry = identityOf(lockPath);
-    const claimBytes = `${DEAD_PID}\n`;
-    writeFileSync(claimPath, claimBytes);
-    const claimEntry = identityOf(claimPath);
-    try {
-      freezeAtAge(mtime, YOUNG_MS - 1);
-      const started = starting(path);
-      await holdsYoung(lockPath, entry, mtime, started, { path: claimPath, entry: claimEntry, bytes: claimBytes });
-      freezeAtAge(mtime, YOUNG_MS + 1);
-      const result = await within(started, 5000, 'the dead claim was not evicted past the young boundary');
-      expect(result.kind).toBe('serving');
-      expect(await ask(path, leadRequest)).toMatchObject({ ok: true, read: { kind: 'records' } });
-      if (result.kind === 'serving') openHandles.push(result.handle);
-      expect(failures).toEqual([]);
-      expect(existsSync(lockPath)).toBe(false);
-      expect(existsSync(claimPath)).toBe(false);
-      expect(temps(lockPath)).toEqual([]);
-    } finally {
-      setSystemTime();
-    }
   });
 
   scene('a live holder is never evicted: the deadline refuses and touches nothing', async () => {
