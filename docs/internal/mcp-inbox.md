@@ -93,9 +93,10 @@ signature does not verify, is refused with a tool error and no receipt: a receip
 read of something the server could not authenticate. A plain-text drop an earlier build wrote is
 one such file: `inbox_check` does not list it, and a read of it answers the same tool error and
 writes no receipt, but it raises no refusal event to the owner — it is not a record anything could
-have admitted, and listing it every turn would only repeat the refusal. A file shaped as a record
-keeps both the refusal and the event, however it fails. It says the seat *read* the message, not
-that it acted on it. So:
+have admitted, and listing it every turn would only repeat the refusal. A regular file that opens
+as a record keeps both the refusal and the event, however it fails; a link, a FIFO or a directory
+at a drop's name never reaches that read — the answer is a tool error with no receipt and no
+refusal event. It says the seat *read* the message, not that it acted on it. So:
 
 - a receipt is `delivered (read)`, in the console, the JSON, the history and `team feed`;
 - no receipt is `sent (unconfirmed)`, with the drop kept;

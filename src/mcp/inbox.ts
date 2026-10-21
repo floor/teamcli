@@ -285,10 +285,11 @@ function parsedJson(text: string): unknown {
  * Whether the file at `path` is a drop an earlier build wrote: plain text, not JSON at all. This
  * build can never serve one — it is unsigned, and nothing in it can be verified — so the inbox
  * neither lists it nor raises its refusal to the owner; `team drops --read` skips and counts the
- * same file. Only a regular file of this user's is classified: a link, a FIFO, another user's file
- * or one that cannot be read keeps the refusal the record reader gave it. So does a file that opens
- * as JSON, even one that is not a record: a tampered or truncated signed record always starts as a
- * JSON object, and is never mistaken for old plain-text mail.
+ * same file. Only a regular file of this user's is classified; a link, a FIFO, a directory,
+ * another user's file or one that cannot be read is answered exactly as before — for a link, a
+ * FIFO or a directory at the drop's name, that answer is a tool error with no refusal event. A
+ * file that opens as JSON is not classified either: a tampered or truncated signed record starts
+ * as a JSON object, and is never mistaken for old plain-text mail.
  */
 export function legacyDropAt(path: string): boolean {
   const held = heldAt(path);
