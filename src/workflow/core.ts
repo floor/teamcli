@@ -228,6 +228,15 @@ export function decide(input: CoreInput): CoreDecision {
     );
   }
 
+  // Acceptance order 4: dry envelopes never carry a ledger head, and the dry run records none,
+  // so a present expected head cannot match — refused rather than silently ignored.
+  if (envelope.expectedHead !== undefined) {
+    return refused(
+      DECISION_CODES.headConflict,
+      'the dry run records no ledger head, so a supplied expected head does not match',
+    );
+  }
+
   // Selection. Zero or two enabled transitions are checker facts; the core treats them as
   // invariants and never reports a decision for them.
   const state = definition.states[run.state];

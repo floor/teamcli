@@ -347,6 +347,20 @@ describe('acceptance order', () => {
     expect(decide(scene({ definition: release })).kind).toBe('step');
   });
 
+  test('R5 a present expectedHead is refused: the dry run records no head', () => {
+    const base = scene({ definition: release });
+    const decision = decide({
+      ...base,
+      envelope: { ...base.envelope, expectedHead: { seq: 1, hash: 'abcdef' } },
+    });
+    expect(decision.kind).toBe('refused');
+    if (decision.kind === 'refused') {
+      expect(decision.code).toBe(DECISION_CODES.headConflict);
+      expect(decision.revision).toBe(0);
+    }
+    expect('plan' in decision).toBe(false);
+  });
+
   test('R6 an envelope naming another run or definition is refused ahead of acceptance', () => {
     const base = scene({ definition: release });
     const runMismatch = decide({
