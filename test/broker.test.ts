@@ -1324,7 +1324,8 @@ process.exit(started.kind === 'locked' && after !== undefined && after.bytes.len
 `;
 
   type ClockChild = {
-    /** The next line, which must start with `prefix`; a mismatch or an early exit rejects. */
+    /** The next line, which must start with `prefix`; a mismatch, or a close whose drained
+     *  output never held that line, rejects. */
     next: (prefix: string) => Promise<string>;
     exited: Promise<number | null>;
     kill: () => void;
@@ -1338,7 +1339,7 @@ process.exit(started.kind === 'locked' && after !== undefined && after.bytes.len
     const said: string[] = [];
     const exited = new Promise<number | null>((done) => child.once('exit', (code) => done(code)));
     let cursor = 0;
-    let code: number | null | undefined;
+    let closed: number | null | undefined;
     let err = '';
     let notify: (() => void) | undefined;
     const wake = (): void => {
@@ -1359,8 +1360,13 @@ process.exit(started.kind === 'locked' && after !== undefined && after.bytes.len
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => (err += chunk));
-    child.once('exit', (status) => {
-      code = status;
+    // `exit` is not the stdout-drain boundary: the child writes its final line and exits at
+    // once, and a reader delayed past the exit sees that line's `data` only afterwards. Only
+    // `close`, after the stdio streams have ended, says no further line can arrive. Measured
+    // on bun 1.4.2 with a paused stdout: exit (queue 0, so an exit rule would reject), data
+    // ("closed gone", queue 1), stdout-end, close (queue 1).
+    child.once('close', (status) => {
+      closed = status;
       wake();
     });
     return {
@@ -1373,8 +1379,8 @@ process.exit(started.kind === 'locked' && after !== undefined && after.bytes.len
             else reject(new Error(`the clock fixture said "${line}", expected "${prefix}"`));
             return;
           }
-          if (code !== undefined) {
-            reject(new Error(`the clock fixture exited (${code})${err ? `: ${err.trim()}` : ''}`));
+          if (closed !== undefined) {
+            reject(new Error(`the clock fixture closed (${closed})${err ? `: ${err.trim()}` : ''}`));
             return;
           }
           notify = check;
