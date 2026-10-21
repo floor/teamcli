@@ -123,8 +123,20 @@ completed its first pass, and a stopped or failed watch the record does not call
 phase line, and a route the daemon records no watch for prints nothing at all — a watch exists
 only where one was started on purpose. A stopped or failed watch is terminal in the record: nothing
 here restarts it, and the daemon does not bring it back by itself, so it runs again only when it is
-started again. With more than one watched route, each line ends with its route, `… (<root>)`. These
-notes never enter the total and never change the exit.
+started again. With more than one watched route, each line ends with its route, `… (<root>)`.
+
+A pane watch the session's state records is read through the same liveness predicate [`team up`](up.md)
+plans from, and the same rules keep it quiet: a live process with a fresh heartbeat adds no line. A
+recorded process that is gone reads `watch: the recorded process <pid> is gone; the next team up
+starts one`; a live process behind an old or unreadable heartbeat reads `watch: process <pid> is
+alive but its heartbeat is old; the next team up replaces it`; a record with no process or pane
+reads `watch: recorded with no process or pane; the next team up starts one`; and, when the daemon
+reading proves no hosted watch owns the route, no watch at all reads `watch: none running; the next
+team up starts one`. A hosted watch that owns the route suppresses the pane reading, and a session
+that is not running has no watch to expect. When the daemon's health cannot be read, the pane line
+names that limit instead of a repair `up` will not make, and a standing-by hosted watch does not
+claim a live pane watch that its record no longer shows. These notes never enter the total and
+never change the exit.
 
 The state's leftovers are differences too. A record for a seat the file no longer declares — one
 an older file named and this one dropped — and a session the file does not name with no seat of

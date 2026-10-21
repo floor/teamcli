@@ -334,6 +334,13 @@ export interface UpInput {
   watchLabel: string;
   /** The watch is running, so no second watch is started. */
   watchAlive?: boolean;
+  /** A recorded pane watch whose process lives but whose heartbeat is stale. The plan stops it
+   *  before it starts the replacement; without this the replacement would be the second watcher
+   *  on the route. */
+  watchPid?: number;
+  /** The daemon health cannot say whether a hosted watch owns the route. No pane watch is
+   *  started, and the plan says why rather than leaving the reader to guess. */
+  watchUnknown?: boolean;
   /** When false, no watch is started: a flagless watch started in `root` would
    *  not read the file this plan was built from. Absent means start one, as before. */
   startWatch?: boolean;
@@ -830,6 +837,21 @@ export function upPlan(input: UpInput): Step[] {
   }
 
   if (input.watchAlive || input.startWatch === false) return steps;
+  if (input.watchUnknown) {
+    steps.push({
+      kind: 'skip',
+      text: 'watch: the daemon health cannot be read; no pane watch is started this run',
+    });
+    return steps;
+  }
+  if (input.watchPid !== undefined) {
+    steps.push({
+      kind: 'run',
+      argv: ['kill', String(input.watchPid)],
+      note: 'the stale watch, before its replacement',
+      do: { do: 'kill', pid: input.watchPid },
+    });
+  }
   const watchArguments = session === 'default' ? '' : ` --session ${shellQuote(session)}`;
   const watchLine = input.watchLine ?? `team watch${watchArguments}`;
   steps.push({

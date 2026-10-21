@@ -9,6 +9,14 @@ into — and its sidebar is rewritten from the file either way. A seat the file 
 is a human's own pane: the plan skips it — nothing is launched into it or typed into it; left as
 it is — and it does not count as short of ready.
 
+The watch is read against both records: the watch the session's state carries and the hosted watch
+the machine daemon records for this route. A hosted watch that is not standing by is already
+watching the session, so the run starts no pane watch beside it; a standing-by hosted watch yields
+to the pane watch the state records. A pane watch with a live process and a fresh heartbeat is left
+alone, a dead or missing record starts one, and a live process behind an old heartbeat is stopped
+before its replacement starts. When the daemon's health cannot be read, the run starts no pane
+watch and the plan says why rather than risking a second one.
+
 Before the plan types anything, the run delivers the general seat brief: TeamCLI's built-in
 default, the first text every seat gets, written as a signed message record into the drop folder
 of every seat the plan launches or relaunches, and of every declared seat the session records no
