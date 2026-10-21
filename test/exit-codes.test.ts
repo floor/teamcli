@@ -22,8 +22,13 @@ import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
+import { FAULT_WHY, faultRequestPath, faultResultPath, writeFaultRequest } from '../src/daemon/fault.ts';
+import { daemonSocketPath } from '../src/daemon/paths.ts';
+import { routeId, routeOf } from '../src/daemon/routes.ts';
+import { writeDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
 import runPresenceHook from '../src/daemon/presence/hook.ts';
 import type { ServiceManager } from '../src/daemon/service.ts';
+import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
 import { commits } from '../src/commands/commits.ts';
@@ -3833,6 +3838,76 @@ async function daemonRan(
   return { code: await runDaemon(argv, io, daemonSources(place, overrides)), out: io.out, err: io.err };
 }
 
+const FAULT_SINCE = '2026-10-20T10:00:00.000Z';
+
+/** The route id the checkout's own team file records, as `fault-watch` derives it. */
+function faultRouteAt(place: Place): string {
+  const loaded = loadTeamFile(place.root, { home: place.home });
+  if (!loaded.ok) throw new Error(`the scene team file must load: ${loaded.errors[0]?.message ?? ''}`);
+  return routeId(routeOf(loaded.root, loaded.team.project, loaded.team.session, loaded.team.seats.map((seat) => seat.name)));
+}
+
+/** A live daemon record this test process is its own pid of, carrying the one hosted watch. */
+function faultDaemonRecord(place: Place, route: string, watch: Partial<HostedWatchState> | 'none' = {}): void {
+  const entry: DaemonRootState = {
+    root: place.root,
+    team: 'acme',
+    send: 'serving',
+    bus: 'serving',
+    why: null,
+    ...(watch === 'none' ? {} : {
+      watch: {
+        routeId: route,
+        root: place.root,
+        team: 'acme',
+        session: 'default',
+        phase: 'running',
+        startedAt: FAULT_SINCE,
+        lastCycleAt: FAULT_SINCE,
+        lastCycleOutcome: 'pass',
+        cycles: 2,
+        failures: 0,
+        effects: 'blocked',
+        required: true,
+        why: null,
+        ...watch,
+      } satisfies HostedWatchState,
+    }),
+  };
+  writeDaemonState(place.home, {
+    format: 1,
+    pid: process.pid,
+    uid: typeof process.getuid === 'function' ? process.getuid() : -1,
+    since: FAULT_SINCE,
+    startedBy: 'manual',
+    version: 'test',
+    heartbeatAt: FAULT_SINCE,
+    socket: daemonSocketPath(place.home),
+    features: { broker: 'absent' },
+    stuck: [],
+    roots: [entry],
+  });
+}
+
+/** A fault result the daemon would write, echoing the nonce of the request it just read. */
+function answerFault(place: Place, route: string, outcome: 'faulted' | 'refused', why: string): DaemonCommandSources['sleep'] {
+  return async () => {
+    const asked = JSON.parse(readFileSync(faultRequestPath(place.home), 'utf8')) as { nonce: string };
+    writeFileSync(
+      faultResultPath(place.home),
+      `${JSON.stringify({
+        format: 1,
+        home: place.home,
+        routeId: route,
+        nonce: asked.nonce,
+        outcome,
+        why,
+        at: FAULT_SINCE,
+      }, null, 2)}\n`,
+    );
+  };
+}
+
 scene('daemon.entry-missing', async (place) => {
   write(place, TEAM);
   return show(
@@ -3941,6 +4016,88 @@ scene('daemon.uninstalled', async (place) => {
   return show(ran, 'team daemon: uninstalled');
 });
 scene('daemon.usage', async (place) => show(await daemonRan(place, ['watch']), 'unknown subcommand'));
+scene('daemon.fault-usage', async (place) =>
+  show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', 'nope']), '32-character route id'));
+scene('daemon.fault-root', async (place) =>
+  show(
+    await daemonRan(place, ['fault-watch', '--root', join(place.home, 'missing-checkout'), '--route', 'a'.repeat(32)]),
+    'missing-checkout',
+  ));
+scene('daemon.fault-route', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['fault-watch', '--root', place.root, '--route', 'f'.repeat(32)]),
+    "does not name this checkout's hosted route",
+  );
+});
+scene('daemon.fault-daemon', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  return show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route]), 'is not running');
+});
+scene('daemon.fault-watch', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  faultDaemonRecord(place, route, 'none');
+  return show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route]), 'no hosted watch in the daemon record');
+});
+scene('daemon.fault-watch-state', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  faultDaemonRecord(place, route, { phase: 'standby', why: 'a pane watch owns this session' });
+  return show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route]), 'stands down to a live pane watch');
+});
+scene('daemon.fault-dry-run', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  faultDaemonRecord(place, route);
+  const ran = await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route, '--dry-run']);
+  expect(existsSync(faultRequestPath(place.home))).toBe(false);
+  return show(ran, 'would ask the running daemon to fault the hosted watch');
+});
+scene('daemon.faulted', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  faultDaemonRecord(place, route);
+  const ran = await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route], owner, {
+    sleep: answerFault(place, route, 'faulted', FAULT_WHY),
+  });
+  return show(ran, 'faulted the hosted watch for');
+});
+scene('daemon.fault-pending', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  faultDaemonRecord(place, route);
+  expect(
+    writeFaultRequest(place.home, {
+      format: 1,
+      home: place.home,
+      routeId: route,
+      daemonPid: process.pid,
+      daemonSince: FAULT_SINCE,
+      why: FAULT_WHY,
+      requestedAt: FAULT_SINCE,
+      nonce: 'already-waiting',
+    }),
+  ).toEqual({ ok: true });
+  return show(await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route]), 'a fault request is already waiting');
+});
+scene('daemon.fault-refused', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  faultDaemonRecord(place, route);
+  const ran = await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route], owner, {
+    sleep: answerFault(place, route, 'refused', 'the fault request names another daemon home'),
+  });
+  return show(ran, 'refused the fault');
+});
+scene('daemon.fault-not-reached', async (place) => {
+  write(place, TEAM);
+  const route = faultRouteAt(place);
+  faultDaemonRecord(place, route);
+  const ran = await daemonRan(place, ['fault-watch', '--root', place.root, '--route', route], owner, { faultWaitMs: 0 });
+  return show(ran, 'nothing was killed');
+});
 scene('next.broker', async (place) => {
   write(place, LINEAR);
   recordLead(place);
