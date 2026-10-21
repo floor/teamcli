@@ -48,7 +48,7 @@ import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
 import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
-import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
+import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
 import { upPlan } from '../launch/plan.ts';
 import { recordText } from '../launch/progress.ts';
@@ -595,6 +595,9 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // The general seat brief goes first, before the state hook and the plan's rules line: the
     // claim is written before the hook that resolves it and the signed drop before the launch.
     await deliverBrief(true);
+    // The binding the seat holds before this run's install: a minted successor belongs to the
+    // launch only if the plan runs the seat's line, and a refusal before that puts this back.
+    const priorBinding = readState(dir).sessions[session]?.seats[planned.name]?.presence_binding;
     // The state hook lands before the plan types the launch line. A seat whose settings file did
     // not land is said once, in the log, and relaunches with the file's own line.
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
@@ -806,6 +809,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         return 0;
       }
     }
+    // A binding is minted for a launch this run is about to type. A refusal that leaves the
+    // seat before its line runs never gave the new settings file to a process, so the seat
+    // keeps the incarnation it had: the rotation is undone, and a seat the install itself
+    // created goes with it. The run's own records of the seat stand otherwise.
+    restorePresenceBinding(dir, session, seat.name, priorBinding);
     if (!closed) {
       refuse(io, json, 'reload', {
         id: 'reload.changed',

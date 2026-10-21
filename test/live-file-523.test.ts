@@ -297,6 +297,25 @@ describe('reload preserves work without an approved copy', () => {
       noApproval();
     });
   }
+
+  test('a refused reload keeps the presence binding the seat was launched with', async () => {
+    remember('worker', 'low');
+    updateState(dir, (state) => {
+      const seat = state.sessions.acme?.seats.worker;
+      if (seat !== undefined) seat.presence_binding = 'prs_aaaaaaaaaaaa';
+    });
+    const state = readState(dir);
+    const made = world([agent('worker', 'idle')]);
+    // The planning reads see idle; the check before the close sees the working screen.
+    let reads = 0;
+    made.launch.paneText = () => (++reads === 1 ? IDLE : WORKING);
+    const io = testIo(root, OWNER);
+    expect(await runReload(['worker'], io, { launch: made.launch, home, now: () => NOW }), io.err + io.out).toBe(1);
+    expect(made.effects).toEqual([]);
+    expect(readState(dir).sessions.acme?.seats).toEqual(state.sessions.acme?.seats);
+    expect(readState(dir).sessions.acme?.seats.worker?.presence_binding).toBe('prs_aaaaaaaaaaaa');
+    noApproval();
+  });
 });
 
 describe('the granted caller has no additional unasked-close path', () => {
