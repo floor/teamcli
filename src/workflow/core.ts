@@ -261,16 +261,20 @@ export function decide(input: CoreInput): CoreDecision {
     on: transition.on,
   };
 
-  // Resolve and shape-check the cited evidence once. A cited ref that is not there is refused,
-  // not held: the envelope named a record that does not exist. A record for another run's target
-  // or artifact is not a candidate (scope), never a false answer.
+  // Resolve and shape-check the cited evidence once. A cited ref the document does not supply is
+  // missing evidence, not a refusal: the run waits on that exact ref (waitingOn names it) and
+  // nothing moves. A record for another run's target or artifact is not a candidate (scope),
+  // never a false answer.
   const resolved: Array<{ ref: EvidenceRef; record: EvidenceRecord }> = [];
   for (const ref of evidenceRefs) {
     const record = input.evidence.record(ref);
     if (record === undefined) {
-      return refused(
+      return held(
         DECISION_CODES.evidenceMissing,
-        `evidence ref "${ref}" is cited but does not resolve`,
+        `evidence ref "${ref}" is cited but the evidence document does not supply it`,
+        { kind: 'evidence', ref },
+        undefined,
+        transitionRef,
       );
     }
     const problem = recordProblem(record);
