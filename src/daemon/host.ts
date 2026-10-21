@@ -219,7 +219,7 @@ export type StartMachineDaemonInput = {
   /** The presence pass interval; 250 ms in production. A test shortens it. */
   presenceEveryMs?: number;
   /**
-   * The daemon-start restore sweep (FLO-1061 item 4): after the sockets, routes, state record and
+   * The daemon-start restore sweep: after the sockets, routes, state record and
    * shutdown machinery are wired, one guarded pass per canonical route repairs the seats its
    * recorded session lost. On by default, because a host restart is exactly when it is needed;
    * `false` turns it off, and a function replaces the runner for a test that must observe the
@@ -1692,7 +1692,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     return run;
   };
 
-  // The daemon-start restore sweep (FLO-1061 item 4): after the sockets, canonical routes, state
+  // The daemon-start restore sweep: after the sockets, canonical routes, state
   // record and shutdown machinery are wired, one guarded pass per accepted route repairs the
   // seats its recorded session lost. It is never awaited here, so readiness does not wait on a
   // launch; `closeOnce` drains the tracked run, and the run's own `isClosing` stops it between
