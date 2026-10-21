@@ -82,9 +82,13 @@ decides instead. The record's shape, with one example: [team init](init.md).
 
 ## Output and exit codes
 
+Each pass ends with one restore summary, written even when all three counts are zero: `N seats
+repaired, M skipped (working), K refused`, with ` (seat: why; …)` appended for the seats the pass
+would not repair.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
-| every seat ready, watch running | one `<seat>: ready` record per seat in file order, on stdout; `watch: started`, on stderr | 0 |
+| every seat ready, watch running | one `<seat>: ready` record per seat in file order, on stdout; `watch: started` and the restore summary line, on stderr | 0 |
 | `--dry-run` | the plan; `! up would refuse: …` per refusal above it | the refusal's own exit, else 0 |
 | a caller the run does not admit | a real run: `deny`, and nothing else: no `team up:` prefix, no reason, no plan. A `--dry-run`: `! up would refuse: <the reason>`, `! to unblock: <a leads seat's own run, or the owner's>`, then the plan where the run reached one | 1 |
 | the run is refused | one `team up: <reason>` per reason, on stderr, before the first step | 1 |
@@ -93,8 +97,11 @@ decides instead. The record's shape, with one example: [team init](init.md).
 | the team file can't be read | `team up: line <n>: <message>` (`team up: <message>` when the problem names no line) | 2 |
 
 `--json` prints one `team.up` document instead: `project`, `session`, the seat names the file
-declares as `seats`, and `notes` — the run's other lines in order, its closing `<seat>: ready`
-record as `action_summary` — with `dry_run` `false` and `status` `ready`. A run that ends short of
+declares as `seats`, `notes` — the run's other lines in order — `action_summary`, the restore
+summary line, and `restore_summary`, which carries that line's `repaired`, `skipped_working` and
+`refused` counts, its `repaired_seats` and `skipped_working_seats`, and its `refused_seats` with
+each seat's `seat` and `reason`, beside the same `line`, with `dry_run` `false` and `status`
+`ready`. A run that ends short of
 ready is the `team.error` document instead, named by what fell short: `up.pending` (the seats it
 names), `up.server` or `up.watch`. With `--dry-run` the document is `status` `dry-run`, `dry_run`
 `true`, `action_summary` `dry run: nothing was run`, and the plan as `plan` — the warning first
