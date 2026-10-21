@@ -33,6 +33,10 @@ import type { ScreenKind, Spec, ToolState } from './spec.ts';
 /** The pid the fixture's state records for a watch that is alive. */
 export const WATCH_PID = 4242;
 
+/** The pid the fixture's `team proc` records call running — the proc page's own process, which
+ *  its `--pid` example requires to be running. Every other number is a process that is gone. */
+export const PROC_PID = 4243;
+
 /** The pid a `team watch` run in a page has: never the recorded one, as a person's is not. */
 export const RUN_WATCH_PID = 9001;
 
@@ -293,6 +297,9 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
   let herdr = spec.herdr;
   // A watch that is already alive, or one the plan starts: `up` must not start a second.
   let watchPid: number | null = spec.watch === 'alive' || spec.watch === 'stale' ? WATCH_PID : null;
+  // The fixture's own process table: the pids a page calls running. Every command that reads a
+  // pid is handed this, so no example depends on a process the machine running the suite has.
+  const alivePid = (pid: number): boolean => pid === PROC_PID || (watchPid !== null && pid === watchPid);
   // The pane a run started a watch in, until `settle` records the pass it reaches next.
   let startedWatch: string | null = null;
   let made = 0;
@@ -727,6 +734,9 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         home,
         machine,
         projects: projectsAt(home),
+        // The fixture's process table, not the machine's: the proc notes a page shows are the
+        // records the same page's `team proc` examples made, never the host's own pids.
+        alive: alivePid,
       };
     },
     listSources(): ListSources {
@@ -758,6 +768,9 @@ export function createWorld(input: { team: TeamFile | null; spec: Spec; root: st
         standing: standingSource(home),
         now,
         home,
+        // A recorded watch's liveness is the fixture's process table too: a page whose state
+        // records a watch says whether its process runs, and the machine never answers.
+        alive: alivePid,
         // The caller gate's own reads, so a page's unapproved caller meets the world and not a
         // real herdr or a real store.
         gate: {
