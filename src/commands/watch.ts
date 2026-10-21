@@ -39,6 +39,7 @@ import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkP
 import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
 import { nativeHeldSeats } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
+import { actingWatchHandover, readWatchHandover } from '../watch/handover.ts';
 import type { HostedLoop } from '../watch/hosted.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { judgeTemporary, judgeWorktree } from '../watch/close.ts';
@@ -640,6 +641,25 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
     for (;;) {
       // A hosted pass starts only while the host still wants one.
       if (hosted?.signal.aborted) break;
+      // A daemon that hosts this route asks the live pane watch to hand over before it takes the
+      // session. The request is read once per pass, before any effect: it must name this
+      // checkout and session, come from a live process and carry a fresh beat on that daemon's
+      // fixed liveness. The pane watch then leaves through its own loop, whose cleanup deletes
+      // only its own record; the daemon's next beat acquires. A hosted loop never reads its own
+      // request — it is the asking side of the same transfer.
+      if (hosted === undefined) {
+        const asked = actingWatchHandover({
+          read: readWatchHandover(dir),
+          root: first.root,
+          session,
+          alive: (pid) => sources.alive(pid),
+          now: sources.now().getTime(),
+        });
+        if (asked !== undefined) {
+          say(`the machine daemon now hosts this route's watch; handing over the session "${session}"`, false);
+          break;
+        }
+      }
       // The file is read again on every pass, so a seat parked or stopped since is seen.
       const current = currentTeam(io.cwd, aimed, sources.now(), sources.home);
       const team = current.ok ? current.team : first.team;
