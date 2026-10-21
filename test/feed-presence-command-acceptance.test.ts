@@ -1,5 +1,5 @@
 // Independent acceptance for the shared feed command at 4ac0793f7 (`feat(presence): read the
-// verified presence feed in team feed`). Every world is synthetic under /private/tmp and walks
+// verified presence feed in team feed`). Every world is synthetic under a temporary directory and walks
 // the actual path: the real spool writer, the real ingester, the real publisher, the real bus
 // log's signature verification, and the command's own `runFeed`. No live seat, pane, checkout
 // store, owner home or CLI is touched.
@@ -23,6 +23,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEvent, pruneEventLog } from '../src/bus/log.ts';
 import { runFeed } from '../src/commands/feed.ts';
@@ -80,7 +81,7 @@ afterEach(async () => {
 });
 
 function makeShared(): Shared {
-  const base = realpathSync(mkdtempSync('/private/tmp/b7-feed-accept-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b7-feed-accept-')));
   const home = join(base, 'home');
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   mkdirSync(lobbyDir(home), { recursive: true });

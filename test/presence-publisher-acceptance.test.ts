@@ -2,7 +2,7 @@
 // publisher/feed SHA cfa5bb91f: a real synthetic state record, real spool records through the
 // real ingester, the publisher's own bounded step, then the bus log's verified reader and the
 // feed adapter. No pane, seat, owner home or live runtime is touched; every world lives under
-// `/private/tmp`.
+// a temporary directory.
 //
 // What these scenes hold the publisher to:
 //   - every applied line of the current binding reaches the bus as `presence.changed` with the
@@ -14,6 +14,7 @@
 //   - retention permits republication after the old records are gone: the same record identity
 //     can appear in the feed again under a new bus sequence. No exactly-once claim is made.
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { recipientsForEvent } from '../src/bus/kinds.ts';
@@ -46,7 +47,7 @@ describe('presence transitions reach the bus with their own identity and no audi
   let home: string;
 
   beforeEach(() => {
-    root = realpathSync(mkdtempSync('/private/tmp/b7-publish-world-'));
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'b7-publish-world-')));
     dir = join(root, '.agents');
     mkdirSync(dir);
     home = join(root, 'home');

@@ -31,7 +31,7 @@ test('a multi-line body is filed whole and the pane gets one short line', async 
   expect(trigger).not.toContain('HEAD-LINE');
   expect(trigger).not.toContain('TAIL-LINE');
   const drops = dropDir(made.dir);
-  const names = readdirSync(drops);
+  const names = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(names.length).toBe(1);
   const path = join(drops, names[0] as string);
   const line = readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' });

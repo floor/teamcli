@@ -15,6 +15,7 @@
 // the ordinary path) and the one override is the owner's explicit `now`.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Caller } from '../src/caller.ts';
@@ -90,7 +91,7 @@ seats:
 `;
 
 beforeEach(() => {
-  const base = realpathSync(mkdtempSync('/private/tmp/b7-swap-hold-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b7-swap-hold-')));
   places.push(base);
   root = join(base, 'acme');
   home = join(base, 'home');

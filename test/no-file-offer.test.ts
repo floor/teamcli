@@ -41,8 +41,9 @@ const TO_THE_FILE: Record<string, string[]> = {
 
 /** Commands that read the machine instead of a team file, so the sentence cannot come from
  *  them: `team usage` prints the live quota status lines, which a test folder does not
- *  isolate and a real machine answers slowly. */
-const MACHINE_ONLY = new Set(['usage']);
+ *  isolate and a real machine answers slowly, and `team daemon` manages or runs the
+ *  machine-wide daemon process. */
+const MACHINE_ONLY = new Set(['usage', 'daemon']);
 
 const OFFER = 'or pass --file';
 const NO_REPO = 'not inside a git repository';

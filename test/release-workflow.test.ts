@@ -87,3 +87,13 @@ test("each publishing job's condition is the pinned tag-push expression", () => 
     for (const step of job.steps ?? []) expect(stepPublishes(step)).toBe(false);
   }
 });
+
+test('the verify job packs with the stamped script and checks the stamp against the run commit', () => {
+  const steps = (workflow.jobs?.verify?.steps ?? []) as Step[];
+  const pack = steps.find((step) => typeof step.run === 'string' && step.run.includes('scripts/pack.ts'));
+  expect(pack).toBeDefined();
+  expect(pack?.run as string).not.toContain('npm pack');
+  const check = steps.find((step) => typeof step.run === 'string' && step.run.includes('scripts/check-pack.ts'));
+  expect(check).toBeDefined();
+  expect(check?.run as string).toContain('GITHUB_SHA');
+});

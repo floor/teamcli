@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runTeamCheck } from '../src/check/team.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -129,6 +129,7 @@ function live(text: string): Live {
 function check(root: string, text: string): { code: number; out: string } {
   const io = testIo(root, { kind: 'owner' });
   const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    home: join(dirname(root), 'home'),
     live: () => live(text),
     branch: () => 'main',
     standing: (at) => approvalStanding(at, join(root, 'nowhere')),

@@ -45,6 +45,7 @@
     "test": "bun test",
     "e2e": "bun scripts/e2e.ts",
     "build": "bun scripts/build.ts",
+    "pack": "bun scripts/pack.ts",
     "conformance": "bun scripts/conformance.ts --impl \"node dist/cli.js conformance-adapter\"",
     "coverage": "bun scripts/coverage.ts",
     "coverage:check": "bun scripts/coverage.ts --check",

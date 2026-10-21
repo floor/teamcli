@@ -68,7 +68,7 @@ describe("team send: the file's seat, before its record", () => {
       'team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
     );
     const drops = dropDir(one.dir, 'native');
-    expect(recordBody(join(drops, readdirSync(drops)[0] as string))).toBe(
+    expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
       "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team\n\na note",
     );
   });

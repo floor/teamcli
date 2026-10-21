@@ -23,7 +23,7 @@ import {
 } from '../policy/index.ts';
 import type { Standing } from '../store/store.ts';
 
-/** Whose word set the pace: a signed policy level, the approved file, or the release default. */
+/** Whose word set the pace: a signed policy level, the team file, or the release default. */
 export type WatchPaceSource = 'entity' | 'project' | 'team' | 'file' | 'default';
 
 export type WatchPace = {
@@ -67,7 +67,7 @@ export function applyWatchPace(
   return next;
 }
 
-/** The watch values a pass runs with under a pace: the approved file when verified, else defaults. */
+/** The watch values a pass runs with under a pace: the team file when verified, else defaults. */
 export function watchInForceWithPace(standing: Standing, team: TeamFile, pace: WatchPace): TeamFile['watch'] {
   return applyWatchPace(standing.kind === 'verified' ? team.watch : defaultWatch(), pace);
 }

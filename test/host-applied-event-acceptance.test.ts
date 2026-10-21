@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startMachineDaemon, type StartMachineDaemonInput } from '../src/daemon/host.ts';
 import { probeDaemonHealth } from '../src/daemon/health.ts';
@@ -75,9 +76,7 @@ const made: Scratch[] = [];
 const cleanups: Array<() => Promise<void> | void> = [];
 
 function scratch(): Scratch {
-  // Scenes live under /private/tmp, never the system temp folder: a spawned world there costs a
-  // second on first use and these scenes are timing-sensitive.
-  const base = realpathSync(mkdtempSync('/private/tmp/b7-b5-host-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b7-b5-host-')));
   const root = join(base, 'repo');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });

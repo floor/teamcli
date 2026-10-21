@@ -6,7 +6,7 @@
 # `latest`.
 #
 # Two jobs, so the OIDC token exists in as few steps as possible: `verify` runs
-# the tag checks, the gate and `npm pack`, and uploads the tarball; `publish`
+# the tag checks, the gate and the stamped pack, and uploads the tarball; `publish`
 # alone holds `id-token: write` and downloads the tarball, re-checks its version
 # and publishes it — no checkout, no install, no build.
 # The tag's commit must be on main, the version must be package.json's, and the
@@ -86,29 +86,34 @@ jobs:
       - run: bun run ci
 
       # Packed once, here, with the npm the Node 22 above ships; this exact file
-      # is what publish uploads and npm gets. The filename comes from npm's own
-      # --json report, never a glob over whatever tarballs happen to be around.
+      # is what publish uploads and npm gets. The filename comes from the
+      # stamped pack's own report, never a glob over whatever tarballs happen
+      # to be around. scripts/pack.ts refuses a dirty tree or an uncommitted
+      # version and writes the full HEAD SHA into the tarball's manifest.
       - name: Pack the tarball
         id: pack
         run: |
-          filename="$(npm pack --json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename')"
-          test -f "$filename" || { echo "npm pack reported '$filename', which is not a file" >&2; exit 1; }
+          filename="$(bun scripts/pack.ts --pack-destination . | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
+          test -f "$filename" || { echo "pack reported '$filename', which is not a file" >&2; exit 1; }
           echo "tarball=$filename" >> "$GITHUB_OUTPUT"
 
       # A tarball is public the moment it is published, so nothing in it may
-      # carry an internal ticket reference. The script reads every member and
-      # names the file, never the reference, so a failure does not leak one;
+      # carry an internal ticket reference. The same script also checks the
+      # source stamp against the commit this run packed. It reads every member
+      # and names the file, never the reference, so a failure does not leak one;
       # an extraction or read error fails the step too (exit 2).
-      - name: No internal ticket references in the tarball
+      - name: The tarball carries its source stamp and no internal ticket reference
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: bun scripts/check-pack.ts "$TARBALL"
+        run: bun scripts/check-pack.ts "$TARBALL" "$GITHUB_SHA"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: matrix.os == 'ubuntu-latest'
         with:
           name: package
-          path: team-*.tgz
+          path: |
+            team-*.tgz
+            team-*.tgz.stamp.json
           if-no-files-found: error
 
   # Only the token, a Node with the pinned npm, and the tarball verify built.

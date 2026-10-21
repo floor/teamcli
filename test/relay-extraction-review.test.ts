@@ -9,6 +9,7 @@ import {
   existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { createConnection } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createHostServer, HOST_FRAME_LIMIT } from '../packages/relay/host/server.js';
 import {
@@ -34,7 +35,7 @@ afterEach(() => {
 });
 
 function scratch(): { base: string; home: string; dropDir: string; socketPath: string } {
-  const base = mkdtempSync('/private/tmp/b7relay-');
+  const base = mkdtempSync(join(tmpdir(), 'b7relay-'));
   bases.push(base);
   return {
     base,

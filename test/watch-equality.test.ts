@@ -115,7 +115,7 @@ function oldPass(
         const repair = name === team.orchestrator || name === team.operator
           ? 'team down, then team up (to restart the whole team)'
           : `team remove ${name} --keep, then team add ${name}`;
-        once(`model:${name}`, `${name} runs ${running.model} ${running.version}; the file says ${seat.display}: it signs with the wrong model — ${repair}`);
+        once(`model:${name}`, `${name} runs ${running.model} ${running.version}; the registry says ${seat.model} ${seat.version}: it signs with the wrong model — ${repair}`);
       }
     }
 

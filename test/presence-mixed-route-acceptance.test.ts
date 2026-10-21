@@ -1,7 +1,7 @@
 // Independent acceptance for the display's per-seat presence qualification: baseline cc253905e,
 // mixed-route fix bc51e1cb3, missing-list followup ad1ad6376, and the integrated copies
 // a3a91484d (mixed route) and 00d3df3a3 (missing list). The rows come from production
-// `seatRegistryRows`; the projections and state records are synthetic files under /private/tmp.
+// `seatRegistryRows`; the projections and state records are synthetic files under a temporary directory.
 // No live pane, session, daemon or credential is touched.
 //
 // The final source-class contract (2556c4518) makes that answer complete: every declared seat is
@@ -16,6 +16,7 @@
 //     fail-closed fallback.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { seatRegistryRows, type SeatRegistryRow, type SeatTraceSources } from '../src/commands/seats.ts';
 import { presencePaths } from '../src/daemon/presence/spool.ts';
@@ -119,7 +120,7 @@ let base = '';
 let stateDir = '';
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync('/private/tmp/b7-display-route-'));
+  base = realpathSync(mkdtempSync(join(tmpdir(), 'b7-display-route-')));
   stateDir = join(base, '.agents');
   mkdirSync(stateDir, { recursive: true });
 });

@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startMachineDaemon, type StartMachineDaemonInput } from '../src/daemon/host.ts';
 import { daemonLockPath } from '../src/daemon/paths.ts';
@@ -89,7 +90,7 @@ let world: Scratch;
 let cleanups: Array<() => Promise<void> | void> = [];
 
 beforeEach(() => {
-  const base = realpathSync(mkdtempSync('/private/tmp/b7-host-accept-'));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'b7-host-accept-')));
   const root = join(base, 'repo');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });

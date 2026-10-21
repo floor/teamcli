@@ -2,7 +2,7 @@
 // 78014e1a3 (the bc0d65a5f stage plus the ignored-notification exit hygiene): the generated
 // settings file, its Notification command run through `sh` with a real stdin pipe, the real
 // spool writer, the real ingester, and the display consumer's fence. No live seat, session,
-// owner home or CLI is touched; every world lives under `/private/tmp`.
+// owner home or CLI is touched; every world lives under a synthetic temporary directory.
 //
 // What these scenes hold the adapter to:
 //   - the settings entry carries no matcher; the filter is the exact stdin payload;
@@ -18,6 +18,7 @@
 //     projection, and the consumer fences it as invalid rather than as absence.
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import run from '../src/daemon/presence/hook.ts';
@@ -56,7 +57,7 @@ describe('the generated human-wait adapter filters its own stdin and never inven
   let settingsPath: string;
 
   beforeEach(() => {
-    root = realpathSync(mkdtempSync('/private/tmp/b7-humanwait-world-'));
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'b7-humanwait-world-')));
     dir = join(root, '.agents');
     mkdirSync(dir);
     home = join(root, 'home');
@@ -104,7 +105,7 @@ describe('the generated human-wait adapter filters its own stdin and never inven
     return spawnSync('sh', ['-c', command], {
       input: payload,
       encoding: 'utf8',
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, TMPDIR: '/private/tmp' },
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, TMPDIR: tmpdir() },
       timeout: 30_000,
     });
   }

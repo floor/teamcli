@@ -175,7 +175,7 @@ describe('a restored seat running outside its launcher', () => {
       .toEqual([
         `claude-coordinator-acme ${GENERIC}`,
         leadNote('claude-coordinator-acme'),
-        'claude-coordinator-acme runs Claude Fable 5.1; the file says Claude Opus 5.5: it signs with the wrong model — '
+        'claude-coordinator-acme runs Claude Fable 5.1; the registry says Claude Opus 5.5: it signs with the wrong model — '
           + RESTART_TEAM,
       ]);
   });
