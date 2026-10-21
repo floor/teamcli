@@ -140,6 +140,10 @@ export type Composer = Box | StatusLast | StatusThenOne | TwoRules;
 
 export type ScreenData = {
   chrome: RegExp[];
+  /** The row that ends a turn, when the CLI draws one: a `live` rule's newest-turn region starts
+   *  after the last such row above the composer, so a sentence a completion already ended is
+   *  history. Absent, the whole paragraph above the composer is the newest turn. */
+  turnEnd?: RegExp;
   unknown?: Stage;
   trust?: Stage;
   permission?: Stage;
