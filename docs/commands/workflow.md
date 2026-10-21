@@ -18,7 +18,7 @@ Read-only: nothing writes, and no herdr session is needed.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `<path>` | a workflow file | the workflow definition (`version: 1`) to parse and validate |
-| `--json` | — | the report as the `team.workflow` document (`schema/workflow.schema.json`); an invocation or file-read error as the `team.error` document on stdout |
+| `--json` | — | the report (pass or refusal, exit 0 or 1) as the `team.workflow` document (`schema/workflow.schema.json`); an invocation, unreadable-file, or YAML-syntax error (exit 2) as the `team.error` document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it

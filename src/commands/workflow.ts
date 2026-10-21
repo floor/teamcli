@@ -34,7 +34,7 @@ import {
 export const USAGE = `Usage: team workflow check <path> [--json]
 
   <path>    the workflow file to check
-  --json    the report as a document, and a refusal as the error document
+  --json    the report (pass or refusal) as a document, and an invocation or file error as the error document
 
 Checks a workflow definition (schema v1) and its transition graph.
 
