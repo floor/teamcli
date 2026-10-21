@@ -34,6 +34,7 @@ import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
+import { LockBusyError, withLock } from '../state.ts';
 import {
   messageKeyOf,
   messageKeyState,
@@ -788,6 +789,11 @@ type AppendIndex = {
 
 const appendIndexes = new Map<string, AppendIndex>();
 
+/** The append locks this process holds, by lock directory. Append is synchronous, so a set is
+ *  the whole reentrancy state: the nested drop declaration's append runs under the lock its
+ *  caller already holds instead of waiting on itself. */
+const heldEventLocks = new Set<string>();
+
 function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
   return `${payload.kind}\u0000${payload.record_id}\u0000${payload.session}`;
 }
@@ -972,6 +978,29 @@ export function appendEvent(
   const storeDir = storePath(project, root, home);
   const ladderErr = ensureStoreLadder(storeDir, home);
   if (ladderErr !== null) return { ok: false, reason: ladderErr };
+
+  // Allocation and the append it stamps are one critical section across processes: two writers
+  // that scan the same newest sequence would otherwise mint it twice, and one of the two records
+  // would then be invisible to every cursor reader. The held set lets the drop declaration
+  // (declareDrop, below) append from inside an append without waiting on its own lock.
+  const lockDir = join(storeDir, 'locks', 'events');
+  if (!heldEventLocks.has(lockDir)) {
+    try {
+      return withLock(lockDir, () => {
+        heldEventLocks.add(lockDir);
+        try {
+          return appendEvent(project, root, home, input, options);
+        } finally {
+          heldEventLocks.delete(lockDir);
+        }
+      });
+    } catch (error) {
+      if (error instanceof LockBusyError) {
+        return { ok: false, reason: 'the event log is busy; the record was not written' };
+      }
+      throw error;
+    }
+  }
 
   const indexed = appendIndexOf(project, root, home, kept);
   if (!indexed.ok) return indexed;
