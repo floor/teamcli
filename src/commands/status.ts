@@ -11,7 +11,7 @@ import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../c
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive } from '../dev_mode.ts';
 import { existsSync } from 'node:fs';
-import { ownerSeatHelperPath, systemOwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { ownerSeatHelperPath, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { readSecurityProfile, securityProfileLine, securityProfilePath } from '../security/profile.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
@@ -97,6 +97,8 @@ export type StatusSources = {
   /** The machine daemon's one health reading, probed once per run at this boundary. Absent in a
    *  test that does not stand one in, so its scenes read no socket. */
   daemonHealth?(home: string): Promise<DaemonHealth>;
+  /** The owner-seat credential store that confirms the security profile's signer; the system helper by default. */
+  ownerSeatStore?: OwnerSeatKeyStore;
 };
 
 /**
@@ -461,7 +463,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The owner-signed security profile: a relaxed one is said loudly on every status; a record that
   // does not verify is said too (strict then applies). No record, no line: strict is the default.
   if (sources.home !== undefined && existsSync(securityProfilePath(sources.home))) {
-    comparison.notes.push(securityProfileLine(readSecurityProfile(sources.home, systemOwnerSeatKeyStore(ownerSeatHelperPath(sources.home)), now)));
+    comparison.notes.push(securityProfileLine(readSecurityProfile(sources.home, sources.ownerSeatStore ?? systemOwnerSeatKeyStore(ownerSeatHelperPath(sources.home)), now)));
   }
   // Idle with work and ready-but-uninstalled slices: one read each, notes only, no exit change.
   // The snapshot always exists once the watch provides one (the default local queue counts as a
