@@ -34,6 +34,11 @@
 // Exits 0 when the install (or --dry-run check) succeeds, 1 when a provenance,
 // source-stamp, version-ordering, or rollback guard refuses the candidate before
 // mutation, and 2 when arguments or readable file preconditions fail.
+//
+// A failure after the backend call has been dispatched reports phase
+// "post-dispatch", the attempted mutateCalls, and installedState "changed" or
+// "unknown" with the measured postState; it never presents a possibly-changed
+// prefix as a refusal that left it untouched.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -157,6 +162,25 @@ export interface InstallTarballOptions {
   dryRun?: boolean;
 }
 
+/** Whether a failed install stopped before or after a backend call was attempted. */
+export type InstallFailurePhase = 'pre-dispatch' | 'post-dispatch';
+
+/** What the measured post-dispatch state says about the installed prefix. */
+export type InstallInstalledState = 'unchanged' | 'changed' | 'unknown';
+
+/**
+ * The prefix state measured after a dispatched backend call failed. Present only
+ * when the re-inspection itself succeeded; `exists: false` is a measured absent
+ * installation, distinct from a failed inspection (postState `null`).
+ */
+export interface InstallPostState {
+  inspection: 'ok';
+  exists: boolean;
+  version: string | null;
+  gitHead: string | null;
+  matchesCandidate: boolean | null;
+}
+
 export type InstallTarballResult =
   | {
       ok: true;
@@ -188,10 +212,32 @@ export type InstallTarballResult =
       decision: InstallDecisionKind;
       decisionCode: InstallDecisionKind;
       order: -1 | 0 | 1 | null;
-      mutated: false;
-      mutateCalls: 0;
+      /** Whether this stopped before any backend call or after one was dispatched. */
+      phase: InstallFailurePhase;
+      /** True iff a backend call was attempted. */
+      dispatched: boolean;
+      /**
+       * False before dispatch; true only when the measured post-state shows a
+       * change; null when a dispatched install's effect cannot be established.
+       */
+      mutated: boolean | null;
+      /** Backend calls attempted: 0 before dispatch, at least 1 after. */
+      mutateCalls: number;
+      /** What the measured post-state says about `<prefix>`. */
+      installedState: InstallInstalledState;
+      /** Measured state after a dispatched failure; null before dispatch. */
+      postState: InstallPostState | null;
       installed: string | null;
       candidate: string | null;
+      /** The prefix to inspect; always named so a failure record supports recovery. */
+      prefix: string;
+      packageDir: string | null;
+      binPath: string | null;
+      previousGitHead: string | null;
+      /** Failure record written (or attempted), when a record path was given. */
+      recordPath: string | null;
+      /** Why the failure record could not be written; null when it was not attempted or succeeded. */
+      recordError: string | null;
       rollback: RollbackDeclaration | null;
       preservedRollbackArtifacts: RollbackArtifactSnapshot[];
       message: string;
@@ -443,6 +489,20 @@ interface CandidateData {
   unpackedPackageDir: string;
 }
 
+interface RefusalDetails {
+  phase?: InstallFailurePhase;
+  mutateCalls?: number;
+  mutated?: boolean | null;
+  installedState?: InstallInstalledState;
+  postState?: InstallPostState | null;
+  prefix?: string;
+  packageDir?: string | null;
+  binPath?: string | null;
+  previousGitHead?: string | null;
+  recordPath?: string | null;
+  recordError?: string | null;
+}
+
 function refuse(
   code: 1 | 2,
   decision: InstallDecisionKind,
@@ -452,17 +512,30 @@ function refuse(
   rollback: RollbackDeclaration | null,
   preservedRollbackArtifacts: RollbackArtifactSnapshot[],
   message: string,
+  details: RefusalDetails = {},
 ): InstallTarballResult {
+  const phase = details.phase ?? 'pre-dispatch';
   return {
     ok: false,
     code,
     decision,
     decisionCode: decision,
     order,
-    mutated: false,
-    mutateCalls: 0,
+    phase,
+    dispatched: phase === 'post-dispatch',
+    // null is a measured answer ("unknown"), not an absent detail.
+    mutated: details.mutated === undefined ? false : details.mutated,
+    mutateCalls: details.mutateCalls ?? 0,
+    installedState: details.installedState ?? 'unchanged',
+    postState: details.postState ?? null,
     installed,
     candidate,
+    prefix: details.prefix ?? '',
+    packageDir: details.packageDir ?? null,
+    binPath: details.binPath ?? null,
+    previousGitHead: details.previousGitHead ?? null,
+    recordPath: details.recordPath ?? null,
+    recordError: details.recordError ?? null,
     rollback,
     preservedRollbackArtifacts,
     message,
@@ -573,8 +646,30 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
   );
 
   const installedState = inspectInstalledPrefix(options.prefix);
+
+  // Every refusal names the prefix and the pre-attempt identity so the record
+  // supports inspection even for a failure that dispatched a backend call.
+  const refuseHere = (
+    code: 1 | 2,
+    decision: InstallDecisionKind,
+    order: -1 | 0 | 1 | null,
+    installed: string | null,
+    candidate: string | null,
+    rollbackDeclaration: RollbackDeclaration | null,
+    preserved: RollbackArtifactSnapshot[],
+    message: string,
+    details: RefusalDetails = {},
+  ): InstallTarballResult =>
+    refuse(code, decision, order, installed, candidate, rollbackDeclaration, preserved, message, {
+      prefix: installedState.ok ? installedState.prefix : resolve(options.prefix),
+      packageDir: installedState.ok ? installedState.packageDir : null,
+      binPath: installedState.ok ? installedState.binPath : null,
+      previousGitHead: installedState.ok ? installedState.gitHead : null,
+      ...details,
+    });
+
   if (!installedState.ok) {
-    return refuse(
+    return refuseHere(
       installedState.code,
       installedState.decision,
       null,
@@ -589,7 +684,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
   const installedVersion = installedState.version;
   const resolvedTarball = resolve(options.tarball);
   if (!existsSync(resolvedTarball)) {
-    return refuse(
+    return refuseHere(
       2,
       'refuse-missing-tarball',
       null,
@@ -605,7 +700,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
   try {
     tarballStat = statSync(resolvedTarball);
   } catch (error) {
-    return refuse(
+    return refuseHere(
       2,
       'refuse-missing-tarball',
       null,
@@ -617,7 +712,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     );
   }
   if (!tarballStat.isFile()) {
-    return refuse(
+    return refuseHere(
       2,
       'refuse-missing-tarball',
       null,
@@ -637,7 +732,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     const extracted = spawnSync('tar', ['-xzf', resolvedTarball, '-C', scratch], { encoding: 'utf8' });
     if (extracted.error !== undefined || extracted.status !== 0) {
       const detail = extracted.error?.message ?? extracted.stderr.trim();
-      return refuse(
+      return refuseHere(
         2,
         'refuse-corrupt-tarball',
         null,
@@ -652,7 +747,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     const unpackedPackageDir = join(scratch, 'package');
     const candidateManifestPath = join(unpackedPackageDir, 'package.json');
     if (!existsSync(candidateManifestPath)) {
-      return refuse(
+      return refuseHere(
         2,
         'refuse-corrupt-tarball',
         null,
@@ -678,7 +773,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         bin?: { team?: unknown };
       };
     } catch (error) {
-      return refuse(
+      return refuseHere(
         2,
         'refuse-corrupt-tarball',
         null,
@@ -691,7 +786,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     }
 
     if (manifest.name !== 'team') {
-      return refuse(
+      return refuseHere(
         1,
         'refuse-invalid-package',
         null,
@@ -714,7 +809,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     });
 
     if (!guard.allowed) {
-      return refuse(
+      return refuseHere(
         1,
         guard.decision,
         guard.order,
@@ -727,7 +822,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     }
 
     if (options.allowUnstampedRollback === true && guard.decision !== 'allow-declared-rollback') {
-      return refuse(
+      return refuseHere(
         1,
         'refuse-unstamped-forward-install',
         guard.order,
@@ -755,7 +850,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       try {
         sidecar = JSON.parse(readFileSync(stampPath, 'utf8')) as Partial<StampSidecar>;
       } catch (error) {
-        return refuse(
+        return refuseHere(
           1,
           'refuse-missing-stamp',
           guard.order,
@@ -767,7 +862,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         );
       }
       if (sidecar.sha256 !== tarballSha256) {
-        return refuse(
+        return refuseHere(
           1,
           'refuse-stamp-sha256-mismatch',
           guard.order,
@@ -779,7 +874,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         );
       }
       if (sidecar.bytes !== tarballBytes) {
-        return refuse(
+        return refuseHere(
           1,
           'refuse-stamp-bytes-mismatch',
           guard.order,
@@ -791,7 +886,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         );
       }
       if (sidecar.version !== candidateVersion) {
-        return refuse(
+        return refuseHere(
           1,
           'refuse-stamp-vs-manifest-version-mismatch',
           guard.order,
@@ -803,7 +898,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         );
       }
     } else if (requireSidecar) {
-      return refuse(
+      return refuseHere(
         1,
         'refuse-missing-stamp',
         guard.order,
@@ -819,7 +914,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     let candidateGitHead: string | null = null;
     if (rawGitHead !== undefined && rawGitHead !== null && rawGitHead !== '') {
       if (typeof rawGitHead !== 'string' || !GIT_HEAD_PATTERN.test(rawGitHead)) {
-        return refuse(
+        return refuseHere(
           1,
           'refuse-missing-or-mismatched-githead',
           guard.order,
@@ -832,7 +927,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       }
       candidateGitHead = rawGitHead;
     } else if (!allowUnstamped) {
-      return refuse(
+      return refuseHere(
         1,
         'refuse-missing-or-mismatched-githead',
         guard.order,
@@ -850,7 +945,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         !GIT_HEAD_PATTERN.test(sidecar.gitHead) ||
         (candidateGitHead !== null && sidecar.gitHead !== candidateGitHead))
     ) {
-      return refuse(
+      return refuseHere(
         1,
         'refuse-missing-or-mismatched-githead',
         guard.order,
@@ -867,7 +962,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       options.expectedGitHead !== '' &&
       candidateGitHead !== options.expectedGitHead
     ) {
-      return refuse(
+      return refuseHere(
         1,
         'refuse-missing-or-mismatched-githead',
         guard.order,
@@ -887,7 +982,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
             ? resolve(options.rollbackDir, artifactPathOrName)
             : resolve(artifactPathOrName);
         if (!existsSync(candidatePath) || sha256File(candidatePath) !== expectedSha) {
-          return refuse(
+          return refuseHere(
             1,
             'refuse-rollback-preserve-collision',
             guard.order,
@@ -906,7 +1001,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       if (sameNameInRollbackDir !== resolvedTarball && existsSync(sameNameInRollbackDir)) {
         const existingSha = sha256File(sameNameInRollbackDir);
         if (existingSha !== tarballSha256) {
-          return refuse(
+          return refuseHere(
             1,
             'refuse-rollback-preserve-collision',
             guard.order,
@@ -925,7 +1020,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         preserved.path === installedState.binPath ||
         preserved.path.startsWith(`${installedState.packageDir}/`)
       ) {
-        return refuse(
+        return refuseHere(
           1,
           'refuse-rollback-preserve-collision',
           guard.order,
@@ -944,7 +1039,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
         : 'dist/cli.js';
     const candidateBinFile = join(unpackedPackageDir, binRelPath);
     if (!existsSync(candidateBinFile)) {
-      return refuse(
+      return refuseHere(
         1,
         'refuse-missing-entrypoint',
         guard.order,
@@ -970,7 +1065,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
     if (options.dryRun === true) {
       const rollbackProblem = verifyRollbackSnapshotsUnchanged(preservedRollbackArtifacts);
       if (rollbackProblem !== null) {
-        return refuse(
+        return refuseHere(
           1,
           'refuse-rollback-preserve-collision',
           guard.order,
@@ -1017,7 +1112,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       if (destTarball !== resolvedTarball) {
         if (existsSync(destTarball)) {
           if (sha256File(destTarball) !== tarballSha256) {
-            return refuse(
+            return refuseHere(
               1,
               'refuse-rollback-preserve-collision',
               guard.order,
@@ -1039,6 +1134,97 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
 
     // 4. Perform the installation into `<prefix>`.
     let mutateCalls = 0;
+
+    // A failure after the backend was dispatched measures the prefix again and
+    // reports the attempt and its observed effect instead of claiming no mutation.
+    const failAfterDispatch = (
+      code: 1 | 2,
+      decision: InstallDecisionKind,
+      order: -1 | 0 | 1 | null,
+      installed: string | null,
+      candidate: string | null,
+      rollbackDeclaration: RollbackDeclaration | null,
+      preserved: RollbackArtifactSnapshot[],
+      message: string,
+    ): InstallTarballResult => {
+      const after = inspectInstalledPrefix(installedState.prefix);
+      let postState: InstallPostState | null;
+      let stateKind: InstallInstalledState;
+      if (!after.ok) {
+        // The re-inspection itself failed: the effect cannot be measured.
+        postState = null;
+        stateKind = 'unknown';
+      } else {
+        postState = {
+          inspection: 'ok',
+          exists: after.exists,
+          version: after.version,
+          gitHead: after.gitHead,
+          matchesCandidate: after.exists
+            ? after.version === candidateData.version && after.gitHead === candidateData.gitHead
+            : null,
+        };
+        const changed =
+          after.exists !== installedState.exists ||
+          after.version !== installedState.version ||
+          after.gitHead !== installedState.gitHead;
+        stateKind = changed ? 'changed' : 'unknown';
+      }
+      let recordPath: string | null = null;
+      let recordError: string | null = null;
+      if (options.recordPath !== undefined && options.recordPath !== '') {
+        recordPath = resolve(options.recordPath);
+        try {
+          mkdirSync(dirname(recordPath), { recursive: true });
+          // Persist the measured failure before returning, so the attempt and
+          // its observed effect survive even when the caller loses the result.
+          const record = refuseHere(
+            code,
+            decision,
+            order,
+            installed,
+            candidate,
+            rollbackDeclaration,
+            preserved,
+            `${message}; installed state ${stateKind === 'changed' ? 'changed' : 'unknown'}; inspect ${installedState.prefix}`,
+            {
+              phase: 'post-dispatch',
+              mutateCalls,
+              mutated: stateKind === 'changed' ? true : null,
+              installedState: stateKind,
+              postState,
+              recordPath,
+              recordError: null,
+            },
+          );
+          writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+        } catch (error) {
+          recordError = (error as Error).message;
+        }
+      }
+      const suffix =
+        recordError === null ? '' : `; failure record not written: ${recordError}`;
+      return refuseHere(
+        code,
+        decision,
+        order,
+        installed,
+        candidate,
+        rollbackDeclaration,
+        preserved,
+        `${message}; installed state ${stateKind === 'changed' ? 'changed' : 'unknown'}; inspect ${installedState.prefix}${suffix}`,
+        {
+          phase: 'post-dispatch',
+          mutateCalls,
+          mutated: stateKind === 'changed' ? true : null,
+          installedState: stateKind,
+          postState,
+          recordPath,
+          recordError,
+        },
+      );
+    };
+
     const installer = options.installer ?? 'tar';
     if (typeof installer === 'function') {
       mutateCalls += 1;
@@ -1069,7 +1255,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       );
       if (npmRun.error !== undefined || npmRun.status !== 0) {
         const detail = npmRun.error?.message ?? npmRun.stderr.trim();
-        return refuse(
+        return failAfterDispatch(
           2,
           'refuse-installer-failed',
           guard.order,
@@ -1099,7 +1285,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       afterInstalled.version !== candidateData.version ||
       afterInstalled.gitHead !== candidateData.gitHead
     ) {
-      return refuse(
+      return failAfterDispatch(
         2,
         'refuse-post-install-mismatch',
         guard.order,
@@ -1113,7 +1299,7 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
 
     const rollbackProblem = verifyRollbackSnapshotsUnchanged(preservedRollbackArtifacts);
     if (rollbackProblem !== null) {
-      return refuse(
+      return failAfterDispatch(
         1,
         'refuse-rollback-preserve-collision',
         guard.order,
