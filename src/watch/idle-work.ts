@@ -122,6 +122,15 @@ function idleSeatsOf(
         thresholdSeconds: threshold_seconds,
       });
       if (verdict.idle) {
+        // A usage wall outranks the projection's idle word: the runtime's turn ended, but the
+        // CLI's own screen proves nothing can be typed there until the wall lifts, so the seat
+        // is blocked, never an idle worker. The gate reads the pane this pass holds; a pass with
+        // no live reading or no single agent for the seat keeps the projection's answer.
+        if (live !== null && live.running) {
+          const agents = live.agents.filter((candidate) => candidate.name === seat.name);
+          const pane = agents.length === 1 ? agents[0]?.pane : undefined;
+          if (pane !== undefined && readScreen(seat.cli, live.screens[pane]).kind === 'rate limit') continue;
+        }
         if (since === null) {
           // The verdict proved the persisted stamp parses; a missing value here is still a hold,
           // never a wake on a clock this snapshot cannot read.
