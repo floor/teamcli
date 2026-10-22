@@ -9,8 +9,9 @@
 //
 // The rows below pin the contract, not a wording beyond it:
 //   send    a positively read wall refuses (exit 1, `send.refused`) before any record, socket,
-//           fallback or typing effect, with the reset it read; a quote inside a working turn,
-//           a finished turn's history, and a healthy prompt keep ordinary sends.
+//           fallback or typing effect, with the reset it read; the same holds when the box
+//           already carries unsent text, which the refusal never types into; a quote inside a
+//           working turn, a finished turn's history, and a healthy prompt keep ordinary sends.
 //   status  one canonical `blocked: quota` seat state, human and JSON, with the reset as
 //           displayed: `resets at 11:00`, `resets in 47h31m`, or an explicit no-reset; no parsed
 //           instant, no invented zone; Codex/Cursor status rows are not a wall.
@@ -63,6 +64,9 @@ const CODEX_WARNING = CAPTURE('codex/0.157.0/idle.txt');
 // Synthetic frames (see README.md): never a native agy/Codex/Cursor trace.
 const AGY_QUOTA = HERE('./agy-individual-quota.txt');
 const AGY_NO_RESET = HERE('./agy-individual-quota-no-reset.txt');
+// The same synthetic wall above the retained agy box with text typed in its composer: the
+// draft guard's own frame, never a native trace.
+const AGY_DRAFT = AGY_QUOTA.replace('\n>\n', '\n> please fix the tests\n');
 const CLAUDE_HISTORY = HERE('./claude-quota-history.txt');
 const CLAUDE_QUOTE = HERE('./claude-quota-in-turn-quote.txt');
 const CODEX_WEEKLY_ZERO = HERE('./codex-weekly-zero.txt');
@@ -175,6 +179,20 @@ describe('send at a quota-out screen', () => {
     expect(scene.out).toContain('quota');
     expect(scene.out).toContain('11:00');
     expect(scene.typed).toEqual([]);
+    expect(scene.records).toEqual([]);
+  });
+
+  test('a wall over a composer that holds unsent text refuses before any retry record, and the draft is never typed into', async () => {
+    const scene = await sendAt(agyWorld(), 'agy1', AGY_DRAFT, 'done');
+    expect(scene.code).toBe(1);
+    expect(scene.doc?.error?.id).toBe('send.refused');
+    expect(scene.out).toContain('quota');
+    expect(scene.out).toContain('47h31m');
+    expect(scene.out).not.toContain('unsent');
+    expect(scene.out).not.toContain('send-drops');
+    expect(scene.typed).toEqual([]);
+    expect(scene.enters).toBe(0);
+    expect(scene.frames).toBe(0);
     expect(scene.records).toEqual([]);
   });
 
