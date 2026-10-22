@@ -27,6 +27,7 @@ import type {
   DryStop,
   EvidenceRef,
   OccurrenceId,
+  Revision,
   RunId,
   Workflow,
   WorkflowEnvelope,
@@ -206,7 +207,8 @@ export function dryRun(input: DryRunInput): DryRunResult {
     last = decision;
 
     if (decision.kind === 'held' || decision.kind === 'refused') {
-      journal.outcome = { kind: 'stopped', ...stopOf(decision) };
+      // The stop keeps the request's own precondition so replay can re-evaluate it unchanged.
+      journal.outcome = { kind: 'stopped', ...stopOf(decision, signal.expectedRevision) };
       return { ok: true, journal, run: decisionRun, decision, exit: 1 };
     }
     if (decision.kind === 'duplicate') {
@@ -466,7 +468,7 @@ function effectRecords(journal: DryRunJournal): DryEffectRecord[] {
   return [...journal.start.effects, ...journal.steps.flatMap((step) => step.effects)];
 }
 
-function stopOf(decision: HeldDecision | RefusedDecision): DryStop {
+function stopOf(decision: HeldDecision | RefusedDecision, expectedRevision: Revision): DryStop {
   return {
     decision: decision.kind,
     code: decision.code,
@@ -477,6 +479,8 @@ function stopOf(decision: HeldDecision | RefusedDecision): DryStop {
     ...(decision.waitingOn !== undefined ? { waitingOn: decision.waitingOn } : {}),
     ...(decision.signal !== undefined ? { signal: decision.signal } : {}),
     ...(decision.requestId !== undefined ? { requestId: decision.requestId } : {}),
+    // A request-derived stop records the request's own precondition; a request-less stop has none.
+    ...(decision.signal !== undefined && decision.requestId !== undefined ? { expectedRevision } : {}),
     evidence: [...decision.evidence],
     ...(decision.guard !== undefined ? { guard: decision.guard } : {}),
   };
