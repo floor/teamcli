@@ -53,7 +53,8 @@ status shows `blocked: quota, resets <time>` (human row and JSON seat state); th
 waking that seat until the reset. The send and check rows keep the wording already pinned; the
 follow-up commit that adds this section also changes the status assertions from the earlier
 `quota out` word to `blocked: quota`. Per-seat `team pause <seat>` / `team resume <seat>` are
-covered in `seat-pause.test.ts`.
+covered in `seat-pause.test.ts`, including the watch's skip of the paused seat (its peer keeps
+being nudged) and the fresh nudge after a resume.
 
 ## Composer-less wall frames
 
