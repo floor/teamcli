@@ -263,6 +263,9 @@
         "pause": {
           "type": "object"
         },
+        "seat_pauses": {
+          "type": "object"
+        },
         "procs": {
           "type": "array",
           "items": {

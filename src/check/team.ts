@@ -453,6 +453,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     now: sources.now(),
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     pause: whole.pause ?? null,
+    seatPauses: whole.seat_pauses ?? null,
     swaps: Object.keys(whole.swaps ?? {}),
   });
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);

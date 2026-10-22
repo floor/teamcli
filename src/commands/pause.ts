@@ -26,14 +26,16 @@ import { emptySession, pauseText, stopText, updateState, type PauseRecord } from
 // file declares that is not a human's, so the resume starts the lead from what the tool holds.
 // The caller rule is narrower than `hold`'s: the owner, or the team's own orchestrator.
 
-export const USAGE = `Usage: team pause [<team>] [--reason <text>] [--all] [--json]
+export const USAGE = `Usage: team pause [<team>|<seat>] [--seat <seat>] [--team <team>] [--reason <text>] [--all] [--json]
 
-Stops every seat taking new work: team next claims nothing and the watch types no work nudge
-until team resume. The stop points of every declared seat are recorded in the state. The owner
-or the team's orchestrator runs it; a human seat is never touched. <team> is a registered
-team's name, project or id, and --all is every registered team.
+Stops a seat or a whole team taking new work: team next claims nothing and the watch types no
+work nudge to it until team resume. <seat> is a seat the current folder's team declares,
+<team> is a registered team's name, project or id, --seat and --team say which one a name means,
+and --all is every registered team. The stop points of every declared seat are recorded in the
+state. The owner or the team's orchestrator runs it; a human seat is never touched.
 
-Exits 0 when the team is paused, 1 when it is refused or state I/O fails, 2 when the invocation or team file can't be read.
+Exits 0 when the seat or team is paused, 1 when it is refused or state I/O fails, 2 when the
+invocation or team file can't be read.
 `;
 
 /** What `runPause` reads from outside, so tests can stand in for the clock and the store. */
@@ -55,10 +57,25 @@ type Outcome =
 export async function runPause(argv: string[], io: Io, sources: PauseSources = realPauseSources): Promise<number> {
   const out = cleanedIo(io);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['reason'], ['all', 'json']);
+  const args = readArgs(argv, ['reason', 'seat', 'team'], ['all', 'json']);
   if (args.error) return invocation(out, args.error, json);
   const all = args.flags.has('all');
+  let seat: string | undefined;
+  if (args.values.seat !== undefined) {
+    seat = plainLine(args.values.seat).trim();
+    if (seat === '') return invocation(out, '--seat needs a seat name', json);
+  }
+  let team: string | undefined;
+  if (args.values.team !== undefined) {
+    team = plainLine(args.values.team).trim();
+    if (team === '') return invocation(out, '--team needs a team name', json);
+  }
+  if (all && seat !== undefined) return invocation(out, '--all and --seat can\'t be used together', json);
+  if (all && team !== undefined) return invocation(out, '--all and --team can\'t be used together', json);
+  if (seat !== undefined && team !== undefined) return invocation(out, '--seat and --team can\'t be used together', json);
   if (all && args.rest.length > 0) return invocation(out, '--all takes no <team>', json);
+  if (seat !== undefined && args.rest.length > 0) return invocation(out, '--seat takes no positional name', json);
+  if (team !== undefined && args.rest.length > 0) return invocation(out, '--team takes no positional name', json);
   if (!all && args.rest.length > 1) return invocation(out, `unexpected "${plainLine(args.rest[1] ?? '')}"`, json);
   // Every team is its own document, so one `--json` cannot carry the run: the lines are the
   // only shape `--all` has, the same rule `team seats` keeps for `--watch`.
@@ -81,7 +98,9 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
     return 1;
   }
   const resolved = resolveTargets({
-    key: all ? undefined : args.rest[0],
+    key: seat !== undefined || team !== undefined || all ? undefined : args.rest[0],
+    ...(seat !== undefined ? { seat } : {}),
+    ...(team !== undefined ? { team } : {}),
     all,
     io,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
@@ -118,6 +137,19 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
       // at once keep the first one and the second is refused by name. The stop points are read
       // from the state this write holds, not from an earlier read.
       const op = updateState<Op>(target.dir, (state) => {
+        if (target.seat !== undefined) {
+          const standing = state.seat_pauses?.[target.seat];
+          if (standing !== undefined) return { kind: 'paused', pause: standing };
+          const record: PauseRecord = {
+            by,
+            at,
+            ...(reason !== undefined ? { reason } : {}),
+            stops: pauseStops(target.team, state.sessions[session] ?? emptySession())
+              .filter((stop) => stop.seat === target.seat),
+          };
+          state.seat_pauses = { ...(state.seat_pauses ?? {}), [target.seat]: record };
+          return { kind: 'placed', pause: record };
+        }
         if (state.pause !== undefined) return { kind: 'paused', pause: state.pause };
         const record: PauseRecord = {
           by,
@@ -132,7 +164,9 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
         ? { kind: 'placed', target, pause: op.pause, session }
         : { kind: 'paused', target, pause: op.pause, session });
       if (op.kind === 'placed') {
-        logLine(target.dir, 'pause', by, reason === undefined ? 'paused the team' : `paused the team: ${reason}`, now);
+        logLine(target.dir, 'pause', by, target.seat === undefined
+          ? (reason === undefined ? 'paused the team' : `paused the team: ${reason}`)
+          : (reason === undefined ? `paused seat ${target.seat}` : `paused seat ${target.seat}: ${reason}`), now);
       }
     } catch (error) {
       outcomes.push({ kind: 'io', target, message: `${target.team.project}: ${error instanceof Error ? error.message : String(error)}` });
@@ -144,7 +178,8 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
     if (outcome.kind === 'io') continue;
     const many = resolved.targets.length > 1;
     if (outcome.kind === 'placed') {
-      const summary = pauseText(outcome.pause);
+      const seat = outcome.target.seat;
+      const summary = seat === undefined ? pauseText(outcome.pause) : `${seat}: ${pauseText(outcome.pause)}`;
       if (json) {
         writeJson(out, 'team.pause', {
           format: 1,
@@ -153,8 +188,8 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
           action_summary: summary,
           project: outcome.target.team.project,
           session: outcome.session,
-          target: 'team',
-          value: outcome.pause.reason ?? null,
+          target: seat === undefined ? 'team' : 'seat',
+          value: seat ?? outcome.pause.reason ?? null,
           pause: outcome.pause,
           ...(notice !== undefined ? { notice } : {}),
         });
@@ -165,9 +200,12 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
       continue;
     }
     refused += 1;
-    const message = `already paused: ${pauseText(outcome.pause)}`;
+    const seat = outcome.target.seat;
+    const message = seat === undefined
+      ? `already paused: ${pauseText(outcome.pause)}`
+      : `already paused: ${seat} (${pauseText(outcome.pause)})`;
     if (json) {
-      writeJsonError(out, 'pause.paused', message, 'team resume', 1, undefined, notice);
+      writeJsonError(out, 'pause.paused', message, seat === undefined ? 'team resume' : `team resume ${seat}`, 1, undefined, notice);
     } else {
       out.stderr(`team pause: ${many ? `${outcome.target.team.project}: ` : ''}${message}\n`);
     }

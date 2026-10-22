@@ -922,6 +922,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // stops nudging, and a foreign watch's notice is dropped where every other work drop
           // of that watch is.
           pause: whole.pause ?? null,
+          // Seats paused on their own are skipped by this pass's work nudges; the rest of the
+          // team keeps its nudges.
+          seatPauses: whole.seat_pauses ?? null,
           approval: standing.kind === 'verified' ? [] : null, approvalReason, watch: inForce,
           modelRule,
           liveness: {
@@ -980,6 +983,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             root, dir, team, state, live, now: sources.now(),
             home: sources.home,
             pause: whole.pause ?? null,
+            seatPauses: whole.seat_pauses ?? null,
             swaps: [...waiting],
             body: (seat) => (team.watch.nudge ?? NUDGE_TEXT).replaceAll('<your seat name>', seat),
             push: sources.pushWork,

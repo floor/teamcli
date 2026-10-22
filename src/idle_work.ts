@@ -72,9 +72,10 @@ export type BrokerWorkSource = (input: {
 }) => Promise<BrokerWorkSnapshot | null>;
 
 /** What the watch needs to take the snapshot. `home` is absent in a test that does not set one.
- *  The pause and the queued swaps are the project's records, not one session's, so they arrive
- *  beside the session state: a paused team claims nothing, and a seat holding a queued swap takes
- *  no new task and is not an idle worker. */
+ *  The pause, the seats paused on their own and the queued swaps are the project's records, not
+ *  one session's, so they arrive beside the session state: a paused team claims nothing, a seat
+ *  paused on its own is not an idle worker and gets no wake, and a seat holding a queued swap
+ *  takes no new task. */
 export type IdleWorkInput = {
   root: string;
   team: TeamFile;
@@ -83,6 +84,9 @@ export type IdleWorkInput = {
   now: Date;
   home?: string;
   pause?: PauseRecord | null;
+  /** Seats paused on their own with `team pause <seat>`, keyed by name: skipped by the snapshot
+   *  and by every wake path that reads it, while the rest of the team keeps working. */
+  seatPauses?: Readonly<Record<string, PauseRecord>> | null;
   swaps?: readonly string[];
   /** Native presence readings prefetched for this pass, keyed by seat name. Absent means the
    *  reader does not consult the native store and keeps the terminal-host reading as it was;
