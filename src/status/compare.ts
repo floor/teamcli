@@ -760,6 +760,13 @@ function modelOf(
       notes.push(`${seat.name}: its screen shows no model; the launch line's ${seat.display} stands`);
       return `${seat.display} (from launch)`;
     }
+    // A registry record declares the model the seat was launched with. When its screen names no
+    // model — a ready screen this version cannot read, one `team register` cannot prove the seat
+    // at — the column shows that declaration as one, never as a model the screen was read for.
+    if (registered) {
+      notes.push(`${seat.name}: its screen shows no model; the registry declares ${seat.display}`);
+      return `${seat.display} (declared)`;
+    }
     notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
     return `${seat.display} (unread)`;
   }

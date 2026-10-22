@@ -18,6 +18,10 @@ profile cannot read keeps herdr's `unknown`, with the note that names herdr's wo
 reading decides the quiet a mark above needs, and `team check` and the watch take their state and
 attention from it too.
 
+A seat's model is the one its screen names, checked against the file's. A screen that names none
+is a note, never a difference: the column reads `<display> (unread)`, or `<display> (declared)`
+when the value is the registry record's own declaration rather than anything the screen showed.
+
 A pane that no longer holds the process `team` launched is not by itself a difference: when a
 program `team` did not launch is in front and the agent session the seat's records bind — its
 registry record where one exists, the copy stored with its launch where none does — is the

@@ -124,7 +124,10 @@ guards are in `docs/commands/up.md`.
 The model is the seat's `display` when the running model matches the file, and
 `<model> <version> (file: <display>)` when it doesn't. An effort word alone does not move the
 column: the model on the pane is still the file's. A screen that doesn't show the model is a
-`note` rather than a difference: `unread` is never wrong.
+`note` rather than a difference: `unread` is never wrong. A seat with a registry record shows
+that record's declared model marked `(declared)`, with a note naming the registry — the value is
+a declaration from the record, never a reading of the screen; a seat with no registry record
+keeps `<display> (unread)`.
 
 A record in force is not a note of its own: the live file is what the commands read, so nothing is
 compared against the record and the reading says nothing about it. A file with no record on this

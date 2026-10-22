@@ -1016,6 +1016,93 @@ describe('team status', () => {
   });
 });
 
+// A model the screen names is checked against the file; a model no screen names is never shown as
+// one the screen was read for. The registry's own declaration is the one value a row may carry
+// without a reading, and it says so.
+describe('a model the screen cannot show', () => {
+  afterEach(() => {
+    delete sources.home;
+  });
+
+  /** The ready screen cursor-agent drew on 2026.10.19 for a model this version cannot spell: the
+   *  status row is not one the profile's grammar knows, so the whole screen reads unknown. The
+   *  observation is retained, not reproduced; the pane text is the one the review captured. */
+  const CURSOR_UNKNOWN = '  Gemini 4 Argon High    Run Everything\n  ~/lobby\n';
+
+  test('a registry record shows its model as declared, never as a reading', async () => {
+    // The file's Cursor seat (the sample's stopped grok seat, rewritten in place) runs a model
+    // the profile has no status rule for. `readScreen` returns unknown and `team register`
+    // refuses the seat at its prompt (src/commands/register.ts, the screen refusal), so the
+    // registry's signing triple is a declaration from launch, not a reading. The row names it
+    // as one; a seat with no registry record keeps the unread marker instead.
+    writeFileSync(file, example.replace(
+      /  - role: reviewer\n    name: grok-acme\n(?:    [^\n]*\n)+/,
+      '  - role: implementer\n' +
+      '    name: cursor-acme\n' +
+      '    cli: cursor\n' +
+      '    vendor: google\n' +
+      '    model: Gemini\n' +
+      '    version: "4 Argon"\n' +
+      '    launch: cursor-agent --model gemini-4-argon-high\n',
+    ));
+    approveOnDisk();
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['cursor-acme'] = {
+        stage: 'ready',
+        pane: 'w10:p1',
+        workspace: 'w10',
+        launched: { shell: 400, cli: [401] },
+      };
+    });
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    sources.home = home;
+    registerAgent(home, {
+      name: 'cursor-acme',
+      signing: { model: 'Gemini', version: '4 Argon', role: 'implementer' },
+      lab: 'google',
+      cli: 'cursor',
+      launcher: null,
+      launch: 'cursor-agent --model gemini-4-argon-high',
+      reach: {
+        team: teamIdOf(dir),
+        seat: 'cursor-acme',
+        session: 'acme-web',
+        pane: 'w10:p1',
+        address: null,
+        agent_session: null,
+      },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    live = {
+      ...built(),
+      agents: [...built().agents, agent('cursor-acme', 'w10', 'idle', 'cursor')],
+      workspaces: [...built().workspaces, { id: 'w10', label: 'cursor' }],
+      screens: { ...built().screens, 'w10:p1': CURSOR_UNKNOWN },
+      processes: { 'w10:p1': { shell: 400, foreground: [401] } },
+    };
+    const { out } = await status();
+    expect(out).toMatch(/cursor-acme\s+idle \(screen not recognised\)\s+gemini 4 argon \(declared\)/);
+    expect(out).toContain('cursor-acme: its screen shows no model; the registry declares gemini 4 argon');
+    expect(out).not.toContain('gemini 4 argon (unread)');
+    // No drift is claimed from an unread screen; the seat's only difference is the rules file
+    // every seat in this fixture lacks under the home read.
+    expect(out).not.toContain('difference: cursor-acme: running');
+    // The control: the same run's seats with no registry record keep the unread marker.
+    expect(out).toContain('GPT-6 Sol (unread)');
+    const doc = JSON.parse((await status('--json')).out);
+    expect(doc.rows.find((row: { name: string }) => row.name === 'cursor-acme')).toMatchObject({
+      state: 'idle (screen not recognised)',
+      model: 'gemini 4 argon (declared)',
+      pane: 'w10:p1',
+    });
+  });
+});
+
 // A pane is its seat only while the process team launched is still in it. Each case records a
 // launch for codex-acme and hands the comparison one process-info reading for its pane.
 describe('a pane that no longer holds the process team launched', () => {
