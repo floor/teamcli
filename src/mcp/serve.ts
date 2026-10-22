@@ -9,6 +9,16 @@
 //
 // Nothing here is a push: MCP is client-pull, so the seat notices a message when it calls
 // `inbox_check`. The drop-folder watch is the bounded fall-back, not this process.
+//
+// Spike branch only: with TEAM_SPIKE_CHANNEL=1 this process also answers the question whether
+// Claude Code registers a stdio server whose initialize result declares
+// `experimental['claude/channel']` and renders an unsolicited `notifications/claude/channel`.
+// A push is emitted only for a signed record that arrives in the inbox after startup; the
+// record stays for `inbox_read`, and a `<id>.channel-push.json` receipt records what TeamCLI
+// wrote, because Claude Code acknowledges no channel notification. This is measurement code,
+// not a product delivery path.
+import { createHash } from 'node:crypto';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -17,7 +27,9 @@ import { loadTeamFile } from '../file/load.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
+import { readRecord, verifyRecord } from '../send/record.ts';
 import { readState } from '../state.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, version } from '../version.ts';
 import type { BuildIdentity } from '../version.ts';
 import {
@@ -39,6 +51,14 @@ export const PROTOCOL_VERSION = '2025-06-18';
 export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ['2024-11-05', '2025-03-26', PROTOCOL_VERSION];
 
 export const SERVER_NAME = 'team-inbox';
+
+/** Spike only: the notification method Claude Code listens for once `claude/channel` is declared. */
+export const CHANNEL_METHOD = 'notifications/claude/channel';
+
+/** Spike only: the receipt this process writes beside a record when it emits that record's push.
+ *  It is not a read receipt and never proves delivery; only `inbox_read` writes the signed
+ *  `.read.json`. */
+export const CHANNEL_PUSH_RECEIPT = 'channel-push';
 
 /** One JSON-RPC message per line in each direction. Tests pass their own. */
 export type ServeStreams = {
@@ -116,6 +136,81 @@ function negotiate(params: unknown): string {
     if (typeof asked === 'string' && SUPPORTED_PROTOCOL_VERSIONS.includes(asked)) return asked;
   }
   return PROTOCOL_VERSION;
+}
+
+/** Spike only: one channel notification, exactly the two parameter fields the reference names. */
+export type ChannelPush = { content: string; meta: Record<string, string> };
+
+/** Spike only: the body and sender of a signed record already in this inbox, verified without
+ *  writing a read receipt. The record is left where it is; `inbox_read` is still the only read. */
+export function channelSourceOf(serving: Serving, id: string): { body: string; from: string } | null {
+  const looked = readRecord(join(serving.dropDir, id), id);
+  if (!looked.ok || looked.record === null) return null;
+  const payload = looked.record.payload;
+  if (payload.to !== serving.seat || payload.session !== serving.session) return null;
+  if (payload.root !== serving.root) return null;
+  const key = messageKeyState(serving.home);
+  if (key.kind !== 'key' || !verifyRecord(looked.record, key.key)) return null;
+  return { body: payload.body, from: payload.from };
+}
+
+/** Spike only: the push a record would produce. Meta keys stay identifier-only (`from`, `seat`,
+ *  `team`, `id`) as the channel reference requires; anything else is dropped by the client. */
+export function channelPushOf(serving: Serving, id: string, team: string): ChannelPush | null {
+  const source = channelSourceOf(serving, id);
+  if (source === null) return null;
+  return { content: source.body, meta: { from: source.from, seat: serving.seat, team, id } };
+}
+
+/** Spike only: watch the inbox for records that arrive after this server starts, and write one
+ *  channel notification per new signed record. Mail already waiting at startup is left to
+ *  `inbox_check`, so a fresh session starts quiet. Each push leaves the signed record untouched
+ *  and writes the unconfirmed push receipt beside it. */
+function watchChannel(serving: Serving, team: string, write: (line: string) => void): () => void {
+  const seen = new Set<string>();
+  let primed = false;
+  const tick = (): void => {
+    const unread = listUnread(
+      serving.dropDir,
+      { to: serving.seat, root: serving.root, session: serving.session },
+      serving.home,
+    );
+    if (!primed) {
+      for (const message of unread) seen.add(message.id);
+      primed = true;
+      return;
+    }
+    for (const message of unread) {
+      if (seen.has(message.id)) continue;
+      seen.add(message.id);
+      const push = channelPushOf(serving, message.id, team);
+      if (push === null) continue;
+      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+      const receipt = {
+        v: 1,
+        kind: CHANNEL_PUSH_RECEIPT,
+        id: message.id,
+        seat: serving.seat,
+        session: serving.session,
+        root: serving.root,
+        at: new Date().toISOString(),
+        content_sha256: createHash('sha256').update(push.content).digest('hex'),
+        meta: push.meta,
+        status: 'sent (unconfirmed)',
+        note: 'Claude Code acknowledges no channel notification; delivery is unproven',
+      };
+      try {
+        writeFileSync(join(serving.dropDir, `${message.id}.${CHANNEL_PUSH_RECEIPT}.json`), `${JSON.stringify(receipt)}\n`, {
+          mode: 0o600,
+        });
+      } catch {
+        // The push already went out; a receipt the spike cannot write must not stop the server.
+      }
+    }
+  };
+  const timer = setInterval(tick, 250);
+  tick();
+  return () => clearInterval(timer);
 }
 
 /** One `tools/call` body. Tool faults are results with `isError`, not JSON-RPC errors. */
@@ -203,7 +298,7 @@ export function handleLine(line: string, serving: Serving): string | null {
     case 'initialize':
       return answer(id, {
         protocolVersion: negotiate(record.params),
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
         serverInfo: { name: SERVER_NAME, version: version() },
       });
     case 'ping':
@@ -286,12 +381,30 @@ export async function runMcpServe(
     home: host.home,
     brief,
   };
+  // Spike only: TEAM_SPIKE_FRAMES records every protocol line this server reads and writes, so
+  // the capture is the server's own view of the handshake and the push.
+  const frameFile = process.env.TEAM_SPIKE_FRAMES;
+  const frame = (direction: 'IN' | 'OUT', line: string): void => {
+    if (frameFile === undefined || frameFile === '') return;
+    try {
+      appendFileSync(frameFile, `${new Date().toISOString()} ${direction} ${line}\n`);
+    } catch {
+      // A frame log the spike cannot write must not stop the server.
+    }
+  };
+  const write = (line: string): void => {
+    frame('OUT', line);
+    streams.write(line);
+  };
+  const stopChannel = process.env.TEAM_SPIKE_CHANNEL === '1' ? watchChannel(serving, team.project, write) : null;
   try {
     for await (const line of streams.lines) {
+      frame('IN', line);
       const reply = handleLine(line, serving);
-      if (reply !== null) streams.write(reply);
+      if (reply !== null) write(reply);
     }
   } finally {
+    stopChannel?.();
     streams.close?.();
     removeListener(dropDir, process.pid);
   }
