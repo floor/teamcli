@@ -113,6 +113,9 @@ export const ENFORCED_POLICY_NAMES = [
   'idle-threshold',
   'daemon.broker',
   'watch-rhythm',
+  'grant-emission',
+  'owner-signers',
+  'owner-signer-mode',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -190,6 +193,9 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   codex_daemon: 'codex-daemon',
   idle_threshold: 'idle-threshold',
   watch_rhythm: 'watch-rhythm',
+  grant_emission: 'grant-emission',
+  owner_signers: 'owner-signers',
+  owner_signer_mode: 'owner-signer-mode',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -917,6 +923,45 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
   // declarations bound it: the release default is not a parent, so a team with no ancestor word
   // may choose any preset. This entry is the name, its aliases and the value rule; the watch
   // reads the effective value itself.
+  // How `team grant --client` may be emitted for an entity: `owner-terminal` (the default, and
+  // what an absent, unsigned or tampered policy reads as) is the owner at a terminal outside the
+  // multiplexer; `conversational` also admits a pending request (`--request`) that runs only with
+  // a single-use, short-lived owner approval bound to the request's hash (`--execute`). Entity
+  // level only. `owner-terminal` is the tighter word.
+  // Which owner-seat signers an entity accepts for an approval, by signer name (for example
+  // `[phone, mac]`); no signer type is preferred. Absent, every registered signer is accepted.
+  'owner-signers': {
+    name: 'owner-signers',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: null,
+    gateLifting: false,
+    parseValue: (raw: unknown) =>
+      Array.isArray(raw) && raw.length > 0 && raw.every((n) => typeof n === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(n)) && new Set(raw).size === raw.length
+        ? (raw as string[])
+        : null,
+    isWithin: (lower: string[] | null, higher: string[] | null) => higher === null || (lower !== null && lower.every((n) => higher.includes(n))),
+  },
+  // How the accepted signers combine: `any` (one valid assertion from any accepted signer).
+  'owner-signer-mode': {
+    name: 'owner-signer-mode',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: 'any',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'any' ? raw : null),
+    isWithin: () => true,
+  },
+  'grant-emission': {
+    name: 'grant-emission',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: 'owner-terminal',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'owner-terminal' || raw === 'conversational' ? raw : null),
+    isWithin: (lower: 'owner-terminal' | 'conversational', higher: 'owner-terminal' | 'conversational') =>
+      lower === higher || lower === 'owner-terminal',
+  },
   'watch-rhythm': {
     name: 'watch-rhythm',
     kind: 'enforced',

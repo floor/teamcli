@@ -46,7 +46,9 @@
       "enum": [
         "updated",
         "unchanged",
-        "dry-run"
+        "dry-run",
+        "requested",
+        "denied"
       ]
     },
     "action_summary": {
@@ -109,6 +111,41 @@
     "target": {
       "type": "string",
       "minLength": 1
+    },
+    "approved_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rule_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request": {
+      "type": "object"
+    },
+    "summary": {
+      "type": "object"
+    },
+    "choices": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "ignored": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "capabilities": {
       "type": "array",
