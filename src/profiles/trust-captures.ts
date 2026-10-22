@@ -233,6 +233,7 @@ export const TRUST_CAPTURES: readonly string[] = [
   "jules jules/0.1.42/wide.txt",
   "jules jules/0.1.42/working.txt",
   "muse muse/1.4.11/idle.txt",
+  "muse muse/1.4.11/rules-line-unsent.txt",
   "muse muse/1.4.9/idle-footer.txt",
   "muse muse/1.4.9/idle.txt",
   "muse muse/1.4.9/model-picker.txt",

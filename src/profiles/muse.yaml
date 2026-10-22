@@ -128,3 +128,10 @@ screen:
       # An operator's notes transcribe the fresh composer as showing this hint; the
       # saved idle capture shows the input row empty.
       - equals: 'Type @ to search and insert workspace file paths'
+      # The pane's rotating prompt hint, drawn greyed in the input row between the Voice input
+      # rules; confirmed on a running 1.4.11 pane, which drew it as the box's whole input.
+      - equals: 'Tab queues or steers while a run is active'
+    # A 1.4.11 pane draws one empty row under a typed line, inside the box, before the closing
+    # rule (captured: the rules line typed into the ready box and left unsent). It is the box's
+    # frame, not the text's; stripping it is what lets the captured line read back exactly.
+    frame_rows: 1

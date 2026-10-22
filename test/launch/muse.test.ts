@@ -20,7 +20,8 @@ import {
   withLaunchOverrides,
 } from '../../src/profiles/profile.ts';
 import { boxHoldsText, deliverRules, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
-import { classifyComposer, readScreen } from '../../src/watch/screen.ts';
+import { rulesLine } from '../../src/launch/rules-file.ts';
+import { classifyComposer, readBox, readScreen } from '../../src/watch/screen.ts';
 import { runningModel } from '../../src/status/statusline.ts';
 
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/muse/1.4.9/${name}.txt`, import.meta.url), 'utf8');
@@ -106,6 +107,8 @@ describe('muse launch and captured screens', () => {
     ['working-synthetic', 'working', 'idle'],
     ['unsent-synthetic', 'unsent', 'unsent'],
     ['ambiguous-synthetic', 'unknown', 'unknown'],
+    ['rules-line-unsent', 'unsent', 'unsent'],
+    ['placeholder-synthetic', 'idle', 'idle'],
   ] as const)('1.4.11 %s reads %s, its composer %s', (file, kind, composer) => {
     const text = fixture1411(file);
     expect(readScreen('muse', text).kind).toBe(kind);
@@ -148,6 +151,25 @@ describe('muse launch and captured screens', () => {
     expect(boxHoldsText('muse', wrapped, fixture('unsent'))).toBe(true);
     expect(boxHoldsText('muse', `${wrapped}!`, fixture('unsent'))).toBe(false);
     expect(boxHoldsText('muse', 'anything', fixture('idle'))).toBe(false);
+  });
+
+  test('the captured 1.4.11 unsent frame reads back the exact rules line, and altered text does not', () => {
+    const line = rulesLine('/Users/example/.config/team/demo-3f9c2a8e1d7b/rules/builder-6.md', '68952ad875fc');
+    const text = fixture1411('rules-line-unsent');
+    // The pane draws one empty row under the typed line, inside the box. It is the frame, not a
+    // row of the text, so the box reads as the line alone.
+    expect(readBox('muse', text)).toMatchObject({ first: line, indent: 2, rows: [] });
+    expect(boxHoldsText('muse', line, text)).toBe(true);
+    expect(boxHoldsText('muse', `${line}!`, text)).toBe(false);
+    expect(boxHoldsText('muse', line.replace('reply ready', 'reply now'), text)).toBe(false);
+  });
+
+  test('the captured 1.4.11 placeholder is the empty box, never a draft to send', () => {
+    const text = fixture1411('placeholder-synthetic');
+    expect(readScreen('muse', text).kind).toBe('idle');
+    expect(classifyComposer('muse', text.split('\n')).kind).toBe('idle');
+    expect(readBox('muse', text)).toBeNull();
+    expect(boxHoldsText('muse', 'Tab queues or steers while a run is active', text)).toBe(false);
   });
 
   test('the quota patterns read the 5-hour and weekly windows off the /usage box lines', () => {
@@ -314,5 +336,51 @@ describe('the rules delivery on the 1.4.11 ready box, with herdr unable to repor
     expect(await deliverRules('muse', LINE, 30, d.io)).toBe(false);
     expect(d.calls).toEqual([]);
     expect(d.refusals).toMatchObject([{ stop: 'screen', typed: false, sent: false, kind: 'idle' }]);
+  });
+});
+
+// The captured 1.4.11 typing shape, from the authorized capture of a ready box holding a rules
+// line unsent: the pane draws one empty row under the line, inside the box. The captured frame
+// is the positive read-back; a frame drawing anything else is the negative.
+const CAPTURED_LINE = rulesLine('/Users/example/.config/team/demo-3f9c2a8e1d7b/rules/builder-6.md', '68952ad875fc');
+
+/** The captured typed frame with its one text row drawn as `text` instead. */
+const typedFrame = (text: string) => fixture1411('rules-line-unsent').replace(CAPTURED_LINE, text);
+
+function capturedScene(start: string, draws: (text: string) => string) {
+  let raw = start;
+  let status: string | null = 'unknown';
+  let clock = 0;
+  const calls: string[] = [];
+  const refusals: Refusal[] = [];
+  const io: Delivery = {
+    screen: () => raw,
+    status: () => status,
+    report: (why) => { refusals.push(why); },
+    file: () => true, // these scenes prove the reading, not the file
+    type(text) { calls.push(text); raw = draws(text); return true; },
+    enter() { calls.push('Enter'); raw = fixture1411('working-synthetic'); return true; },
+    key(name) { calls.push(name); return true; },
+    foreground: () => ['muse-bin-1.4.11'],
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
+  };
+  return { io, calls, refusals };
+}
+
+describe('the rules delivery on the captured 1.4.11 typing frame', () => {
+  test('the grey queue-steer hint is the empty box: the line is typed into it and sent only once the captured frame reads it back', async () => {
+    const d = capturedScene(fixture1411('placeholder-synthetic'), () => fixture1411('rules-line-unsent'));
+    expect(await deliverRules('muse', CAPTURED_LINE, 30, d.io)).toBe(true);
+    expect(d.calls).toEqual([CAPTURED_LINE, 'Enter']);
+    expect(d.refusals).toEqual([]);
+  });
+
+  test('a frame that draws altered text never reads back, so Enter is not pressed on it', async () => {
+    const d = capturedScene(fixture1411('idle'), (text) => typedFrame(`${text}!`));
+    expect(await deliverRules('muse', CAPTURED_LINE, 30, d.io)).toBe(false);
+    // The line was typed, the altered frame did not read it back, and the one key cleared it.
+    expect(d.calls).toEqual([CAPTURED_LINE, 'ctrl+u']);
+    expect(d.refusals).toMatchObject([{ stop: 'read-back', typed: true, sent: false }]);
   });
 });
