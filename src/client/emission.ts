@@ -242,7 +242,8 @@ function readOwnerSeatAnswer(home: string, record: PendingGrantRecord, store: Ow
   } catch {
     return { ok: false, why: `the owner-seat answer to ${record.request_id} cannot be read` };
   }
-  const verified = verifyOwnerAnswer(home, parsed, store, now);
+  // The owner-signers policy read is the one of the entity the request acts on, not the seat's.
+  const verified = verifyOwnerAnswer(home, parsed, store, now, record.params.entity);
   if (!verified.ok) return verified;
   const answer = verified.answer;
   if (answer.kind !== 'grant' || answer.request_id !== record.request_id || answer.params_sha256 !== record.params_sha256) {

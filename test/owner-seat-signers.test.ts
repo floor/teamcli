@@ -121,6 +121,19 @@ describe('several owner signers, none preferred', () => {
     expect(verifyOwnerAnswer(h.home, viaPhone, store).ok).toBe(true);
   });
 
+  test("the owner-signers policy read is the request's entity, not the owner seat's", () => {
+    const h = home('entity');
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    allowSigners(h.home, ['mac']);
+    const a = answerOf('gr_000000000000000000000004');
+    const viaMac = { owner_seat_answer: a, signer: 'mac', signature: (store.sign('owner-floor-mac', ownerSeatAnswerBytes(a), 'r') as { signature: string }).signature };
+    expect(verifyOwnerAnswer(h.home, viaMac, store, new Date(), 'floor').ok).toBe(true);
+    const other = verifyOwnerAnswer(h.home, viaMac, store, new Date(), 'acme');
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.why).toContain('entity "acme"');
+  });
+
   test('a swapped passkey key in the record fails its pin; an unavailable store fails closed', () => {
     const h = home('pin');
     const store = fakeStore();

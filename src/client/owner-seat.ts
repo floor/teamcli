@@ -236,11 +236,12 @@ export function readOwnerSeat(home: string): OwnerSeatRecord | null {
   }
 }
 
-/** The signer names an entity accepts: its `owner-signers` policy. No policy, no signer (approvals.md rule 6: no fallback). */
-export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date = new Date()): { names: string[]; source: 'policy' } | { why: string } {
+/** The signer names an entity accepts: its `owner-signers` policy. No policy, no signer (approvals.md rule 6: no fallback).
+ *  `entity` is the entity the approved request acts on; it defaults to the owner seat's own. */
+export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date = new Date(), entity: string = record.entity): { names: string[]; source: 'policy' } | { why: string } {
   let chain;
   try {
-    chain = loadAndResolvePolicyChain({ home, entity: record.entity, projectId: null, teamRoot: null, team: null }, { now, upToLevel: 'entity' });
+    chain = loadAndResolvePolicyChain({ home, entity, projectId: null, teamRoot: null, team: null }, { now, upToLevel: 'entity' });
   } catch {
     return { why: 'the owner-signer policy cannot be read' };
   }
@@ -249,7 +250,7 @@ export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date
   if (mode !== undefined && mode !== 'any') return { why: `owner-signer-mode "${String(mode)}" is not one this build reads` };
   const listed = chain.policies['owner-signers']?.value;
   if (Array.isArray(listed)) return { names: listed.filter((n): n is string => typeof n === 'string'), source: 'policy' };
-  return { why: `no owner-signers policy is set for entity "${record.entity}"; no owner-seat answer is accepted (set it with team policy set entity owner-signers)` };
+  return { why: `no owner-signers policy is set for entity "${entity}"; no owner-seat answer is accepted (set it with team policy set entity owner-signers)` };
 }
 
 /** A signer's public key, confirmed against the credential store; fails closed. */
@@ -335,14 +336,14 @@ function ecdsaOk(publicKey: string, data: Buffer, signature: string): boolean {
  * confirmed against the credential store, and the signature (or WebAuthn assertion, with its
  * challenge, relying party and user-presence flag) holds over exactly this answer.
  */
-export function verifyOwnerAnswer(home: string, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; answer: OwnerSeatAnswer; signer: OwnerSigner } | { ok: false; why: string } {
+export function verifyOwnerAnswer(home: string, signed: SignedOwnerAnswer, store: OwnerSeatKeyStore, now: Date = new Date(), entity?: string): { ok: true; answer: OwnerSeatAnswer; signer: OwnerSigner } | { ok: false; why: string } {
   const record = readOwnerSeat(home);
   if (record === null) return { ok: false, why: 'an owner-seat answer exists but no owner seat is registered to verify it' };
   const answer = signed.owner_seat_answer;
   if (answer === undefined || typeof signed.signature !== 'string' || typeof signed.signer !== 'string') return { ok: false, why: 'the owner-seat answer is not signed' };
   const signer = record.signers.find((s) => s.name === signed.signer);
   if (signer === undefined) return { ok: false, why: `"${signed.signer}" is not a registered owner signer` };
-  const accepted = acceptedSigners(home, record, now);
+  const accepted = acceptedSigners(home, record, now, entity ?? record.entity);
   if ('why' in accepted) return { ok: false, why: accepted.why };
   if (!accepted.names.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner-signers policy (${accepted.names.join(', ') || 'none'})` };
   const confirmed = confirmedSignerKey(signer, store);
