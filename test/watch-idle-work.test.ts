@@ -73,7 +73,7 @@ function queue(records: { id: string; title: string }[]): void {
   writeFileSync(join(root, '.agents', 'queue.yaml'), records.map((record) => `- id: ${record.id}\n  title: "${record.title}"\n`).join(''));
 }
 
-function read(team: TeamFile, state: SessionState, scene: Live | null = live(), now = NOW, extra: { pause?: PauseRecord; swaps?: string[]; broker?: BrokerWorkSnapshot } = {}) {
+function read(team: TeamFile, state: SessionState, scene: Live | null = live(), now = NOW, extra: { pause?: PauseRecord; seatPauses?: Record<string, PauseRecord>; swaps?: string[]; broker?: BrokerWorkSnapshot } = {}) {
   return idleWorkReport({ root, team, state, live: scene, now: new Date(now), ...extra });
 }
 
@@ -144,6 +144,18 @@ describe('the idle clock', () => {
     const report = read(teamOf(example), stateWith(new Date(NOW - 10 * MIN).toISOString()), live(), NOW, { swaps: [WORKER] });
     expect(report.idle).toEqual([]);
     expect(report.takeable).toBe(0);
+  });
+
+  test('a seat paused on its own is not an idle worker, and its own record is enough', () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const since = new Date(NOW - 10 * MIN).toISOString();
+    const healthy = read(teamOf(example), stateWith(since));
+    expect(healthy.idle.map((worker) => worker.seat)).toEqual([WORKER]);
+    expect(healthy.takeable).toBe(1);
+    const seatPause: PauseRecord = { at: new Date(NOW - MIN).toISOString(), by: 'owner', stops: [{ seat: WORKER }] };
+    const paused = read(teamOf(example), stateWith(since), live(), NOW, { seatPauses: { [WORKER]: seatPause } });
+    expect(paused.idle).toEqual([]);
+    expect(paused.takeable).toBe(0);
   });
 
   test('a record a live lease holds is not counted; an expired one is', () => {

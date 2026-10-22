@@ -354,6 +354,33 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     expect(freed.work.map((drop) => drop.seat)).toEqual(['deepseek-acme']);
   });
 
+  test('a seat paused on its own takes no work drop, its sibling is nudged, and a resume makes it due', () => {
+    const file = valid(defaultExample);
+    const live = liveScene({
+      'deepseek-acme': { status: 'idle', screen: idleScreen },
+      'deepseek-acme-2': { status: 'idle', screen: idleScreen },
+    });
+    const memory = newMemory();
+    const record = { by: 'owner', at: '2026-10-04T08:59:00.000Z', stops: [{ seat: 'deepseek-acme' }] };
+    const seatPauses = { 'deepseek-acme': record };
+    pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 0, memory, seatPauses,
+    });
+    const paused = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 10 * MIN, memory, seatPauses,
+    });
+    // Only the paused seat is skipped: the sibling takes the ordinary nudge in the same pass.
+    expect(paused.work).toEqual([{ pane: 'w4:p1', seat: 'deepseek-acme-2', cli: 'claude-code', body: NUDGE_TEXT }]);
+    // The paused pass cleared the seat's stamp, so the first pass after its resume is due.
+    const resumed = pass({
+      team: file, watch: file.watch, state: emptySession(), live, machine: fine,
+      now: 11 * MIN, memory,
+    });
+    expect(resumed.work.map((drop) => drop.seat)).toEqual(['deepseek-acme']);
+  });
+
   test('a native-held seat is not rung and takes no pause notice; both wait for the hold to lift', () => {
     const file = valid(defaultExample);
     const live = liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } });
