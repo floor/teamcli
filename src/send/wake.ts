@@ -10,12 +10,14 @@ import { join } from 'node:path';
 import type { TeamFile } from '../file/types.ts';
 import { getAgent, isAgentId } from '../registry/agents.ts';
 import { getTeam, teamIdOf } from '../registry/teams.ts';
+import { messageDisplayInForce } from '../settings/message-display-policy.ts';
 import { messageKeyState } from '../store/keys.ts';
+import { namingFor, senderDisplayName } from './names.ts';
 import type { TriggerSender } from './native.ts';
 import { readRecord, verifyRecord, type RecordPayload } from './record.ts';
 
 /** The receiving side a wake is typed into: the team file in force, its checkout and session. */
-export type WakeReceiver = { root: string; session: string; team: Pick<TeamFile, 'project' | 'seats'> };
+export type WakeReceiver = { root: string; session: string; team: TeamFile };
 
 /** Whether a name can sit in a one-line wake: non-empty and holding no line break. A writer
  *  name from a signed record may hold a space (`the launch`); the line still reads as one line. */
@@ -95,4 +97,51 @@ export function verifiedPayloadOf(dropDir: string, id: string, home: string): Re
   if (!looked.ok || looked.record === null) return null;
   if (!verifyRecord(looked.record, key.key)) return null;
   return looked.record.payload;
+}
+
+/** The message's age: the clock handed in against the record's own `at`. Unreadable or future
+ *  times read 0 rather than a negative or invented age. */
+function ageMsOf(at: string, now: Date | undefined): number {
+  if (now === undefined) return 0;
+  const then = Date.parse(at);
+  if (!Number.isFinite(then)) return 0;
+  return Math.max(0, now.getTime() - then);
+}
+
+/**
+ * The typed wake's sender and words, from the record alone: the verified seat and team, the
+ * seat's nickname (its seat name when the file writes none), and the receiving team's
+ * `message-display` template in force. Everything the line shows is the record's; the summary is
+ * the body's first content line, never a rewrite. A receiver whose registry or chain cannot be
+ * read leaves the shipped name and template — a wake always opens with a readable header.
+ */
+export function wakeTrigger(
+  payload: Pick<RecordPayload, 'from' | 'from_id' | 'body' | 'at'> & { subject?: string },
+  home: string,
+  receiving: WakeReceiver,
+  now?: Date,
+): TriggerSender | null {
+  const sender = wakeSender(payload, home, receiving);
+  if (sender === null) return null;
+  let name = sender.seat;
+  try {
+    const naming = { ...namingFor({ home, root: receiving.root, file: receiving.team }), mode: 'nickname' as const };
+    name = senderDisplayName({ seat: payload.from, id: payload.from_id ?? undefined }, naming) || sender.seat;
+  } catch {
+    // A registry that cannot answer leaves the seat name; a wake still names its sender.
+  }
+  const template = messageDisplayInForce({
+    home,
+    root: receiving.root,
+    team: receiving.team,
+    ...(now === undefined ? {} : { now }),
+  });
+  return {
+    ...sender,
+    name,
+    template,
+    body: payload.body,
+    ageMs: ageMsOf(payload.at, now),
+    ...(payload.subject === undefined ? {} : { subject: payload.subject }),
+  };
 }

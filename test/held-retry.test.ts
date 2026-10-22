@@ -251,7 +251,7 @@ describe('retryHeldDrops', () => {
   test('never types into a box that holds someone else\'s text, and delivers once it is free', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-1', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-1', 'from the owner — admitted by: the owner\n\nhello');
     const one = pane(claudeBox('a draft only its author can send'));
     const said: string[] = [];
     const at = {
@@ -275,10 +275,10 @@ describe('retryHeldDrops', () => {
 
     one.screen = claudeBox('');
     await retryHeldDrops(at);
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
-    expect(recordBody(join(dropDir, 'drop-1'))).toBe('from the owner\n\nhello');
+    expect(recordBody(join(dropDir, 'drop-1'))).toBe('from the owner — admitted by: the owner\n\nhello');
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
@@ -287,7 +287,7 @@ describe('retryHeldDrops', () => {
         ts: NOW.toISOString(),
         from: 'owner',
         to: 'lead',
-        body: 'from the owner\n\nhello',
+        body: 'from the owner — admitted by: the owner\n\nhello',
         id: 'drop-1',
         outcome: 'sent (unconfirmed)',
         note: 'trigger taken, no read receipt yet',
@@ -300,7 +300,7 @@ describe('retryHeldDrops', () => {
   test('a native hold keeps the drop pending even at a free box, and the retry runs once it lifts', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-1', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-1', 'from the owner — admitted by: the owner\n\nhello');
     const one = pane(claudeBox(''));
     const said: string[] = [];
     const at = {
@@ -328,7 +328,7 @@ describe('retryHeldDrops', () => {
     // The same scene with the hold lifted is the ordinary retry: one trigger, the marker gone.
     at.nativeHeld = new Set();
     await retryHeldDrops(at);
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
   });
@@ -336,7 +336,7 @@ describe('retryHeldDrops', () => {
   test('a retry whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-receipt', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-receipt', 'from the owner — admitted by: the owner\n\nhello');
     const one = pane(claudeBox(''));
     const said: string[] = [];
     const base = scripts(one);
@@ -363,7 +363,7 @@ describe('retryHeldDrops', () => {
 
     await retryHeldDrops(at);
 
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
     expect(existsSync(receiptPath(dropDir, 'drop-receipt'))).toBe(true);
@@ -376,7 +376,7 @@ describe('retryHeldDrops', () => {
         ts: NOW.toISOString(),
         from: 'owner',
         to: 'lead',
-        body: 'from the owner\n\nhello',
+        body: 'from the owner — admitted by: the owner\n\nhello',
         id: 'drop-receipt',
         outcome: 'delivered (read)',
         via: 'typed',
@@ -390,7 +390,7 @@ describe('retryHeldDrops', () => {
     // settled with the words a receipt inside the retry's window earns, and nothing is typed.
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-read-first', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-read-first', 'from the owner — admitted by: the owner\n\nhello');
     const one = pane(claudeBox(''));
     const said: string[] = [];
     const base = scripts(one);
@@ -431,7 +431,7 @@ describe('retryHeldDrops', () => {
         ts: NOW.toISOString(),
         from: 'owner',
         to: 'lead',
-        body: 'from the owner\n\nhello',
+        body: 'from the owner — admitted by: the owner\n\nhello',
         id: 'drop-read-first',
         outcome: 'delivered (read)',
         via: 'typed',
@@ -442,7 +442,7 @@ describe('retryHeldDrops', () => {
   test('a retry that moves the owner\'s draft carries the paste-back receipt on its line and in history', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-draft', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-draft', 'from the owner — admitted by: the owner\n\nhello');
     const one = pane(claudeBox('a draft for the retry'));
     const said: string[] = [];
     const at = {
@@ -462,7 +462,7 @@ describe('retryHeldDrops', () => {
     // One clear, the trigger, one Enter, then the owner's text back as one bracketed paste.
     expect(one.keys).toEqual(['ctrl+c']);
     expect(one.typed).toEqual([
-      readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string,
+      readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string,
       '\x1b[200~a draft for the retry\x1b[201~',
     ]);
     expect(readPending(dropDir)).toEqual([]);
@@ -477,7 +477,7 @@ describe('retryHeldDrops', () => {
         ts: NOW.toISOString(),
         from: 'owner',
         to: 'lead',
-        body: 'from the owner\n\nhello',
+        body: 'from the owner — admitted by: the owner\n\nhello',
         id: 'drop-draft',
         outcome: 'sent (unconfirmed)',
         note: 'trigger taken, no read receipt yet; the unsent text was pasted back',
@@ -490,7 +490,7 @@ describe('retryHeldDrops', () => {
     const made = world();
     const text = teamText(made.root, lobbyDir(made.home)).replace('    name: lead\n', '    name: lead\n    human: true\n');
     const team = teamOf(text);
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-human', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-human', 'from the owner — admitted by: the owner\n\nhello');
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
@@ -507,13 +507,13 @@ describe('retryHeldDrops', () => {
       `lead: a held send from owner was not delivered (the pane is a human's, and nothing is typed into it); the record is at ${join(dropDir, 'drop-human')}; send it again`,
     ]);
     // The message itself waits on disk: the person reads the record's body.
-    expect(recordBody(join(dropDir, 'drop-human'))).toBe('from the owner\n\nhello');
+    expect(recordBody(join(dropDir, 'drop-human'))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('a pane back at its shell is not typed into: the reason is said and the drop kept', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-shell', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-shell', 'from the owner — admitted by: the owner\n\nhello');
     // An idle status and an empty-looking box, but the foreground is the pane's own shell: the
     // seat's CLI has exited, and a trigger typed here would reach the shell, not the seat.
     const one = pane(claudeBox(''));
@@ -534,14 +534,14 @@ describe('retryHeldDrops', () => {
       `lead: a held send from owner was not delivered (the seat is back at its shell; nothing was typed); the record is at ${join(dropDir, 'drop-shell')}; send it again`,
     ]);
     // The message waits on disk for the seat's return or a person's hand.
-    expect(recordBody(join(dropDir, 'drop-shell'))).toBe('from the owner\n\nhello');
+    expect(recordBody(join(dropDir, 'drop-shell'))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
   test('a trigger left unsent in the box is submitted, never typed over', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-2', 'from the owner\n\nagain');
-    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-2', 'from the owner — admitted by: the owner\n\nagain');
+    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'again' }) as string;
     const one = pane(claudeBox(line));
     const said: string[] = [];
 
@@ -560,7 +560,7 @@ describe('retryHeldDrops', () => {
   test('a held drop whose signed record does not verify is never typed nameless', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-unverified', 'from the owner\n\nhello');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-unverified', 'from the owner — admitted by: the owner\n\nhello');
     writeFileSync(join(dropDir, 'drop-unverified'), 'not a signed record\n');
     const one = pane(claudeBox(''));
     const said: string[] = [];
@@ -584,7 +584,7 @@ describe('retryHeldDrops', () => {
   test('is bounded: after three tries the drop path is said and the record is gone', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-3', 'from the owner\n\nstuck');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-3', 'from the owner — admitted by: the owner\n\nstuck');
     // The Enter is taken but nothing changes: the trigger stays in the box and the status stays
     // idle, so every retry ends not-submitted.
     const one = pane(claudeBox(''));
@@ -619,7 +619,7 @@ describe('retryHeldDrops', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const old = new Date(NOW.getTime() - PENDING_MAX_AGE_MS - 60_000);
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-4', 'from the owner\n\nold', old);
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-4', 'from the owner — admitted by: the owner\n\nold', old);
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
@@ -641,7 +641,7 @@ describe('retryHeldDrops', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const old = new Date(NOW.getTime() - PENDING_MAX_AGE_MS - 60_000);
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-gone-seat', 'from the owner\n\nvanished', old);
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-gone-seat', 'from the owner — admitted by: the owner\n\nvanished', old);
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
@@ -663,7 +663,7 @@ describe('retryHeldDrops', () => {
   test('a record whose drop file is gone is given up on, not typed', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-missing', 'from the owner\n\nlost');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-missing', 'from the owner — admitted by: the owner\n\nlost');
     rmSync(join(dropDir, 'drop-missing'));
     const one = pane(claudeBox(''));
     const said: string[] = [];
@@ -685,7 +685,7 @@ describe('retryHeldDrops', () => {
   test('a young mcp-inbox marker is not a held send: the pass leaves it and types nothing', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const body = 'from the owner\n\nread by the seat when it polls';
+    const body = 'from the owner — admitted by: the owner\n\nread by the seat when it polls';
     // The marker send leaves when its mcp-inbox leg gets no receipt: it records the leg so the
     // watch knows the message is the seat's own to read, not one to type.
     const dropDir = seedInbox(made, 'acme', 'lead', 'drop-inbox', body);
@@ -715,7 +715,7 @@ describe('promoteInboxDrops', () => {
   test('a receipt promotes the send once: delivered (read), the marker gone, nothing typed', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const body = 'from the owner\n\nread when the seat polls';
+    const body = 'from the owner — admitted by: the owner\n\nread when the seat polls';
     const dropDir = seedInbox(made, 'acme', 'lead', INBOX_A, body);
     const one = pane(claudeBox(''));
     const said: string[] = [];
@@ -766,7 +766,7 @@ describe('promoteInboxDrops', () => {
   test('a read through the inbox hides the drop from team drops, and the watch then promotes it', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const body = 'from the owner\n\nread, and no longer waiting';
+    const body = 'from the owner — admitted by: the owner\n\nread, and no longer waiting';
     const dropDir = seedInbox(made, 'acme', 'lead', INBOX_E, body);
     const one = pane(claudeBox(''));
     const said: string[] = [];
@@ -799,7 +799,7 @@ describe('promoteInboxDrops', () => {
   test('a receipt that names another seat proves nothing', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedInbox(made, 'acme', 'lead', INBOX_B, 'from the owner\n\nnot for helper');
+    const dropDir = seedInbox(made, 'acme', 'lead', INBOX_B, 'from the owner — admitted by: the owner\n\nnot for helper');
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
@@ -831,7 +831,7 @@ describe('promoteInboxDrops', () => {
   test('a drop receipt promotes a dropped send: delivered (read), the marker gone, nothing typed', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const body = 'from the owner\n\nread at turn start';
+    const body = 'from the owner — admitted by: the owner\n\nread at turn start';
     const dropDir = seedDropped(made, 'acme', 'lead', DROP_A, body);
     const one = pane(claudeBox(''));
     const said: string[] = [];
@@ -881,7 +881,7 @@ describe('promoteInboxDrops', () => {
   test('an inbox receipt promotes a dropped send too, and another seat\'s receipt proves nothing', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const body = 'from the owner\n\nread through the inbox';
+    const body = 'from the owner — admitted by: the owner\n\nread through the inbox';
     const dropDir = seedDropped(made, 'acme', 'lead', DROP_B, body);
     const one = pane(claudeBox(''));
     const said: string[] = [];
@@ -919,7 +919,7 @@ describe('an inbox send past its fallback window', () => {
   test('the watch types the trigger once and records why', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const body = 'from the owner\n\nleft unread';
+    const body = 'from the owner — admitted by: the owner\n\nleft unread';
     const old = new Date(NOW.getTime() - INBOX_FALLBACK_MS - 60_000);
     const dropDir = seedInbox(made, 'acme', 'lead', INBOX_C, body, old);
     const one = pane(claudeBox(''));
@@ -931,7 +931,7 @@ describe('an inbox send past its fallback window', () => {
       say: (text: string) => said.push(text),
     });
 
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'left unread' }) as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
     const history = readHistory('acme', made.root, made.home);
@@ -956,9 +956,9 @@ describe('an inbox send past its fallback window', () => {
   test('a typed marker goes before an inbox marker that is already due', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedHeld(made, 'acme', 'lead', 'held-now', 'from the owner\n\nheld first');
+    const dropDir = seedHeld(made, 'acme', 'lead', 'held-now', 'from the owner — admitted by: the owner\n\nheld first');
     const old = new Date(NOW.getTime() - INBOX_FALLBACK_MS - 60_000);
-    seedInbox(made, 'acme', 'lead', INBOX_D, 'from the owner\n\ninbox second', old);
+    seedInbox(made, 'acme', 'lead', INBOX_D, 'from the owner — admitted by: the owner\n\ninbox second', old);
     const one = pane(claudeBox(''));
 
     await retryHeldDrops({
@@ -969,7 +969,7 @@ describe('an inbox send past its fallback window', () => {
 
     // One delivery per seat per pass, and it is the typed marker's: the inbox marker is due but
     // waits behind the retry's own kind.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'held first' }) as string]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir).map((drop) => drop.id)).toEqual([INBOX_D]);
   });
@@ -977,7 +977,7 @@ describe('an inbox send past its fallback window', () => {
   test('a drop marker is never typed, and past the age bound it is given up with the path', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const dropDir = seedDropped(made, 'acme', 'lead', DROP_A, 'from the owner\n\nunread');
+    const dropDir = seedDropped(made, 'acme', 'lead', DROP_A, 'from the owner — admitted by: the owner\n\nunread');
     const one = pane(claudeBox(''));
     const said: string[] = [];
 
@@ -1009,7 +1009,7 @@ describe('an inbox send past its fallback window', () => {
       `lead: a dropped send from owner was not read (no receipt within 30m); the drop file is at ${join(dropDir, DROP_A)}`,
     ]);
     // The message itself stays: only the watch's wait for a receipt ended.
-    expect(recordBody(join(dropDir, DROP_A))).toBe('from the owner\n\nunread');
+    expect(recordBody(join(dropDir, DROP_A))).toBe('from the owner — admitted by: the owner\n\nunread');
     expect(readHistory('acme', made.root, made.home)).toMatchObject({ ok: true, entries: [] });
   });
 });
@@ -1097,7 +1097,7 @@ describe('a retry that ends taken', () => {
   test('a receipt the seat wrote after the retry is delivered (read), and the confirmation types nothing', () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
-    const body = 'from the owner\n\nread after the fact';
+    const body = 'from the owner — admitted by: the owner\n\nread after the fact';
     const dropDir = seedHeld(made, 'acme', 'lead', 'drop-taken-receipt', body);
     markTaken(dropDir, { id: 'drop-taken-receipt', from: 'owner', to: 'lead', body, ts: NOW.toISOString(), before: 'idle' });
     clearPending(dropDir, 'drop-taken-receipt');
@@ -1182,7 +1182,7 @@ describe('team send leaves the record the retry reads', () => {
       live: liveWith('lead', 'w1:p1'), ownPane: null, sources: scripts(one), now: NOW,
       say: (text: string) => said.push(text),
     });
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
     const history = readHistory('acme', made.root, made.home);
     expect(history.ok).toBe(true);
     if (!history.ok) return;
@@ -1229,7 +1229,7 @@ describe('team send leaves the record the retry reads', () => {
     });
 
     expect(one.keys).toEqual(['ctrl+c']);
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string, `\x1b[200~${draft}\x1b[201~`]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string, `\x1b[200~${draft}\x1b[201~`]);
     expect(one.screen).toBe(claudeBox(draft));
     expect(existsSync(join(dropDir, `${drop.id}.draft`))).toBe(false);
     expect(readPending(dropDir)).toEqual([]);
@@ -1284,7 +1284,7 @@ describe('team send leaves the record the retry reads', () => {
     expect(readPending(dropDir)).toEqual([]);
     // The send's own typed leg named its sender; the retry that finished the delivery types the
     // same named line, which is what the seat's box already holds.
-    const held = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+    const held = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
     expect(one.typed).toEqual([held, held]);
     expect(one.enters).toBe(1);
     const history = readHistory('acme', made.root, made.home);
@@ -1305,7 +1305,7 @@ describe('team watch retries a held drop', () => {
     writeFileSync(file, raw);
     const dropDir = join(directory, '.agents', 'send-drops', 'acme-web', 'deepseek-acme');
     const clock = Date.parse('2026-10-03T14:00:00Z');
-    const body = 'from the owner\n\nwatched';
+    const body = 'from the owner — admitted by: the owner\n\nwatched';
     seedHeld({ root: directory, dir: join(directory, '.agents'), home: directory }, 'acme-web', 'deepseek-acme', 'drop-5', body, new Date(clock - 60_000));
 
     const one = pane(claudeBox(''));
@@ -1333,7 +1333,7 @@ describe('team watch retries a held drop', () => {
     const code = await runWatch(['--file', file], io, sources);
 
     expect(code).toBe(0);
-    const line = readTriggerLine('deepseek-acme', 'acme-web', { seat: 'owner', team: 'acme-web' }) as string;
+    const line = readTriggerLine('deepseek-acme', 'acme-web', { seat: 'owner', team: 'acme-web', body: 'watched' }) as string;
     expect(typed).toEqual([line]);
     expect(one.enters).toBe(1);
     expect(readPending(dropDir)).toEqual([]);
@@ -1358,7 +1358,7 @@ describe('team watch promotes an inbox send its seat has read', () => {
     mkdirSync(join(directory, '.agents'));
     const file = join(directory, '.agents', 'team.yaml');
     writeFileSync(file, raw);
-    const body = 'from the owner\n\nalready read';
+    const body = 'from the owner — admitted by: the owner\n\nalready read';
     const seeded = { root: directory, dir: join(directory, '.agents'), home: directory };
     const dropDir = seedInbox(seeded, 'acme-web', 'deepseek-acme', INBOX_A, body);
     // The prior mailbox generation can leave its signed record beside the new send record. Its
@@ -1410,7 +1410,7 @@ describe('team watch promotes an inbox send its seat has read', () => {
     writeFileSync(file, raw);
     const dropDir = join(directory, '.agents', 'send-drops', 'acme-web', 'deepseek-acme');
     const clock = Date.parse('2026-10-03T14:00:00Z');
-    const body = 'from the owner\n\nread between passes';
+    const body = 'from the owner — admitted by: the owner\n\nread between passes';
     const seeded = { root: directory, dir: join(directory, '.agents'), home: directory };
     seedInbox(seeded, 'acme-web', 'deepseek-acme', INBOX_W, body, new Date(clock - 60_000));
     readInbox(seeded, INBOX_W, 'deepseek-acme', 'acme-web');

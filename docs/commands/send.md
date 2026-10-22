@@ -2,7 +2,7 @@
 
 Writes one message to one seat. A plain send writes the message whole as one signed record, mode
 0600, by renaming a temporary file into place, and — on the typed leg — types one short trigger
-line that names that record. The record is the message: it carries the body, the sender, the
+line that announces the message. The record is the message: it carries the body, the sender, the
 rule that admitted the send, and the thread it belongs to, and its name is the send's id.
 A record waiting in a seat's folder is answered with [team reply](reply.md), which writes the
 answer as a record on the same thread and cites the record it answers.
@@ -73,6 +73,36 @@ declaration the hold sat under is re-confirmed, by its settings file being rewri
 hold's mark lives under the receiving team's state folder, outside the seat's drop folder, so
 its reader never sees it as a message.
 
+The `channel` leg is the second implied default outside a declared word, and the only one that is
+never a declared word: with no level of the receiving seat's chain declaring an order, a Claude
+Code seat whose own launch carries the development-channels flag naming the team server
+(`--dangerously-load-development-channels server:team-inbox`) and whose live `.inbox-listener`
+marker says `channel` is walked `channel` first, then whatever the rest of the order would have
+been. The seat's own inbox server pushes one notification per record that arrives after it starts:
+its content opens with the message-display header and carries the signed body whole, and its meta
+names only identifiers — the message id, the sender, the seat and the team. The client draws its
+own `← <server>: <summary>` wrapper over that notification, naming the server that pushed it, with
+content too long for the pane elided; the wrapper is display, never part of the message. Nothing
+is typed and no pane is read. The sender waits two seconds for the marker the server leaves beside
+the record, `<id>.channel-push.json`; a marker for that id ends the walk `sent (channel)` (exit 0,
+`via: channel`), and the `<id>.pending` marker beside the record says `leg: channel`. `sent
+(channel)` claims only that the notification was written: the client acknowledges nothing at the
+transport, so the push is not a read. The seat's handling turn calls the server's `ack` tool with
+the id from the notification's meta, which writes the same signed `<id>.read.json` receipt as
+`team ack`, with `read_by: channel`; a watch promotes that receipt once to `delivered (read)`,
+clears the marker and types nothing.
+
+A pushed message still without a signed receipt three minutes after the push is redelivered
+exactly once: the watch writes `redelivered: channel unconfirmed` onto the marker before either
+attempt, dials the seat's socket when the receiver accepts a frame, and otherwise — or when the
+socket does not take it — types the ordinary trigger line. The history line records the redelivery
+as `failed: redelivered: channel unconfirmed`. The marker carries that word, so no later pass can
+redeliver the same push again, and an acknowledged record is never touched: a receipt that lands
+after the redelivery settles the marker as read and types nothing more. A wait that sees no marker
+inside its two seconds wrote a record nothing pushed: the marker is cleared and the walk moves on
+with `failed: channel: no push receipt within <n> ms`, because this leg took nothing and no later
+pass may redeliver a send whose own run is still walking the order.
+
 The `mcp-inbox` leg writes the message whole into the seat's own inbox —
 `<root>/.agents/send-drops/<session>/<seat>`, the same 0600 record the typed leg would leave —
 and types nothing. It takes the send only when a server is serving that inbox: a marker
@@ -95,10 +125,12 @@ records it `unavailable`. The native leg is a call the sender's own process make
 from the owner, or from a sender whose own file does not declare `cli: claude-code`, records it
 `unavailable` too; a sender whose own file does declare it gets [the native
 handoff](#the-native-channel) instead — one pending record, the exact target, the body and the
-`--confirm` line — and makes the call itself. The typed leg types `Run team drops --read --seat <seat> --session
-<session> and do that.` — the seat's own drop read, whose first act is the signed read receipt
-beside the drop — and a receipt that verifies inside the window is `delivered (read)`, the one
-word that line earns. Without one, a typed send ends `sent (unconfirmed)` when the line has left
+`--confirm` line — and makes the call itself. The typed leg types the rendered
+`message-display` header and the fixed hint `Read it with: team drops --read.` — one printable
+line of at most 80 characters, asking for the seat's own drop read, whose first act is the
+signed read receipt beside the drop — and a receipt that verifies inside the window is
+`delivered (read)`, the one word that line earns. Without one, a typed send ends `sent
+(unconfirmed)` when the line has left
 the seat's input box after that one trigger line and Enter — either herdr reported the seat
 `working` (or `done` or `blocked`, and not the status read before Enter), or the transcript shows
 the drop being read (a CLI's status can lag while it works) — and the pane was not a dialog this
@@ -174,9 +206,9 @@ route](route.md) answers the address and the rule beside it.
 
 ## Synopsis
 
-    team send <target> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
-    team send <target> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
-    team send <target> --brief <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> --brief <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --confirm <id> [--json] [--dry-run]
     team send --record <seat> --channel native --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel native --ms <N> --file <path> [--json] [--dry-run]
@@ -196,7 +228,12 @@ folder is a pointer, not a brief: the send warns on stderr, naming the pointer a
 the brief itself — with `--brief <file>` or its text in the body — and still sends exactly what
 it was given. A prose body that merely mentions such a path draws no warning. A multiline body
 that looks like terminal output — two or more lines starting with a check mark or a bracketed
-number — is warned about on stderr and sent unchanged. `--brief` reads
+number — is warned about on stderr and sent unchanged. `--subject <text>` writes one display
+line beside the body: it fills the `{subject}` slot of the `message-display` template ([the
+message-display wake line](#the-message-display-wake-line)) and never stands in for `{summary}`,
+which is always the body's own first content line. The subject is sanitised like every other
+display field, a blank word is no subject at all, and it is not part of the body the receiver
+reads. `--brief` reads
 the receiving team's `brief-transport` before it writes anything: `file` and `message` both send
 the whole body as an ordinary send, while `memory` refuses the send (exit `send.brief-memory`,
 1) — no drop, no state or history line, no fallback — because no runtime in this build proves
@@ -441,6 +478,46 @@ same way, and so
 does the body the message history keeps. The receiver reads who sent a message and why that sender
 was let through; the record carries the sender's ids from day one.
 
+## The message-display wake line
+
+A message a typed leg or a watch announces opens with a header the `message-display` policy
+renders. The policy is a signed, enforced setting at the entity and team levels and has no team
+file field: the entity's default stands until a team writes its own value, and the team's value
+wins. The shipped default is
+
+    Message from {name} ({seat}@{team}): {summary}
+
+A template may carry seven placeholders and no others; a value naming any other word is refused
+when it is saved, and the refusal names the placeholder:
+
+| Placeholder | What it renders |
+| --- | --- |
+| `{name}` | the seat's nickname, or its seat name when the file holds no nickname — a header is never hollow |
+| `{seat}` | the seat's own name |
+| `{team}` | the team's name |
+| `{subject}` | the sender's [`--subject`](#synopsis) line, sanitised like every field; empty when none was written |
+| `{summary}` | the body's first content line, sanitised and then cut at 80 characters — never paraphrased, and never the subject |
+| `{age}` | how long the message has waited: seconds, minutes, hours or days |
+| `{id}` | reserved for the record's id; this build's typed lines and frames leave it empty, because the id travels in the socket frame's `msg_id` only |
+
+Every field is data: control characters, escape sequences and line breaks are neutralised, so a
+rendered header is one printable line. A body line that forges a sender header stays summary
+text and never becomes the header.
+
+On an agent seat the typed wake is the rendered header, one space, and the fixed sentence
+`Read it with: team drops --read.` The whole typed line is one printable line of at most 100
+characters; the hint is kept whole and the header gives way to it. The template cannot remove
+the hint — an agent seat always learns where to read the signed record — and the message's id
+is not in the line.
+
+The socket frame an agent seat receives carries the rendered header, the full body, and the
+fixed reply line, `Reply with: team send <address> "…"`. A person-pane seat's frame carries the
+header and the body and neither the reply line nor the read hint: a person answers in the
+client, and the line is never shown to an agent.
+
+A running watch uses the same header to ring for the oldest waiting message, and it does not
+ring when nothing waits.
+
 ## Outcomes
 
 Every run that reads a team file opens on stdout with one context line,
@@ -450,7 +527,8 @@ line on stderr and has none.
 | Outcome | Exit | Printed |
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
-| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the typed leg's own `team drops --read`, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the channel's ack, the typed leg's own `team drops --read`, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| sent (channel) | 0 | `<seat>: sent (channel) (<n> ms)` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms)` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms)` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (typed, <n> ms; trigger taken, no read receipt yet)` on stdout, for the typed leg: the trigger line left the seat's input box, and no signed receipt has come back, so the message is not called read |

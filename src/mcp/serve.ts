@@ -7,20 +7,44 @@
 // shows the body, and writes `<id>.read.json` before the body is returned; that receipt is the
 // only proof of delivery this leg has, and it means the message was read, not acted on.
 //
-// Nothing here is a push: MCP is client-pull, so the seat notices a message when it calls
-// `inbox_check`. The drop-folder watch is the bounded fall-back, not this process.
+// The one push is the development channel: when the launch carries the flag naming this server,
+// the server declares `claude/channel`, pushes each new record as one notification, writes a
+// `<id>.channel-push.json` marker beside it, and serves the `ack` tool — which writes the same
+// signed read receipt, marked `read_by: channel`. Without the flag, MCP is client-pull and the
+// seat notices a message when it calls `inbox_check`, with the drop-folder watch as the bounded
+// fall-back.
+import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { loadTeamFile } from '../file/load.ts';
+import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
-import { currentBriefClaim } from '../launch/general-brief.ts';
+import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
+import { publishRecordRead } from '../send/read-receipt.ts';
+import { readRecord, verifyRecord } from '../send/record.ts';
+import { wakeHead } from '../send/native.ts';
+import { wakeTrigger } from '../send/wake.ts';
+import { messageKeyState } from '../store/keys.ts';
 import { readState } from '../state.ts';
 import { buildIdentity, version } from '../version.ts';
 import type { BuildIdentity } from '../version.ts';
 import {
+  CHANNEL_CAPABILITY,
+  CHANNEL_INSTRUCTIONS,
+  CHANNEL_METHOD,
+  CHANNEL_PUSH_STATUS,
+  CHANNEL_READ_BY,
+  CHANNEL_TICK_MS,
+  channelLaunchEnabled,
+  channelPushHeld,
+  recordChannelPush,
+} from './channel.ts';
+import {
+  MESSAGE_ID,
   ensureInboxFolder,
   inboxFolderHeld,
   legacyDropAt,
@@ -56,7 +80,30 @@ export type ServeHost = { home: string; build?: BuildIdentity };
 
 export const realServeHost: ServeHost = { home: homedir() };
 
-type Serving = { project: string; seat: string; session: string; root: string; dropDir: string; home: string; brief?: BriefRead };
+type Serving = {
+  project: string;
+  seat: string;
+  session: string;
+  root: string;
+  dropDir: string;
+  home: string;
+  team: TeamFile;
+  /** True when this seat's launch carries the development channel naming this server. */
+  channel: boolean;
+  brief?: BriefRead;
+};
+
+/** Whether two roots are the same folder once links are resolved, as the inbox checks do. */
+function sameFolder(left: string, right: string): boolean {
+  const real = (at: string): string => {
+    try {
+      return realpathSync(at);
+    } catch {
+      return at;
+    }
+  };
+  return real(left) === real(right);
+}
 type RequestId = string | number | null;
 
 /** The process's stdin and stdout, framed the way MCP's stdio transport reads them. */
@@ -73,8 +120,8 @@ export function processStreams(): ServeStreams {
   };
 }
 
-function toolList(): unknown[] {
-  return [
+function toolList(serving: Serving): unknown[] {
+  const tools: unknown[] = [
     {
       name: 'inbox_check',
       description: "List the messages waiting in this seat's inbox. Call it at the start of every turn.",
@@ -91,6 +138,19 @@ function toolList(): unknown[] {
       },
     },
   ];
+  if (serving.channel) {
+    tools.push({
+      name: 'ack',
+      description: 'Acknowledge a channel message by its meta id. Writes the same signed read receipt as `team ack`, with read_by channel. Call it in the same turn the notification arrives.',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'the id from the channel notification meta' } },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    });
+  }
+  return tools;
 }
 
 function toolError(text: string): unknown {
@@ -116,6 +176,116 @@ function negotiate(params: unknown): string {
     if (typeof asked === 'string' && SUPPORTED_PROTOCOL_VERSIONS.includes(asked)) return asked;
   }
   return PROTOCOL_VERSION;
+}
+
+/** One channel notification: the message-display header, then the signed body whole. */
+function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
+  const looked = readRecord(join(serving.dropDir, id), id);
+  if (!looked.ok || looked.record === null) return null;
+  const payload = looked.record.payload;
+  if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) return null;
+  // A record a client wrote, and the seat's own general brief, are never channel messages: the
+  // brief is served at the turn start under its claim, and an ack here would hold the receipt
+  // name that reader needs.
+  if (payload.from_client !== undefined || isGeneralBriefRecord(payload)) return null;
+  const key = messageKeyState(serving.home);
+  if (key.kind !== 'key' || !verifyRecord(looked.record, key.key)) return null;
+  const sender = wakeTrigger(payload, serving.home, { root: serving.root, session: serving.session, team: serving.team });
+  if (sender === null) return null;
+  const header = wakeHead(sender);
+  if (header === '') return null;
+  return {
+    content: `${header}\n\n${payload.body}`,
+    meta: { id, from: payload.from, seat: serving.seat, team: serving.project },
+  };
+}
+
+/**
+ * Watches the inbox for signed records that arrive after this server starts, and writes one
+ * channel notification per new record. Mail already waiting at startup is left to `inbox_check`,
+ * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker after
+ * the notification; the signed record is never touched, and only `ack` (or `inbox_read`) writes
+ * a read receipt.
+ */
+function watchChannel(serving: Serving, write: (line: string) => void): () => void {
+  const seen = new Set<string>();
+  let primed = false;
+  const tick = (): void => {
+    const unread = listUnread(
+      serving.dropDir,
+      { to: serving.seat, root: serving.root, session: serving.session },
+      serving.home,
+    ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id)));
+    if (!primed) {
+      for (const message of unread) seen.add(message.id);
+      primed = true;
+      return;
+    }
+    for (const message of unread) {
+      if (seen.has(message.id)) continue;
+      seen.add(message.id);
+      // An earlier server may have pushed this id before this one started; its marker is the
+      // push, and a second notification is a duplicate wake.
+      if (channelPushHeld(serving.dropDir, message.id)) continue;
+      const push = channelPushOf(serving, message.id);
+      if (push === null) continue;
+      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+      recordChannelPush(serving.dropDir, {
+        v: 1,
+        kind: 'channel-push',
+        id: message.id,
+        seat: serving.seat,
+        session: serving.session,
+        root: serving.root,
+        at: new Date().toISOString(),
+        meta: push.meta as { id: string; from: string; seat: string; team: string },
+        content_sha256: createHash('sha256').update(push.content).digest('hex'),
+        status: CHANNEL_PUSH_STATUS,
+      });
+    }
+  };
+  const timer = setInterval(tick, CHANNEL_TICK_MS);
+  tick();
+  return () => clearInterval(timer);
+}
+
+/** The `ack` tool: the signed read receipt `team ack` writes, marked `read_by: channel`. */
+function ackTool(args: unknown, serving: Serving): unknown {
+  if (!serving.channel) return toolError('ack is served only by a channel inbox');
+  const id = typeof args === 'object' && args !== null ? (args as Record<string, unknown>).id : undefined;
+  if (typeof id !== 'string' || !MESSAGE_ID.test(id)) return toolError('ack needs the message id from the notification meta');
+  if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
+    return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
+  }
+  const looked = readRecord(join(serving.dropDir, id), id);
+  if (!looked.ok || looked.record === null) return toolError(`no message ${id} is waiting in this inbox`);
+  const payload = looked.record.payload;
+  if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) {
+    return toolError(`message ${id} is not addressed to this inbox`);
+  }
+  if (payload.from_client !== undefined) return toolError(`message ${id} was written by a client; its read belongs to the client inbox`);
+  if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
+  const key = messageKeyState(serving.home);
+  if (key.kind !== 'key') return toolError('no message key; nothing was acknowledged');
+  if (!verifyRecord(looked.record, key.key)) return toolError(`message ${id} does not verify with this home's key`);
+  const outcome = publishRecordRead({
+    dropDir: serving.dropDir,
+    id,
+    to: serving.seat,
+    root: serving.root,
+    session: serving.session,
+    home: serving.home,
+    key: key.key,
+    at: new Date().toISOString(),
+    readBy: CHANNEL_READ_BY,
+  });
+  if (outcome.kind === 'held') {
+    return toolError(`${id}: not acknowledged: the ${outcome.status} receipt name is held by a file that does not verify for this message`);
+  }
+  if (outcome.kind === 'unwritten') {
+    return toolError(`${id}: not acknowledged: the read receipt could not be written; call ack again`);
+  }
+  return toolText(JSON.stringify({ acknowledged: id, written: outcome.kind === 'published' }));
 }
 
 /** One `tools/call` body. Tool faults are results with `isError`, not JSON-RPC errors. */
@@ -171,6 +341,7 @@ function callTool(params: unknown, serving: Serving): unknown {
     }
     return toolText(read.body);
   }
+  if (name === 'ack') return ackTool(args, serving);
   return toolError(`unknown tool ${JSON.stringify(String(name))}`);
 }
 
@@ -200,16 +371,23 @@ export function handleLine(line: string, serving: Serving): string | null {
   // is the one every client sends after the handshake.
   if (!hasId) return null;
   switch (method) {
-    case 'initialize':
+    case 'initialize': {
+      // The channel capability is declared only when the seat's launch enabled it. No
+      // `claude/channel/permission` is ever declared: this server asks the person for nothing.
+      const capabilities: Record<string, unknown> = serving.channel
+        ? { tools: {}, experimental: { [CHANNEL_CAPABILITY]: {} } }
+        : { tools: {} };
       return answer(id, {
         protocolVersion: negotiate(record.params),
-        capabilities: { tools: {} },
+        capabilities,
         serverInfo: { name: SERVER_NAME, version: version() },
+        ...(serving.channel ? { instructions: CHANNEL_INSTRUCTIONS } : {}),
       });
+    }
     case 'ping':
       return answer(id, {});
     case 'tools/list':
-      return answer(id, { tools: toolList() });
+      return answer(id, { tools: toolList(serving) });
     case 'tools/call':
       return answer(id, callTool(record.params, serving));
     default:
@@ -253,6 +431,10 @@ export async function runMcpServe(
     return refuse('the inbox folder is not a real folder: a link, a file or a failed write stands in its path');
   }
   const build = host.build ?? buildIdentity();
+  // The channel is the seat's own launch word: a line with the development-channels flag naming
+  // this server. Nothing on the command line turns it on separately, and a marker without it is
+  // an ordinary inbox the send walks past.
+  const channel = channelLaunchEnabled(seat.launch);
   const listener: InboxListener = {
     v: 1,
     seat: seat.name,
@@ -263,6 +445,7 @@ export async function runMcpServe(
     ts: new Date().toISOString(),
     version: build.version,
     build: build.build,
+    ...(channel ? { channel: true as const } : {}),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
   // The launch's own brief is served under the claim its state holds. The epoch is the one the
@@ -284,14 +467,18 @@ export async function runMcpServe(
     root: loaded.root,
     dropDir,
     home: host.home,
+    team,
+    channel,
     brief,
   };
+  const stopChannel = channel ? watchChannel(serving, streams.write) : null;
   try {
     for await (const line of streams.lines) {
       const reply = handleLine(line, serving);
       if (reply !== null) streams.write(reply);
     }
   } finally {
+    stopChannel?.();
     streams.close?.();
     removeListener(dropDir, process.pid);
   }

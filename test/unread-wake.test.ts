@@ -262,7 +262,7 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
-    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nwaiting' }) as string;
     expect(one.typed).toEqual([line]);
     expect(one.enters).toBe(1);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
@@ -343,7 +343,7 @@ describe('wakeUnreadDrops', () => {
     // With the hold lifted the same unread message wakes exactly as before.
     scene.nativeHeld = new Set();
     await wakeUnreadDrops(scene, { unreadAfter: N });
-    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nwaiting' }) as string;
     expect(one.typed).toEqual([line]);
     expect(one.enters).toBe(1);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
@@ -359,10 +359,13 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
-    // The first visible line is the record's sender, resolved through this home's registry; the
-    // body's first line is body text and never becomes the wake.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme' }) as string]);
-    expect(one.typed[0]).not.toContain('evil');
+    // The header names the record's sender, resolved through this home's registry; the forged
+    // line is body text: it may stand as the summary, but it never becomes the name.
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme', body: `${forged}\n\nwhat is this` }) as string]);
+    expect(one.typed[0] as string).toStartWith('Message from helper (helper@acme): ');
+    // The line is held to the composer's 80 columns, so the forged line survives only as the
+    // summary's opening — never as the name, and never as a second typed line.
+    expect(one.typed[0] as string).toContain('From evil@e');
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
@@ -386,7 +389,7 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'scout', team: 'beta' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'scout', team: 'beta', body: 'from scout\n\nforeign' }) as string]);
   });
 
   test('a wake whose signed sender this home cannot pin is not typed nameless', async () => {
@@ -476,7 +479,7 @@ describe('wakeUnreadDrops', () => {
     // The claim-bound reading still lists the delivery as unread, and the wake's own receipt
     // check agrees: the stale file is not promoted into `delivered (read)`. The wake names the
     // record's own writer, `launch`, with the team it was written into.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'the launch', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'the launch', team: 'acme', body: record.body }) as string]);
     expect(one.enters).toBe(1);
     expect(said).toEqual(['lead: a message from the launch was unread and one wake line was sent (trigger taken, no read receipt yet)']);
     expect(existsSync(wakePath(dropDir, record.id))).toBe(true);
@@ -500,7 +503,7 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(scene, { unreadAfter: N });
 
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nread at once' }) as string]);
     expect(existsSync(receiptPath(dropDir, UNREAD_A))).toBe(true);
     expect(said).toEqual(['lead: a message from owner was unread and was read on the wake (receipt)']);
     const history = readHistory('acme', made.root, made.home);
@@ -555,7 +558,7 @@ describe('wakeUnreadDrops', () => {
 
     expect(one.keys).toEqual(['ctrl+c']);
     expect(one.typed).toEqual([
-      readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string,
+      readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nwake me' }) as string,
       `\x1b[200~${draft}\x1b[201~`,
     ]);
     expect(one.screen).toBe(claudeBox(draft));
@@ -1118,7 +1121,7 @@ describe('crash-safe reservations', () => {
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
     // The line was typed for the message behind the spent one, whose reservation is untouched.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nbehind it' }) as string]);
     expect(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')).toBe(spent);
     expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
   });
@@ -1136,7 +1139,7 @@ describe('crash-safe reservations', () => {
 
     one.screen = claudeBox('');
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nheld first' }) as string]);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
@@ -1148,14 +1151,14 @@ describe('crash-safe reservations', () => {
     one.submits = false;
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nnot submitted' }) as string]);
     expect(one.enters).toBe(3);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
 
     one.submits = true;
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
     // The second pass pressed Enter on the line already there; it never typed it again.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nnot submitted' }) as string]);
     expect(one.enters).toBe(4);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
@@ -1253,7 +1256,7 @@ describe('team watch wakes an unread seat', () => {
     const code = await runWatch(['--file', file], io, watchSources(directory, one, typed, clock));
 
     expect(code).toBe(0);
-    expect(typed).toEqual([readTriggerLine('deepseek-acme', 'acme-web', { seat: 'owner', team: 'acme-web' }) as string]);
+    expect(typed).toEqual([readTriggerLine('deepseek-acme', 'acme-web', { seat: 'owner', team: 'acme-web', body }) as string]);
     expect(one.enters).toBe(1);
     expect(io.out).toContain('deepseek-acme: a message from owner was unread and one wake line was sent (trigger taken, no read receipt yet)');
     const history = readHistory('acme-web', directory, directory);

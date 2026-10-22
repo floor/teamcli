@@ -3917,6 +3917,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.sent-channel",
+      "meaning": "the seat's own inbox server wrote the push notification and its marker; the signed read receipt that follows is the read",
+      "trigger": "team send lead hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.sent-unconfirmed",
       "meaning": "the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back",
       "trigger": "team send worker hello"

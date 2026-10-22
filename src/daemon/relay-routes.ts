@@ -237,6 +237,8 @@ function humanSkipReasonFor(leg: DeliveryLeg): string {
       return "the pane is a human's, and no session is resumed";
     case 'mcp-inbox':
       return "the pane is a human's, and the drop leg is the only one walked";
+    case 'channel':
+      return "the pane is a human's, and the drop leg is the only one walked";
     case 'drop':
       return '';
   }
@@ -253,6 +255,7 @@ function relayRouteOfLeg(leg: DeliveryLeg): RuntimeRelayRoute | null {
     case 'drop':
       return 'durable-copy';
     case 'mcp-inbox':
+    case 'channel':
     case 'typed':
       return null;
   }

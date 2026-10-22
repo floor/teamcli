@@ -327,7 +327,7 @@ describe('an agy seat sends to the main coordinator', () => {
     expect(typed.pane).toBe('pane-coordinator');
     // The trigger is the seat's own receipt-writing read, built from the receiver's seat and
     // session — the line that wakes it is the one that writes the signed read receipt.
-    const line = readTriggerLine('main-coordinator', 's', { seat: 'agy-seat', team: 'floor' });
+    const line = readTriggerLine('main-coordinator', 's', { seat: 'agy-seat', team: 'floor', body: BODY });
     if (line === null) throw new Error('the trigger line did not fit');
     expect(typed.text).toBe(line);
     const drop = soleDrop(root, 's', 'main-coordinator');
@@ -392,7 +392,7 @@ describe('an orchestrator reaches another team by name', () => {
     const typed = betaPane.typed[0] as Typed;
     expect(typed.session).toBe('beta');
     expect(typed.pane).toBe('pane-beta-lead');
-    const line = readTriggerLine('lead', 'beta', { seat: 'lead', team: 'alpha' });
+    const line = readTriggerLine('lead', 'beta', { seat: 'lead', team: 'alpha', body: BODY });
     if (line === null) throw new Error('the trigger line did not fit');
     expect(typed.text).toBe(line);
     const drop = soleDrop(betaRoot, 'beta', 'lead');
