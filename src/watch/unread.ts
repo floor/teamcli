@@ -13,7 +13,10 @@
 // second. The sender's own mailbox is the one its signed agent id resolves to through this
 // home's agent and team registries — a teammate in another checkout is written in that team's
 // root and session — and a sender those registries cannot pin to one team, seat and session is
-// reported to the lead alone, with the missing metadata said.
+// reported to the lead alone, with the missing metadata said. A signed client-origin record
+// (`from_client`) is the one sender with no internal mailbox at all: it is reported to the
+// receiving team's lead alone, and no resolution is attempted or said for it, because its
+// external principal is complete as written rather than missing.
 //
 // The wake is the typed leg's own delivery, with the rules that leg already has: a human seat's
 // pane is never typed into, a dialog or a box holding unsent text is not typed blind, the seat
@@ -426,13 +429,16 @@ type ReportResolution = {
 /**
  * The mailboxes one report goes to: the sender's own when the signed record's `from_id` resolves
  * through this home's registries to exactly one seat of one known team, and the team's lead. A
- * sender is never routed by name: the signed `from` alone could name a same-named seat here or in
- * another team, so a record without an agent id, or whose agent record, team record or roster
- * entry does not pin the same team, seat and session, is reported to the lead only, with the
- * missing metadata in the words. The identity is exact: the team record's own root must derive
- * the team id the agent names, and the roster must hold exactly one entry for that agent, exactly
- * one entry at that seat, and that entry must be the pair — a root whose identity is another team,
- * an agent listed at two seats, or a seat held by two agents, routes nothing.
+ * signed client-origin record carries no agent id by construction — its `from_client` names an
+ * external principal — so its only mailbox is the receiving team's lead; no sender resolution is
+ * attempted and no unresolved reason is recorded for it. A sender is never routed by name: the
+ * signed `from` alone could name a same-named seat here or in another team, so a record without
+ * an agent id, or whose agent record, team record or roster entry does not pin the same team,
+ * seat and session, is reported to the lead only, with the missing metadata in the words. The
+ * identity is exact: the team record's own root must derive the team id the agent names, and the
+ * roster must hold exactly one entry for that agent, exactly one entry at that seat, and that
+ * entry must be the pair — a root whose identity is another team, an agent listed at two seats,
+ * or a seat held by two agents, routes nothing.
  */
 function reportTargets(scene: RetryScene, payload: RecordPayload, home: string): ReportResolution {
   const targets: ReportTarget[] = [];
@@ -446,7 +452,13 @@ function reportTargets(scene: RetryScene, payload: RecordPayload, home: string):
   const own = (to: string): ReportTarget => ({ root: scene.root, session: scene.session, to, label: to });
   let unresolved: string | null = null;
 
-  if (payload.from === OWNER_MAILBOX && payload.from_id === null) {
+  if (payload.from_client !== undefined) {
+    // A signed client-origin record names an external principal, not a seat: the record's own
+    // validator admits it only as `from: client:<id>` with no agent id, so there is no internal
+    // mailbox to resolve and nothing missing to explain. Its report's route is the receiving
+    // team's lead alone, which `add` below completes; no sender resolution is attempted, so the
+    // report carries no `could not be resolved` reason for a record that is complete as written.
+  } else if (payload.from === OWNER_MAILBOX && payload.from_id === null) {
     add(own(OWNER_MAILBOX));
   } else if (payload.from_id === null) {
     unresolved = `the signed record names no agent id for ${JSON.stringify(payload.from)}`;
