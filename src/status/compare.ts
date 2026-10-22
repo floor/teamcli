@@ -130,24 +130,14 @@ export function orderAndAnnotateDifferences(differences: Difference[]): Differen
   return [...approval, ...rest];
 }
 
-/** The account a seat's budget counts against: its own `account:`, its vendor when it names
- *  none — the resolution every counting rule uses (RFC 0003 § 3b). Null when neither says, and a
- *  mark then leaves the pool out. */
-function accountOf(seat: Seat | undefined): string | null {
-  const account = seat?.account ?? seat?.vendor ?? '';
-  return account === '' ? null : account;
-}
-
-/** The word a quiet seat's screen earns for a usage limit: `quota out`, named for the pool the
- *  seat spends and carrying the reset exactly as the screen words it — `at` for a clock, `in`
- *  for a span — or an explicit "no reset time named" when it names none. Null for every other
- *  screen. The row shows this word instead of the host's: a wall is not a bare done. */
-function quotaOutText(seat: Seat | undefined, screen: Screen): string | null {
+/** The word a quiet seat's screen earns for a usage limit: `blocked: quota`, with the reset
+ *  exactly as the screen words it — `at` for a clock, `in` for a span — or an explicit "no
+ *  reset time named" when it names none. Null for every other screen. The row shows this word
+ *  instead of the host's: a wall is a blocked seat, never a bare done. */
+function quotaOutText(screen: Screen): string | null {
   if (screen.kind !== 'rate limit') return null;
-  const account = accountOf(seat);
-  const on = account === null ? '' : ` on ${account}`;
-  if (screen.reset === null) return `quota out${on}, no reset time named`;
-  return `quota out${on}, resets ${screen.reset.kind} ${screen.reset.value}`;
+  if (screen.reset === null) return 'blocked: quota, no reset time named';
+  return `blocked: quota, resets ${screen.reset.kind} ${screen.reset.value}`;
 }
 
 /**
@@ -315,7 +305,7 @@ export function compare(
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
-      const quotaOut = quiet ? quotaOutText(seat, screen) : null;
+      const quotaOut = quiet ? quotaOutText(screen) : null;
       const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : '';
       const stateText = quotaOut !== null
         ? `${quotaOut}${seat.parked ? ', parked' : ''}`
@@ -535,7 +525,7 @@ export function compare(
       const quiet = tempWord === 'idle' || tempWord === 'done';
       const unread = quiet && tempScreen.kind === 'unknown';
       // The pool a temporary seat spends is the like-seat's, as its cli and model string are.
-      const quotaOut = quiet ? quotaOutText(likeSeat, tempScreen) : null;
+      const quotaOut = quiet ? quotaOutText(tempScreen) : null;
       rows.push({
         name,
         ...idField,
