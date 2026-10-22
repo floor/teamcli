@@ -4,8 +4,10 @@
 // disk and starts the installed entry, and a sender that falls back from a stale serving channel
 // holds the push marker's name, so the old server's late push cannot follow its wake as a second
 // one. Fixtures only: a synthetic team, homes and listener markers this test writes; no live
-// session or pane is touched, and no process is spawned.
+// session or pane is touched, and no process is spawned (the reload's start is driven through its
+// hooks).
 import { afterEach, describe, expect, test } from 'bun:test';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +23,8 @@ import {
   writeListener,
   type InboxListener,
 } from '../src/mcp/inbox.ts';
-import { runMcpServe } from '../src/mcp/serve.ts';
+import { restartSelf, runMcpServe } from '../src/mcp/serve.ts';
+import { selfRunner } from '../src/mcp/register.ts';
 import type { BuildIdentity, InstallIdentity } from '../src/version.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -47,6 +50,8 @@ const NEW: BuildIdentity = {
   builtAt: Date.parse('2026-10-22T00:00:00.000Z'),
   head: NEW_HEAD,
 };
+
+type Spawn = typeof import('node:child_process').spawn;
 
 let cleanup: () => void = () => {};
 afterEach(() => {
@@ -234,6 +239,76 @@ describe('an install under a running server', () => {
       staleFeed.end();
       await stale.catch(() => 0);
     }
+  });
+});
+
+describe('the fresh server a reload starts', () => {
+  /** The child the scene drives. The real `spawn` reports `spawn` or `error` after it returns, so
+   *  the fake does too; `refs` counts the unref the old process leaves behind. */
+  function freshChild(): EventEmitter & { refs: number; unref(): void } {
+    const made = new EventEmitter() as EventEmitter & { refs: number; unref(): void };
+    made.refs = 0;
+    made.unref = () => {
+      made.refs += 1;
+    };
+    return made;
+  }
+
+  test('it starts the loaded entry with the same arguments and leaves only once it is up', () => {
+    const runner = selfRunner();
+    const spawns: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
+    const exits: number[] = [];
+    const said: string[] = [];
+    const fresh = freshChild();
+    restartSelf({
+      spawnChild: ((command: string, args: readonly string[], options: unknown) => {
+        spawns.push({ command, args, options });
+        return fresh;
+      }) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: (line) => said.push(line),
+    });
+    expect(spawns).toEqual([{
+      command: process.execPath,
+      args: [runner.entry, ...process.argv.slice(2)],
+      options: { stdio: 'inherit' },
+    }]);
+    // The old process still serves until the child reports that it started.
+    expect(exits).toEqual([]);
+    expect(fresh.refs).toBe(0);
+    fresh.emit('spawn');
+    expect(fresh.refs).toBe(1);
+    expect(exits).toEqual([0]);
+    expect(said).toEqual([]);
+  });
+
+  test('a start that fails after spawn returns says so and exits non-zero', () => {
+    const exits: number[] = [];
+    const said: string[] = [];
+    const fresh = freshChild();
+    restartSelf({
+      spawnChild: (() => fresh) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: (line) => said.push(line),
+    });
+    fresh.emit('error', new Error('spawn team ENOENT'));
+    expect(fresh.refs).toBe(0);
+    expect(exits).toEqual([1]);
+    expect(said).toEqual(['team mcp serve: the fresh server could not start; the next launch reloads\n']);
+  });
+
+  test('a start that throws on the call also exits non-zero', () => {
+    const exits: number[] = [];
+    const said: string[] = [];
+    restartSelf({
+      spawnChild: (() => {
+        throw new Error('bad arguments');
+      }) as unknown as Spawn,
+      exit: (code) => exits.push(code),
+      say: (line) => said.push(line),
+    });
+    expect(exits).toEqual([1]);
+    expect(said).toEqual(['team mcp serve: the fresh server could not start; the next launch reloads\n']);
   });
 });
 
