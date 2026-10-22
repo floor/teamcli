@@ -38,7 +38,9 @@ the weekly limit left): a real capture of a warning that must not read as a wall
 - **watch**: the watch types no work nudge into a walled agy pane at `idle_first`, at
   `idle_repeat`, or past the frame's named reset while the wall is still on screen; a healthy idle
   seat in the same pass is nudged as the control, and the same agy seat on its retained idle frame
-  is nudged.
+  is nudged. The idle-work snapshot (what `status` prints and the dispatcher reads) counts no
+  walled seat either: a coherent native turn-end projection behind the wall is not an idle worker,
+  while the same projection on the retained idle frame is.
 - **check**: the existing `stuck at a quota prompt` difference and exit 1, now reached by agy,
   with the reset form it read; a quote in a working turn and a wall above a finished turn are not
   named quota.
