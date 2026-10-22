@@ -87,7 +87,7 @@ export function seatModel(seat: { cli: string; model: string }, screen: string |
  * model and, when the seat has a version, that version matches the rule's `version_like` —
  * nothing is built and no reader is run. A model no list names (another maker's, a made-up
  * family) is not readable, and a rule that declares nothing yields nothing. A seat it answers no
- * to is unread for as long as it runs — `status` prints its model `(unread)` with a note, and the
+ * to is unread for as long as it runs — `status` prints it as `<display> (declared, unread)` with a note, and the
  * watch never reports a drift for it — so no launch-time finding may claim the running seat
  * checks it.
  */
@@ -103,7 +103,7 @@ export function canShowModel(seat: { cli: string; model: string; version?: strin
  * Whether a seat's model column falls back to the launch line's model, labelled, when its
  * screen names none: the profile says so. A question widget replaces grok's box and hides the
  * footer the model rules read, and the launch line's model still stands there — so its column
- * shows it labelled, where a profile without the fallback keeps `(unread)`.
+ * shows it labelled, where a profile without the fallback marks it `(declared, unread)`.
  */
 export function launchModelWhenUnread(cli: string): boolean {
   return profileFor(cli)?.unreadModel === 'launch';

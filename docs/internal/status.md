@@ -77,7 +77,8 @@ CLI ended, or the session was restored, and the pane is back at its shell; or `r
 launched by team` when its pane runs a process `team` did not launch — another session's restore,
 or a CLI started by hand; or `stopped` when the file marks it stopped; or `wrong name`
 when an agent sits in the seat's workspace under another name. A `wrong name` row's model is
-the one that pane's screen names, or `(unread)` when the screen names none — never the file's.
+the one that pane's screen names, or the seat's declared display marked `(declared, unread)`
+when the screen names none.
 
 A pane is its seat only while the process `team` launched is still in it. The state records, for
 each seat `up` or `add` launched, the pane's own shell process and the processes the launch left in
@@ -124,10 +125,11 @@ guards are in `docs/commands/up.md`.
 The model is the seat's `display` when the running model matches the file, and
 `<model> <version> (file: <display>)` when it doesn't. An effort word alone does not move the
 column: the model on the pane is still the file's. A screen that doesn't show the model is a
-`note` rather than a difference: `unread` is never wrong. A seat with a registry record shows
-that record's declared model marked `(declared)`, with a note naming the registry — the value is
-a declaration from the record, never a reading of the screen; a seat with no registry record
-keeps `<display> (unread)`.
+`note` rather than a difference: `unread` is never wrong. The column shows the seat's declared
+display marked `(declared, unread)`: the registry record's declaration when one exists, the file's
+or the state's retained one otherwise — with a note naming where the declaration comes from and
+that the screen reading is unread. The value is always a declaration, never a reading the screen
+confirmed.
 
 A record in force is not a note of its own: the live file is what the commands read, so nothing is
 compared against the record and the reading says nothing about it. A file with no record on this

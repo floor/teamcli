@@ -99,7 +99,7 @@ export interface Profile {
   /** Whether the CLI starts on its last-used model when a launch names none. */
   lastUsedModel: boolean;
   /** What the model column shows when this CLI's screen names no model: `launch` falls back
-   *  to the launch line's model, labelled; null keeps `(unread)`. */
+   *  to the launch line's model, labelled; null marks the display `(declared, unread)`. */
   unreadModel: 'launch' | null;
   /** The model and version a launch line's model id means, or null when unknown. */
   modelOf(launch: string): { model: string; version: string } | null;
