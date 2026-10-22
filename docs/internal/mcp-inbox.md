@@ -136,6 +136,35 @@ again, and no seat whose receipt exists is typed into.
 The evidence rule above still holds: the push marker is not a read, and only the signed receipt at
 `<id>.read.json` makes a channel delivery `delivered (read)`.
 
+## An install under a running server
+
+`serve` keeps the code it started with: installing a build under it neither reloads it nor ends
+it. Two rules close that gap, one on each side.
+
+The listener marker names the install the server started from — its `version`, its `build` (a
+short digest of the entry module it loaded) and the packed `head` when the package carries one. A
+sender of another version or another packed commit judges the marker stale and walks its next
+leg, exactly as it does for a dead pid, and a marker that records no identity cannot vouch for
+the server's code. The channel leg and the `mcp-inbox` leg both require a marker this build can
+vouch for.
+
+On every channel tick, and after each line its client writes, the server compares the install
+under it — the version and packed commit the installed entry names — with the one it started
+from. When they differ it stops its channel, closes its input, removes its marker and starts the
+installed entry with the same arguments and this process's stdio, then exits 0: the installed
+build reads the same stdin, so the calls that arrive there next are answered by it. A line the
+old process had already read is not replayed. When the installed entry cannot be started, the
+server says so on stderr and exits; the next launch starts the installed build.
+
+A sender that falls back from a stale channel listener has a second hazard: the old server still
+watches the folder and would push the record after the sender's own wake. Before it writes the
+record, when its walk holds a leg that wakes the seat (socket, native or typed), the sender
+writes `<id>.channel-held.json` at the push marker's own name — `{v, kind: "channel-held", id,
+at, reason}`. Every serving server, old or new, treats a marker for the id as a push already
+made and skips it. The marker is not a push: the sender's wait reads only the server's
+`channel-push` marker as delivery, and a wait that finds the held marker alone has delivered
+nothing.
+
 ## The evidence rule
 
 The receipt is the only evidence this leg produces, and it is written by `inbox_read` before the

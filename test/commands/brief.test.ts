@@ -211,7 +211,7 @@ async function runRollout(
 }
 
 /** The build the runs compare a listener marker against, unless a test pins another. */
-const BUILD: BuildIdentity = { version: '0.5.3-hotfix.1', build: '0123456789abcdef', builtAt: Date.parse(NOW_ISO) };
+const BUILD: BuildIdentity = { version: '0.5.3-hotfix.1', build: '0123456789abcdef', builtAt: Date.parse(NOW_ISO), head: null };
 
 /** A live listener marker in the seat's inbox, as a server leaves it. */
 function listener(seat: string, over: Partial<InboxListener> = {}): void {

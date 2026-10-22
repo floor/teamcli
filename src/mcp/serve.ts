@@ -14,6 +14,7 @@
 // seat notices a message when it calls `inbox_check`, with the drop-folder watch as the bounded
 // fall-back.
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -30,8 +31,8 @@ import { wakeHead } from '../send/native.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { readState } from '../state.ts';
-import { buildIdentity, version } from '../version.ts';
-import type { BuildIdentity } from '../version.ts';
+import { buildIdentity, installIdentity, version } from '../version.ts';
+import type { BuildIdentity, InstallIdentity } from '../version.ts';
 import {
   CHANNEL_CAPABILITY,
   CHANNEL_INSTRUCTIONS,
@@ -55,6 +56,7 @@ import {
   type BriefRead,
   type InboxListener,
 } from './inbox.ts';
+import { selfRunner } from './register.ts';
 
 /** The protocol version this server speaks when the client names one it does not know. */
 export const PROTOCOL_VERSION = '2025-06-18';
@@ -75,10 +77,42 @@ export type ServeOptions = { seat: string | undefined; session: string | undefin
 
 /** Where the server reads the message key, and the build it stamps on its listener marker. The
  *  launch uses the process's home; a test pins its own, so no read can reach the home of the
- *  machine running the suite, and may pin the build identity it asserts. */
-export type ServeHost = { home: string; build?: BuildIdentity };
+ *  machine running the suite, and may pin the build identity it asserts. `installed` is the
+ *  identity on disk now: a server started before an install compares it with its own and starts a
+ *  fresh process from the installed entry. When `build` is pinned without `installed`, the pinned
+ *  identity is also the installed one — a scene that states its build never reloads on its own.
+ *  `restart` stands in for the fresh process in a test; the launch starts the real one. */
+export type ServeHost = {
+  home: string;
+  build?: BuildIdentity;
+  installed?: () => InstallIdentity;
+  restart?: (installed: InstallIdentity) => void;
+};
 
 export const realServeHost: ServeHost = { home: homedir() };
+
+/** Whether the install on disk is still the one this process started from. The packed commit is
+ *  compared as well as the version: a package rebuilt from another commit under the same version
+ *  is another install, and its parsers are not this process's. */
+function installChanged(running: BuildIdentity, onDisk: InstallIdentity): boolean {
+  return running.version !== onDisk.version || (running.head ?? null) !== onDisk.head;
+}
+
+/** Starts a fresh server from the entry this process loaded and leaves this one. The new process
+ *  inherits the client's stdio, so it is the same MCP session; the listener marker is removed
+ *  before this is called, and the fresh process writes its own. A stdin line the old process had
+ *  already read is not replayed: the client's next call is the new process's first. */
+function restartSelf(): void {
+  const { command, entry } = selfRunner();
+  try {
+    spawn(command, [entry, ...process.argv.slice(2)], { stdio: 'inherit' }).unref();
+  } catch {
+    // The fresh process could not start: this session ends, and the next launch is the reload.
+    process.stderr.write('team mcp serve: the fresh server could not start; the next launch reloads\n');
+    return;
+  }
+  process.exit(0);
+}
 
 type Serving = {
   project: string;
@@ -206,11 +240,19 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
  * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker after
  * the notification; the signed record is never touched, and only `ack` (or `inbox_read`) writes
  * a read receipt.
+ *
+ * `notice`, when given, is read at the top of every tick: true means this process has been found
+ * to run an install that is no longer on disk, so it stops pushing and never writes another
+ * notification.
  */
-function watchChannel(serving: Serving, write: (line: string) => void): () => void {
+function watchChannel(serving: Serving, write: (line: string) => void, notice?: () => boolean): () => void {
   const seen = new Set<string>();
   let primed = false;
   const tick = (): void => {
+    if (notice !== undefined && notice()) {
+      clearInterval(timer);
+      return;
+    }
     const unread = listUnread(
       serving.dropDir,
       { to: serving.seat, root: serving.root, session: serving.session },
@@ -224,8 +266,9 @@ function watchChannel(serving: Serving, write: (line: string) => void): () => vo
     for (const message of unread) {
       if (seen.has(message.id)) continue;
       seen.add(message.id);
-      // An earlier server may have pushed this id before this one started; its marker is the
-      // push, and a second notification is a duplicate wake.
+      // An earlier server may have pushed this id before this one started, and a sender whose own
+      // walk takes the message leaves a held marker at the same name: either marker says this id
+      // is not to be pushed, and a second notification is a duplicate wake.
       if (channelPushHeld(serving.dropDir, message.id)) continue;
       const push = channelPushOf(serving, message.id);
       if (push === null) continue;
@@ -445,9 +488,34 @@ export async function runMcpServe(
     ts: new Date().toISOString(),
     version: build.version,
     build: build.build,
+    ...(build.head === null ? {} : { head: build.head }),
     ...(channel ? { channel: true as const } : {}),
   };
   if (!writeListener(dropDir, listener)) return refuse('the inbox listener marker could not be written');
+  // A server keeps the code it started with, and an install neither reloads it nor ends it. The
+  // installed identity is read from disk while this one serves: when it differs from the identity
+  // in this process, the channel stops pushing and the process is replaced by one started from
+  // the installed entry. A pinned build with no installed source is its own install, so a scene
+  // that states a build never reloads unless it says how.
+  const installedNow = host.installed ?? (host.build === undefined ? installIdentity : () => installIdentityOf(host.build as BuildIdentity));
+  const restart = host.restart ?? restartSelf;
+  let installed: InstallIdentity | null = null;
+  const notice = (): boolean => {
+    if (installed !== null) return true;
+    let onDisk: InstallIdentity;
+    try {
+      onDisk = installedNow();
+    } catch {
+      // An unreadable manifest proves nothing about the install; keep serving this one.
+      return false;
+    }
+    if (!installChanged(build, onDisk)) return false;
+    installed = onDisk;
+    // End the read loop; the restart happens after the listener is removed. Closing here is what
+    // lets the channel's own tick notice the install without waiting for a tool call.
+    streams.close?.();
+    return true;
+  };
   // The launch's own brief is served under the claim its state holds. The epoch is the one the
   // registration was started with, when it has one: a server started before a relaunch serves
   // nothing of the claim that relaunch wrote, until the seat is launched again.
@@ -471,17 +539,25 @@ export async function runMcpServe(
     channel,
     brief,
   };
-  const stopChannel = channel ? watchChannel(serving, streams.write) : null;
+  const stopChannel = channel ? watchChannel(serving, streams.write, notice) : null;
   try {
     for await (const line of streams.lines) {
       const reply = handleLine(line, serving);
       if (reply !== null) streams.write(reply);
+      // The call just answered ran this build's code; the next one runs the installed build's.
+      if (notice()) break;
     }
   } finally {
     stopChannel?.();
     streams.close?.();
     removeListener(dropDir, process.pid);
   }
+  if (installed !== null) restart(installed);
   // exit: mcp.serve-ended
   return 0;
+}
+
+/** The installed identity a pinned build stands for: its version and packed commit. */
+function installIdentityOf(build: BuildIdentity): InstallIdentity {
+  return { version: build.version, head: build.head };
 }
