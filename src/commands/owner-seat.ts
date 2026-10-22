@@ -15,11 +15,12 @@ import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { ownerSeatFile, readOwnerSeat, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
+import { writePolicySet } from '../policy/sources.ts';
 import { serveOwnerPage } from '../security/owner-page.ts';
 import { audit, MAX_PROFILE_DAYS, profileNameOf, proposeSecurityProfile, readSecurityProfile, securityProfileLine, signSecurityProfile } from '../security/profile.ts';
 
 export const USAGE = `Usage: team owner-seat [status] [--json]
-       team owner-seat setup --team <team> --signer <name> [--entity <entity>]
+       team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>]
        team owner-seat profile <strict|relaxed|dev> [--days <1-${MAX_PROFILE_DAYS}>] [--reason <text>] [--signer <name>]
        team owner-seat serve [--port <port>]
 
@@ -33,7 +34,7 @@ export default ownerSeat;
 
 export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeatOptions = {}): Promise<number> {
   const io = cleanedIo(rawIo);
-  const args = readArgs(argv, ['team', 'signer', 'entity', 'days', 'reason', 'port'], ['json']);
+  const args = readArgs(argv, ['team', 'signer', 'entity', 'days', 'reason', 'port', 'owner-signers', 'grant-emission'], ['json']);
   const home = options.home ?? homedir();
   const store = options.store ?? systemOwnerSeatKeyStore();
   const now = options.now ?? (() => new Date());
@@ -58,14 +59,24 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
     if (!made.ok) return refuse(made.why);
     // The owner's presence confirms the seat: one Touch ID (or login password) on this Mac. An
     // agent can create a Secure Enclave key, but only the owner can make it sign.
+    // The same Touch ID also covers the entity policies named here, so setup is one owner act.
     const signer = made.record.signers[0]!;
-    const confirmed = store.sign(signer.label, Buffer.from(`team-owner-seat-setup-v1\n${JSON.stringify({ team: made.record.team, public_key: signer.public_key })}`, 'utf8'), `Create the TeamCLI owner seat for ${made.record.team}`);
+    const policies: Array<{ name: string; value: unknown }> = [];
+    if (args.values['owner-signers'] !== undefined) policies.push({ name: 'owner-signers', value: args.values['owner-signers'].split(',').map((n) => n.trim()).filter(Boolean) });
+    if (args.values['grant-emission'] !== undefined) policies.push({ name: 'grant-emission', value: args.values['grant-emission'] });
+    const said = policies.length === 0 ? '' : ` and set ${policies.map((p) => `${p.name}=${Array.isArray(p.value) ? p.value.join(',') : String(p.value)}`).join(', ')}`;
+    const confirmed = store.sign(signer.label, Buffer.from(`team-owner-seat-setup-v1\n${JSON.stringify({ team: made.record.team, public_key: signer.public_key, entity: made.record.entity, policies })}`, 'utf8'), `Create the TeamCLI owner seat for ${made.record.team}${said}`);
     if (!confirmed.ok) {
       renameSync(ownerSeatFile(home), `${ownerSeatFile(home)}.unconfirmed-${now().getTime()}`);
       audit(home, 'seat-unconfirmed', { team: made.record.team, why: confirmed.why }, now());
       return refuse(`the owner did not confirm the seat (${confirmed.why}); nothing is registered`);
     }
-    audit(home, 'seat-registered', { team: made.record.team, signer: signer.name }, now());
+    audit(home, 'seat-registered', { team: made.record.team, signer: signer.name, policies }, now());
+    for (const p of policies) {
+      const wrote = writePolicySet(home, { level: 'entity', target: made.record.entity, name: p.name, value: p.value } as never, { now: now() });
+      if (!wrote.ok) return refuse(`seat registered, but policy ${p.name} was not set (${wrote.why})`);
+      io.stdout(`policy: entity ${made.record.entity} ${p.name} set\n`);
+    }
     io.stdout(`owner seat: registered owner@${made.record.team}, confirmed by Touch ID\nsigner: ${signer.name} (Secure Enclave)\n`);
     return 0;
   }

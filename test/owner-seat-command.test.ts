@@ -64,3 +64,13 @@ describe('team owner-seat', () => {
     expect((await run(['serve', '--port', '0'], h, s)).out).toMatch(/owner page: http:\/\/localhost:\d+\/\?t=/);
   });
 });
+
+describe('team owner-seat setup with policies', () => {
+  test('one confirmation registers the seat and sets the named entity policies', async () => {
+    const h = home(); const s = store();
+    const r = await run(['setup', '--team', 'floor', '--signer', 'mac', '--owner-signers', 'mac', '--grant-emission', 'conversational'], h, s);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('owner-signers set');
+    expect(r.out).toContain('grant-emission set');
+  });
+});
