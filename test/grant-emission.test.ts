@@ -429,6 +429,8 @@ describe('the owner seat approves with its own credential-store key', () => {
     const seat = JSON.parse(readFileSync(ownerSeatFile(w.home), 'utf8'));
     expect(seat).toMatchObject({ seat: 'owner', role: 'owner', human: true, lifecycle: 'running', signers: [{ name: 'mac', type: 'mac-keystore' }], provenance: { note: 'created for the human owner' } });
     expect(JSON.stringify(seat)).not.toContain('PRIVATE');
+    const signers = writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['mac'] }, { now: new Date() });
+    if (!signers.ok) throw new Error(signers.why);
     return { w, store };
   }
   const approve = (w: World, store: OwnerSeatKeyStore, id: string, word: string) => runGrant(['--approve-as-owner-seat', id, word], capture(w).io, { home: w.home, ownerSeatStore: store });

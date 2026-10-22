@@ -236,8 +236,8 @@ export function readOwnerSeat(home: string): OwnerSeatRecord | null {
   }
 }
 
-/** The signer names an entity accepts: its `owner-signers` policy, or every registered signer. */
-export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date = new Date()): { names: string[]; source: 'policy' | 'fallback' } | { why: string } {
+/** The signer names an entity accepts: its `owner-signers` policy. No policy, no signer (approvals.md rule 6: no fallback). */
+export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date = new Date()): { names: string[]; source: 'policy' } | { why: string } {
   let chain;
   try {
     chain = loadAndResolvePolicyChain({ home, entity: record.entity, projectId: null, teamRoot: null, team: null }, { now, upToLevel: 'entity' });
@@ -249,7 +249,7 @@ export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date
   if (mode !== undefined && mode !== 'any') return { why: `owner-signer-mode "${String(mode)}" is not one this build reads` };
   const listed = chain.policies['owner-signers']?.value;
   if (Array.isArray(listed)) return { names: listed.filter((n): n is string => typeof n === 'string'), source: 'policy' };
-  return { names: record.signers.map((s) => s.name), source: 'fallback' };
+  return { why: `no owner-signers policy is set for entity "${record.entity}"; no owner-seat answer is accepted (set it with team policy set entity owner-signers)` };
 }
 
 /** A signer's public key, confirmed against the credential store; fails closed. */

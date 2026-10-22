@@ -78,6 +78,11 @@ function io(cwd: string): { io: Io; out: () => string; err: () => string } {
   return { io: { stdout: (t) => { out += t; }, stderr: (t) => { err += t; }, cwd, env: {}, stdinIsTTY: false }, out: () => out, err: () => err };
 }
 
+function allowSigners(h: string, names: string[]): void {
+  const wrote = writePolicySet(h, { level: 'entity', target: 'floor', name: 'owner-signers', value: names }, { now: new Date() });
+  if (!wrote.ok) throw new Error(wrote.why);
+}
+
 const answerOf = (id: string, choice: OwnerSeatAnswer['choice'] = 'once'): OwnerSeatAnswer => ({ kind: 'grant', request_id: id, params_sha256: 'a'.repeat(64), choice, team: 'floor', seat: 'owner', at: new Date().toISOString() });
 
 describe('several owner signers, none preferred', () => {
@@ -92,6 +97,13 @@ describe('several owner signers, none preferred', () => {
     const assertion = phone.assert(a);
     const viaMac = { owner_seat_answer: a, signer: 'mac', signature: macSig };
     const viaPhone = { owner_seat_answer: a, signer: 'phone', signature: assertion.signature, webauthn: { authenticator_data: assertion.authenticator_data, client_data_json: assertion.client_data_json } };
+    // No owner-signers policy: fail closed, no fallback to every registered signer (approvals.md rule 6).
+    for (const unset of [viaMac, viaPhone]) {
+      const refused = verifyOwnerAnswer(h.home, unset, store);
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.why).toContain('no owner-signers policy is set');
+    }
+    allowSigners(h.home, ['mac', 'phone']);
     expect(verifyOwnerAnswer(h.home, viaMac, store).ok).toBe(true);
     expect(verifyOwnerAnswer(h.home, viaPhone, store).ok).toBe(true);
     // A passkey assertion over another answer, without user presence, or for another relying party fails.
@@ -113,6 +125,7 @@ describe('several owner signers, none preferred', () => {
     registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store);
     const phone = passkey('owner.example');
     addOwnerSigner(h.home, { signer: 'phone', type: 'webauthn', publicKey: phone.publicKey, credentialId: 'Y3JlZGVudGlhbC1pZA', rpId: 'owner.example' }, store);
+    allowSigners(h.home, ['mac', 'phone']);
     const attacker = passkey('owner.example');
     const record = JSON.parse(readFileSync(ownerSeatFile(h.home), 'utf8'));
     record.signers[1].public_key = attacker.publicKey;
@@ -132,6 +145,7 @@ describe('team init approved by the owner seat', () => {
     const h = home(label);
     const store = fakeStore();
     expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    allowSigners(h.home, ['mac']);
     const sources = (now?: Date) => ({ loggedIn: () => true, ownerSeatStore: store, ...(now ? { now: () => now } : {}) });
     const run = async (cwd: string, argv: string[], now?: Date) => {
       const c = io(cwd);
