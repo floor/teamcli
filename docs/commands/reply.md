@@ -37,8 +37,8 @@ closed thread is refused, naming what ended it, and nothing is written.
 The answered record moves to `replied`: the reply writes a signed receipt (`<id>.replied.json`)
 beside the message it answers, in the answering seat's own folder. The reply is delivered the way
 the drop leg delivers — the record is left in the target's folder, nothing is typed and no frame
-is sent — and the receiving seat's own watch rings
-`Team: run team drops --read --seat <seat> --session <session>`; a
+is sent — and the receiving seat's own watch rings the message-display wake line: the rendered
+header and the fixed `Read it with: team drops --read.` hint. A
 [team send --wait](send.md) waiting on that thread wakes on the reply record and returns
 `answered`. A reply's text is
 kept in the record, and the project's message history keeps one line for it, with `thread`,
