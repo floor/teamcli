@@ -19,8 +19,9 @@ reading decides the quiet a mark above needs, and `team check` and the watch tak
 attention from it too.
 
 A seat's model is the one its screen names, checked against the file's. A screen that names none
-is a note, never a difference: the column reads `<display> (unread)`, or `<display> (declared)`
-when the value is the registry record's own declaration rather than anything the screen showed.
+is a note, never a difference: the column shows the seat's declared display marked
+`(declared, unread)` — the registry record's declaration when one exists, otherwise the file's or
+the state's retained one — so the value is never presented as a reading the screen confirmed.
 
 A pane that no longer holds the process `team` launched is not by itself a difference: when a
 program `team` did not launch is in front and the agent session the seat's records bind — its

@@ -127,7 +127,7 @@ status_model:
     yields: [Grok]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
 # A question widget replaces the box, and no rule reads a model off it. The model column then
-# falls back to the launch line's model, labelled, never `(unread)`.
+# falls back to the launch line's model, labelled, never the bare unread marker.
 unread_model: launch
 screen:
   unknown:
