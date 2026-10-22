@@ -131,7 +131,7 @@ screen:
       # The pane's rotating prompt hint, drawn greyed in the input row between the Voice input
       # rules; confirmed on a running 1.4.11 pane, which drew it as the box's whole input.
       - equals: 'Tab queues or steers while a run is active'
-    # A 1.4.11 pane draws one empty row under a typed line, inside the box, before the closing
-    # rule (captured: the rules line typed into the ready box and left unsent). It is the box's
-    # frame, not the text's; stripping it is what lets the captured line read back exactly.
-    frame_rows: 1
+    # A 1.4.11 pane draws a typed newline as an empty row under the line, inside the box, before
+    # the closing rule (captured: the rules line with an Enter pressed on it). It is a row of the
+    # text, not the box's frame: the pre-Enter frame draws the line alone, so no rows are stripped
+    # and a trailing empty row never reads back as the line.

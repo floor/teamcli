@@ -1982,6 +1982,13 @@
       "provenance": "capture"
     },
     {
+      "file": "muse/1.4.11/typed-before-enter.txt",
+      "cli": "muse",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "muse/1.4.11/placeholder-synthetic.txt",
       "cli": "muse",
       "classify": "idle",

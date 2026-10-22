@@ -435,7 +435,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 2,
+        "real": 3,
         "constructed": 1,
         "undocumented": 0
       },
@@ -2186,6 +2186,12 @@
     },
     {
       "file": "muse/1.4.11/rules-line-unsent.txt",
+      "cli": "muse",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/typed-before-enter.txt",
       "cli": "muse",
       "kind": "unsent",
       "provenance": "capture"
