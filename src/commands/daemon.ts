@@ -34,7 +34,7 @@ import type { DaemonHost } from '../send/daemon.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
-import { version as installedVersion } from '../version.ts';
+import { version as installedVersion, gitHead as installedGitHead } from '../version.ts';
 
 export const USAGE = `Usage: team daemon status [--json]
        team daemon run [--root <folder>] [--started-by <source>] [--presence] [--watch]
@@ -82,6 +82,8 @@ export type DaemonCommandSources = {
   program?: { execPath: string; entry: string } | null;
   now?: () => Date;
   version?: string;
+  /** Injected for tests: the packaged commit; null in a source checkout. */
+  gitHead?: string | null;
   heartbeatMs?: number;
   /** Injected for tests: never the real pane/herdr sources. */
   sendHost?: DaemonHost;
@@ -522,6 +524,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       roots,
       startedBy,
       version: sources.version ?? installedVersion(),
+      gitHead: sources.gitHead === undefined ? installedGitHead() : sources.gitHead,
       ...(sources.now !== undefined ? { now: sources.now } : {}),
       ...(sources.heartbeatMs !== undefined ? { heartbeatMs: sources.heartbeatMs } : {}),
       ...(sources.sendHost !== undefined ? { sendHost: sources.sendHost } : {}),

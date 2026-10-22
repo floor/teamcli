@@ -130,6 +130,8 @@ export type StartMachineDaemonInput = {
   roots: string[];
   startedBy?: string;
   version: string;
+  /** The packaged commit this build was installed from; null or absent in a source checkout. */
+  gitHead?: string | null;
   now?: () => Date;
   /** How often the state record's heartbeat is refreshed. */
   heartbeatMs?: number;
@@ -301,6 +303,7 @@ function snapshotOf(fields: {
   since: string;
   startedBy: string;
   version: string;
+  gitHead?: string | null;
   heartbeatAt: string;
   features: DaemonFeatures;
   stuck: DaemonStuckRequest[];
@@ -312,6 +315,7 @@ function snapshotOf(fields: {
     since: fields.since,
     startedBy: fields.startedBy,
     version: fields.version,
+    ...(fields.gitHead === undefined ? {} : { gitHead: fields.gitHead }),
     heartbeatAt: fields.heartbeatAt,
     stuck: fields.stuck,
     features: fields.features,
@@ -528,6 +532,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       since,
       startedBy,
       version: input.version,
+      gitHead: input.gitHead ?? null,
       heartbeatAt,
       features,
       stuck: stuckNow(),
@@ -546,6 +551,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         since,
         startedBy,
         version: input.version,
+        gitHead: input.gitHead ?? null,
         heartbeatAt,
         socket: socketPath,
         features,

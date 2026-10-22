@@ -105,6 +105,10 @@ export type DaemonState = {
    *  platform's own name for its service manager. */
   startedBy: string;
   version: string;
+  /** The commit the running build was packaged from; null in a source checkout. It is written
+   *  beside the version, so a reader can tell an install that changed either one from one that
+   *  changed neither. Older records carry no field and read as null. */
+  gitHead?: string | null;
   heartbeatAt: string;
   socket: string;
   features: DaemonFeatures;
@@ -172,6 +176,7 @@ function stateOf(record: Record<string, unknown>): DaemonState | null {
     since: record.since as string,
     startedBy: record.startedBy as string,
     version: record.version as string,
+    gitHead: typeof record.gitHead === 'string' && record.gitHead !== '' ? record.gitHead : null,
     heartbeatAt: record.heartbeatAt as string,
     socket: record.socket as string,
     features: { broker: (features as Record<string, unknown>).broker as DaemonFeatures['broker'] },
