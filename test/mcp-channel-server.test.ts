@@ -157,6 +157,9 @@ describe('the channel declaration', () => {
       expect(io.out).toBe('');
       expect(io.err).toBe('');
       expect(replies[0]!.result.capabilities).toEqual({ tools: {}, experimental: { 'claude/channel': {} } });
+      // The launch's protocol negotiation is pinned to the legacy revision, and the declaration
+      // answers in the same one: the channel is loaded on 2024-11-05, never a newer revision.
+      expect(replies[0]!.result.protocolVersion).toBe('2024-11-05');
       expect(replies[0]!.result.instructions).toContain('call the ack tool');
       expect(replies[1]!.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['inbox_check', 'inbox_read', 'ack']);
     } finally {
