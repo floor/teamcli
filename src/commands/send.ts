@@ -65,9 +65,9 @@ import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
 import { modelDiffers, runningModel } from '../status/statusline.ts';
 
-export const USAGE = `Usage: team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
-       team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
-       team send <seat> --brief <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+       team send <seat> --brief <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
        team send --client <grant-file> --key <key-file> <address> [--request-id <id>] <message>
        team send --client <grant-file> --key <key-file> <address> [--request-id <id>] --file <path>
        team send --confirm <id> [--json] [--dry-run]
@@ -211,6 +211,11 @@ about on stderr, on either form, because a reader cannot open a file it was not
 given. A multiline body that looks like terminal output — two or more lines
 starting with a check mark or a bracketed number — is warned about on stderr and
 sent unchanged, never cut.
+
+--subject writes one display line beside the body: it fills the {subject} slot
+of the message-display template and never stands in for {summary}, which is
+always the body's own first content line. The word is sanitised like every
+other field; a blank --subject is no subject at all.
 
 A Claude Code seat's native leg is the sender's own cross-session SendMessage, which this
 process cannot make for it. A sender whose own file declares Claude Code gets the handoff
