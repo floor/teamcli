@@ -25,8 +25,10 @@ import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
 import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
+import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import {
   clearPending,
+  markRedelivered,
   PENDING_MAX_AGE_MS,
   PENDING_MAX_TRIES,
   readPending,
@@ -72,13 +74,26 @@ export type RetryScene = {
   /** The pass's native hold by seat: nothing is typed at a seat whose presence proves a turn, a
    *  person wait, a session end, or cannot be trusted. Absent, the retry is exactly today's. */
   nativeHeld?: ReadonlySet<string>;
+  /** The channel's one redelivery over the socket: a push no receipt confirmed is written as a
+   *  frame to the receiving session. Absent, the redelivery goes straight to the typed leg. */
+  socketRedeliver?(dropDir: string, drop: PendingDrop): Promise<{ ok: true } | { ok: false; reason: string }>;
 };
 
 /** The drop's words, minus the trigger line: one sentence for the watch's log. An inbox send
  *  was `sent (unconfirmed)` rather than held — the seat's own client never read it — and the
  *  watch typing it is the fallback its bound promises, not a retry. */
 function heldWords(drop: PendingDrop): string {
-  return drop.leg === 'mcp-inbox' ? `an inbox send from ${drop.from}` : `a held send from ${drop.from}`;
+  if (drop.leg === 'mcp-inbox') return `an inbox send from ${drop.from}`;
+  if (drop.leg === 'channel') return `a channel send from ${drop.from}`;
+  return `a held send from ${drop.from}`;
+}
+
+/** Why this marker's delivery ended on another leg, as the history line's failed note. The
+ *  inbox's bound and the channel's one redelivery both say so on the same line the retry writes. */
+function failedNotes(drop: PendingDrop): { failed?: string[] } {
+  if (drop.leg === 'mcp-inbox') return { failed: [INBOX_FALLBACK_REASON] };
+  if (drop.leg === 'channel' && drop.redelivered !== undefined) return { failed: [CHANNEL_UNCONFIRMED_REASON] };
+  return {};
 }
 
 /** The drop is out of retries: forget the marker and say where the message is, so it can be
@@ -191,7 +206,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
           id: drop.id,
           outcome: 'delivered (read)',
           via: 'typed',
-          ...(drop.leg === 'mcp-inbox' ? { failed: [INBOX_FALLBACK_REASON] } : {}),
+          ...failedNotes(drop),
         });
       }
       scene.say(`${drop.to}: ${heldWords(drop)} was read on retry (receipt)`, false);
@@ -223,7 +238,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
             via: 'typed',
             // A typed fall-through is the inbox leg's own bound ending: the history line says why
             // the same drop file was typed after the seat's client left it unread.
-            ...(drop.leg === 'mcp-inbox' ? { failed: [INBOX_FALLBACK_REASON] } : {}),
+            ...failedNotes(drop),
           });
         }
         scene.say(`${drop.to}: ${heldWords(drop)} was read on retry (receipt)`, false);
@@ -259,7 +274,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
           via: 'typed',
           // A typed fall-through is the inbox leg's own bound ending: the history line says why
           // the same drop file was typed after the seat's client left it unread.
-          ...(drop.leg === 'mcp-inbox' ? { failed: [INBOX_FALLBACK_REASON] } : {}),
+          ...failedNotes(drop),
         });
       }
       scene.say(`${drop.to}: ${heldWords(drop)} was sent on retry (${note})`, false);
@@ -279,6 +294,56 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
   } finally {
     lock.release();
   }
+}
+
+/**
+ * The channel's one redelivery: a push whose confirmation window ended with no signed receipt is
+ * written again through the next leg — the receiving session's socket, then the typed trigger —
+ * and the marker is marked before either attempt, so no later pass can redeliver it. A receipt
+ * that landed first is the read itself: nothing is typed and the record is settled, exactly as
+ * the promotion pass would settle it. A socket delivery writes its own receipt and history line;
+ * the typed leg is the ordinary retry, whose history line carries `redelivered: channel
+ * unconfirmed` as the failed note. A pane this pass cannot type at spends the one redelivery all
+ * the same: the marker says the watch tried, and the message stays where a person can send it
+ * again.
+ */
+async function redeliverChannel(scene: RetryScene, cli: string, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
+  const home = scene.home;
+  if (home === undefined) {
+    giveUp(scene, dropDir, drop, 'this watch has no home to verify its sender with');
+    return;
+  }
+  const receipt = (): boolean => receiptHeld(dropDir, drop.id, { to: drop.to, root: scene.root, session: scene.session }, home, claimBindingIn(scene.root, scene.session, drop.to, drop.id));
+  // A receipt that arrived after the promotion pass read the markers is the read itself: an
+  // acknowledged message is never touched again.
+  if (receipt()) {
+    clearPending(dropDir, drop.id);
+    appendHistory(scene.team.project, scene.root, home, {
+      ts: scene.now.toISOString(),
+      from: drop.from,
+      to: drop.to,
+      body: drop.body,
+      id: drop.id,
+      outcome: 'delivered (read)',
+      via: 'channel',
+    });
+    scene.say(`${drop.to}: a channel send from ${drop.from} was read (receipt)`, false);
+    return;
+  }
+  markRedelivered(dropDir, drop, CHANNEL_UNCONFIRMED);
+  const marked: PendingDrop = { ...drop, redelivered: CHANNEL_UNCONFIRMED };
+  if (scene.socketRedeliver !== undefined) {
+    const socket = await scene.socketRedeliver(dropDir, marked);
+    if (socket.ok) {
+      // The socket attempt wrote the signed receipt and its own history line, marked with the
+      // channel's own note; the marker has nothing left to say.
+      clearPending(dropDir, drop.id);
+      scene.say(`${drop.to}: a channel send from ${drop.from} was redelivered on the socket`, false);
+      return;
+    }
+    scene.say(`${drop.to}: a channel send from ${drop.from} was not confirmed; the socket was not taken (${socket.reason}), typing the trigger`, false);
+  }
+  await retryOne(scene, cli, pane, dropDir, marked);
 }
 
 /**
@@ -314,12 +379,15 @@ export function promoteInboxDrops(scene: RetryScene): ReadonlySet<string> {
           id: drop.id,
           outcome: 'delivered (read)',
           via: drop.leg,
+          ...(drop.leg === 'channel' && drop.redelivered !== undefined ? { failed: [CHANNEL_UNCONFIRMED_REASON] } : {}),
         });
       }
       scene.say(
         drop.leg === 'drop'
           ? `${seat.name}: a dropped send from ${drop.from} was read in its drop folder`
-          : `${seat.name}: an inbox send from ${drop.from} was read in its inbox`,
+          : drop.leg === 'channel'
+            ? `${seat.name}: a channel send from ${drop.from} was read (receipt)`
+            : `${seat.name}: an inbox send from ${drop.from} was read in its inbox`,
         false,
       );
     }
@@ -368,12 +436,19 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
     const pane = agents.length === 1 ? agents[0]?.pane : undefined;
     if (pane === undefined || pane === scene.ownPane) continue;
-    // A typed marker is the retry's own business and always goes first. An inbox marker is typed
-    // only once its fallback window has ended — before that the seat's own client still has the
-    // message, and typing the trigger would race a read that is about to happen. A drop marker
-    // appears in neither find: nothing is ever typed for it.
+    // A typed marker is the retry's own business and always goes first. A channel marker is
+    // redelivered once, after its confirmation window and only while no redelivery is recorded.
+    // An inbox marker is typed only once its fallback window has ended — before that the seat's
+    // own client still has the message, and typing the trigger would race a read that is about to
+    // happen. A drop marker is in none of the finds: nothing is ever typed for it.
+    const channelDue = live.find(
+      (one) => one.leg === 'channel' && one.redelivered === undefined && now - Date.parse(one.ts) > CHANNEL_CONFIRM_MS,
+    );
     const drop = live.find((one) => one.leg === undefined)
+      ?? channelDue
       ?? live.find((one) => one.leg === 'mcp-inbox' && now - Date.parse(one.ts) > INBOX_FALLBACK_MS);
-    if (drop !== undefined) await retryOne(scene, seat.cli, pane, dropDir, drop);
+    if (drop === undefined) continue;
+    if (drop.leg === 'channel') await redeliverChannel(scene, seat.cli, pane, dropDir, drop);
+    else await retryOne(scene, seat.cli, pane, dropDir, drop);
   }
 }

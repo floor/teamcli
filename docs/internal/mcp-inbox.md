@@ -65,6 +65,9 @@ Every wait on the leg is bounded.
 | `INBOX_FALLBACK_MS` | 10 minutes | how long the watch leaves an unread inbox drop to the seat's own client before typing the drop's trigger |
 | `PENDING_MAX_TRIES` | 3 | typed retries once the fall-through starts |
 | `PENDING_MAX_AGE_MS` | 30 minutes | the marker's whole life, from the send |
+| `CHANNEL_TICK_MS` | 250 ms | how often a serving inbox looks for a record it has not pushed yet |
+| `CHANNEL_PUSH_GRACE_MS` | 2000 ms | how long `team send` waits for the server's push marker after writing the record |
+| `CHANNEL_CONFIRM_MS` | 3 minutes | how long a push waits for its signed read receipt before the one redelivery |
 
 A send with no receipt in the grace prints `sent (unconfirmed)`, keeps the drop and the marker,
 and ends the walk there: the message is safe, and the seat's client may still read it. The watch
@@ -80,6 +83,58 @@ and a drop that runs out of bounds is reported with its path rather than lost.
 
 `team feed` shows one row per message: a later line for the same id — receipt, fall-back or taken
 report — replaces the earlier outcome, and a `--follow` pass prints the update when it arrives.
+
+## The channel, when the launch carries the flag
+
+A seat's launch line may start its client with a development channel naming this server:
+`--dangerously-load-development-channels server:team-inbox`. That flag is the whole eligibility
+test on the server side. Only then does `serve` declare `experimental["claude/channel"]`, serve
+the `ack` tool beside `inbox_check` and `inbox_read`, and give its client one instruction — call
+`ack` with the id from a notification's meta in the same handling turn, before reading or acting
+on the message. No `claude/channel/permission` capability is ever declared: this server asks the
+person for nothing. A launch without the flag is the ordinary inbox server, with no capability,
+no instructions, no push and no `ack`, and the listener marker it writes carries no `channel`
+word.
+
+Every signed record that arrives after the server primes is pushed once as
+`notifications/claude/channel` with `{content, meta}`. Mail already waiting when the server starts
+is left to `inbox_check`, so a fresh session starts quiet. The content opens with the
+message-display header and carries the signed body whole; the meta carries identifiers only —
+`{id, from, seat, team}`. A record a client wrote, the seat's own general brief, and a record that
+does not verify with the home's message key are never pushed. After writing the notification the
+server writes `<id>.channel-push.json` beside the record, whole, mode 0600, with `wx` so a second
+write cannot replace it: `{v, kind: "channel-push", id, seat, session, root, at, meta,
+content_sha256, status: "sent (channel)"}`. That marker is the proof the notification was written,
+never the proof it was read, and a record already holding one is not pushed a second time.
+
+The transport acknowledges nothing. T1's independent replay of a spike server measured only the
+visible wrapper line, `← team: Message from Agamemnon`, with that spike server named `team`; the
+`ack` call is the only channel receipt. `ack` takes the id from the meta and writes the signed
+read receipt `team ack` writes — `{status: "read", read_by: "channel"}` at `<id>.read.json`,
+published with the same exclusive, no-clobber link as `inbox_read`. An id this inbox does not
+hold, a record addressed to another seat, session or checkout, a record a client wrote, the
+general brief, a record that does not verify, and a receipt name held by a file that does not
+verify for this message are each a tool error with no receipt. A verifying receipt already at the
+name means the message was already acknowledged: the call answers `{acknowledged, written:
+false}` and no receipt is rewritten, so `ack`, `inbox_read` and `team ack` all find the same
+evidence.
+
+`team send` walks the channel first only when the seat declares no order, the receiver's CLI is
+claude-code, the launch carries the flag naming this server, and the seat's live listener marker
+says `channel: true`. It writes the signed record and waits `CHANNEL_PUSH_GRACE_MS` for the push
+marker; the marker present ends the walk as `sent (channel)` with the pending marker's
+`leg: channel`. No marker clears that pending marker, records `channel: no push receipt within
+<n> ms` in the history line's `failed`, and continues the walk to the next leg — the inbox server
+still reads the record it holds. The watch promotes a signed receipt to one `delivered (read)`
+line and types nothing; no receipt after `CHANNEL_CONFIRM_MS` is the one case it redelivers. It
+redelivers exactly once, through the next leg — a socket frame when the seat's socket is eligible,
+else the typed trigger — and stamps the marker and the history line with `redelivered: channel
+unconfirmed` before the attempt, so no later pass selects it again. A receipt that arrives after
+the redelivery settles the message as `delivered (read)`; an acknowledged record is never touched
+again, and no seat whose receipt exists is typed into.
+
+The evidence rule above still holds: the push marker is not a read, and only the signed receipt at
+`<id>.read.json` makes a channel delivery `delivered (read)`.
 
 ## The evidence rule
 
@@ -118,6 +173,9 @@ is ever derived from pane text or a status.
 The behaviour is pinned by these suites, run with `bun test`:
 
 - `test/mcp-inbox-server.test.ts` — the stdio server: tools, receipts, seat binding, refusals;
+- `test/mcp-channel-server.test.ts` — the channel declaration, push and meta, the push marker and
+  `ack`;
+- `test/channel-leg.test.ts` — the send side's channel walk and the watch's one redelivery;
 - `test/mcp-register.test.ts` — per-CLI routes, exact argv, the git rule, the file merge and its
   refusals;
 - `test/launch/inbox-launch.test.ts` — registration happens before the launch command, and a
