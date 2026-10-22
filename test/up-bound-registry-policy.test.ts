@@ -4,8 +4,8 @@
 // an override. A kept seat and a real relaunch must keep the bound recipe in the seat state, the
 // agent registry and the session start — the base recipe, never the expanded launch argv — and
 // their next plan must be a plain skip. A seat with no record, a refused one (a stale state
-// handle or copy, another herdr session, an orphaned record), a retired one and a fresh seat all
-// plan the declared line instead. Every reading is a fixture: no live herdr, registry, provider
+// handle or copy, another terminal session, an orphaned record), a retired one and a fresh seat all
+// plan the declared line instead. Every reading is a fixture: no live terminal host, registry, provider
 // or pane. The pane's model and its measured conversation come from the command the fake ran.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -110,7 +110,7 @@ function setup(): void {
 type RecordOptions = {
   /** Fields written over the launch record the binding was written from. */
   state?: Partial<SeatState>;
-  /** The herdr session the agent record was written in. */
+  /** The terminal session the agent record was written in. */
   reachSession?: string;
   orphanedAt?: string;
   retired?: boolean;
@@ -195,7 +195,7 @@ function sessionFor(command: string): string | null {
   return /(?:--resume|--session-id)(?:=|\s+)['"]?([A-Za-z0-9][A-Za-z0-9._:-]*)/.exec(command)?.[1] ?? null;
 }
 
-/** One synthetic herdr session: the worker's recorded pane, and whatever a run makes. The
+/** One synthetic terminal session: the worker's recorded pane, and whatever a run makes. The
  *  pane's model and session are read back from the command, never asserted into place. */
 function makeWorld(
   first: { screen: string; live?: string; status?: string } | null,
@@ -472,7 +472,7 @@ test('a state handle that disagrees with the record is not this seat: the declar
   expect(dry.out).not.toContain(A.launch);
 });
 
-test('a record written in another herdr session is not this seat: the declared line is planned', async () => {
+test('a record written in another terminal session is not this seat: the declared line is planned', async () => {
   recordValid({ reachSession: 'other-session' });
   const made = makeWorld({ screen: IDLE_A });
   const dry = testIo(root, { kind: 'owner' });
