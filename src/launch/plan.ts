@@ -303,8 +303,6 @@ export interface UpSeat {
    * the stored process is left as it is.
    */
   sessionDoubt?: string;
-  /** The doubt is a refusal: the seat is left out and the run exits 1. Nothing is closed. */
-  doubtHeld?: boolean;
   /** The doubt's screen is working: the seat keeps its record, nothing is closed, and the run
    *  reports it as skipped working — not as a refusal. */
   doubtWorking?: boolean;
@@ -532,27 +530,26 @@ export function upPlan(input: UpInput): Step[] {
       continue;
     }
     if (seat.sessionDoubt) {
-      if (seat.doubtHeld && !seat.doubtWorking) {
+      // The pane holds a process this record cannot tie to the launch. A working screen is left
+      // to finish its turn and reported as skipped working, so the run does not fail. Any other
+      // unresolved doubt is a refusal and holds the run — the stored ready stage does not turn
+      // it into success: nothing was proven, and nothing was closed.
+      if (seat.doubtWorking) {
         steps.push({
           kind: 'skip',
           text: `${seat.name}: ${seat.sessionDoubt}`,
-          do: {
-            do: 'record',
-            seat: seat.name,
-            record: { kind: 'left out', reason: seat.sessionDoubt },
-            held: true,
-          },
-        });
-      } else if (seat.stage === 'ready') {
-        steps.push({
-          kind: 'skip',
-          text: `${seat.name}: ${seat.sessionDoubt}`,
-          do: {
-            do: 'record',
-            seat: seat.name,
-            record: { kind: 'ready' },
-            detail: `  ${seat.sessionDoubt}\n`,
-          },
+          do: seat.stage === 'ready'
+            ? {
+                do: 'record',
+                seat: seat.name,
+                record: { kind: 'ready' },
+                detail: `  ${seat.sessionDoubt}\n`,
+              }
+            : {
+                do: 'record',
+                seat: seat.name,
+                record: { kind: 'left out', reason: seat.sessionDoubt },
+              },
         });
       } else {
         steps.push({
@@ -562,6 +559,10 @@ export function upPlan(input: UpInput): Step[] {
             do: 'record',
             seat: seat.name,
             record: { kind: 'left out', reason: seat.sessionDoubt },
+            // The refusal's own sentence stays the record's stderr detail, as the stored-ready
+            // record carried it before the seat was refused.
+            detail: `  ${seat.sessionDoubt}\n`,
+            held: true,
           },
         });
       }
