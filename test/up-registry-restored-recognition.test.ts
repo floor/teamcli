@@ -307,8 +307,8 @@ test('a working pane nothing ties is left out as a working skip, nothing closed 
   record(RECORD);
   // The pane runs another conversation and reads working: this is the doubt the close refuses
   // to resolve. A working doubt is a restore skip, not a failed run: the record stays ready,
-  // the reason is on stderr, and the run exits clean (FLO-1061 restore buckets; `skipped
-  // (working)` is M in the owner summary).
+  // the reason is on stderr, and the run exits clean (`skipped (working)` is M in the owner
+  // summary).
   const made = sources('ses_other', { status: 'working' });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(0);
