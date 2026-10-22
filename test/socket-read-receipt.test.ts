@@ -11,7 +11,7 @@ import { mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync, utimesS
 import { join } from 'node:path';
 import { listDrops } from '../src/commands/drops.ts';
 import { listUnacked } from '../src/commands/messages.ts';
-import { runSend } from '../src/commands/send.ts';
+import { runSend, sendDirect } from '../src/commands/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
@@ -334,6 +334,27 @@ test('a seat with no nickname opens the frame with its written label name, and w
   expect(await runSend(['lead', 'from the blank'], fromBlank, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
   expect(frameContent(again.frames[0] as string).startsWith('Message from blank (blank@acme)\n\n')).toBe(true);
+});
+
+test('a direct-only push leaves the record unread: its receiving runtime is the reader', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made);
+  declare(made);
+  const host = fake(made);
+
+  const run = await sendDirect(owner(made.root), host, { seat: 'lead', pane: 'w1:p1', cli: 'claude-code', body: 'run team next' });
+
+  expect(run.code).toBe(0);
+  expect(run.result?.route).toBe('socket');
+  expect(host.frames).toHaveLength(1);
+  const drops = dropDir(made.dir, 'lead');
+  const id = recordName(drops);
+  // The watch's push is a request: the receiver's own read gate serves it and writes its receipt
+  // then, so the send itself must leave the record unread.
+  expect(readdirSync(drops).filter((name) => name.endsWith('.read.json'))).toEqual([]);
+  const context = { to: 'lead', root: realpathSync(made.root), session: 'acme' };
+  expect(listUnread(drops, context, made.home).map((message) => message.id)).toEqual([id]);
 });
 
 test('a seat sender opens the frame with its nickname, and with its seat name when the roster holds none', async () => {

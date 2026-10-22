@@ -3700,21 +3700,28 @@ async function deliverSocketFrame(
     return { kind: 'held', reason: HELD_FRAME_REASON };
   }
   // The frame was taken and no held dialog answered it: the receiving session has the message,
-  // so the record is read now. The signed receipt is what keeps the watch from ringing for a
-  // message the socket already delivered, and what keeps `team drops --read` and `team messages`
-  // from serving it again — the same receipt a reader would have written. A held frame returned
-  // above writes none: it was not a delivery, and the watch's retry stays the attempt.
-  try {
-    const receipt = signReceiptPayload(
-      { kind: 'receipt', status: 'read', id: msgId, to: payload.to, root: payload.root, session: payload.session, at: host.now().toISOString(), read_by: SOCKET_READ_BY },
-      host.home,
-    );
-    const receiptWrite = writeReceipt(copy.dir, receipt, host.home);
-    if (!receiptWrite.ok) {
-      logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written (${receiptWrite.reason})`, host.now());
+  // so an ordinary send's record is read now. The signed receipt is what keeps the watch from
+  // ringing for a message the socket already delivered, and what keeps `team drops --read` and
+  // `team messages` from serving it again — the same receipt a reader would have written. A held
+  // frame returned above writes none: it was not a delivery, and the watch's retry stays the
+  // attempt.
+  //
+  // A direct-only run is the watch's own dispatch, and there the frame is a request: the
+  // receiving runtime reads it through the read gate and acts on it, so the send leaves the
+  // record unread — a receipt here would stop the very reader the push exists for.
+  if (host.direct === undefined) {
+    try {
+      const receipt = signReceiptPayload(
+        { kind: 'receipt', status: 'read', id: msgId, to: payload.to, root: payload.root, session: payload.session, at: host.now().toISOString(), read_by: SOCKET_READ_BY },
+        host.home,
+      );
+      const receiptWrite = writeReceipt(copy.dir, receipt, host.home);
+      if (!receiptWrite.ok) {
+        logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written (${receiptWrite.reason})`, host.now());
+      }
+    } catch {
+      logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written`, host.now());
     }
-  } catch {
-    logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written`, host.now());
   }
   if (!wait) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
