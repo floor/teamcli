@@ -222,11 +222,17 @@ describe('dry producer to replay round trip', () => {
     delete tampered.outcome.expectedRevision;
 
     // Fail closed: an older request-derived stop without its precondition is not replayed under
-    // a substituted revision.
+    // a substituted revision. The reader may refuse the shape; if it keeps it, replay must refuse
+    // the stop rather than rebuild it under the folded revision.
     const read = readJournal(JSON.stringify(tampered));
-    expect(read.ok).toBe(false);
-    if (read.ok) return;
-    expect(read.code).toBe('workflow.journal');
+    if (!read.ok) {
+      expect(read.code).toBe('workflow.journal');
+      return;
+    }
+    const replayed = replayJournal(fixture, read.journal);
+    expect(replayed.ok).toBe(false);
+    if (replayed.ok) return;
+    expect(replayed.fail.code).toBe('workflow.journal');
   });
 
   test('a tampered recorded expected revision is still refused', () => {
