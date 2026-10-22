@@ -74,3 +74,12 @@ describe('team owner-seat setup with policies', () => {
     expect(r.out).toContain('grant-emission set');
   });
 });
+
+describe('team owner-seat serve without a seat', () => {
+  test('refuses at once instead of serving a page nothing could sign on', async () => {
+    const h = home();
+    const r = await run(['serve', '--port', '0'], h, store());
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('no owner seat is registered yet');
+  });
+});

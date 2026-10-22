@@ -93,7 +93,7 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
     const seat = readOwnerSeat(home)!;
     const signer = seat.signers.find((s) => s.name === proposed.body.signer)!;
     if (signer.type === 'webauthn') {
-      io.stdout(`security profile ${name} until ${proposed.body.expires} proposed for passkey "${signer.name}"\nthe owner approves it on the owner page (team owner-seat serve), challenge ${proposed.challenge}\n`);
+      io.stdout(`security profile ${name} until ${proposed.body.expires} proposed for passkey "${signer.name}"\nthe owner signs it on the owner page (team owner-seat serve), challenge ${proposed.challenge}\n`);
       return 0;
     }
     const signed = signSecurityProfile(home, store, undefined, now());
@@ -103,8 +103,10 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
   }
 
   if (sub === 'serve') {
+    // Every act on the page needs an owner signer, so with no seat there is nothing to serve.
+    if (readOwnerSeat(home) === null) return refuse('no owner seat is registered yet: team owner-seat setup comes first');
     const page = await serveOwnerPage({ home, store, ...(args.values.port !== undefined ? { port: Number(args.values.port) } : {}), now });
-    io.stdout(`owner page: ${page.url}\nopen it on this Mac; a passkey approval can use the iPhone through the browser's QR code. Ctrl-C stops it.\n`);
+    io.stdout(`owner page: ${page.url}\nopen it on this Mac; a passkey signature can use the iPhone through the browser's QR code. Ctrl-C stops it.\n`);
     if (options.serve === false) page.server.close();
     else await new Promise<void>((resolve) => page.server.on('close', () => resolve()));
     return 0;
