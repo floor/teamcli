@@ -228,3 +228,83 @@ describe('the pause record', () => {
     });
   });
 });
+
+// The seat form: `team pause <seat>` stops one declared seat on its own, in a `seat_pauses` map
+// beside the team's `pause` record, and resolves its positional seat-first.
+describe('the seat form', () => {
+  test('a declared seat pauses alone, with one stop point and no team record', async () => {
+    const where = place();
+    recordPane(where, 'worker', 'w2:p1');
+    const ran = await pause(['worker'], where);
+    expect(ran.code).toBe(0);
+    expect(ran.err).toBe('');
+    expect(ran.out).toContain('worker: paused since 2026-10-04T09:00:00.000Z by owner');
+    expect(ran.out).toContain('stop worker: ready');
+    const state = readState(join(where.root, '.agents'));
+    expect(state.pause).toBeUndefined();
+    expect(state.seat_pauses).toEqual({
+      worker: {
+        by: 'owner',
+        at: '2026-10-04T09:00:00.000Z',
+        stops: [{ seat: 'worker', stage: 'ready' }],
+      },
+    });
+  });
+
+  test('--json names the seat as the target and carries its record', async () => {
+    const where = place();
+    recordPane(where, 'worker', 'w2:p1');
+    const ran = await pause(['--seat', 'worker', '--json'], where);
+    expect(ran.code).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      target: string;
+      value: string;
+      pause: { by: string; stops: unknown[] };
+    }>(ran.out, PAUSE_OUTPUT_SCHEMA);
+    expect(doc.target).toBe('seat');
+    expect(doc.value).toBe('worker');
+    expect(doc.pause.stops).toEqual([{ seat: 'worker', stage: 'ready' }]);
+  });
+
+  test('a name that is both a declared seat and a registered team refuses, and writes nothing', async () => {
+    const where = place();
+    upsertTeam(where.home, teamIdOf(where.root), {
+      project: 'worker', session: 'worker', root: where.root, roster: [],
+    });
+    const ran = await pause(['worker'], where);
+    expect(ran.code).toBe(2);
+    expect(ran.err).toBe(
+      'team pause: "worker" names both a seat of acme and a registered team; use team pause --seat worker or team pause --team worker\n',
+    );
+    expect(readState(join(where.root, '.agents')).seat_pauses).toBeUndefined();
+  });
+
+  test('an unknown name, a human seat and --seat with --all all refuse, and write nothing', async () => {
+    const unknown = await pause(['ghost'], place());
+    expect(unknown.code).toBe(2);
+    expect(unknown.err).toBe('team pause: no seat named "ghost" is declared in acme, and no registered team has that name\n');
+
+    const human = await pause(['worker'], place(HUMAN));
+    expect(human.code).toBe(2);
+    expect(human.err).toBe('team pause: worker is a human seat; a pause never touches it\n');
+
+    const where = place();
+    const both = await pause(['--seat', 'worker', '--all'], where);
+    expect(both.code).toBe(2);
+    expect(both.err).toContain('--all and --seat can\'t be used together');
+    expect(readState(join(where.root, '.agents')).seat_pauses).toBeUndefined();
+  });
+
+  test('an explicit --team stays team-wide even beside a declared seat of that name', async () => {
+    const where = place();
+    upsertTeam(where.home, teamIdOf(where.root), {
+      project: 'acme', session: 'acme', root: where.root, roster: [],
+    });
+    // A registered team named like the declared seat does not shadow `--team`.
+    const ran = await pause(['--team', 'acme'], where);
+    expect(ran.code).toBe(0);
+    const state = readState(join(where.root, '.agents'));
+    expect(state.pause?.by).toBe('owner');
+    expect(state.seat_pauses).toBeUndefined();
+  });
+});

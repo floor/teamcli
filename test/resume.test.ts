@@ -175,3 +175,67 @@ describe('resuming', () => {
     expect(readState(join(where.root, '.agents')).pause).toBeDefined();
   });
 });
+
+// The seat form: a seat's own record clears alone, beside a standing team pause or without one.
+describe('the seat form', () => {
+  async function pauseSeat(seat: string, where: { root: string; home: string }): Promise<void> {
+    const io = testIo(where.root, OWNER);
+    const code = await runPause([seat], io, { home: where.home, now: () => NOW } satisfies PauseSources);
+    if (code !== 0) throw new Error(io.err);
+  }
+
+  test('a seat resume clears only that seat and names the team pause it leaves standing', async () => {
+    const where = place();
+    recordPane(where, 'worker', 'w2:p1');
+    await pauseSeat('worker', where);
+    await pause(where);
+    const ran = await resume(['worker'], where);
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('resumed worker (paused since 2026-10-04T09:00:00.000Z by owner)');
+    expect(ran.out).toContain('stop worker: ready');
+    const state = readState(join(where.root, '.agents'));
+    expect(state.pause).toBeDefined();
+    expect(state.seat_pauses).toBeUndefined();
+  });
+
+  test('a team resume leaves the seat record standing and prints it as still paused', async () => {
+    const where = place();
+    recordPane(where, 'worker', 'w2:p1');
+    await pauseSeat('worker', where);
+    await pause(where);
+    const ran = await resume([], where);
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('resumed acme (paused since 2026-10-04T09:00:00.000Z by owner: freeze deploys)');
+    expect(ran.out).toContain('still paused: worker (paused since 2026-10-04T09:00:00.000Z by owner)');
+    const state = readState(join(where.root, '.agents'));
+    expect(state.pause).toBeUndefined();
+    expect(state.seat_pauses?.worker?.at).toBe('2026-10-04T09:00:00.000Z');
+  });
+
+  test('a seat JSON resume names the seat as the target and lists the standing team pause', async () => {
+    const where = place();
+    await pauseSeat('worker', where);
+    await pause(where);
+    const ran = await resume(['worker', '--json'], where);
+    expect(ran.code).toBe(0);
+    const doc = assertMatchesOutputSchema<{ target: string; value: string; resumed: { by: string } }>(ran.out, RESUME_OUTPUT_SCHEMA);
+    expect(doc.target).toBe('seat');
+    expect(doc.value).toBe('worker');
+    expect(doc.resumed.by).toBe('owner');
+  });
+
+  test('a seat with no own record under a team pause names the team; with no pause at all it is not paused', async () => {
+    const paused = place();
+    await pause(paused);
+    const underTeam = await resume(['worker', '--json'], paused);
+    expect(underTeam.code).toBe(1);
+    expect(underTeam.out).toContain('the team is paused, not the seat; team resume clears the team');
+    expect(readState(join(paused.root, '.agents')).pause).toBeDefined();
+
+    const clear = place();
+    const none = await resume(['worker', '--json'], clear);
+    expect(none.code).toBe(1);
+    expect(none.out).toContain('not paused: worker');
+    expect(none.out).toContain('team pause worker');
+  });
+});
