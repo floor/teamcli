@@ -1958,6 +1958,18 @@
           "takesValue": true
         },
         {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--team",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -1968,14 +1980,14 @@
       "name": "pause",
       "positionals": [
         {
-          "name": "team",
+          "name": "name",
           "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team pause [<team>] [--reason <text>] [--all] [--json]"
+        "team pause [<name>] [--seat <seat>] [--team <team>] [--reason <text>] [--all] [--json]"
       ],
       "who": {
         "gate": "team-pause",
@@ -3230,6 +3242,18 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--team",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -3240,14 +3264,14 @@
       "name": "resume",
       "positionals": [
         {
-          "name": "team",
+          "name": "name",
           "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team resume [<team>] [--all] [--json]"
+        "team resume [<name>] [--seat <seat>] [--team <team>] [--all] [--json]"
       ],
       "who": {
         "gate": "team-pause",

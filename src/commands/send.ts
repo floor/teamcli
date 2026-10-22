@@ -51,6 +51,7 @@ import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
+import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
 import { frameFor, frameReplyFor } from '../send/frame.ts';
 import {
@@ -270,10 +271,13 @@ export type DirectSendResult = {
 
 /**
  * The watch's idle dispatch uses this hook. With it set, the send walks only routes that reach a
- * live receiver without a keystroke — the typed and native legs type, and the drop and mcp-inbox
- * legs are stored copies rather than wakes, so none of the four is attempted. The walk's ending is
- * handed back as a result instead of only an exit code. Admission, the delivery order and every
- * remaining route's rules are the same ones an ordinary send runs.
+ * live receiver without a keystroke — the native and drop legs type or store rather than wake,
+ * and the mcp-inbox leg is the seat's own storage, so none of the three is attempted. One
+ * exception: a socket leg this run actually dials and the receiver refuses hands the send to the
+ * typed leg behind it (the receiver's order must name `typed`), under the same admission, seat
+ * lock, draft move and recheck, because that fallback is still a wake of the seat that asked for
+ * work. The walk's ending is handed back as a result instead of only an exit code. Admission, the
+ * delivery order and every remaining route's rules are the same ones an ordinary send runs.
  */
 export type DirectSendHook = {
   /** The pane and CLI the caller's own pass saw for this seat: the send is bound to them, and a
@@ -281,10 +285,11 @@ export type DirectSendHook = {
    *  before any route is attempted. */
   expect?: { pane: string; cli: string };
   /** A caller's own narrowing recheck, run after preparation and immediately before each route
-   *  a direct walk could transport on, socket or a functional headless route. On the watch's own
-   *  run the principal's actual verifier is composed in front of it whatever this holds — omitted
-   *  or permissive, it can only narrow, never replace. A refusal ends the walk without another
-   *  transport attempt; a throw is read as a refusal, never as consent. */
+   *  a direct walk could transport on, socket, a functional headless route or the typed fallback
+   *  behind a refused socket. On the watch's own run the principal's actual verifier is composed
+   *  in front of it whatever this holds — omitted or permissive, it can only narrow, never
+   *  replace. A refusal ends the walk without another transport attempt; a throw is read as a
+   *  refusal, never as consent. */
   guard?: () => { ok: true } | { ok: false; why: string };
   /** Called once, when a route's ending closes the walk, before the command returns. */
   ended(result: DirectSendResult): void;
@@ -858,6 +863,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       }
     }
   }
+  // The quota preflight: a walled seat is refused before the body is read into a send, before
+  // a drop file, a socket frame or a key exists. Only a positive read of the seat's own pane
+  // refuses; an absent agent or a pane that does not read leaves the existing delivery-time
+  // cautions, and that gap is the named limitation, not a safe outcome. The host's status is
+  // not consulted: a wall the screen proves holds even while the terminal host still calls the
+  // seat working, so no socket or drop effect can start ahead of the old caution.
+  {
+    const live = findAgent(host, to.session, to.seat);
+    if (live.ok) {
+      const text = host.native.paneText?.(to.session, live.pane);
+      const quota = quotaOutOf(to.cli, text);
+      if (quota !== null) return refuse(io, dir, who, `${to.seat}: ${quotaOutDetail(declared, quota)}`, host, report);
+    }
+  }
   // A `--brief` send reads the receiving team's `brief-transport` before it reads the draft or
   // writes anything durable. `message` and `file` both deliver the whole body as an ordinary
   // send — the walk is the same one — while `memory` is refused with nothing written on either
@@ -1036,15 +1055,31 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const human = overrides.human ?? (declared?.human === true);
   const chosen: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
-  // reaches a live receiver without a keystroke stays. The typed and native legs type, the drop
-  // leg is a stored copy and the mcp-inbox leg is the seat's own storage — none of them is a
-  // wake, so none is attempted. A functional headless route would stay if this build carried
-  // one. Every remaining leg keeps its own rules, and the order's own words decide whether the
-  // receiver offers it. A watch principal makes the walk direct by itself: the watch's own send
-  // never falls back to a route that types or stores, whatever hook its caller built.
+  // reaches a live receiver without a keystroke stays. The native leg types, the drop leg is a
+  // stored copy and the mcp-inbox leg is the seat's own storage — none of them is a wake, so
+  // none is attempted. A functional headless route would stay if this build carried one. Every
+  // remaining leg keeps its own rules, and the order's own words decide whether the receiver
+  // offers it. A watch principal makes the walk direct by itself: the watch's own send never
+  // falls back to a route that types or stores, whatever hook its caller built — with one
+  // exception, the typed leg when a socket leg this run actually dialed was refused.
+  //
+  // That typed leg is the direct walk's one fallback. It stands only when this run will really
+  // dial the socket (the same gates the socket branch reads) and the receiver's order names
+  // `typed`: a skipped socket — another CLI, a build without the socket, a declaration that does
+  // not admit it, a held-frame mark — is not a refusal and types nothing. The leg then runs
+  // under the walk's own rules (the seat lock, the draft move, the watch principal's recheck
+  // before the keystroke), so the fallback is the ordinary typed trigger, never a second path.
   const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
-  const walk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  const typedAfterSocket = directWalk
+    && to.cli === 'claude-code'
+    && socketNow
+    && chosen.includes('socket')
+    && chosen.includes('typed');
+  const directLegs = chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg));
+  const walk: readonly DeliveryLeg[] = directWalk
+    ? (typedAfterSocket ? [...directLegs, 'typed'] : directLegs)
+    : chosen;
   // The ordered leg report the JSON documents carry. A real send lists the walk itself; the
   // states fill in as it runs and a leg it never reaches stays `not-reached`. A human's only
   // walked leg is the drop file, so the legs the ruling kept out are listed in the order they
@@ -1619,14 +1654,27 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       await ensureEpisode();
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
     }
-    // The typed leg. The trigger is built here, so an order that reaches this leg is refused a
-    // trigger past the measured line before anything is written. The line is the seat's own
-    // receipt-writing drop read, so the command that wakes it is the one that proves it read: the
-    // signed `<id>.read.json` lands before the body is printed. A compose seat's typed leg is
-    // its CLI's own screens instead: there is no drop-file trigger to build, and the walk is
-    // run in this process (below), not handed to the daemon. A refusal decided here — a trigger
-    // past the line, a name the session does not list — happens before any route attempt, so the
-    // walk stages nothing for it: a refusal leaves no record in the receiver's folder.
+    // The typed leg. When a direct walk reaches it, it is the fallback for a socket leg this run
+    // dialed and the receiver refused: the watch principal's authority is rechecked here exactly
+    // as it is before the socket and resume transports, so a watch that lost its authority
+    // between the refused frame and this keystroke types nothing. The trigger is built here, so
+    // an order that reaches this leg is refused a trigger past the measured line before anything
+    // is written. The line is the seat's own receipt-writing drop read, so the command that wakes
+    // it is the one that proves it read: the signed `<id>.read.json` lands before the body is
+    // printed. A compose seat's typed leg is its CLI's own screens instead: there is no drop-file
+    // trigger to build, and the walk is run in this process (below), not handed to the daemon. A
+    // refusal decided here — a trigger past the line, a name the session does not list — happens
+    // before any route attempt, so the walk stages nothing for it: a refusal leaves no record in
+    // the receiver's folder.
+    if (directWalk) {
+      const typedGuard = guardRefusal(directGuard);
+      if (typedGuard !== null) {
+        failures.push(`typed: refused: ${typedGuard.why}`);
+        markLeg('typed', 'refused', typedGuard.why);
+        note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: typedGuard.why }));
+        break;
+      }
+    }
     const compose = profileFor(to.cli)?.compose ?? null;
     // The receiving team's `message-display` policy decides the words the wake opens with; a team
     // file that did not read leaves the shipped template, never an unnamed wake.
@@ -1875,9 +1923,10 @@ export type DirectSendRun = { code: number; result: DirectSendResult | null };
 /**
  * Sends `body` to `seat` over wake routes only, through the same command an ordinary send runs:
  * the same admission, the same delivery order, the same route rules. Only a route that reaches a
- * live receiver without a keystroke is walked, so nothing is typed and no stored copy counts as a
- * delivery, and the send is bound to the pane and CLI the caller's pass saw. The watch's idle
- * dispatch calls this.
+ * live receiver without a keystroke is walked, with one exception: a socket leg this run dialed
+ * and the receiver refused falls back to the receiver's typed leg, under the same seat lock,
+ * draft move and recheck. A stored copy never counts as a delivery, and the send is bound to the
+ * pane and CLI the caller's pass saw. The watch's idle dispatch calls this.
  */
 export async function sendDirect(
   io: Io,

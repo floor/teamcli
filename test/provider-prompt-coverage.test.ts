@@ -279,7 +279,7 @@ describe('the current non-empty screen is read after a turn-end', () => {
 
 describe('dialogs after a turn-end keep their own reading', () => {
   test('a rate-limit screen after the turn-end is read as the rate limit', () => {
-    expect(readScreen('claude-code', rateLimitAfterCompletion)).toEqual({ kind: 'rate limit', reset: '11:00' });
+    expect(readScreen('claude-code', rateLimitAfterCompletion)).toEqual({ kind: 'rate limit', reset: { kind: 'at', value: '11:00' } });
     expect(dialogKind('claude-code', rateLimitAfterCompletion)).toBe('rate limit');
   });
 

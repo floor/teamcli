@@ -246,7 +246,7 @@ screen:
   # reads it on the live region alone: the newest turn above the box, never a turn the pane has
   # scrolled past, so an old error over an idle prompt stays an idle prompt. The newest turn
   # starts after the last completion row (see `turn_end`), so an error the turn already ended —
-  # Atlas's observed seat, idle and ready — is history, while an error after a completion is
+  # a reported seat, idle and ready — is history, while an error after a completion is
   # still the live screen.
   provider_error:
     - any:
@@ -254,12 +254,22 @@ screen:
       live: true
   # The rejected line, matched on the fragments that were quoted: the field report names
   # 429 and 403 as this CLI's usage-limit rejections. Whatever follows "Your limit will
-  # reset at" is the reset time the watch reports.
+  # reset at" is the reset time the watch reports, in the phrase's own form. `at_composer`
+  # reads the fragments in the block directly above the box — the captured frame draws the
+  # rejected line there — so a sentence the pane scrolled past, or one quoted inside a turn
+  # that goes on after it, is not the wall. A window whose composer cannot be read falls back
+  # to the whole window, exactly as before the field: a wall that was held stays held.
   rate_limit:
+    # The retained rejected-line capture reads above the box. `at_composer` keeps a quoted
+    # sentence with later prose under it from becoming the wall; the reset time the TUI wraps
+    # onto its own row below the sentence (digits, no letters) is the one continuation allowed,
+    # and that wrapped value is not read as the reset (test/provider-error-gaps.test.ts).
     - all:
         - 'API Error: Request rejected \((?:429|403)\)'
         - 'Usage limit reached'
         - 'Your limit will reset at'
+      live: true
+      at_composer: true
   working:
     - any:
         - '\besc to interrupt\b'

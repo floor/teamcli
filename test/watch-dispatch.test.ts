@@ -275,6 +275,8 @@ describe('one attempt per eligible idle episode', () => {
     expect(leadRecord.payload.from).toBe('runtime');
     expect(leadRecord.payload.body).toContain('worker-1 is idle with takeable work but was not told directly');
     expect(leadRecord.payload.body).toContain('the pane holds a dialog');
+    // A route that never reached the typed fallback typed nothing.
+    expect(leadRecord.payload.body).toContain('nothing was typed for it');
     expect(statSync(leadPath).mode & 0o777).toBe(0o600);
     const mainRecord = JSON.parse(
       readFileSync(join(entityRoot, '.agents', 'messages', 'head-lead', main[0]!), 'utf8'),
@@ -296,6 +298,27 @@ describe('one attempt per eligible idle episode', () => {
     expect(again.pushed).toHaveLength(1);
     expect(calls).toHaveLength(2);
     expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(2);
+  });
+
+  test('a typed fallback that refuses is announced as the fallback not taking the work', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const push: WorkPush = async () => ({
+      ok: false,
+      refused: "typed: refused: the recorded watch is another watch's epoch",
+    });
+    const one = stateAt(new Date(NOW - 10 * MIN).toISOString(), ['worker-1']);
+    const first = await dispatchIdleWork(input({ push, state: one }));
+    expect(first.pushed).toHaveLength(1);
+    const lead = recordsIn(join(root, '.agents', 'messages', 'crew-lead'));
+    expect(lead).toHaveLength(1);
+    const body = (JSON.parse(
+      readFileSync(join(root, '.agents', 'messages', 'crew-lead', lead[0]!), 'utf8'),
+    ) as { payload: { body: string } }).payload.body;
+    // The route's refusal word is kept, and the notice says a fallback was tried rather than
+    // promising nothing was typed when a keystroke may have been refused.
+    expect(body).toContain("was not told directly (typed: refused: the recorded watch is another watch's epoch)");
+    expect(body).toContain('its typed fallback did not take it');
+    expect(body).not.toContain('nothing was typed for it');
   });
 
   test('a throwing route is a refusal, not a crash, and still spends the episode', async () => {

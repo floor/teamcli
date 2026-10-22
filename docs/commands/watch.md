@@ -8,8 +8,10 @@ A report is never typed into a seat. It goes to `.agents/team.log` and to the de
 notification; the operator reads the log. The watch's fixed typed lines are the ring, a pause
 notice, a held send's retry and the wake of a seat whose message has gone unread; none carries a
 report's text, and the retry and the wake name the drop rather than the body. An automatic work
-request is not typed at all. Every pass reads one shared idle snapshot and asks the direct send
-route to deliver the work prompt; `watch.nudge`, when the file sets it, is the body, and when the
+request's body is never typed. Every pass reads one shared idle snapshot and asks the direct send
+route to deliver the work prompt; the route walks the wake channels that need no keystroke, and
+the one keystroke it may make is the seat's own drop read, as its fallback behind a socket leg it
+dialed and the receiver refused. `watch.nudge`, when the file sets it, is the body, and when the
 file omits it the body is the fixed line `Team watch: reports are waiting in .agents/team.log`.
 The snapshot counts a seat idle only when it is declared, exactly one herdr agent carries its
 name, herdr reports that agent idle or done, its screen is an empty prompt, the seat is not the
@@ -199,8 +201,8 @@ a day: a 1 MB log holds ≈40 days of that, and three are kept, ≈5 months.
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a screen the seat's profile captures as a vendor notice — today, Codex 0.157.0's update screen; `team` never answers one |
 | `<seat> shows a provider error: connection lost, and no capture names a retry` | a Claude Code seat stopped on its provider's connection error; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen. The error is read in the live region, so one the turn has already ended above a ready composer is history and is not reported |
-| `<seat> is at a rate limit on <account>: usage limit, resets at <time>` | a seat stopped on its provider's usage limit, and the screen names when it resets — today Claude Code's rejected 429 or 403 and Gemini's exhausted-quota dialog; `<account>` is the pool the seat spends, its own `account:` or its vendor when it names none; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
-| `<seat> is at a rate limit on <account>: usage limit, and the screen names no reset time` | the same usage-limit screen when it names no reset time |
+| `<seat> is out of quota on <account>: usage limit, resets at <time>` | a seat stopped on its provider's usage limit, and the screen names when it resets — today a Claude Code rejected 429 or 403, Gemini's exhausted-quota dialog, Antigravity's `Individual quota reached` and Codex's usage-limit message; the reset is the screen's own phrase, `at` a clock or `in` a span (`resets in 47h31m`); `<account>` is the pool the seat spends, its own `account:` or its vendor when it names none; told to the operator and the owner, once, while the seat is not working; `team` never types into that screen |
+| `<seat> is out of quota on <account>: usage limit, and the screen names no reset time` | the same usage-limit screen when the screen words no reset at all |
 | `<seat> is still at a <prompt> prompt after <n> minutes: the team's lead has not cleared it, and the entity's lead and the owner are told` | a permission, vendor-notice or rate-limit prompt held for `prompt_escalation_seconds` (5m in this release): once per prompt, the team's lead having cleared none of it |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is neither idle, done, working nor blocked; a seat whose profile says herdr cannot report it is read from its screen, so this is said only when that screen cannot be read either |
@@ -313,7 +315,7 @@ it did instead. The lines around them:
 | `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the line is tried again on the next pass |
 | `rang <seat>: <the message-display wake line>` | a message was already waiting, that seat's box was an empty idle prompt, and the dispatcher did not own an episode for it that pass; the line was typed and sent, and the body was not |
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
-| `<seat>: its work was not dispatched directly (<why>); nothing was typed for it this episode` | the shared idle reading counted the seat idle with takeable work, and the direct route was absent or refused, once per idle episode |
+| `<seat>: its work was not dispatched directly (<why>); nothing was typed for it this episode` | the shared idle reading counted the seat idle with takeable work, and the direct route was absent or refused, once per idle episode; when the refusal is the route's own typed fallback (`<why>` begins `typed: `), the tail reads `its typed fallback did not take it this episode` instead |
 | `<seat> was not told: <why>` / `<role> <seat> was not told: <why>` | a dispatcher record could not be written to the team lead or the main orchestrator; the target and the reason are named, and no identity is invented in its place |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |
 | `<account>: its check is unreadable` | the check command failed, timed out, or printed something other than one to three lines for a subscription or one line for a spend account; its output is never logged |
@@ -340,11 +342,16 @@ it did instead. The lines around them:
 
 The dispatcher also leaves signed records in the team lead's and the main orchestrator's
 mailboxes, and their bodies are its words, not console lines: `<project>: <seat> is idle with
-takeable work but was not told directly (<why>); nothing was typed for it`; `<project>: <n> idle,
+takeable work but was not told directly (<why>); nothing was typed for it`, whose tail reads
+`its typed fallback did not take it` when `<why>` begins `typed: ` — the route's own trigger was
+refused, so the notice does not promise no keystroke was made; `<project>: <n> idle,
 nothing queued (<names>)`, once per continuous idle stretch and not under a pause; and
 `<project>: <seat> accepted a work wake a minute ago and is still idle with no observed claim; it
 will not be woken again in this idle episode`, once, when a pass at least a minute after an
-accepted wake finds no live lease and no activity clock at or past the wake.
+accepted wake finds no live lease and no activity clock at or past the wake. A refusal replayed
+from a claim an earlier pass settled says only that the direct work request was refused earlier
+in the episode and that the attempt is spent and will not be repeated: the claim keeps no route,
+so the replay claims nothing about a keystroke.
 
 A message waiting in a seat's own drop folder is not a report: it is what the ring's own reader,
 `team drops --read`, serves. When that seat's box is an empty idle prompt, the watch types the

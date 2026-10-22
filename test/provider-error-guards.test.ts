@@ -156,8 +156,8 @@ describe('nothing is typed into a provider error or a rate limit', () => {
 
   test('an override cannot read a shipped provider error or rate limit as idle', () => {
     expect(guardReading({ kind: 'provider error' }, { kind: 'idle' }).kind).toBe('provider error');
-    expect(guardReading({ kind: 'rate limit', reset: '11:00' }, { kind: 'idle' })).toEqual({ kind: 'rate limit', reset: '11:00' });
-    expect(guardReading({ kind: 'rate limit', reset: '11:00' }, { kind: 'question' }).kind).toBe('rate limit');
+    expect(guardReading({ kind: 'rate limit', reset: { kind: 'at', value: '11:00' } }, { kind: 'idle' })).toEqual({ kind: 'rate limit', reset: { kind: 'at', value: '11:00' } });
+    expect(guardReading({ kind: 'rate limit', reset: { kind: 'at', value: '11:00' } }, { kind: 'question' }).kind).toBe('rate limit');
     expect(guardReading({ kind: 'question' }, { kind: 'idle' }).kind).toBe('question');
   });
 });

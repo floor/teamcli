@@ -52,7 +52,7 @@ and both are marked as such.
 | `working` | the seat is in a turn |
 | `idle` | the seat is at a prompt with nothing behind it |
 | `done` | the process the launch recorded is no longer in its pane |
-| `blocked` | the screen is neither mid-turn nor at a prompt: a dialog, a question, an error, or a composer holding unsent text |
+| `blocked` | the screen is neither mid-turn nor at a prompt: a dialog, a question, an error, a composer holding unsent text, or the CLI's usage wall |
 | `held` | a hold stands over the team |
 | `unreachable` | herdr cannot reach the seat |
 | `unknown` | no source was certain |
@@ -73,7 +73,9 @@ The reading answers the first source that is certain, in this order:
 2. herdr unable to reach the seat — `unreachable`;
 3. the launched process no longer in its pane — `done` (`process`);
 4. a screen that is a dialog, a question, an error, or a composer holding unsent text —
-   `blocked`, whatever any clock says;
+   `blocked`, whatever any clock says; the CLI's usage wall is `blocked` too, with reason
+   `quota`: `status` names the reset the screen words beside the word, and never falls back to
+   a bare `done` or `idle`;
 5. the CLI's own signal through the hooks the launch installed — `working` at turn start,
    `idle` at turn end, with the instant it wrote; a `working` hook older than the working window
    keeps its word only where the screen is absent or unknown;
@@ -197,8 +199,8 @@ the pass.
 | `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
 | `<seat> shows a vendor notice: its owner's to act on` | a captured vendor notice, such as an update screen |
 | `<seat> shows a provider error: connection lost, and no capture names a retry` | a provider's connection error; told to the operator and the owner, once, while the seat is not working |
-| `<seat> is at a rate limit on <account>: usage limit, resets at <time>` | a usage-limit screen that names its reset |
-| `<seat> is at a rate limit on <account>: usage limit, and the screen names no reset time` | the same, without a reset |
+| `<seat> is out of quota on <account>: usage limit, resets at <time>` | a usage-limit screen that names its reset, as the screen words it — a clock after `at`, a span after `in` |
+| `<seat> is out of quota on <account>: usage limit, and the screen names no reset time` | the same, without a reset |
 | `<seat> is blocked, and its screen is not one the watch recognises` | herdr says blocked and the screen says nothing the watch knows |
 | `<seat>: herdr reports the status "<status>"` | a status that is none of idle, done, working, blocked, and the screen cannot be read |
 | `<seat> holds text in its input box that was never sent` | unsent text past `watch.unsent_after` |
@@ -359,11 +361,17 @@ spent before the route is called. The route is the sources' own direct push (`pu
 carries the seat, its pane, its CLI and the rendered body — `watch.nudge` with `<your seat name>`
 replaced by the seat's name, or the fixed line `Team watch: reports are waiting in
 .agents/team.log` when the file sets none. The send the watch runs in its own process stages
-its signed record in the seat's `send-drops` folder and walks only the routes that reach a live
-receiver without a keystroke (`socket`, `headless-resume`); the watch types nothing. A route that
-is absent, refuses or throws leaves one signed Runtime mailbox record for the team lead and one
-for the main orchestrator, deduplicated when they are the same target, and types nothing; a
-target the registry cannot map is named as missing, never replaced by an owner or a guessed
+its signed record in the seat's `send-drops` folder and walks the routes that reach a live
+receiver without a keystroke (`socket`, `headless-resume`), plus the typed leg behind a `socket`
+leg it actually dialed when the receiver refused the frame: the seat's own drop-read trigger,
+under the same admission, seat lock and draft move a typed send uses, with the watch principal's
+authority rechecked immediately before that keystroke exactly as before the socket dial. A socket
+the walk did not dial — another CLI, no declaration, a held mark, an order without the leg, a
+declared order without `typed` — types nothing. A route that is absent, refuses or throws leaves
+one signed Runtime mailbox record for the team lead and one for the main orchestrator,
+deduplicated when they are the same target; its body says nothing was typed, or that the route's
+typed fallback did not take the work when the refusal came from that fallback. A target the
+registry cannot map is named as missing, never replaced by an owner or a guessed
 seat. A wake the route accepted is checked at the first pass at least a minute later: a live
 lease the seat holds, or an activity clock at or past the wake, settles it silently; otherwise
 one still-idle record is written and the episode wakes the seat no more.
@@ -373,11 +381,13 @@ stretch — `<project>: <n> idle, nothing queued (<names>)` — and none under a
 notices are the word. The stretch's signature is the idle seats and their clocks, so a changed
 cast is a new stretch.
 
-Automatic work is never typed by the watch: the pass's own work-entry typing and the status
-engine's automatic-work nudges are drained without typing. The typed lines that remain are the
-ring, the pause notice, the held-send retry and the unread wake (§3.6); the ring is suppressed
-for a seat whose idle episode the dispatcher owns that pass. The dispatcher publishes no bus
-event kind and invents none.
+The dispatcher never types, and the body of automatic work is never typed: the pass's own
+work-entry typing and the status engine's automatic-work nudges are drained without typing. The
+one automatic keystroke is the route's own typed fallback described above, and a route that never
+dialed the socket is not typed at by a second path. The typed lines that remain are the ring, the
+pause notice, the held-send retry and the unread wake (§3.6); the ring is suppressed for a seat
+whose idle episode the dispatcher owns that pass. The dispatcher publishes no bus event kind and
+invents none.
 
 Hosting: the daemon-hosted watch lifecycle — the same pass driven by the daemon's fixed
 heartbeat tick, with an existing pane watch asked to hand over through its own loop and stood by
@@ -418,8 +428,12 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    messaged MUST read `working` while its prompt shows. *Source:* `src/labels/state.ts`.
    *Proof:* `test/labels-traces.test.ts`.
 3. **A dialog, a question, an error or unsent text reads `blocked`, whatever any clock says.**
-   *Source:* `src/labels/state.ts`, `src/watch/pass.ts` (`attentionOf`). *Proof:*
-   `test/seat-state.test.ts`.
+   The CLI's usage wall reads `blocked` the same way, with reason `quota`: it is never a bare
+   done, and `status` prints the reset exactly as the screen words it (`blocked: quota, resets
+   at 11:00`, `resets in 47h31m`, or an explicit no-reset line), without an account guess. The
+   JSON row keeps `seat_state: "blocked"` and carries the same text in `state`. *Source:*
+   `src/labels/state.ts`, `src/status/compare.ts`, `src/watch/pass.ts` (`attentionOf`). *Proof:*
+   `test/seat-state.test.ts`, `test/status.test.ts`, `test/quota-out-state.test.ts`.
 4. **An unknown seat past the blind threshold MUST count as not working and be flagged
    `blind`.** *Source:* `src/labels/state.ts`, `src/settings/inherit.ts`. *Proof:*
    `test/seat-state.test.ts`.
@@ -493,7 +507,7 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
 | `working` | in a turn | 0.5.0 | `src/labels/state.ts` | state word |
 | `idle` | at a prompt, nothing behind it | 0.5.0 | `src/labels/state.ts` | state word |
 | `done` | the launched process is no longer in its pane | 0.5.0 | `src/labels/state.ts` | state word |
-| `blocked` | the screen is a dialog, question, error or unsent text | 0.5.0 | `src/labels/state.ts` | state word |
+| `blocked` | the screen is a dialog, question, error, unsent text or usage wall | 0.5.0 | `src/labels/state.ts` | state word; a usage wall reads blocked with reason quota and its reset in `status` |
 | `held` | a hold stands over the team | 0.5.0 | `src/labels/state.ts` | state word |
 | `unreachable` | herdr cannot reach the seat | 0.5.0 | `src/labels/state.ts` | state word |
 | `unknown` | no source was certain | 0.5.0 | `src/labels/state.ts` | state word; blind past the threshold |

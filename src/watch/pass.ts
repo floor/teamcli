@@ -294,6 +294,12 @@ export type PassInput = {
    * human seat's pane is never typed into, exactly as it is never nudged.
    */
   pause?: PauseRecord | null;
+  /**
+   * The seats paused on their own with `team pause <seat>`, keyed by name. They are skipped by
+   * the work nudges exactly as a human seat is — the rest of the team keeps its nudges. The
+   * team's pause, when it stands too, is still the one notice every seat gets.
+   */
+  seatPauses?: Readonly<Record<string, PauseRecord>> | null;
 };
 
 // One pass of the watch. Pure: it reads what it is handed and changes only `memory`.
@@ -323,6 +329,7 @@ export function pass({
   quotaFor: patternsOf = shippedQuota,
   mailbox = [],
   pause,
+  seatPauses = null,
   modelRule: rule = null,
 }: PassInput): PassResult {
   const reports: Report[] = [];
@@ -677,7 +684,7 @@ export function pass({
   }
   return {
     reports,
-    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read, nativeHeld) : workDrops(team, live, observations, watch, now, memory, read, nativeHeld),
+    work: pause ? pauseDrops(team, live, observations, pause, now, memory, read, nativeHeld) : workDrops(team, live, observations, watch, now, memory, read, nativeHeld, seatPauses),
     ring,
     mailboxNote,
     readings,
@@ -700,6 +707,7 @@ function workDrops(
   memory: Memory,
   read: (cli: string, screen: string | undefined) => Screen,
   nativeHeld: ReadonlySet<string> | undefined,
+  seatPauses: Readonly<Record<string, PauseRecord>> | null | undefined = null,
 ): PassResult['work'] {
   const sent = (memory.slots['work-nudge'] ??= {}) as Record<string, number>;
   const body = team.watch.nudge ?? NUDGE_TEXT;
@@ -707,6 +715,12 @@ function workDrops(
   for (const obs of observations) {
     const fileSeat = team.seats.find((item) => item.name === obs.name);
     if (obs.lead || obs.parked || obs.stopped || fileSeat?.human === true || !obs.seat || !obs.agent) {
+      delete sent[obs.name];
+      continue;
+    }
+    // A seat paused on its own gets no work nudge, and its stamp is cleared so a resume starts
+    // a fresh stretch rather than a nudge the same second it wakes. Only this seat is skipped.
+    if (seatPauses?.[obs.name] !== undefined) {
       delete sent[obs.name];
       continue;
     }

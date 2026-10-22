@@ -10,6 +10,12 @@ import { loadScreen } from './screen-file.ts';
 
 export type { Box, Fold, ReadClock, ScreenOptions };
 
+/** The reset time a wall names, as the screen prints it: `kind` is the preposition the CLI's own
+ *  sentence uses — `at` for a clock time (`11:00`, `2:10 PM GMT+2`), `in` for a span
+ *  (`47h31m`) — so a reader never invents the other one. `value` is the displayed text and
+ *  nothing more: no instant is parsed from it, and no timezone is assumed for a zone-less clock. */
+export type Reset = { kind: 'at' | 'in'; value: string };
+
 export type Screen =
   | { kind: 'idle' }                 // the idle prompt, with an empty input box
   | { kind: 'working' }              // a turn is running: herdr's status would already be stale
@@ -25,8 +31,8 @@ export type Screen =
                                      // only by a captured, versioned record, and never answered
   | { kind: 'provider error' }       // the CLI's provider failed mid-response and the prompt is
                                      // back: a transient error, never typed into
-  | { kind: 'rate limit'; reset: string | null } // a usage limit, with the reset time the
-                                     // screen names, or null when it names none
+  | { kind: 'rate limit'; reset: Reset | null } // a usage limit, with the reset the screen
+                                     // names and how it words it, or null when it names none
   | { kind: 'unknown'; matched?: string } // no shape this CLI's profile reads. `matched` is the
                                      // safety floor's own line when one is on the screen — the
                                      // one piece of an unrecognised prompt a reader may quote

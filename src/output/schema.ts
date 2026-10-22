@@ -362,6 +362,9 @@ export const STATUS_OUTPUT_SCHEMA: CommandSchemaSpec = {
         pause: {
           type: 'object',
         },
+        seat_pauses: {
+          type: 'object',
+        },
         procs: {
           type: 'array',
           items: { type: 'object' },
@@ -1029,7 +1032,9 @@ const PAUSE_STOP_SCHEMA_FRAGMENT: JsonSchema = {
   },
 };
 
-/** Published `--json` output schema for `team pause` (`schema/pause.schema.json`). */
+/** Published `--json` output schema for `team pause` (`schema/pause.schema.json`). `target` is
+ *  `team` for a team-wide pause and `seat` for one seat; `value` is the seat's name then, and the
+ *  reason (or null) for a team-wide pause. */
 export const PAUSE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.pause',
   fileName: 'pause.schema.json',
@@ -1037,7 +1042,7 @@ export const PAUSE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   statuses: ['paused'],
   required: ['project', 'session', 'target', 'value', 'pause'],
   properties: {
-    target: { type: 'string', const: 'team' },
+    target: { type: 'string', enum: ['team', 'seat'] },
     value: { type: ['string', 'null'] },
     pause: {
       type: 'object',
@@ -1054,7 +1059,9 @@ export const PAUSE_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
 });
 
 /** Published `--json` output schema for `team resume` (`schema/resume.schema.json`): the record
- *  that was cleared, stop points and all, so the caller keeps what the pause held. */
+ *  that was cleared, stop points and all, so the caller keeps what the pause held. `target` is
+ *  `team` for a team-wide resume and `seat` for one seat (`value` is its name); `still_paused`
+ *  names the seats whose own records a team-wide resume left standing. */
 export const RESUME_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   name: 'team.resume',
   fileName: 'resume.schema.json',
@@ -1062,8 +1069,9 @@ export const RESUME_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   statuses: ['resumed'],
   required: ['project', 'session', 'target', 'value', 'resumed'],
   properties: {
-    target: { type: 'string', const: 'team' },
-    value: { type: 'null' },
+    target: { type: 'string', enum: ['team', 'seat'] },
+    value: { type: ['string', 'null'] },
+    still_paused: { type: 'array', items: { type: 'string', minLength: 1 } },
     resumed: {
       type: 'object',
       additionalProperties: false,

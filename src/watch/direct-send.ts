@@ -1,10 +1,10 @@
-// The watch's own direct-work send: the one entry a hosted watch uses to wake an idle seat
-// without a keystroke. It is internal — no command line reaches it and no `io.caller` stands in
-// for it. The run's caller is the watch principal this module establishes after the actual
-// `verifyWatchAuthority` proves this process holds the watch, and the verifier is asked again
-// after preparation and immediately before every direct transport the walk could take. A refusal
-// at either point ends the send with no transport attempted, and an exception from the verifier
-// is read as a refusal, never as consent.
+// The watch's own direct-work send: the one entry a hosted watch uses to wake an idle seat. It is
+// internal — no command line reaches it and no `io.caller` stands in for it. The run's caller is
+// the watch principal this module establishes after the actual `verifyWatchAuthority` proves this
+// process holds the watch, and the verifier is asked again after preparation and immediately before
+// every direct transport the walk could take, including the typed fallback a refused socket leg
+// hands the send to. A refusal at either point ends the send with no transport attempted, and an
+// exception from the verifier is read as a refusal, never as consent.
 //
 // The context, not the process's working directory, selects the team file: the root is the one
 // the watch host captured, the verifier loads the team file from it canonically, and admission
@@ -22,8 +22,9 @@ export type WatchDirectContext = { root: string; session: string; capturedEpoch:
 
 /**
  * Sends one work push through the ordinary send command's admission, delivery order and route
- * rules, walking only the direct wake legs. `host` is the transport/test seam and carries no
- * identity of its own; the caller is built here, from the verifier's verdict alone.
+ * rules, walking only the direct wake legs — plus the typed fallback when a socket leg this run
+ * dialed is refused. `host` is the transport/test seam and carries no identity of its own; the
+ * caller is built here, from the verifier's verdict alone.
  */
 export async function sendWatchDirect(
   context: WatchDirectContext,

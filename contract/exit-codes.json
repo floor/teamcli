@@ -2175,7 +2175,7 @@
       "code": 1,
       "command": "next",
       "id": "next.paused",
-      "meaning": "the team is paused, so nothing was claimed",
+      "meaning": "the team or the calling seat is paused, so nothing was claimed",
       "trigger": "team next"
     },
     {
@@ -2224,7 +2224,7 @@
       "code": 0,
       "command": "pause",
       "id": "pause.placed",
-      "meaning": "the team was paused",
+      "meaning": "the team or the named seat was paused",
       "trigger": "team pause"
     },
     {
@@ -2252,7 +2252,7 @@
       "code": 1,
       "command": "pause",
       "id": "pause.paused",
-      "meaning": "the team is already paused",
+      "meaning": "the team or the named seat is already paused",
       "trigger": "team pause"
     },
     {
@@ -2273,7 +2273,7 @@
       "code": 2,
       "command": "pause",
       "id": "pause.team",
-      "meaning": "the team name is not registered or names more than one",
+      "meaning": "the name is neither a declared seat nor a registered team, or names more than one",
       "trigger": "team pause other"
     },
     {
@@ -3568,7 +3568,7 @@
       "code": 0,
       "command": "resume",
       "id": "resume.resumed",
-      "meaning": "the team resumed",
+      "meaning": "the team or the named seat resumed",
       "trigger": "team resume"
     },
     {
@@ -3596,7 +3596,7 @@
       "code": 1,
       "command": "resume",
       "id": "resume.not-paused",
-      "meaning": "no pause stands",
+      "meaning": "no pause stands on the target; under a team pause, a seat has no own record",
       "trigger": "team resume"
     },
     {
@@ -3617,7 +3617,7 @@
       "code": 2,
       "command": "resume",
       "id": "resume.team",
-      "meaning": "the team name is not registered or names more than one",
+      "meaning": "the name is neither a declared seat nor a registered team, or names more than one",
       "trigger": "team resume other"
     },
     {

@@ -429,6 +429,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // The pause stands above both: it is the one note that says why no seat takes work.
   const pause = whole.pause;
   if (pause) comparison.notes.unshift(pauseText(pause));
+  // A seat paused on its own stands beside the team's record and says why it alone stays still;
+  // the rest of the team is unaffected, so its line names the seat.
+  const seatPauses = whole.seat_pauses ?? {};
+  comparison.notes.unshift(...Object.entries(seatPauses)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([seat, record]) => `seat paused: ${seat} (${pauseText(record)})`));
   // The swaps this project waits on, in seat order: the same line `team swap` prints, so the
   // reading says what each one waits for before the proc records below.
   const swaps = queuedSwaps(whole);
@@ -468,6 +474,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // The project's records, not one session's: a paused team claims nothing and a seat holding
     // a queued swap is not an idle worker.
     pause: whole.pause ?? null,
+    seatPauses: whole.seat_pauses ?? null,
     swaps: Object.keys(whole.swaps ?? {}),
   });
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
@@ -551,6 +558,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       ...(budgets.length ? { budgets } : {}),
       ...(hold ? { hold } : {}),
       ...(pause ? { pause } : {}),
+      ...(Object.keys(seatPauses).length > 0 ? { seat_pauses: seatPauses } : {}),
       ...(procs.length ? { procs } : {}),
       ...(swaps.length ? { swaps: swaps.map(([seat, swap]) => ({ seat, swap })) } : {}),
     });
