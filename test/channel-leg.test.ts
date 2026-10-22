@@ -606,6 +606,36 @@ describe('the channel redelivery', () => {
     expect(said).toEqual([`lead: a channel send from owner was redelivered on the socket`]);
   });
 
+  test('a live channel listener the launch no longer names holds the push name before the socket wake', async () => {
+    // The team file no longer names the channel, but the listener started with the flag is still
+    // running and can still push. The socket leg must find the name held before it wakes.
+    const made = world(null, [], {});
+    cleanup = made.cleanup;
+    staleListening(made);
+    const dir = seedChannel(made, SOCKET_ID, BODY);
+    const box = pane(claudeBox(''));
+    const said: string[] = [];
+    const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
+    let heldAtSocket: boolean | undefined;
+    const scene = sceneOf(made, box, due, said, {
+      socketRedeliver: async (dropDir, drop) => {
+        heldAtSocket = channelPushHeld(dropDir, drop.id);
+        return { ok: true };
+      },
+    });
+
+    await retryHeldDrops(scene);
+
+    expect(heldAtSocket).toBe(true);
+    const marker = JSON.parse(readFileSync(channelPushPath(dir, SOCKET_ID), 'utf8')) as Record<string, unknown>;
+    expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id: SOCKET_ID });
+    expect(channelPushed(dir, SOCKET_ID)).toBe(false);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([]);
+    expect(said).toEqual([`lead: a channel send from owner was redelivered on the socket`]);
+  });
+
   test('a socket that will not take the frame falls to the typed trigger, with the reason said', async () => {
     const made = channelWorld();
     const dir = seedChannel(made, SOCKET_ID, BODY);

@@ -1561,8 +1561,8 @@ describe('the turn-start read, end to end', () => {
 describe('retryHeldDrops and a stale channel', () => {
   // The install-change-between-send-and-retry case: the send found no listener, so it held no
   // push name; by the retry, a channel-enabled listener from another install serves the seat.
-  // The retry reads that listener again at its own wake and holds the push name before it types,
-  // so the installed build's record is woken once and no channel push follows it.
+  // The retry reserves the push name before its wake whichever listener is there, so the
+  // installed build's record is woken once and no channel push follows it.
   test('an install change between send and retry holds the stale channel push name', async () => {
     const made = world();
     const text = teamText(made.root, lobbyDir(made.home)).split('launch: claude\n').join(
@@ -1611,6 +1611,93 @@ describe('retryHeldDrops and a stale channel', () => {
     expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id });
     expect(channelPushHeld(dropDir, id)).toBe(true);
     expect(channelPushed(dropDir, id)).toBe(false);
+    expect(readPending(dropDir)).toEqual([]);
+  });
+
+  test('a live channel listener the launch no longer names still holds the push name before typing', async () => {
+    const made = world();
+    // The team file's launch carries no channel flag any more, but the listener it started with
+    // the flag is still running: the marker it wrote at startup is the record of that. It can
+    // still push, so the retry holds the name before the typed line although the current launch
+    // alone would say there is nothing to race.
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const id = 'lead-held-2';
+    const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
+    writeListener(dropDir, {
+      v: 1,
+      seat: 'lead',
+      session: 'acme',
+      root: realpathSync(made.root),
+      cli: 'claude-code',
+      pid: process.pid,
+      ts: NOW.toISOString(),
+      version: '0.5.4-hotfix.9',
+      build: 'aaaaaaaaaaaaaaaa',
+      head: 'a'.repeat(40),
+      channel: true,
+    });
+    const one = pane(claudeBox(''));
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: () => {},
+    });
+
+    expect(one.typed).toHaveLength(1);
+    expect(one.enters).toBe(1);
+    const marker = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as Record<string, unknown>;
+    expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id });
+    expect(channelPushHeld(dropDir, id)).toBe(true);
+    expect(channelPushed(dropDir, id)).toBe(false);
+    expect(readPending(dropDir)).toEqual([]);
+  });
+
+  test('a dead channel listener leaves no push to race, so the retry types without a hold', async () => {
+    const made = world();
+    // The same marker, but its process is gone. A server started after the record arrived pushes
+    // nothing (its first listing is marked seen), so the name is left free and the retry types.
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const id = 'lead-held-3';
+    const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
+    writeListener(dropDir, {
+      v: 1,
+      seat: 'lead',
+      session: 'acme',
+      root: realpathSync(made.root),
+      cli: 'claude-code',
+      // Above both hosts' pid_max, so no live process can hold it.
+      pid: 4_194_305,
+      ts: NOW.toISOString(),
+      version: '0.5.4-hotfix.9',
+      build: 'aaaaaaaaaaaaaaaa',
+      head: 'a'.repeat(40),
+      channel: true,
+    });
+    const one = pane(claudeBox(''));
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: () => {},
+    });
+
+    expect(one.typed).toHaveLength(1);
+    expect(one.enters).toBe(1);
+    expect(channelPushHeld(dropDir, id)).toBe(false);
+    expect(existsSync(channelPushPath(dropDir, id))).toBe(false);
     expect(readPending(dropDir)).toEqual([]);
   });
 });

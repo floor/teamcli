@@ -112,12 +112,19 @@ tool call; when they differ it removes its marker, starts the installed entry wi
 arguments and this process's stdio, and exits. A stale channel listener is still a running old
 server and would push the record after the sender's own wake, so a sender whose walk holds a
 waking leg — socket, native or typed — writes a marker with `kind: "channel-held"` at the push
-marker's own name, `<id>.channel-push.json`, before its record. Any serving server skips an id
-that already holds a marker, and the send's own wait never reads the held marker as a push: only
-the server's `channel-push` marker ends it as `sent (channel)`. The watch's retry reserves the
-same name before its wake — on the socket leg first, and again at the typed leg — whichever
-listener is there. That is the point: an install can change between any check and the wake, so
-the name is held before the wake rather than after a verdict that could already be stale.
+marker's own name, `<id>.channel-push.json`, before its record. Any marker-aware serving server
+skips an id that already holds a marker — a build older than this rule cannot honor it — and the
+send's own wait never reads the held marker as a push: only the server's `channel-push` marker
+ends it as `sent (channel)`. The watch's retry reserves the same name before its wake — on the
+socket leg first, and again at the typed leg — whichever listener is there. That is the point: an
+install can change between any check and the wake, so the name is held before the wake rather than
+after a verdict that could already be stale. A seat whose launch no longer names the channel still
+reserves while a listener started with the flag is alive, read from `.inbox-listener`; a server
+started after the record arrived pushes nothing, so a dead marker leaves no push to race. The
+retry's hold is not cleaned up: a wake the seat never takes — the typed line is not submitted and
+the retry gives up, or the pane never frees — leaves the channel push held too, and delivery falls
+to the record's own read (`inbox_check`, the turn-start drop read, or `team messages`). The record
+stays in the inbox throughout, so a held name never withholds the message.
 
 The `mcp-inbox` leg writes the message whole into the seat's own inbox —
 `<root>/.agents/send-drops/<session>/<seat>`, the same 0600 record the typed leg would leave —
