@@ -1,5 +1,9 @@
 # Claude Code screens
 
+## Captured
+
+- `completed-error-empty-box-atlas.txt`: Atlas's capture, 2026-10-22T03:01:25Z, from a seat on installed TeamCLI 0.5.4-rc.2 (source `4e50561d`). The turn printed `API Error: Connection lost mid-response. The response above may be incomplete.` and then ended; the empty composer under it has its opening rule carrying the seat's name in the run (`─…─ builder-7 ─`). The pane carries no CLI version marker, so the CLI's own version is unknown. Sanitized: the tool-result rows above the error and the account figures in the status row are synthetic or same-width neutrals; every decisive row (error, completion, update notice, box frame, footers) is the capture's bytes.
+
 ## Constructed
 
 - `shell-prompt.txt`: constructed, not a capture. A few lines of shell output and a bare `❯ `, the shape of a zsh prompt after Claude Code has exited. Nothing here was read from a live pane.
