@@ -608,7 +608,7 @@ function executePolicySet(
           rawIo,
           'policy.refused',
           plainText(msg),
-          'the owner runs `team policy set` from a terminal outside herdr, or approves it with Touch ID (--owner-device)',
+          'the owner runs `team policy set` from a terminal outside herdr, or confirms it with Touch ID from the owner seat',
           1,
           'owner-only',
         );
@@ -617,7 +617,7 @@ function executePolicySet(
       }
       return 'refused';
     }
-    io.stderr(consent?.ok === true ? `team policy: approved on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
+    io.stderr(consent?.ok === true ? `team policy: confirmed on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
   }
 
   const [rawLevel, rawName, rawValue] = rest as [string, string, string];
@@ -841,7 +841,7 @@ function executePolicyUnset(
           rawIo,
           'policy.refused',
           plainText(msg),
-          'the owner runs `team policy unset` from a terminal outside herdr, or approves it with Touch ID (--owner-device)',
+          'the owner runs `team policy unset` from a terminal outside herdr, or confirms it with Touch ID from the owner seat',
           1,
           'owner-only',
         );
@@ -850,7 +850,7 @@ function executePolicyUnset(
       }
       return 'refused';
     }
-    io.stderr(consent?.ok === true ? `team policy: approved on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
+    io.stderr(consent?.ok === true ? `team policy: confirmed on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
   }
 
   const [rawLevel, rawName] = rest as [string, string];
