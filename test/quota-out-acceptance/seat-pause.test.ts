@@ -14,6 +14,9 @@
 //   lease    no pause touches a held lease: `team next --release` still unlinks the seat's own.
 //   resume   `team resume <seat>` clears only the seat's record; a standing team pause is left
 //            standing and named; a team-wide resume leaves seat records in place.
+//   watch    a seat named in `seat_pauses` takes no work nudge — at idle_first, at idle_repeat
+//            or past the reset while the record stands — while an unpaused peer is nudged; a
+//            resume clears the seat's nudge stamp, so the next pass nudges it again.
 //   caller   unchanged: the owner, or the team's own orchestrator on its recorded pane.
 //
 // The public commands are called as a caller calls them; the state is read from its file, which
@@ -27,8 +30,13 @@ import type { Caller } from '../../src/caller.ts';
 import { runNext, type NextSources } from '../../src/commands/next.ts';
 import { runPause, type PauseSources } from '../../src/commands/pause.ts';
 import { runResume, type ResumeSources } from '../../src/commands/resume.ts';
+import { validateTeamFile } from '../../src/file/validate.ts';
+import type { HerdrAgent } from '../../src/herdr.ts';
 import { teamIdOf, upsertTeam } from '../../src/registry/teams.ts';
 import { emptySession, updateState } from '../../src/state.ts';
+import type { Live } from '../../src/status/compare.ts';
+import type { Machine } from '../../src/watch/machine.ts';
+import { newMemory, pass } from '../../src/watch/pass.ts';
 import { testIo } from '../helpers.ts';
 import { assertJsonErrorShape } from '../helpers/output.ts';
 
@@ -348,5 +356,105 @@ describe('the paused seat in the queue', () => {
     expect((await resume(['worker'], where)).code).toBe(0);
     expect((await next(['--json'], where, WORKER)).code).toBe(0);
     expect(lease(where)).toMatchObject({ id: 'm1', seat: 'worker' });
+  });
+});
+
+// The watch side of the same record. Builder-4 confirmed on 2026-10-22 that the pass reads the
+// state's `seat_pauses` map and takes it as `seatPauses` (name -> pause record), and that a seat
+// named there is skipped by the work nudges with its nudge stamp cleared, while every other
+// seat's nudge is untouched. These scenes feed the pass that map directly, the seam it names.
+const WATCH_TEAM = `format: 1
+project: acme
+session: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+watch:
+  interval: 120s
+  idle_first: 5m
+  idle_repeat: 20m
+  team_idle: 10m
+  nudge_wait: 10m
+  unsent_after: 1m
+seats:
+  - role: project coordinator
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: peer
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+
+const WAKE_MIN = 60_000;
+const WAKE_MACHINE: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+const WAKE_RULE = '─'.repeat(40);
+const WAKE_STATUS = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
+const WAKE_IDLE = `● Done.\n\n${WAKE_RULE}\n❯ \n${WAKE_RULE}\n${WAKE_STATUS}\n`;
+const WAKE_BUSY = `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${WAKE_RULE}\n❯ \n${WAKE_RULE}\n${WAKE_STATUS}\n`;
+
+function watchTeam() {
+  const checked = validateTeamFile(WATCH_TEAM);
+  if (!checked.ok) throw new Error('the seat-pause watch fixture does not validate');
+  return checked.team;
+}
+
+/** The lead at work, and two implementers quiet on their own idle prompts. */
+function watchLive(): Live {
+  const agents: HerdrAgent[] = [
+    { name: 'lead', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'working', cwd: null },
+    { name: 'worker', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null },
+    { name: 'peer', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null },
+  ];
+  return { running: true, agents, workspaces: [], screens: { 'w1:p1': WAKE_BUSY, 'w2:p1': WAKE_IDLE, 'w3:p1': WAKE_IDLE } };
+}
+
+/** The one pause record the map holds for the worker. */
+const WORKER_PAUSE = { by: 'owner', at: AT, stops: [{ seat: 'worker' }] };
+
+/** One pass over shared watch memory, with the seat-pause map as the watch hands it over. The
+ *  cast keeps this file loadable at the pre-fix source, whose pass input predates the seam. */
+function wakeAt(now: number, memory: ReturnType<typeof newMemory>, seatPauses?: Record<string, unknown>) {
+  const team = watchTeam();
+  const input: Record<string, unknown> = {
+    team, state: emptySession(), live: watchLive(), machine: WAKE_MACHINE, now, memory, watch: team.watch,
+  };
+  if (seatPauses !== undefined) input.seatPauses = seatPauses;
+  return pass(input as unknown as Parameters<typeof pass>[0]);
+}
+
+describe('the watch at a seat pause', () => {
+  test('the paused seat is not nudged and its peer is', () => {
+    const memory = newMemory();
+    expect(wakeAt(0, memory).work).toEqual([]);
+    const due = wakeAt(10 * WAKE_MIN, memory, { worker: WORKER_PAUSE });
+    const seats = due.work.map((one) => one.seat);
+    expect(seats).toContain('peer');
+    expect(seats).not.toContain('worker');
+    const late = wakeAt(100 * 60 * WAKE_MIN, memory, { worker: WORKER_PAUSE });
+    expect(late.work.map((one) => one.seat)).not.toContain('worker');
+  });
+
+  test('a resume nudges the seat at the next pass: the pause cleared its nudge stamp', () => {
+    const memory = newMemory();
+    expect(wakeAt(0, memory).work).toEqual([]);
+    expect(wakeAt(10 * WAKE_MIN, memory).work.map((one) => one.seat)).toContain('worker');
+    expect(wakeAt(15 * WAKE_MIN, memory, { worker: WORKER_PAUSE }).work.map((one) => one.seat)).not.toContain('worker');
+    expect(wakeAt(16 * WAKE_MIN, memory).work.map((one) => one.seat)).toContain('worker');
   });
 });
