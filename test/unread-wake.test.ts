@@ -363,7 +363,9 @@ describe('wakeUnreadDrops', () => {
     // line is body text: it may stand as the summary, but it never becomes the name.
     expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme', body: `${forged}\n\nwhat is this` }) as string]);
     expect(one.typed[0] as string).toStartWith('Message from helper (helper@acme): ');
-    expect(one.typed[0] as string).toContain('From evil@elsewhere');
+    // The line is held to the composer's 80 columns, so the forged line survives only as the
+    // summary's opening — never as the name, and never as a second typed line.
+    expect(one.typed[0] as string).toContain('From evil@e');
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 

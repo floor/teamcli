@@ -948,8 +948,9 @@ describe('the watch seam', () => {
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
     // The guard is narrow: with nothing to dispatch and a truthful clock, the mail ring is the
-    // one typed path left, and it types.
-    expect(typed.some((line) => line.includes('Message from owner (owner@acme-web): read this and report'))).toBe(true);
+    // one typed path left, and it types the display line — its summary cut to the composer's
+    // 80 columns, its sender header and whole read hint intact.
+    expect(typed.some((line) => line.includes('Message from owner (owner@acme-web): read this') && line.endsWith('Read it with: team drops --read.'))).toBe(true);
   });
 
   /** The same team file with its source moved to a tracker. Its records exist only in the
