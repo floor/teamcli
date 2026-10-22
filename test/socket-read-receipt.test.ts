@@ -307,6 +307,35 @@ test('the read receipt verifies with read_by and an older receipt without it sti
   expect(isRead(planted, 'aaaa', { to: 'lead', root: realpathSync(made.root), session: 'acme' }, key)).toBe(false);
 });
 
+test('a seat with no nickname opens the frame with its written label name, and with its seat name when that is blank', async () => {
+  const made = world(null, [
+    { name: 'labelled', role: 'builder', label: 'Epimetheus · builder 5' },
+    { name: 'blank', role: 'builder', label: '   ' },
+  ]);
+  cleanup = made.cleanup;
+  declare(made);
+  const labelled = registerSeat(made, 'labelled', 'w4:p1');
+  place(made, 'labelled', 'w4:p1');
+  roster(made, { agent: labelled, seat: 'labelled', role: 'builder' });
+  const host = fake(made, { agents: () => [{ name: 'labelled', pane: 'w4:p1' }, { name: 'lead', pane: 'w2:p1' }] });
+  const io = testIo(made.root, { kind: 'seat', name: 'labelled', pane: 'w4:p1', session: 'acme' });
+
+  // The roster holds no nickname, so the written label's name before the middle dot stands.
+  expect(await runSend(['lead', 'from the label'], io, host)).toBe(0);
+  expect(host.frames).toHaveLength(1);
+  expect(frameContent(host.frames[0] as string).startsWith('Message from Epimetheus (labelled@acme)\n\n')).toBe(true);
+
+  // A written label with nothing before the middle dot falls through to the seat name.
+  const blank = registerSeat(made, 'blank', 'w5:p1');
+  place(made, 'blank', 'w5:p1');
+  roster(made, { agent: blank, seat: 'blank', role: 'builder' });
+  const again = fake(made, { agents: () => [{ name: 'blank', pane: 'w5:p1' }, { name: 'lead', pane: 'w2:p1' }] });
+  const fromBlank = testIo(made.root, { kind: 'seat', name: 'blank', pane: 'w5:p1', session: 'acme' });
+  expect(await runSend(['lead', 'from the blank'], fromBlank, again)).toBe(0);
+  expect(again.frames).toHaveLength(1);
+  expect(frameContent(again.frames[0] as string).startsWith('Message from blank (blank@acme)\n\n')).toBe(true);
+});
+
 test('a seat sender opens the frame with its nickname, and with its seat name when the roster holds none', async () => {
   const made = world(null);
   cleanup = made.cleanup;

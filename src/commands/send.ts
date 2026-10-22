@@ -34,7 +34,7 @@ import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord,
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
-import { namingFor, senderDisplayName, type SenderNaming } from '../send/names.ts';
+import { namingFor, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -1262,7 +1262,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameIdentityHeader(record, naming, team.project));
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameIdentityHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null));
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -3549,23 +3549,41 @@ const HELD_READ_MS = 1000;
 const SOCKET_READ_BY = 'socket delivery';
 
 /**
- * The display line an accepted socket frame opens with: the sender as a person reads it — the
- * nickname the registry (or the seat's own setting) holds, the seat name when none does — and the
- * address it sits at in the team this run sends from. Display only: the signed record below it is
- * the message, and the record's body keeps its own `from … — admitted by: …` line. A registry
- * that cannot answer leaves the seat name, so a frame always names its sender.
+ * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
+ * the file writes reads `<name> · <role>` — the workspace title `up` gives it — and its first half
+ * is the name people call the seat by. A written label with no middle dot is the name whole. A
+ * seat with no written label has no such name: the stored label is its model and version, and its
+ * workspace title its seat name and role, so the seat name stands in its place. Display only.
  */
-function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, teamName: string): string {
-  let name = record.from;
+function labelNameOf(team: TeamFile, seat: string): string | null {
+  const found = team.seats.find((one) => one.name === seat);
+  if (found === undefined || found.labelWritten !== true) return null;
+  const name = (found.label.split('·')[0] ?? '').trim();
+  return name === '' ? null : name;
+}
+
+/**
+ * The display line an accepted socket frame opens with: the sender as a person reads it — the
+ * nickname the registry (or the seat's own setting) holds, the name its written label carries
+ * before the middle dot, then the seat name — and the address it sits at in the team this run
+ * sends from. Display only: the signed record below it is the message, and the record's body
+ * keeps its own `from … — admitted by: …` line. A registry that cannot answer reads as no
+ * nickname, so a frame always names its sender.
+ */
+function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, teamName: string, labelName: string | null): string {
+  let name = '';
   try {
-    name = senderDisplayName(
+    name = senderNickname(
       { seat: record.from, ...(record.from_id === null ? {} : { id: record.from_id }) },
-      { ...naming, mode: 'nickname' },
-    ) || record.from;
+      naming,
+    ) ?? '';
   } catch {
-    // Leave the seat name.
+    // A registry that cannot answer is no nickname.
   }
-  return `Message from ${name} (${record.from}@${teamName})`;
+  // A nickname wins; then the name the seat's written label carries; then the seat name, so the
+  // line always names its sender.
+  if (name === '') name = labelName ?? '';
+  return `Message from ${name === '' ? record.from : name} (${record.from}@${teamName})`;
 }
 
 /** Reads the target pane until the held-message dialog shows, or ~1s passes: the dialog renders
