@@ -60,6 +60,7 @@ import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endp
 import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
+import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
@@ -713,6 +714,16 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     }
     // A CLI with no measured resume form runs fresh; the caller already said so.
   }
+  // The entity model rule's word on the model the line about to run names, read before the seat
+  // is stopped. Two lines can run: the declaration's own (a fresh start, and the line a resume
+  // falls back to when its binding changed), and the recorded conversation's carried line when
+  // the launch resumes. Both are judged, so no path out of this run names an unchecked model.
+  // A dry run answers the same way, since it would run the same line.
+  const launchRule = readEntityModelRule(home, team);
+  const refusalOf = (launch: string) =>
+    launchRefusal({ name: declared.name, role: declared.role, cli: next.cli, launch }, launchRule);
+  const policyProblem = refusalOf(next.launch) ?? (resumed === undefined ? null : refusalOf(planSeat.launch));
+  if (policyProblem !== null) return { kind: 'not-ready', message: `${name}: ${policyProblem}` };
   if (dry) {
     const stopStep = inspected.agent
       ? `stop ${plainLine(name)} in ${plainLine(inspected.agent.pane)} (${inspected.where})\n`
