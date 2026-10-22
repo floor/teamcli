@@ -559,6 +559,9 @@ export function upPlan(input: UpInput): Step[] {
             do: 'record',
             seat: seat.name,
             record: { kind: 'left out', reason: seat.sessionDoubt },
+            // The refusal's own sentence stays the record's stderr detail, as the stored-ready
+            // record carried it before the seat was refused.
+            detail: `  ${seat.sessionDoubt}\n`,
             held: true,
           },
         });
