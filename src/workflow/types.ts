@@ -146,6 +146,12 @@ export type DryStop = {
   waitingOn?: WaitingOn;
   signal?: SignalName;
   requestId?: RequestId;
+  /**
+   * The stopped request's own effective precondition, recorded unchanged even when it is stale.
+   * Present on a request-derived stop (one naming a signal and a request id); a request-less stop
+   * — the reachable `uses:` refusal — names no request and carries none.
+   */
+  expectedRevision?: Revision;
   evidence: EvidenceRef[];
   guard?: { name: string; answer: boolean; evidence: EvidenceRef[] };
 };

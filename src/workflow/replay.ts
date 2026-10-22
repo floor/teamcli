@@ -357,6 +357,11 @@ export function replay(input: ReplayInput): ReplayResult {
   if (stop.requestId === undefined) {
     return failure('workflow.journal', 'the stopped outcome records no request id');
   }
+  if (stop.expectedRevision === undefined) {
+    // Fail closed: an older request-derived stop without its precondition is not rebuilt under the
+    // folded revision, which would accept the request the producer refused.
+    return failure('workflow.journal', 'the stopped outcome records no expected revision');
+  }
 
   const stopState = definition.states[run.state];
   if (stopState === undefined) {
@@ -381,11 +386,12 @@ export function replay(input: ReplayInput): ReplayResult {
     );
   }
   const stopTransition = transitionOf(stopEnabled[0]!);
+  // Re-evaluate the stopped request unchanged, under the precondition the producer recorded.
   const stopEnvelope: WorkflowEnvelope = {
     format: 1,
     run: journal.run,
     definition: journal.definition,
-    expectedRevision: run.revision,
+    expectedRevision: stop.expectedRevision,
     requestId: stop.requestId,
     move: { transition: stopTransition },
     target: journal.target,
@@ -522,6 +528,7 @@ function journalProblem(value: unknown): string | undefined {
         'waitingOn',
         'signal',
         'requestId',
+        'expectedRevision',
         'guard',
       ]) ?? stopProblem(outcome, 'outcome')
     );
@@ -547,6 +554,15 @@ function stopProblem(value: unknown, where: string): string | undefined {
   if (record.decision !== 'held' && record.decision !== 'refused') {
     return `${where}.decision must be "held" or "refused"`;
   }
+  // A request-derived stop must record the request's own precondition. An older journal without it
+  // fails closed here rather than replaying under a substituted revision; the 0.5.4 contract is
+  // unpublished, so there is no released journal shape to keep accepting.
+  const precondition =
+    record.expectedRevision === undefined
+      ? record.signal !== undefined && record.requestId !== undefined
+        ? `${where}.expectedRevision is required on a request-derived stop`
+        : undefined
+      : integerProblem(record.expectedRevision, `${where}.expectedRevision`, 0);
   return (
     nonEmptyStringProblem(record.code, `${where}.code`) ??
     nonEmptyStringProblem(record.why, `${where}.why`) ??
@@ -557,6 +573,7 @@ function stopProblem(value: unknown, where: string): string | undefined {
     (record.waitingOn === undefined ? undefined : waitingOnProblem(record.waitingOn, `${where}.waitingOn`)) ??
     (record.signal === undefined ? undefined : signalProblem(record.signal, `${where}.signal`)) ??
     (record.requestId === undefined ? undefined : nonEmptyStringProblem(record.requestId, `${where}.requestId`)) ??
+    precondition ??
     (record.guard === undefined ? undefined : guardProblem(record.guard, `${where}.guard`))
   );
 }
