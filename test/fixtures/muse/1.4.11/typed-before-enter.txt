@@ -1,0 +1,11 @@
+  Muse Code 1.4.11
+
+  Skills: 56 loaded · 2 warnings (ctrl+o to expand)
+
+── Voice input (⌥ + v to start) ─────────────────────
+❯ Read /home/owner/.config/team/demo-3f9c2a8e1d7b/
+  rules/builder-5.md (sha256 5e1d0a9c4b2f): your
+  standing rules for this session; reply ready and
+  wait for your brief.
+─────────────────────────────────────────────────────
+  echo · /p/t/b5-muse-capture/ws · Auto-review
