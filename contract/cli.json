@@ -1678,6 +1678,18 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval-mode",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--approval-modes",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--approvals",
           "repeatable": false,
           "takesValue": false
@@ -1732,6 +1744,12 @@
         },
         {
           "hidden": false,
+          "name": "--scope",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--signer",
           "repeatable": false,
           "takesValue": true
@@ -1759,7 +1777,9 @@
         "team init --execute <request-id> [--json]",
         "team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]",
         "team init --approvals [--json]",
-        "team init --revoke-approval <rule-id> [--json]"
+        "team init --revoke-approval <rule-id> [--json]",
+        "team init --approval-mode <none|always-rule|per-action> --scope <folder> [--signer <name>] [--assertion <file>] [--json]",
+        "team init --approval-modes [--json]"
       ],
       "who": {
         "gate": "owner-only",
