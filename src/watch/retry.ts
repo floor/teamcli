@@ -20,12 +20,20 @@
 // drop no watcher read is given up on with the file's path, never typed and never called lost.
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { TeamFile } from '../file/types.ts';
+import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
-import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
-import { CHANNEL_CONFIRM_MS, CHANNEL_UNCONFIRMED, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
+import { claimBindingIn, inboxLive, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
+import {
+  channelLaunchEnabled,
+  CHANNEL_CONFIRM_MS,
+  CHANNEL_HELD_RECEIPT,
+  CHANNEL_UNCONFIRMED,
+  CHANNEL_UNCONFIRMED_REASON,
+  recordChannelHeld,
+} from '../mcp/channel.ts';
+import { buildIdentity, type BuildIdentity } from '../version.ts';
 import {
   clearPending,
   markRedelivered,
@@ -70,6 +78,10 @@ export type RetryScene = {
   ownPane: string | null;
   sources: RetrySources;
   now: Date;
+  /** The build this retry delivers as. A channel listener this build cannot vouch for is stale,
+   *  and the retry holds the push name before its wake. Absent, the install on disk is read at
+   *  the wake: a watch started before an install must see the install that is there now. */
+  build?: () => BuildIdentity;
   say(text: string, desktop: boolean): void;
   /** The pass's native hold by seat: nothing is typed at a seat whose presence proves a turn, a
    *  person wait, a session end, or cannot be trusted. Absent, the retry is exactly today's. */
@@ -131,6 +143,15 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
   };
 }
 
+/** Whether a channel-enabled listener serves this seat from an install this build cannot vouch
+ *  for. Read at the wake, not at the pass start: an install can land, and a listener can be
+ *  replaced, between the sender's first probe and this pass. */
+function staleChannelAt(scene: RetryScene, seat: Seat, dropDir: string): boolean {
+  if (seat.cli !== 'claude-code' || !channelLaunchEnabled(seat.launch)) return false;
+  const live = inboxLive(dropDir, scene.root, scene.session, seat.name, (scene.build ?? buildIdentity)());
+  return live.live === false && live.listener?.channel === true;
+}
+
 /**
  * One held drop, when its seat is free. The screen is read first, and a dialog or a status that
  * is not idle/done ends the pass here — the box is never typed blind. Unsent text is the
@@ -140,7 +161,7 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
  * back at its shell is refused under the lock, as the typed leg and the daemon refuse it: its
  * CLI has exited, and the shell's box is not a composer to type a trigger into.
  */
-async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
+async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
   // The marker is only a convenience; the drop file is the message. A record left behind a drop
   // that was moved or removed has nothing to tell the seat, so it is given up on, not typed.
   if (!existsSync(join(dropDir, drop.id))) {
@@ -175,7 +196,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
   // A box that cannot be read is not typed into: a retry exists to avoid the lost message, not to
   // add a second one. The age bound ends a marker left behind a pane that never reads again.
   if (screen === null || (status !== 'idle' && status !== 'done')) return;
-  const kind = readScreen(cli, screen).kind;
+  const kind = readScreen(seat.cli, screen).kind;
   // A dialog screen is never typed into here. Unsent text goes to the delivery below, which
   // copies it beside the drop, clears the box, delivers and pastes it back — or holds where this
   // CLI has no measured way into its box; either way the retry types nothing itself.
@@ -212,7 +233,20 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
       scene.say(`${drop.to}: ${heldWords(drop)} was read on retry (receipt)`, false);
       return;
     }
-    const result = await deliverTrigger(hostOf(scene, pane), pane, line, cli, {
+    // The retry is a wake of its own, and a channel listener from an install this build cannot
+    // vouch for would push the same record on top of it. The listener is checked again here, at
+    // the wake, and the push name is held before the line is typed; a marker already at that
+    // name is the server's own push, and the write is refused while the retry goes on.
+    if (staleChannelAt(scene, seat, dropDir)) {
+      recordChannelHeld(dropDir, {
+        v: 1,
+        kind: CHANNEL_HELD_RECEIPT,
+        id: drop.id,
+        at: scene.now.toISOString(),
+        reason: 'the watch retry wakes the seat; the serving channel runs another install',
+      });
+    }
+    const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
       receipt,
@@ -307,7 +341,7 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
  * the same: the marker says the watch tried, and the message stays where a person can send it
  * again.
  */
-async function redeliverChannel(scene: RetryScene, cli: string, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
+async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
   const home = scene.home;
   if (home === undefined) {
     giveUp(scene, dropDir, drop, 'this watch has no home to verify its sender with');
@@ -343,7 +377,7 @@ async function redeliverChannel(scene: RetryScene, cli: string, pane: string, dr
     }
     scene.say(`${drop.to}: a channel send from ${drop.from} was not confirmed; the socket was not taken (${socket.reason}), typing the trigger`, false);
   }
-  await retryOne(scene, cli, pane, dropDir, marked);
+  await retryOne(scene, seat, pane, dropDir, marked);
 }
 
 /**
@@ -448,7 +482,7 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
       ?? channelDue
       ?? live.find((one) => one.leg === 'mcp-inbox' && now - Date.parse(one.ts) > INBOX_FALLBACK_MS);
     if (drop === undefined) continue;
-    if (drop.leg === 'channel') await redeliverChannel(scene, seat.cli, pane, dropDir, drop);
-    else await retryOne(scene, seat.cli, pane, dropDir, drop);
+    if (drop.leg === 'channel') await redeliverChannel(scene, seat, pane, dropDir, drop);
+    else await retryOne(scene, seat, pane, dropDir, drop);
   }
 }

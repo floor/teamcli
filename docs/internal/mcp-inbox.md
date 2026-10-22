@@ -154,16 +154,22 @@ from. When they differ it stops its channel, closes its input, removes its marke
 installed entry with the same arguments and this process's stdio, then exits 0: the installed
 build reads the same stdin, so the calls that arrive there next are answered by it. A line the
 old process had already read is not replayed. When the installed entry cannot be started, the
-server says so on stderr and exits; the next launch starts the installed build.
+server says so on stderr and exits; the next launch starts the installed build. A server started
+from a build before this one has none of this: it cannot learn to reload, so restarting the
+seat's client is what moves it, and until then a sender of this build protects the seat itself by
+holding the push name whenever its walk wakes the seat.
 
 A sender that falls back from a stale channel listener has a second hazard: the old server still
 watches the folder and would push the record after the sender's own wake. Before it writes the
 record, when its walk holds a leg that wakes the seat (socket, native or typed), the sender
-writes `<id>.channel-held.json` at the push marker's own name — `{v, kind: "channel-held", id,
-at, reason}`. Every serving server, old or new, treats a marker for the id as a push already
-made and skips it. The marker is not a push: the sender's wait reads only the server's
-`channel-push` marker as delivery, and a wait that finds the held marker alone has delivered
-nothing.
+writes a marker at the push marker's own name, `<id>.channel-push.json` — `{v, kind:
+"channel-held", id, at, reason}`. Every serving server, old or new, treats a marker for the id as
+a push already made and skips it. The marker is not a push: the sender's wait reads only the
+server's `channel-push` marker as delivery, and a wait that finds the held marker alone has
+delivered nothing.
+
+The watch's typed retry makes the same identity check at its own wake, because an install can
+land between the send and the retry, and leaves the same held marker before a waking line.
 
 ## The evidence rule
 

@@ -35,7 +35,8 @@ import { signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, writeRe
 import { markTaken, readTaken, TAKEN_IDLE_GRACE_MS } from '../src/send/taken.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import type { Live } from '../src/status/compare.ts';
-import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage, receiptPath } from '../src/mcp/inbox.ts';
+import { INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, readMessage, receiptPath, writeListener } from '../src/mcp/inbox.ts';
+import { CHANNEL_HELD_RECEIPT, channelPushHeld, channelPushPath, channelPushed } from '../src/mcp/channel.ts';
 import { promoteInboxDrops, retryHeldDrops, type RetrySources } from '../src/watch/retry.ts';
 import { confirmTakenDrops } from '../src/watch/taken.ts';
 import { claudeBox, recordBody, testIo } from './helpers.ts';
@@ -1554,4 +1555,61 @@ describe('the turn-start read, end to end', () => {
       [id, 'delivered (read)', 'drop'],
     ]);
   }, 30_000);
+
+});
+
+describe('retryHeldDrops and a stale channel', () => {
+  // The install-change-between-send-and-retry case: the send found no listener, so it held no
+  // push name; by the retry, a channel-enabled listener from another install serves the seat.
+  // The retry reads that listener again at its own wake and holds the push name before it types,
+  // so the installed build's record is woken once and no channel push follows it.
+  test('an install change between send and retry holds the stale channel push name', async () => {
+    const made = world();
+    const text = teamText(made.root, lobbyDir(made.home)).split('launch: claude\n').join(
+      'launch: claude --dangerously-load-development-channels server:team-inbox\n',
+    );
+    const team = teamOf(text);
+    const id = 'lead-held-1';
+    // The send and its record: a held drop, nothing typed yet, and no listener to ask.
+    const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
+    // The install changes under the watch: the listener serving this seat now runs another
+    // version and another packed commit of the same CLI, with the channel declared.
+    writeListener(dropDir, {
+      v: 1,
+      seat: 'lead',
+      session: 'acme',
+      root: realpathSync(made.root),
+      cli: 'claude-code',
+      pid: process.pid,
+      ts: NOW.toISOString(),
+      version: '0.5.4-hotfix.9',
+      build: 'aaaaaaaaaaaaaaaa',
+      head: 'a'.repeat(40),
+      channel: true,
+    });
+    const one = pane(claudeBox(''));
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      build: () => ({ version: '0.5.5', build: 'bbbbbbbbbbbbbbbb', builtAt: NOW.getTime(), head: 'b'.repeat(40) }),
+      say: () => {},
+    });
+
+    // The wake happens once, and the push name was held before it: a serving channel skips the
+    // id, and the retry's own reading never takes the held marker for a push.
+    expect(one.typed).toHaveLength(1);
+    expect(one.enters).toBe(1);
+    const marker = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as Record<string, unknown>;
+    expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id });
+    expect(channelPushHeld(dropDir, id)).toBe(true);
+    expect(channelPushed(dropDir, id)).toBe(false);
+    expect(readPending(dropDir)).toEqual([]);
+  });
 });

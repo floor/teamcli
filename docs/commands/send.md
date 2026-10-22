@@ -111,10 +111,12 @@ compares the install under it with the one it started from on every channel tick
 tool call; when they differ it removes its marker, starts the installed entry with the same
 arguments and this process's stdio, and exits. A stale channel listener is still a running old
 server and would push the record after the sender's own wake, so a sender whose walk holds a
-waking leg — socket, native or typed — writes `<id>.channel-held.json` at the push marker's name
-before its record. Any serving server skips an id that already holds a marker, and the send's
-own wait never reads the held marker as a push: only the server's `channel-push` marker ends it
-as `sent (channel)`.
+waking leg — socket, native or typed — writes a marker with `kind: "channel-held"` at the push
+marker's own name, `<id>.channel-push.json`, before its record. Any serving server skips an id
+that already holds a marker, and the send's own wait never reads the held marker as a push: only
+the server's `channel-push` marker ends it as `sent (channel)`. The watch's typed retry repeats
+that identity check at its own wake — an install can land between the send and the retry — and
+holds the same name before its line.
 
 The `mcp-inbox` leg writes the message whole into the seat's own inbox —
 `<root>/.agents/send-drops/<session>/<seat>`, the same 0600 record the typed leg would leave —
