@@ -1926,6 +1926,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // The seats whose state entry the plan took away before their line ran — a repair closes the
     // old pane and drops the record first.
     const droppedSeats = new Set<string>();
+    // The pane each seat's state held when a close this run confirmed took that entry away: the
+    // negative boundary a launch is read against. A closed pane is never the route the registry
+    // keeps, and the pane a later line started on is told apart from it here.
+    const closedPanes = new Map<string, string | undefined>();
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
       for (const agent of agents) {
@@ -2205,6 +2209,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           }
           delete current.seats[name];
         });
+        closedPanes.set(name, pane);
         if (pane) forgetLaunchedPane(sources.home, pane, session);
       },
       // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
@@ -2384,13 +2389,32 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       },
       team.seats.map((seat) => {
         const held = afterwards[seat.name];
+        const readyPane = held?.stage === 'ready' ? (held.pane ?? null) : null;
+        // A launch this run positively started (its line ran, `sessionStarted`) and left short of
+        // ready on a pane this run did not close: the registry follows that pane, and never claims
+        // ready. A created workspace alone is not this evidence, and a pane the run closed after
+        // starting is not either.
+        const partial = readyPane === null
+          && startedSeats.has(seat.name)
+          && held !== undefined
+          && held.pane !== undefined
+          && closedPanes.get(seat.name) !== held.pane
+          ? { pane: held.pane }
+          : undefined;
+        // A close this run confirmed, with no live successor: the record's route is dead. That is
+        // any seat whose pane this run closed and did not replace with a pane a line started on —
+        // including a replaced seat whose line never ran. A refused or unproven close never gets
+        // here: only a real close calls `drop`.
+        const ended = readyPane === null && partial === undefined && closedPanes.has(seat.name);
         return {
           seat,
-          pane: held?.stage === 'ready' ? (held.pane ?? null) : null,
+          pane: readyPane,
           ...(held?.id ? { handle: held.id } : {}),
           // The same measured id the launch wrote into the seat's record: the registry keeps it
           // beside the pane, and a seat with no reading leaves the record's own id in place.
           ...(held?.agent_session ? { agent_session: held.agent_session } : {}),
+          ...(partial === undefined ? {} : { partial }),
+          ...(ended ? { closed: true as const } : {}),
         };
       }),
     )) logLine(dir, 'up', callerLabel(caller), note, now());
