@@ -12,7 +12,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { answerChoiceOf } from './emission.ts';
+import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 
 export const TEAM_CREATE_TTL_MS = 15 * 60 * 1000;
@@ -131,7 +131,7 @@ export function approveTeamCreate(
 
 export type TeamCreateRule = { rule_id: string; kind: 'team-create'; scope: string; signer: string; created: string };
 
-/** Every `team-create` rule whose owner-signer signature verifies now; others are ignored. */
+/** Every `team-create` rule whose owner-signer signature verifies now and that is inside its approval-rule-ttl; others are ignored. */
 export function listTeamCreateRules(home: string, store: OwnerSeatKeyStore, now: Date = new Date()): { rules: TeamCreateRule[]; ignored: string[] } {
   let names: string[];
   try {
@@ -148,6 +148,8 @@ export function listTeamCreateRules(home: string, store: OwnerSeatKeyStore, now:
       const verified = verifyOwnerAnswer(home, signed, store, now);
       const a = signed.owner_seat_answer;
       if (!verified.ok || a.kind !== 'team-create' || a.choice !== 'always' || typeof a.scope !== 'string' || a.request_id !== id) throw new Error('rule');
+      const seat = readOwnerSeat(home);
+      if (seat === null || approvalRuleExpired(home, seat.entity, a.at, now)) throw new Error('expired');
       rules.push({ rule_id: id, kind: 'team-create', scope: a.scope, signer: signed.signer, created: a.at });
     } catch {
       ignored.push(id);

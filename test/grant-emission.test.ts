@@ -279,6 +279,24 @@ describe('always: standing approval rules', () => {
     expect(rules[0]).toMatchObject({ rule_id: ruleId, client_id: 'grok-bot', entity: 'floor', teams: ['floor'], seats: ['orchestrator'], ops: ['send'], approved_by: 'one-time-code' });
   });
 
+  test('a rule lives for approval-rule-ttl: 30 days by default, 90 at most', async () => {
+    const w = world('ttl');
+    conversational(w);
+    const s = screen();
+    const b = await requestOf(w, s);
+    expect((await execute(w, b.json.target, ['--approve', 'always', '--code', s.codes[0]!])).code).toBe(0);
+    const day = 86_400_000;
+    const at = (days: number) => new Date(Date.now() + days * day);
+    expect((await requestOf(w, s, [], at(29))).json.status).toBe('updated');
+    const stale = await requestOf(w, s, [], at(31));
+    expect(stale.json.status).not.toBe('updated');
+    const ttl = writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'approval-rule-ttl', value: 90 }, { now: new Date() });
+    if (!ttl.ok) throw new Error(ttl.why);
+    expect((await requestOf(w, s, [], at(31))).json.status).toBe('updated');
+    expect((await requestOf(w, s, [], at(91))).json.status).not.toBe('updated');
+    expect(writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'approval-rule-ttl', value: 120 }, { now: new Date() }).ok).toBe(false);
+  });
+
   test('a wider request asks again; a master grant is never auto-approved nor approved always', async () => {
     const w = world('wider');
     conversational(w);

@@ -116,6 +116,7 @@ export const ENFORCED_POLICY_NAMES = [
   'grant-emission',
   'owner-signers',
   'owner-signer-mode',
+  'approval-rule-ttl',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -196,6 +197,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   grant_emission: 'grant-emission',
   owner_signers: 'owner-signers',
   owner_signer_mode: 'owner-signer-mode',
+  approval_rule_ttl: 'approval-rule-ttl',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -929,7 +931,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
   // a single-use, short-lived owner approval bound to the request's hash (`--execute`). Entity
   // level only. `owner-terminal` is the tighter word.
   // Which owner-seat signers an entity accepts for an approval, by signer name (for example
-  // `[phone, mac]`); no signer type is preferred. Absent, every registered signer is accepted.
+  // `[phone, mac]`); no signer type is preferred. Absent, no signer is accepted (fail closed).
   'owner-signers': {
     name: 'owner-signers',
     kind: 'enforced',
@@ -951,6 +953,17 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: (raw: unknown) => (raw === 'any' ? raw : null),
     isWithin: () => true,
+  },
+  // How long a standing ('always') approval rule lives, in days from its creation: 30 by
+  // default, 90 at most. A rule past it stops matching. Entity level; shorter is tighter.
+  'approval-rule-ttl': {
+    name: 'approval-rule-ttl',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: 30,
+    gateLifting: false,
+    parseValue: (raw: unknown) => (typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 && raw <= 90 ? raw : null),
+    isWithin: (lower: number, higher: number) => lower <= higher,
   },
   'grant-emission': {
     name: 'grant-emission',

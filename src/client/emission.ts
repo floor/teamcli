@@ -520,6 +520,28 @@ export function denyPendingGrant(home: string, requestId: string, now: Date = ne
 
 // ---- standing approval rules ('always') ----------------------------------------------------
 
+export const APPROVAL_RULE_TTL_DEFAULT_DAYS = 30;
+export const APPROVAL_RULE_TTL_MAX_DAYS = 90;
+
+/** The `approval-rule-ttl` for an entity in days: 30 by default, never past 90; unreadable reads as the default. */
+export function approvalRuleTtlDays(home: string, entity: string, now: Date = new Date()): number {
+  try {
+    const chain = loadAndResolvePolicyChain({ home, entity, projectId: null, teamRoot: null, team: null }, { now, upToLevel: 'entity' });
+    const v = chain.ok ? chain.policies['approval-rule-ttl']?.value : undefined;
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 1) return Math.min(v, APPROVAL_RULE_TTL_MAX_DAYS);
+  } catch {
+    // the default below
+  }
+  return APPROVAL_RULE_TTL_DEFAULT_DAYS;
+}
+
+/** Whether a rule created at `created` is past the entity's approval-rule-ttl at `now`. */
+export function approvalRuleExpired(home: string, entity: string, created: string, now: Date = new Date()): boolean {
+  const at = Date.parse(created);
+  if (!Number.isFinite(at)) return true;
+  return now.getTime() >= at + approvalRuleTtlDays(home, entity, now) * 86_400_000;
+}
+
 export const GRANT_RULE_DOMAIN = 'team-grant-approval-rule-v1\n';
 export const GRANT_RULE_ID_PATTERN = /^ar_[0-9a-f]{24}$/;
 
@@ -617,6 +639,7 @@ export function matchingApprovalRule(home: string, p: PendingGrantParams, now: D
   const duration = durationSeconds(p, now);
   for (const rule of listApprovalRules(home).rules) {
     if (rule.client_id !== p.client_id || rule.entity !== p.entity) continue;
+    if (approvalRuleExpired(home, rule.entity, rule.created, now)) continue;
     if (!rule.teams.includes(p.team ?? p.entity) || !rule.seats.includes(p.seat ?? 'orchestrator')) continue;
     if (!ops.every((op) => rule.ops.includes(op))) continue;
     if (!(duration > 0) || duration > rule.max_duration_seconds) continue;
