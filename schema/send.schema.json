@@ -51,6 +51,7 @@
             "delivered",
             "delivered (read)",
             "sent (unconfirmed)",
+            "sent (channel)",
             "queued (receiver busy)",
             "answered",
             "recorded",
@@ -90,6 +91,7 @@
             "mcp-inbox",
             "native",
             "headless-resume",
+            "channel",
             null
           ]
         },

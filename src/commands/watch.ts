@@ -24,7 +24,7 @@ import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
 import { watchCommand, watchWouldRead } from './up.ts';
-import { realHost, sendDirect } from './send.ts';
+import { realHost, redeliverChannelOnSocket, sendDirect } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
 import { listUnacked, listUnackedMessages } from './messages.ts';
@@ -1144,6 +1144,25 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           await retryHeldDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
             nativeHeld: nativeHeldNow,
+            // The channel's one redelivery dials the receiving session's socket with the stored
+            // signed record; a seat whose launch the socket gate refuses falls through to the
+            // typed leg the retry already walks.
+            socketRedeliver: (dropDir, drop) => {
+              const seat = team.seats.find((one) => one.name === drop.to);
+              return redeliverChannelOnSocket({
+                host: { ...realHost, home: sources.home ?? realHost.home, now: sources.now },
+                dir,
+                root,
+                project: team.project,
+                session,
+                seat: drop.to,
+                cli: seat?.cli ?? '',
+                dropDir,
+                drop,
+                team,
+                ...(seat === undefined ? {} : { launch: seat.launch }),
+              });
+            },
           });
         }
         // A delivered send whose seat was not seen acting on the line yet leaves a record of its

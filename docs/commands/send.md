@@ -73,6 +73,36 @@ declaration the hold sat under is re-confirmed, by its settings file being rewri
 hold's mark lives under the receiving team's state folder, outside the seat's drop folder, so
 its reader never sees it as a message.
 
+The `channel` leg is the second implied default outside a declared word, and the only one that is
+never a declared word: with no level of the receiving seat's chain declaring an order, a Claude
+Code seat whose own launch carries the development-channels flag naming the team server
+(`--dangerously-load-development-channels server:team-inbox`) and whose live `.inbox-listener`
+marker says `channel` is walked `channel` first, then whatever the rest of the order would have
+been. The seat's own inbox server pushes one notification per record that arrives after it starts:
+its content opens with the message-display header and carries the signed body whole, and its meta
+names only identifiers — the message id, the sender, the seat and the team. The client draws its
+own `← <server>: <summary>` wrapper over that notification, naming the server that pushed it, with
+content too long for the pane elided; the wrapper is display, never part of the message. Nothing
+is typed and no pane is read. The sender waits two seconds for the marker the server leaves beside
+the record, `<id>.channel-push.json`; a marker for that id ends the walk `sent (channel)` (exit 0,
+`via: channel`), and the `<id>.pending` marker beside the record says `leg: channel`. `sent
+(channel)` claims only that the notification was written: the client acknowledges nothing at the
+transport, so the push is not a read. The seat's handling turn calls the server's `ack` tool with
+the id from the notification's meta, which writes the same signed `<id>.read.json` receipt as
+`team ack`, with `read_by: channel`; a watch promotes that receipt once to `delivered (read)`,
+clears the marker and types nothing.
+
+A pushed message still without a signed receipt three minutes after the push is redelivered
+exactly once: the watch writes `redelivered: channel unconfirmed` onto the marker before either
+attempt, dials the seat's socket when the receiver accepts a frame, and otherwise — or when the
+socket does not take it — types the ordinary trigger line. The history line records the redelivery
+as `failed: redelivered: channel unconfirmed`. The marker carries that word, so no later pass can
+redeliver the same push again, and an acknowledged record is never touched: a receipt that lands
+after the redelivery settles the marker as read and types nothing more. A wait that sees no marker
+inside its two seconds wrote a record nothing pushed: the marker is cleared and the walk moves on
+with `failed: channel: no push receipt within <n> ms`, because this leg took nothing and no later
+pass may redeliver a send whose own run is still walking the order.
+
 The `mcp-inbox` leg writes the message whole into the seat's own inbox —
 `<root>/.agents/send-drops/<session>/<seat>`, the same 0600 record the typed leg would leave —
 and types nothing. It takes the send only when a server is serving that inbox: a marker
@@ -551,7 +581,8 @@ line on stderr and has none.
 | Outcome | Exit | Printed |
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
-| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the typed leg's own `team drops --read`, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the channel's ack, the typed leg's own `team drops --read`, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
+| sent (channel) | 0 | `<seat>: sent (channel) (<n> ms)` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms)` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms)` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
 | sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (typed, <n> ms; trigger taken, no read receipt yet)` on stdout, for the typed leg: the trigger line left the seat's input box, and no signed receipt has come back, so the message is not called read |
