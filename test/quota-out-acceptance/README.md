@@ -28,9 +28,10 @@ the weekly limit left): a real capture of a warning that must not read as a wall
 
 - **send**: a positively read wall refuses (`send.refused`, exit 1) before any drop, fallback,
   `.pending` retry, socket frame or typing — including when the host still reports the seat
-  working, and including a wall frame whose composer cannot be read. A quote inside a working
-  turn, a wall above a finished turn (history), and a healthy idle prompt keep ordinary sends.
-  An ordinary provider error keeps its existing caution.
+  working, including a wall frame whose composer cannot be read, and including a wall above a
+  composer that already holds unsent text (the draft is never typed into and no retry record is
+  written). A quote inside a working turn, a wall above a finished turn (history), and a healthy
+  idle prompt keep ordinary sends. An ordinary provider error keeps its existing caution.
 - **status**: one canonical `blocked: quota` seat state in the human row and in JSON `rows[].seat_state`,
   with the reset as displayed — `resets at 11:00`, `resets in 47h31m`, the Gemini capture's
   `2:10 PM GMT+2` verbatim, or an explicit no-reset — and never a parsed instant or invented zone.
@@ -56,8 +57,13 @@ follow-up commit that adds this section also changes the status assertions from 
 covered in `seat-pause.test.ts`, including the watch's skip of the paused seat (its peer keeps
 being nudged) and the fresh nudge after a resume.
 
-## Composer-less wall frames
+## Composer-less and draft-bearing wall frames
 
 A wall frame whose pane draws no readable composer is a wall on every surface, as it is at the
 pinned source: its send is held, status carries the quota-out word and the reset, and check
 reports the prompt. The no-composer rows in `acceptance.test.ts` pin all three.
+
+The draft frame is built in the test from the same synthetic wall above the retained agy box,
+with `> please fix the tests` in its composer. It is synthetic for the same reason as
+`agy-individual-quota.txt`. Its row pins that the wall refuses before any retry record is
+written and that the draft is never typed into (no key, no Enter).
