@@ -19,7 +19,7 @@ import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts'
 import { version } from '../version.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
-import { admitTeamCreate, approveTeamCreate, createTeamCreateRequest, listTeamCreateRules, revokeTeamCreateRule } from '../client/team-create.ts';
+import { admitTeamCreate, approveTeamCreate, createTeamCreateRequest, listApprovalModes, listTeamCreateRules, revokeTeamCreateRule, setApprovalMode } from '../client/team-create.ts';
 import { assertionFile } from '../client-cli.ts';
 
 // What git must never pick up: the file and the runtime files beside it — the start files of
@@ -182,6 +182,8 @@ export const USAGE = `Usage: team init [--restore] [--json]
        team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
        team init --approvals [--json]
        team init --revoke-approval <rule-id> [--json]
+       team init --approval-mode <none|always-rule|per-action> --scope <folder> [--signer <name>] [--assertion <file>] [--json]
+       team init --approval-modes [--json]
 
 Exits 0 when the team file is written or restored, 1 when init is refused, 2 when the invocation can't be read or this folder is not a git repository.
 `;
@@ -200,7 +202,7 @@ export async function runInit(
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval'], ['restore', 'json', 'request', 'approvals']);
+  const args = readArgs(argv, ['execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope'], ['restore', 'json', 'request', 'approvals', 'approval-modes']);
   const approving = args.values['approve-as-owner-seat'] !== undefined;
   if (args.error || (args.rest.length && !(approving && args.rest.length === 1))) {
     refuse(io, json, 'init', {
@@ -246,6 +248,23 @@ export async function runInit(
   } else if (args.flags.has('approvals')) {
     const listed = listTeamCreateRules(actionHome, store, now);
     actionDone('answered', 'team init: team-create approval rules', { rules: listed.rules, ignored: listed.ignored });
+    actionOutcome = 'done';
+  } else if (args.values['approval-mode'] !== undefined) {
+    // Signed once by an owner signer at setup; never by the requester at action time.
+    const assertion = assertionFile(args.values.assertion, io.cwd);
+    const scope = args.values.scope;
+    const set = scope === undefined
+      ? { ok: false as const, why: '--approval-mode needs --scope <folder>' }
+      : setApprovalMode(actionHome, 'team-create', args.values['approval-mode'], resolve(io.cwd, scope), store, now, {
+        ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
+        ...(assertion !== undefined ? { assertion } : {}),
+      });
+    if (!set.ok) actionRefusal(set.why);
+    else actionDone('answered', `team init: approval mode for team-create is ${args.values['approval-mode']}`, { ...(set.modeId !== undefined ? { mode_id: set.modeId } : {}), revoked: set.revoked });
+    actionOutcome = set.ok ? 'done' : 'refused';
+  } else if (args.flags.has('approval-modes')) {
+    const listed = listApprovalModes(actionHome, store, now);
+    actionDone('answered', 'team init: approval modes', { modes: listed.modes, ignored: listed.ignored });
     actionOutcome = 'done';
   } else if (args.values['revoke-approval'] !== undefined) {
     const revoked = revokeTeamCreateRule(actionHome, args.values['revoke-approval']);
