@@ -79,9 +79,10 @@ async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOpt
     const policies: Array<{ name: string; value: unknown }> = [];
     if (args.values['owner-signers'] !== undefined) policies.push({ name: 'owner-signers', value: args.values['owner-signers'].split(',').map((n) => n.trim()).filter(Boolean) });
     if (args.values['grant-emission'] !== undefined) policies.push({ name: 'grant-emission', value: args.values['grant-emission'] });
-    const policyEntity = args.values['policy-entity'] ?? made.record.entity;
-    const said = policies.length === 0 ? '' : ` and set ${policies.map((p) => `${p.name}=${Array.isArray(p.value) ? p.value.join(',') : String(p.value)}`).join(', ')} for entity ${policyEntity}`;
-    const statement = Buffer.from(`team-owner-seat-setup-v1\n${JSON.stringify({ team: made.record.team, public_key: signer.public_key, entity: policyEntity, policies })}`, 'utf8');
+    const policyEntities = [...new Set((args.values['policy-entity'] ?? made.record.entity).split(',').map((e) => e.trim()).filter(Boolean))];
+    const policyEntity = policyEntities.join(', ');
+    const said = policies.length === 0 ? '' : ` and set ${policies.map((p) => `${p.name}=${Array.isArray(p.value) ? p.value.join(',') : String(p.value)}`).join(', ')} for ${policyEntities.length === 1 ? 'entity' : 'entities'} ${policyEntity}`;
+    const statement = Buffer.from(`team-owner-seat-setup-v1\n${JSON.stringify({ team: made.record.team, public_key: signer.public_key, entities: policyEntities, policies })}`, 'utf8');
     const confirmed = store.sign(signer.label, statement, `Create the TeamCLI owner seat for ${made.record.team}${said}`);
     const statementOk = confirmed.ok && (() => {
       const key = ownerSeatPublicKey(signer.public_key);
@@ -99,9 +100,11 @@ async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOpt
     }
     audit(home, 'seat-registered', { team: made.record.team, signer: signer.name, policies }, now());
     for (const p of policies) {
-      const wrote = writePolicySet(home, { level: 'entity', target: policyEntity, name: p.name, value: p.value } as never, { now: now() });
-      if (!wrote.ok) return refuse(`seat registered, but policy ${p.name} was not set (${wrote.why})`);
-      io.stdout(`policy: entity ${policyEntity} ${p.name} set\n`);
+      for (const target of policyEntities) {
+        const wrote = writePolicySet(home, { level: 'entity', target, name: p.name, value: p.value } as never, { now: now() });
+        if (!wrote.ok) return refuse(`seat registered, but policy ${p.name} was not set for ${target} (${wrote.why})`);
+        io.stdout(`policy: entity ${target} ${p.name} set\n`);
+      }
     }
     io.stdout(`owner seat: registered owner@${made.record.team}, confirmed by Touch ID\nsigner: ${signer.name} (Secure Enclave)\n`);
     return 'done';

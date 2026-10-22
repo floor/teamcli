@@ -95,3 +95,19 @@ describe('team owner-seat setup checks the confirmation', () => {
     expect(existsSync(ownerSeatFile(h))).toBe(false);
   });
 });
+
+describe('team owner-seat setup for several entities', () => {
+  test('one confirmation sets the policies on each listed entity (teamcli for the grant, floor for Floor Docs)', async () => {
+    const h = home(); const s = store();
+    const r = await run(['setup', '--team', 'floor', '--signer', 'mac', '--policy-entity', 'teamcli,floor,teamcli', '--owner-signers', 'mac'], h, s);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('policy: entity teamcli owner-signers set');
+    expect(r.out).toContain('policy: entity floor owner-signers set');
+    expect(r.out.match(/owner-signers set/g)!.length).toBe(2);
+    const { acceptedSigners, readOwnerSeat } = await import('../src/client/owner-seat.ts');
+    for (const entity of ['teamcli', 'floor']) {
+      const accepted = acceptedSigners(h, readOwnerSeat(h)!, new Date(), entity);
+      expect('names' in accepted && accepted.names).toEqual(['mac']);
+    }
+  });
+});
