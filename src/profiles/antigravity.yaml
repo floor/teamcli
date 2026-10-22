@@ -169,7 +169,9 @@ screen:
     # A usage wall reported from the field (2026-10-21): the pane read `Individual quota
     # reached`, with a reset span under it (`Resets in 47h31m`). No capture of the frame
     # exists, so the placement is not invented: `at_composer` reads the block directly above
-    # the box as one block, every row of it matching the rule. The reported frame is the two
+    # the box as one block, every row of it matching the rule (a printed reset value wrapped
+    # onto its own row under the sentence is the one continuation the reader allows). The
+    # reported frame is the two
     # rows below (sentence, then reset) over the box's blank margin, and a screen that names
     # no reset is the one-row form; the second rule reads that one without requiring a reset.
     # A sentence quoted inside a turn, with later text between it and the box, is not the

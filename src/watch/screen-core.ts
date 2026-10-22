@@ -645,8 +645,11 @@ function liveRegion(
  * frame, read as one contiguous block — the blank margin under it skipped, blanks inside it
  * allowed — walking up from the last non-blank row while every non-blank row matches at least
  * one of the rule's patterns, and stopping at the first row that does not (or at the profile's
- * turn-end row). So a notice drawn in one row, or in two rows as a sentence and its reset, is
- * the wall; a quoted sentence with any later text between it and the box leaves the adjacent row
+ * turn-end row). One printed value row — no letters, at least one digit, the clock Claude Code
+ * wraps onto its own row under `Your limit will reset at` — may sit directly above the frame and
+ * is kept in the block, though its value is never read as the reset. So a notice drawn in one
+ * row, in two rows as a sentence and its reset, or as a sentence whose value wrapped below it, is
+ * the wall; a quoted sentence with any later prose between it and the box leaves the adjacent row
  * non-matching and the block empty. Null when the composer cannot be read: adjacency has nothing
  * to anchor on then, and the rule reads the whole window as one without the field does.
  */
@@ -665,6 +668,7 @@ function composerEdgeBlock(
   const block: number[] = [];
   let at = hit.from - 1;
   while (at >= 0 && !(plain[at] ?? '').trim()) at--;
+  let continued = false;
   while (at >= 0) {
     if (tick()) return null;
     const line = plain[at] ?? '';
@@ -674,11 +678,24 @@ function composerEdgeBlock(
     }
     if (data.turnEnd?.test(line)) break;
     const row = patterns.some((pattern) => matches(data, plain, at, pattern, tick, true) === true);
-    if (!row) break;
+    if (!row) {
+      if (continued || block.length > 0 || !printedValueRow(line)) break;
+      continued = true;
+      block.push(at);
+      at--;
+      continue;
+    }
     block.push(at);
     at--;
   }
   return block;
+}
+
+/** A row that prints only a value — at least one digit and no letter — as a reset time wrapped
+ *  off the sentence's last row does. Prose always carries a letter, and a second such row does
+ *  not continue a notice, so a quote followed by later text still ends the adjacent block. */
+function printedValueRow(line: string): boolean {
+  return /\d/.test(line) && !/\p{L}/u.test(line);
 }
 
 function ruleMatches(data: ScreenData, lines: string[], rule: Rule, tick: () => boolean, live?: () => Set<number> | null, edge?: (patterns: LinePattern[]) => number[] | null): boolean | 'stop' {
