@@ -111,6 +111,11 @@ export type ReceiptPayload = {
   /** Diagnostics the read copied from the seat's record, when it had them. */
   brief_seat_handle?: string;
   brief_pane_root_pid?: number;
+  /** What took the record when it was read without a reader: the socket delivery writes the read
+   *  receipt itself, and this names it. A receipt written by a reader carries none. Signed with
+   *  the rest of the payload, so a receipt that names another taker than the one written does
+   *  not verify. */
+  read_by?: string;
 };
 
 export type SignedReceipt = { payload: ReceiptPayload; signature: string };
@@ -258,6 +263,10 @@ export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
     && (typeof value.brief_pane_root_pid !== 'number' || !Number.isInteger(value.brief_pane_root_pid) || value.brief_pane_root_pid <= 0)) {
     return null;
   }
+  // The taker an unread record was read by, when no reader did: the socket delivery's own read.
+  // The field is signed with the payload, so it is carried into the reconstructed payload — a
+  // receipt whose `read_by` was dropped or rewritten stops verifying.
+  if (value.read_by !== undefined && !nonEmpty(value.read_by)) return null;
   const payload: ReceiptPayload = {
     kind: 'receipt',
     status: value.status as ReceiptStatus,
@@ -274,6 +283,7 @@ export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
   }
   if (value.brief_seat_handle !== undefined) payload.brief_seat_handle = value.brief_seat_handle as string;
   if (value.brief_pane_root_pid !== undefined) payload.brief_pane_root_pid = value.brief_pane_root_pid as number;
+  if (value.read_by !== undefined) payload.read_by = value.read_by as string;
   return payload;
 }
 
