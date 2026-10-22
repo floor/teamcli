@@ -133,4 +133,31 @@ describe('security-profile', () => {
     expect(signSecurityProfile(h, store, assert(p.body, 0x05), now).ok).toBe(true);
     expect(ruleRelaxed(h, 'approval.standing-auto', store, { now })).toBe(true);
   });
+
+  test('a proposal edited to relax more than the profile it names is refused at signing', () => {
+    const h = home();
+    const store = fakeStore();
+    registerOwnerSeat(h, { team: 'floor', signer: 'mac' }, store, now);
+    proposeSecurityProfile(h, { profile: 'strict', days: 7, reason: 'x' }, now);
+    const path = join(h, '.config', 'team', 'security-profile.proposal.json');
+    const edited = JSON.parse(readFileSync(path, 'utf8'));
+    writeFileSync(path, JSON.stringify({ ...edited, relaxed: ['team-create.owner-answer'] }));
+    const signed = signSecurityProfile(h, store, undefined, now);
+    expect(signed.ok).toBe(false);
+    if (!signed.ok) expect(signed.why).toContain('not exactly the strict preset');
+    expect(store.signs).toBe(0);
+    expect(ruleRelaxed(h, 'team-create.owner-answer', store, { now })).toBe(false);
+  });
+
+  test('a relaxed record missing a rule of its preset does not count either', () => {
+    const h = home();
+    const store = fakeStore();
+    registerOwnerSeat(h, { team: 'floor', signer: 'mac' }, store, now);
+    proposeSecurityProfile(h, { profile: 'relaxed', days: 7, reason: 'x' }, now);
+    const path = join(h, '.config', 'team', 'security-profile.proposal.json');
+    const edited = JSON.parse(readFileSync(path, 'utf8'));
+    writeFileSync(path, JSON.stringify({ ...edited, relaxed: ['gate.owner-terminal'] }));
+    expect(signSecurityProfile(h, store, undefined, now).ok).toBe(false);
+  });
 });
+

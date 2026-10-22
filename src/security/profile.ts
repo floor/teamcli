@@ -131,6 +131,11 @@ function bodyProblem(body: SecurityProfileBody, now: Date): string | null {
   if (body.format !== 1 || body.policy !== 'security-profile') return 'not a security-profile record';
   if (!SECURITY_PROFILES.includes(body.profile)) return `unknown profile "${String(body.profile)}"`;
   if (!Array.isArray(body.relaxed) || body.relaxed.some((id) => !(id in SECURITY_RULES))) return 'the record lists an unknown rule id';
+  // The list is the preset's, exactly: the owner's prompt names the profile, so a proposal edited
+  // to relax more (or less) than the profile it names is refused before and after signing.
+  const preset = [...PROFILE_PRESETS[body.profile]].sort();
+  const listed = [...body.relaxed].sort();
+  if (listed.length !== preset.length || listed.some((id, i) => id !== preset[i])) return `the relaxed rules are not exactly the ${body.profile} preset`;
   const expires = Date.parse(body.expires);
   const setAt = Date.parse(body.set_at);
   if (!Number.isFinite(expires) || !Number.isFinite(setAt)) return 'the record has no readable expiry';
