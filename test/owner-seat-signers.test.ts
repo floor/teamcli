@@ -155,6 +155,10 @@ describe('team policy set entity owner-signers from the command line', () => {
     expect(acceptedSigners(h.home, record)).toEqual({ names: ['mac', 'phone'], source: 'policy' });
     expect(await runPolicy(['set', 'entity', 'owner-signers', 'mac,mac', '--entity', 'floor'], owner(), { home: h.home })).not.toBe(0);
     expect(await runPolicy(['set', 'entity', 'owner-signers', 'Bad Name', '--entity', 'floor'], owner(), { home: h.home })).not.toBe(0);
+    // approval-rule-ttl from the command line: days, 90 at most.
+    expect(await runPolicy(['set', 'entity', 'approval-rule-ttl', '60', '--entity', 'floor'], owner(), { home: h.home })).toBe(0);
+    expect(await runPolicy(['set', 'entity', 'approval-rule-ttl', '45d', '--entity', 'floor'], owner(), { home: h.home })).toBe(0);
+    expect(await runPolicy(['set', 'entity', 'approval-rule-ttl', '91', '--entity', 'floor'], owner(), { home: h.home })).not.toBe(0);
   });
 });
 

@@ -260,6 +260,12 @@ function parseOwnerSigners(raw: unknown): string[] | null {
     : null;
 }
 
+/** `approval-rule-ttl`: whole days, 1 to 90; on the command line `60` or `60d`. */
+function parseApprovalRuleTtlDays(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*d?$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 90 ? n : null;
+}
+
 function parsePositiveSeconds(raw: unknown): number | null {
   if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
   if (typeof raw === 'string' && /^[1-9][0-9]*s?$/.test(raw.trim())) {
@@ -967,7 +973,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: 30,
     gateLifting: false,
-    parseValue: (raw: unknown) => (typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 && raw <= 90 ? raw : null),
+    parseValue: parseApprovalRuleTtlDays,
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
   'grant-emission': {
