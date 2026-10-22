@@ -2453,9 +2453,9 @@ Hidden: no
 
 Usage:
 
-    team send <seat> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
-    team send <seat> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
-    team send <seat> --brief <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <seat> --brief <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --client <grant-file> --key <key-file> <address> [--request-id <id>] <message>
     team send --client <grant-file> --key <key-file> <address> [--request-id <id>] --file <path>
     team send --confirm <id> [--json] [--dry-run]
@@ -2484,6 +2484,7 @@ Usage:
 | `--ms` | yes | no | no |
 | `--record` | yes | no | no |
 | `--request-id` | yes | no | no |
+| `--subject` | yes | no | no |
 | `--timeout` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |
