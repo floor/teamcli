@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
-import { CLIENT_EXPIRY_MAX_MS, writeClientGrant, type ClientGrantRecord, type ClientGrantScope } from './records.ts';
+import { CLIENT_EXPIRY_MAX_MS, planClientGrant, writeClientGrant, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope } from './records.ts';
 
 export type GrantEmission = 'owner-terminal' | 'conversational';
 
@@ -337,6 +337,9 @@ export function createPendingGrant(
   }
   const key = ownerKey(home);
   if (key === null) return { ok: false, why: 'the owner signing key is absent or unreadable: no request can be recorded' };
+  // A request for a grant that could not be written (an unregistered team, an unlisted seat…) is refused now.
+  const planned = planClientGrant(home, grantRequestOf(params), { now });
+  if (!planned.ok) return { ok: false, why: planned.why };
   const adapter = options.adapter ?? oneTimeCodeAdapter();
   if (!adapter.available()) return { ok: false, why: `the ${adapter.name} approval adapter is not available` };
   const requestId = `gr_${randomBytes(12).toString('hex')}`;
@@ -436,6 +439,10 @@ export function executePendingGrant(
   if (adapter === undefined || !adapter.available()) return { ok: false, why: `the ${record.adapter} approval adapter is not available; the owner answers with team grant --answer ${input.requestId} oui` };
   const always = input.approve === 'always';
   if (always && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always: each one needs its own approval' };
+  // The grant is validated (team registered, seat listed, key placement, expiry) before the
+  // request is spent: a grant that cannot be written leaves the request and its approval intact.
+  const planned = planClientGrant(home, grantRequestOf(record.params), { now });
+  if (!planned.ok) return { ok: false, why: `${planned.why}; request ${input.requestId} is not spent` };
   const used = writeExclusive(join(grantRequestsFolder(home), `${input.requestId}.used`), `${now.toISOString()}\n`);
   if (used === 'exists') return { ok: false, why: `request ${input.requestId} was already used: an approval is single-use` };
   if (used === 'failed') return { ok: false, why: `request ${input.requestId} could not be claimed` };
@@ -458,7 +465,12 @@ export function executePendingGrant(
 }
 
 function issueFromParams(home: string, p: PendingGrantParams, now: Date, key: KeyObject) {
-  return writeClientGrant(home, {
+  return writeClientGrant(home, grantRequestOf(p), { now, key });
+}
+
+/** The client-grant request a pending request's parameters stand for. */
+function grantRequestOf(p: PendingGrantParams): ClientGrantRequest {
+  return {
     clientId: p.client_id,
     entity: p.entity,
     publicKey: p.public_key,
@@ -469,7 +481,7 @@ function issueFromParams(home: string, p: PendingGrantParams, now: Date, key: Ke
     ...(p.seat !== null ? { seat: p.seat } : {}),
     ...(p.team !== null ? { team: p.team } : {}),
     ...(p.allow_grant && p.grant_scope !== null ? { grantScope: p.grant_scope } : {}),
-  }, { now, key });
+  };
 }
 
 function writeEmissionAudit(home: string, audit: Record<string, string>, name: string, key: KeyObject): { ok: true; path: string } | { ok: false } {

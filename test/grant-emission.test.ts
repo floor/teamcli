@@ -181,6 +181,26 @@ describe('conversational requests and approvals', () => {
     expect(readdirSync(join(w.home, '.config', 'team', 'grants')).filter((n) => n.startsWith('cg_'))).toHaveLength(0);
   });
 
+  test('a request for an unregistered team is refused; an execute that cannot write the grant does not spend the request', async () => {
+    const w = world('unspent');
+    conversational(w);
+    const s = screen();
+    const ghost = await requestOf(w, s, ['--team', 'ghost']);
+    expect(ghost.code).not.toBe(0);
+    expect(JSON.parse(ghost.io.out()).error.message).toBe('no team "ghost" of entity "floor" is registered');
+    const a = await requestOf(w, s);
+    expect(a.code).toBe(0);
+    const teams = join(w.home, '.config', 'team', 'teams.yaml');
+    const live = readFileSync(teams, 'utf8');
+    writeFileSync(teams, live.replace('lifecycle: running', 'lifecycle: archived'));
+    const failed = await execute(w, a.json.target, ['--code', s.codes[0]!]);
+    expect(failed.code).toBe(1);
+    expect(failed.io.err()).toContain('is not spent');
+    expect(existsSync(join(grantRequestsFolder(w.home), `${a.json.target}.used`))).toBe(false);
+    writeFileSync(teams, live);
+    expect((await execute(w, a.json.target, ['--code', s.codes[0]!])).code).toBe(0);
+  });
+
   test('no code, a wrong code (which spends the request) and a reused approval are refused', async () => {
     const w = world('codes');
     conversational(w);
