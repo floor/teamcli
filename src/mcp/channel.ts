@@ -30,10 +30,10 @@ export const CHANNEL_PUSH_RECEIPT = 'channel-push';
 export const CHANNEL_PUSH_STATUS = 'sent (channel)';
 
 /** The marker a sender leaves at the push marker's name when its own walk already wakes the seat
- *  through another leg. Any serving server treats a marker for the id as a push and skips it —
- *  including a long-lived server running an install this sender has already replaced, whose own
- *  push after the fallback would be a second wake. It is not a push, and the sender's own wait
- *  never reads it as one. */
+ *  through another leg. Any marker-aware serving server treats a marker for the id as a push and
+ *  skips it — including a long-lived server running an install this sender has already replaced,
+ *  whose own push after the fallback would be a second wake; a build older than this rule cannot
+ *  honor it. It is not a push, and the sender's own wait never reads it as one. */
 export const CHANNEL_HELD_RECEIPT = 'channel-held';
 
 /** How long a send waits for the server's push marker: the server polls its inbox on a short

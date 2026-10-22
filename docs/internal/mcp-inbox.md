@@ -163,26 +163,40 @@ A sender that falls back from a stale channel listener has a second hazard: the 
 watches the folder and would push the record after the sender's own wake. Before it writes the
 record, when its walk holds a leg that wakes the seat (socket, native or typed), the sender
 writes a marker at the push marker's own name, `<id>.channel-push.json` — `{v, kind:
-"channel-held", id, at, reason}`. Every serving server, old or new, treats a marker for the id as
-a push already made and skips it. The marker is not a push: the sender's wait reads only the
-server's `channel-push` marker as delivery, and a wait that finds the held marker alone has
-delivered nothing.
+"channel-held", id, at, reason}`. Every marker-aware serving server treats a marker for the id
+as a push already made and skips it; a build older than the marker rule cannot honor it, which is
+the case the reload rule above exists for. The marker is not a push: the sender's wait reads
+only the server's `channel-push` marker as delivery, and a wait that finds the held marker alone
+has delivered nothing.
 
 The watch's retry reserves the same name before its first wake leg — the socket frame or the
-typed trigger — and again before its typed line, without judging the listener first. That is
-deliberate: an install, or a listener, can change between any check and the wake, so the name is
-held before the wake rather than after a verdict that could be stale by the time the wake lands.
-The record stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the name
-never withholds the message.
+typed trigger — and again before its typed line. It does not ask whether the listener is stale:
+an install, or a listener, can change between any check and the wake, so the name is held before
+the wake rather than after a verdict that could be stale by the time the wake lands. The one
+listener fact it reads is whether a channel-declaring server is running at all: a seat whose
+current launch no longer names the channel still reserves while a live listener started with the
+flag is alive, because that server can still push. A server started after the record arrived
+pushes nothing — its first listing is marked seen — so a dead marker leaves no push to race. The
+record stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the name never
+withholds the message.
+
+The hold is permanent for the id, and nothing removes it. If the wake it precedes is never taken
+— the typed line is not submitted and the retry gives up after `PENDING_MAX_TRIES`, a socket frame
+is refused and the pane never frees, or the pass cannot type at all — the name stays held, and no
+marker-aware server pushes this record afterwards, including a tick a still-running server has yet
+to make. Delivery then falls to the seat's own read: its turn-start drop read, `team messages`, or
+`inbox_check`/`inbox_read`. That is the price of holding before the wake; removing the marker
+after a wake that typed nothing would let a push land after the wake and reopen the duplicate the
+reservation exists to stop.
 
 One window remains, and it is a display duplicate, not a second message. A serving server writes
 the notification before its push marker. A tick that has already passed its marker check before
 the retry's write can therefore display the full body of the same id, and its own marker write
-then fails on the held name. No second record is created and no second valid receipt is written:
-both are per id. So the claim is no second record or id, not at-most-once display. Two serving
-processes for one inbox are not excluded — the listener marker is last-writer-wins and each
-process's seen set is its own — so each live server can do that once; every later tick of every
-process finds the name held.
+then fails on the held name. No second record is created and no second valid read receipt is
+written: both are per id. So the claim is no second record or id, not at-most-once display. Two
+serving processes for one inbox are not excluded — the listener marker is last-writer-wins and
+each process's seen set is its own — so each live server can do that once; every later tick of
+every process finds the name held.
 
 ## The evidence rule
 

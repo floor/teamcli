@@ -24,7 +24,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
-import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, listenerLive, readListener, receiptHeld } from '../mcp/inbox.ts';
 import {
   channelLaunchEnabled,
   CHANNEL_CONFIRM_MS,
@@ -139,25 +139,41 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
 }
 
 /** Whether a wake of this seat can race a channel push at all: the channel is a Claude Code
- *  launch feature, and a launch without the flag has no server that could push. */
-function channelSeat(seat: Seat): boolean {
-  return seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch);
+ *  launch feature, and a launch without the flag has no server that could push. A listener
+ *  started with the flag can still be running after the team file stops naming it, so a live
+ *  listener marker that declared the channel counts too. A server started after the record
+ *  arrived pushes nothing — its first listing is marked seen — so a dead marker leaves no push
+ *  to race. */
+function channelSeat(seat: Seat, dropDir: string): boolean {
+  if (seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch)) return true;
+  const listener = readListener(dropDir);
+  return listener !== null && listener.channel === true && listenerLive(listener);
 }
 
 /** Reserve the push name before a retry wake. The reservation is made before the wake whichever
  *  install is listening, not after judging a listener: a listener can be replaced, or an install
  *  can land, between any check and the wake, and the name must already be held when that happens.
- *  Every serving server treats a marker for the id as a push already made, so every later tick of
- *  every server skips the record, and the retry's socket frame or typed trigger is the one wake
- *  this pass adds. The record stays in the inbox and `inbox_check`/`inbox_read` still serve it, so
- *  holding the name never withholds the message.
+ *  Every marker-aware serving server treats a marker for the id as a push already made, so every
+ *  later tick of every such server skips the record, and the retry's socket frame or typed
+ *  trigger is the one wake this pass adds. A build older than the marker rule cannot honor it.
+ *  The record stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the
+ *  name never withholds the message.
+ *
+ *  The hold is permanent for the id: nothing removes it. If the wake it precedes is never taken
+ *  — the typed line is not submitted and the retry gives up after `PENDING_MAX_TRIES`, or the
+ *  pane never frees — the name stays held and no marker-aware server pushes this record
+ *  afterwards, including a tick a still-running server has yet to make. Delivery then falls to
+ *  the seat's own read: its turn-start drop read, `team messages`, or `inbox_check`/`inbox_read`.
+ *  That is the price of holding before the wake; removing the marker after a wake that typed
+ *  nothing would let a push land after the wake and reopen the duplicate the reservation exists
+ *  to stop.
  *
  *  The reservation cannot fence a tick that already passed its own marker check. That tick writes
  *  the notification — the body is displayed — and its push marker write then fails on this file.
- *  It creates no second record and no second valid receipt: the receipt is per id, so the claim
- *  is no second record or id, not at-most-once display. The server's seen set is per process, and
- *  two servers for one inbox are not excluded, so each live server can do that once; every later
- *  tick of every process finds the name held. */
+ *  It creates no second record and no second valid read receipt: the receipt is per id, so the
+ *  claim is no second record or id, not at-most-once display. The server's seen set is per
+ *  process, and two servers for one inbox are not excluded, so each live server can do that once;
+ *  every later tick of every process finds the name held. */
 function holdChannelPush(scene: RetryScene, dropDir: string, drop: PendingDrop): void {
   recordChannelHeld(dropDir, {
     v: 1,
@@ -249,11 +265,11 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
       scene.say(`${drop.to}: ${heldWords(drop)} was read on retry (receipt)`, false);
       return;
     }
-    // The retry is a wake of its own, and any channel server could push the same record on top
-    // of it. The push name is reserved before the line, without waiting to judge the listener:
-    // a marker already at that name is the server's own push, and the write is refused while
-    // the retry goes on.
-    if (channelSeat(seat)) holdChannelPush(scene, dropDir, drop);
+    // The retry is a wake of its own, and any marker-aware channel server could push the same
+    // record on top of it. The push name is reserved before the line, without waiting to judge
+    // the listener: a marker already at that name is the server's own push, and the write is
+    // refused while the retry goes on.
+    if (channelSeat(seat, dropDir)) holdChannelPush(scene, dropDir, drop);
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
@@ -341,9 +357,10 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
 /**
  * The channel's one redelivery: a push whose confirmation window ended with no signed receipt is
  * written again through the next leg — the receiving session's socket, then the typed trigger —
- * and the marker is marked before either attempt, so no later pass can redeliver it. A channel
- * server could push the same record at any tick, so the push name is reserved before the first
- * wake leg, whichever install is listening; `retryOne` reserves again before typing. A receipt
+ * and the marker is marked before either attempt, so no later pass can redeliver it. A
+ * marker-aware channel server could push the same record at any tick, so the push name is
+ * reserved before the first wake leg, whichever install is listening; `retryOne` reserves again
+ * before typing. A receipt
  * that landed first is the read itself: nothing is typed and the record is settled, exactly as
  * the promotion pass would settle it. A socket delivery writes its own receipt and history line;
  * the typed leg is the ordinary retry, whose history line carries `redelivered: channel
@@ -378,7 +395,7 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
   // The socket leg is a wake of its own, and the typed leg inside `retryOne` reserves again: the
   // push name is held before the first of them, whichever install is listening, so a server that
   // appears or changes between this point and the wake still finds the record held.
-  if (channelSeat(seat)) holdChannelPush(scene, dropDir, drop);
+  if (channelSeat(seat, dropDir)) holdChannelPush(scene, dropDir, drop);
   const marked: PendingDrop = { ...drop, redelivered: CHANNEL_UNCONFIRMED };
   if (scene.socketRedeliver !== undefined) {
     const socket = await scene.socketRedeliver(dropDir, marked);
