@@ -622,7 +622,6 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         sessionDoubt: why,
-        doubtHeld: true,
         ...(named.some(working) ? { doubtWorking: true } : {}),
       };
     }
@@ -631,7 +630,6 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         sessionDoubt: 'its recorded pane is gone and the pane naming this seat gives no process identity; nothing closed',
-        doubtHeld: true,
         ...(working(candidate) ? { doubtWorking: true } : {}),
       };
     }
@@ -735,7 +733,6 @@ function seatPlan(
       ...planned,
       stage: recorded.stage,
       sessionDoubt: refusal ?? 'its pane holds a process this record cannot tie to the launch',
-      ...(held ? { doubtHeld: true } : {}),
       ...(held?.working ? { doubtWorking: true } : {}),
     };
   }
