@@ -95,6 +95,7 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
     ...(seat !== undefined ? { seat } : {}),
     ...(team !== undefined ? { team } : {}),
     all,
+    command: 'resume',
     io,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     now: () => now,
