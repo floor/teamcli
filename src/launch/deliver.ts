@@ -32,8 +32,9 @@ export type Refusal = {
   sent: boolean;
   kind: Screen['kind'];
   row: string | null;
-  /** The profile's one clearing key, spelled as herdr spells it, when this CLI has one: the
-   *  advice names it. Absent or null: the advice says the owner clears the box, naming no key. */
+  /** The profile's one clearing key, spelled as the terminal host spells it, when this CLI
+   *  has one: the advice names it. Absent or null: the advice says the owner clears the box,
+   *  naming no key. */
   clearKey?: string | null;
   /** The exit text this CLI's profile types, set when the box already holds exactly it — an
    *  earlier stop's leftover — so the report names the text and the one key, and nothing is sent. */
@@ -50,8 +51,8 @@ export interface Delivery {
   status(): string | null;
   type(text: string): boolean;
   enter(): boolean;
-  /** The profile's one clearing key, by the name herdr spells. Absent: a failed read-back
-   *  leaves the line where it was typed. */
+  /** The profile's one clearing key, by the name the terminal host spells. Absent: a failed
+   *  read-back leaves the line where it was typed. */
   key?(name: string): boolean;
   /** Whether the seat's rules file still holds, read without following a link, the text whose
    *  hash the line carries — the last look, directly before Enter. */
@@ -69,7 +70,8 @@ export interface Delivery {
 }
 
 /** The key as its pane's own screen spells it, for the advice a report gives the owner. The
- *  spelling each CLI draws was read off the captures; the herdr name stays in `clearKey`. */
+ *  spelling each CLI draws was read off the captures; the terminal host's name stays in
+ *  `clearKey`. */
 export function keyName(key: string): string {
   if (key === 'ctrl+c') return 'Ctrl-C';
   if (key === 'ctrl+u') return 'Ctrl+U';
@@ -241,8 +243,9 @@ async function clearTypedLine(cli: string, why: Refusal, io: Delivery): Promise<
   if (key === null || !io.key) return why;
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
-  // A CLI whose profile says herdr cannot report it: herdr's missing or `unknown` word is no
-  // reading of the seat, and the unsent composer the caller proved is the reading that stands.
+  // A CLI whose profile says the terminal host cannot report it: that host's missing or
+  // `unknown` word is no reading of the seat, and the unsent composer the caller proved is the
+  // reading that stands.
   const wordless = () => {
     const status = io.status();
     return herdrUnreliable(cli) && (status === null || status === 'unknown');
@@ -379,11 +382,11 @@ export function refusalReport(why: Refusal): string {
 export async function deliverRules(cli: string, line: string, seconds: number, io: Delivery): Promise<boolean | 'no-agent'> {
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
-  // Herdr's word for a CLI its profile reports faithfully. For a CLI the profile says herdr
-  // cannot report (`herdr_status: unreliable`), a missing or `unknown` status is no reading of
-  // the seat at all: the profile's own recognised screen is the reading there, exactly as the
-  // watch and status read such a seat. A status herdr can give — idle, done, working, blocked —
-  // is still its word.
+  // The terminal host's word for a CLI its profile reports faithfully. For a CLI the profile
+  // says the terminal host cannot report (`herdr_status: unreliable`), a missing or `unknown`
+  // status is no reading of the seat at all: the profile's own recognised screen is the reading
+  // there, exactly as the watch and status read such a seat. A status the terminal host can
+  // give — idle, done, working, blocked — is still its word.
   const wordless = () => {
     const status = io.status();
     return herdrUnreliable(cli) && (status === null || status === 'unknown');
@@ -493,9 +496,9 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
     // The line was submitted and no ready prompt was seen. Nothing about it is confirmed: the
     // box is read as the screen shows it.
     const kind = readScreen(cli, io.screen()).kind;
-    // A CLI herdr cannot report: its own recognised working screen is the acknowledgement
-    // herdr's `working` status would have given. The composer must be back to its empty idle
-    // row — a box still holding the line is not a submission.
+    // A CLI the terminal host cannot report: its own recognised working screen is the
+    // acknowledgement the terminal host's `working` status would have given. The composer must be
+    // back to its empty idle row — a box still holding the line is not a submission.
     if (herdrUnreliable(cli) && kind === 'working' && composer.kind === 'idle') return true;
     if (kind === 'trust' || kind === 'permission' || kind === 'question' || kind === 'exit question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit' || io.now() >= deadline) {
       return report(stoppedOn(cli, 'ack', io.screen(), line));
