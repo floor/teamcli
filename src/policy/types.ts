@@ -252,6 +252,14 @@ function parseOnOff(raw: unknown): 'on' | 'off' | null {
   return null;
 }
 
+/** `owner-signers`: a list of signer names, or on the command line one comma-separated word (`phone,mac`). */
+function parseOwnerSigners(raw: unknown): string[] | null {
+  const list = typeof raw === 'string' ? raw.split(',').map((n) => n.trim()) : raw;
+  return Array.isArray(list) && list.length > 0 && list.every((n) => typeof n === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(n)) && new Set(list).size === list.length
+    ? (list as string[])
+    : null;
+}
+
 function parsePositiveSeconds(raw: unknown): number | null {
   if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
   if (typeof raw === 'string' && /^[1-9][0-9]*s?$/.test(raw.trim())) {
@@ -938,10 +946,7 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     levels: ['entity'],
     defaultValue: null,
     gateLifting: false,
-    parseValue: (raw: unknown) =>
-      Array.isArray(raw) && raw.length > 0 && raw.every((n) => typeof n === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(n)) && new Set(raw).size === raw.length
-        ? (raw as string[])
-        : null,
+    parseValue: parseOwnerSigners,
     isWithin: (lower: string[] | null, higher: string[] | null) => higher === null || (lower !== null && lower.every((n) => higher.includes(n))),
   },
   // How the accepted signers combine: `any` (one valid assertion from any accepted signer).

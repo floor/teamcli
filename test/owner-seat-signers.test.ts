@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { addOwnerSigner, ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, registerOwnerSeat, verifyOwnerAnswer, webauthnChallenge, type OwnerSeatAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from '../src/client/team-create.ts';
 import { runInit } from '../src/commands/init.ts';
+import { runPolicy } from '../src/commands/policy.ts';
+import { acceptedSigners, readOwnerSeat } from '../src/client/owner-seat.ts';
 import type { Io } from '../src/io.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { keyOf, messageKeyOf, signDomain } from '../src/store/keys.ts';
@@ -137,6 +139,22 @@ describe('several owner signers, none preferred', () => {
     if (!result.ok) expect(result.why).toContain('does not match the key in the credential store');
     const closed = verifyOwnerAnswer(h.home, { owner_seat_answer: a, signer: 'mac', signature: '00' }, { ...store, available: () => false });
     expect(closed.ok).toBe(false);
+  });
+});
+
+describe('team policy set entity owner-signers from the command line', () => {
+  test('one name or a comma-separated list is accepted and read back as a list', async () => {
+    const h = home('cli');
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    const owner = (): Io => ({ ...io(h.base).io, caller: { kind: 'owner' } } as Io);
+    expect(await runPolicy(['set', 'entity', 'owner-signers', 'mac', '--entity', 'floor'], owner(), { home: h.home })).toBe(0);
+    const record = readOwnerSeat(h.home)!;
+    expect(acceptedSigners(h.home, record)).toEqual({ names: ['mac'], source: 'policy' });
+    expect(await runPolicy(['set', 'entity', 'owner-signers', 'mac,phone', '--entity', 'floor'], owner(), { home: h.home })).toBe(0);
+    expect(acceptedSigners(h.home, record)).toEqual({ names: ['mac', 'phone'], source: 'policy' });
+    expect(await runPolicy(['set', 'entity', 'owner-signers', 'mac,mac', '--entity', 'floor'], owner(), { home: h.home })).not.toBe(0);
+    expect(await runPolicy(['set', 'entity', 'owner-signers', 'Bad Name', '--entity', 'floor'], owner(), { home: h.home })).not.toBe(0);
   });
 });
 
