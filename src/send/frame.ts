@@ -47,7 +47,9 @@ export function frameReplyFor(home: string, root: string, from: string, team: st
 }
 
 /** The one frame this channel carries: `type:"user"`, the whole body, the reply line as its own
- *  last line, and the id. `JSON.stringify` keeps multi-line text one line. */
-export function frameFor(body: string, msgId: string, reply: string): string {
-  return `${JSON.stringify({ type: 'user', message: { role: 'user', content: `${body}\n\n${reply}` }, msg_id: msgId })}\n`;
+ *  last line when the seat has one, and the id. A person-pane seat gets no reply line — a person
+ *  answers in their own client — and the id stays in `msg_id`, never in the content. */
+export function frameFor(body: string, msgId: string, reply: string | null): string {
+  const content = reply === null ? body : `${body}\n\n${reply}`;
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content }, msg_id: msgId })}\n`;
 }

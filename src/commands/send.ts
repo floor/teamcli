@@ -35,7 +35,7 @@ import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord,
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
-import { namingFor, senderNickname, type SenderNaming } from '../send/names.ts';
+import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -58,7 +58,8 @@ import {
 } from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
-import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
+import { MESSAGE_LINE_MAX, messageSummaryOf, renderMessageDisplay } from '../settings/message-display.ts';
+import { messageDisplayInForce } from '../settings/message-display-policy.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { deliveryTimeoutInForce } from '../policy/delivery.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -660,7 +661,7 @@ function outputMarkerLines(body: string): number {
 }
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id'], ['wait', 'json', 'list', 'dry-run']);
+  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject'], ['wait', 'json', 'list', 'dry-run']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
@@ -880,6 +881,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     body = words.join(' ');
   }
   if (body.trim() === '') return usage(io, 'the message is empty', report);
+  // The sender's own subject, a display field beside the summary: it never stands in for the
+  // body's first line, and a blank one is no subject at all.
+  const subject = args.values.subject?.trim();
   // A body that is only a path to a brief is the one form the owner's rule forbids: the reader
   // has the message but not the file it points at. The warning is the whole guard — the send
   // still goes, because a path in a body is not proof of anything, and a false refusal would
@@ -1047,7 +1051,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // record within the timeout window.
   const msgId = host.sendId?.() ?? randomUUID();
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
-  const record = recordOf(msgId, to, body, from, admission, host.now().toISOString());
+  const record = recordOf(msgId, to, body, from, admission, host.now().toISOString(), subject === '' ? undefined : subject);
   const callerRoot = { root, session: team.session };
   if (dry) {
     // A dry run reports the same ordered legs a real send would, but it can only say whether each
@@ -1065,6 +1069,29 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     });
     return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}; nothing was written`, report);
   }
+  // The display words every transport opens the message with: the receiving team's
+  // `message-display` template, the sender's nickname (its seat name when the file writes none),
+  // and the body's first content line as the summary. The signed record is the message; this
+  // header is display only. The message id never enters it — the socket frame's `msg_id` carries it.
+  const wakeTemplate = messageDisplayInForce({
+    home: host.home,
+    root: to.root,
+    team: receiving.ok ? receiving.team : null,
+    now: host.now(),
+  });
+  const wakeName = senderDisplayName(
+    { seat: record.from, ...(record.from_id === null ? {} : { id: record.from_id }) },
+    { ...naming, mode: 'nickname' },
+  );
+  const wakeHeader = renderMessageDisplay(wakeTemplate, {
+    name: wakeName,
+    seat: record.from,
+    team: team.project,
+    ...(record.subject === undefined ? {} : { subject: record.subject }),
+    summary: messageSummaryOf(record.body),
+    age: '0s',
+    id: '',
+  });
   // A direct-only caller hands in the pane and CLI its own pass saw for this seat: the send is
   // bound to them, never re-aimed at a pane the caller did not read. A seat the session no longer
   // lists at that pane, or whose file now names another CLI, is refused here — before any route
@@ -1264,7 +1291,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameIdentityHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null));
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameIdentityHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null), human);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -1544,19 +1571,21 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // past the line, a name the session does not list — happens before any route attempt, so the
     // walk stages nothing for it: a refusal leaves no record in the receiver's folder.
     const compose = profileFor(to.cli)?.compose ?? null;
-    // The receiving team's sender-line policy decides the words around the two names; a team
-    // file that did not read leaves the shipped floor format, never an unnamed wake.
-    const wakeFormat = senderLineFormatInForce({
-      home: host.home,
-      root: to.root,
-      team: receiving.ok ? receiving.team : null,
-      now: host.now(),
+    // The receiving team's `message-display` policy decides the words the wake opens with; a team
+    // file that did not read leaves the shipped template, never an unnamed wake.
+    const trigger = readTriggerLine(to.seat, to.session, {
+      seat: record.from,
+      team: team.project,
+      template: wakeTemplate,
+      name: wakeName,
+      body: record.body,
+      ageMs: 0,
+      ...(record.subject === undefined ? {} : { subject: record.subject }),
     });
-    const trigger = readTriggerLine(to.seat, to.session, { seat: record.from, team: team.project, format: wakeFormat });
     if (trigger === null && compose === null) {
-      const why = `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`;
-      markLeg('typed', 'refused', `the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`);
-      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent` }));
+      const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
+      markLeg('typed', 'refused', `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`);
+      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent` }));
       return refuse(io, dir, who, why, host, report);
     }
     // The daemon serves seats of the caller's own team; a seat in another team's record is
@@ -1571,7 +1600,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (!to.cross && compose === null && !wait && existsSync(daemonSock)) await ensureEpisode();
     const viaDaemon = to.cross || compose !== null || wait
       ? null
-      : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) });
+      : await requestDaemon(daemonSock, { v: 1, op: 'send', id: msgId, from, to: to.seat, ...sentAs, body, ...(record.from_id === null ? {} : { from_id: record.from_id }), ...(record.subject === undefined ? {} : { subject: record.subject }), name: wakeName, template: wakeTemplate, ...(failures.length > 0 ? { failed: [...failures] } : {}), ...(at + 1 < walk.length ? { fallthrough: true as const } : {}) });
     if (viaDaemon && !('pong' in viaDaemon) && !('shutdown' in viaDaemon)) {
       // A daemon that found no live agent typed nothing: when a leg still stands behind the
       // typed one, the failure joins the walk and the send goes on to it. The daemon wrote no
@@ -1626,9 +1655,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       return deliverComposeSeat(io, to.dir, to.root, who, from, to.project, to.session, to.seat, to.cli, found.pane, dropDir, record, seatCwd, host, report, startedAt, failures, to.sentAs, wait, timeoutS, callerRoot, note);
     }
     if (trigger === null) {
-      const why = `${to.seat}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`;
-      markLeg('typed', 'refused', `the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent`);
-      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was sent` }));
+      const why = `${to.seat}: the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`;
+      markLeg('typed', 'refused', `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent`);
+      note(walkAttempt('typed', 'refused', false, host.now(), startedAt, { reason: `the trigger would exceed ${String(MESSAGE_LINE_MAX)} characters; nothing was sent` }));
       return refuse(io, dir, who, why, host, report);
     }
     // The typed trigger is the attempt: the signed record is on disk before the keys go out, so a
@@ -1893,7 +1922,7 @@ export function senderIdOf(admission: Admission): string | null {
 /** The record a send transports, built once the message's body is final: the id is the record's
  *  name, the thread is the first message's id (its own, on a first message), and the rule that
  *  admitted the pair is written on it. */
-function recordOf(msgId: string, to: Aim, body: string, from: string, admission: Admission, at: string): RecordPayload {
+function recordOf(msgId: string, to: Aim, body: string, from: string, admission: Admission, at: string, subject?: string): RecordPayload {
   return {
     kind: 'message',
     id: msgId,
@@ -1907,6 +1936,7 @@ function recordOf(msgId: string, to: Aim, body: string, from: string, admission:
     from_id: senderIdOf(admission),
     rule: admission.ok ? admission.rule : 'unrecorded',
     thread: msgId,
+    ...(subject === undefined ? {} : { subject }),
   };
 }
 
@@ -1991,6 +2021,7 @@ async function handOff(
     root: to.root,
     thread,
     ...(to.sentAs !== null ? { spec: to.sentAs.spec, resolved: to.sentAs.resolved } : {}),
+    ...(payload.subject === undefined ? {} : { subject: payload.subject }),
     fallback: [...fallback],
     body: stamped,
   };
@@ -3629,6 +3660,8 @@ async function deliverSocketFrame(
   callerRoot: string,
   /** The display line the frame opens with; empty, the body alone. */
   header = '',
+  /** True for a person-pane seat: no reply line and no read hint, a person answers in its client. */
+  personPane = false,
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -3638,18 +3671,20 @@ async function deliverSocketFrame(
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   // The reply line names the seat the signed record carries and the team this run stood in; a
   // team the run does not know is no address at all, and the frame is not dialed rather than
-  // answering somewhere guessed.
+  // answering somewhere guessed. A person-pane seat has no reply line at all.
   const sendingTeam = report.from_team;
-  if (sendingTeam === undefined) {
+  if (sendingTeam === undefined && !personPane) {
     return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
   }
-  const reply = frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
-  if ('missing' in reply) return { kind: 'fallback', reason: reply.missing };
+  const reply = personPane || sendingTeam === undefined
+    ? null
+    : frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
+  if (reply !== null && 'missing' in reply) return { kind: 'fallback', reason: reply.missing };
   // The frame opens with the sender's display line, then the signed record's own body: the
   // header is display, and the body it precedes still carries the attribution line a reader
   // judges. One blank line separates them, so no body line can pass for the header.
   const content = header === '' ? body : `${header}\n\n${body}`;
-  const frame = frameFor(content, msgId, reply.line);
+  const frame = frameFor(content, msgId, reply === null ? null : reply.line);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
