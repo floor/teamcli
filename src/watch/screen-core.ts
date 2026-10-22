@@ -377,8 +377,8 @@ function resetOf(lines: string[], region?: Set<number>): Reset | null {
   return null;
 }
 
-function asScreen(kind: Screen['kind'], lines: string[], region?: Set<number>): Screen {
-  if (kind === 'rate limit') return { kind, reset: resetOf(lines, region) };
+function asScreen(kind: Screen['kind'], lines: string[], region?: Set<number>, reason?: string): Screen {
+  if (kind === 'rate limit') return { kind, reset: resetOf(lines, region), ...(reason === undefined ? {} : { reason }) };
   return { kind };
 }
 
@@ -421,7 +421,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       const fn = getProfileFn(data.profile, name);
       if (fn !== undefined) {
         const outcome = evalPredicate(fn, plain);
-        if (outcome === 'match') return asScreen(kind, plain);
+        if (outcome === 'match') return asScreen(kind, plain, undefined, stage?.reason);
         if (outcome === 'fail') return { kind: 'unknown' };
       }
       if (stage) {
@@ -432,7 +432,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
           // elsewhere on the pane cannot date a wall it does not belong to.
           if (hit) {
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
-            return asScreen(kind, plain, block === null ? undefined : new Set(block));
+            return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
         }
       }
