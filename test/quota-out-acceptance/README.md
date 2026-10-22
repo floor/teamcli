@@ -31,13 +31,27 @@ the weekly limit left): a real capture of a warning that must not read as a wall
   working, and including a wall frame whose composer cannot be read. A quote inside a working
   turn, a wall above a finished turn (history), and a healthy idle prompt keep ordinary sends.
   An ordinary provider error keeps its existing caution.
-- **status**: one canonical `quota out` seat state in the human row and in JSON `rows[].seat_state`,
+- **status**: one canonical `blocked: quota` seat state in the human row and in JSON `rows[].seat_state`,
   with the reset as displayed — `resets at 11:00`, `resets in 47h31m`, the Gemini capture's
   `2:10 PM GMT+2` verbatim, or an explicit no-reset — and never a parsed instant or invented zone.
   Codex `weekly 0% left` and Cursor `· 0%` rows are not walls.
+- **watch**: the watch types no work nudge into a walled agy pane at `idle_first`, at
+  `idle_repeat`, or past the frame's named reset while the wall is still on screen; a healthy idle
+  seat in the same pass is nudged as the control, and the same agy seat on its retained idle frame
+  is nudged.
 - **check**: the existing `stuck at a quota prompt` difference and exit 1, now reached by agy,
   with the reset form it read; a quote in a working turn and a wall above a finished turn are not
   named quota.
+
+## Floor addition of 2026-10-22
+
+Floor's acceptance, relayed by the orchestrator, supersedes the earlier status word: a recognised
+Antigravity `Individual quota reached … Resets in <time>` line is a distinct blocked state, and
+status shows `blocked: quota, resets <time>` (human row and JSON seat state); the watch stops
+waking that seat until the reset. The send and check rows keep the wording already pinned; the
+follow-up commit that adds this section also changes the status assertions from the earlier
+`quota out` word to `blocked: quota`. Per-seat `team pause <seat>` / `team resume <seat>` are
+covered in `seat-pause.test.ts`.
 
 ## Composer-less wall frames
 

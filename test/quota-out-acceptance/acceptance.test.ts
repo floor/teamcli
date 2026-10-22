@@ -11,9 +11,15 @@
 //   send    a positively read wall refuses (exit 1, `send.refused`) before any record, socket,
 //           fallback or typing effect, with the reset it read; a quote inside a working turn,
 //           a finished turn's history, and a healthy prompt keep ordinary sends.
-//   status  one canonical `quota out` seat state, human and JSON, with the reset as displayed:
-//           `resets at 11:00`, `resets in 47h31m`, or an explicit no-reset; no parsed instant,
-//           no invented zone; Codex/Cursor status rows are not a wall.
+//   status  one canonical `blocked: quota` seat state, human and JSON, with the reset as
+//           displayed: `resets at 11:00`, `resets in 47h31m`, or an explicit no-reset; no parsed
+//           instant, no invented zone; Codex/Cursor status rows are not a wall.
+//
+// Floor's 2026-10-22 addition supersedes the earlier status word: a recognised wall reads
+// `blocked: quota, resets <time>`, distinct from a bare `blocked`, a `done` or an `idle`. The
+// watch holds the same seat: it types no work nudge into a walled pane at idle_first, at
+// idle_repeat, or past the named reset while the wall is still on screen. Both are pinned below;
+// the send and check rows above are unchanged by the addition.
 //   check   the existing `stuck at a quota prompt` difference (exit 1), now for agy too, with
 //           the reset form it read; a quote in a working turn is not quota.
 //
@@ -34,6 +40,8 @@ import { rulesFileHash, writeRulesFile } from '../../src/launch/rules-file.ts';
 import { emptySession, updateState, type SeatState } from '../../src/state.ts';
 import type { Standing } from '../../src/store/store.ts';
 import type { Live } from '../../src/status/compare.ts';
+import type { Machine } from '../../src/watch/machine.ts';
+import { newMemory, pass } from '../../src/watch/pass.ts';
 import { fake, owner, scripted, world, type World } from '../send-native-fixtures.ts';
 import { testIo } from '../helpers.ts';
 
@@ -351,17 +359,17 @@ afterEach(() => {
 });
 
 describe('status at a quota-out screen', () => {
-  test('an agy individual-quota frame reads quota out with the relative reset it shows', async () => {
+  test('an agy individual-quota frame reads blocked: quota with the relative reset it shows', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const sources: StatusSources = { live: () => live([{ name: 'agy-acme', screen: AGY_QUOTA }]), branch: () => 'main', standing: () => standing, now: () => NOW, home };
     await runStatus([], io, sources);
     const row = rowFor(io.out, 'agy-acme');
-    expect(row).toMatch(/quota out/i);
+    expect(row).toMatch(/blocked: quota/i);
     expect(row).toContain('47h31m');
     expect(row).not.toMatch(/^agy-acme\s+done\b/);
   });
 
-  test('status JSON carries the same quota-out seat state', async () => {
+  test('status JSON carries the same blocked quota seat state', async () => {
     const io = testIo(dir, { kind: 'owner' });
     const sources: StatusSources = { live: () => healthyLive(AGY_QUOTA), branch: () => 'main', standing: () => standing, now: () => NOW, home };
     const code = await runStatus(['--json'], io, sources);
@@ -372,9 +380,13 @@ describe('status at a quota-out screen', () => {
     expect(doc.differences).toEqual([]);
     const row = (doc.rows as Array<Record<string, unknown>>).find((one) => one.name === 'agy-acme');
     expect(row).toBeDefined();
-    expect(String(row?.seat_state)).toMatch(/quota/i);
-    for (const word of ['done', 'idle', 'blocked', 'working', 'held', 'unreachable', 'unknown']) {
-      expect(row?.seat_state).not.toBe(word);
+    // B4's contract, confirmed 2026-10-22: the state word is the existing `blocked`; the row's
+    // state text carries the quota detail and the reset.
+    expect(row?.seat_state).toBe('blocked');
+    expect(String(row?.state)).toMatch(/blocked: quota/i);
+    expect(String(row?.state)).toContain('47h31m');
+    for (const word of ['done', 'idle', 'working', 'held', 'unreachable', 'unknown', 'quota out']) {
+      expect(row?.state).not.toBe(word);
     }
   });
 
@@ -383,7 +395,7 @@ describe('status at a quota-out screen', () => {
     const sources: StatusSources = { live: () => live([{ name: 'deepseek-acme', screen: CLAUDE_LIMIT, status: 'idle' }]), branch: () => 'main', standing: () => standing, now: () => NOW, home };
     await runStatus([], io, sources);
     const row = rowFor(io.out, 'deepseek-acme');
-    expect(row).toMatch(/quota out/i);
+    expect(row).toMatch(/blocked: quota/i);
     expect(row).toContain('11:00');
     expect(row).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
@@ -393,7 +405,7 @@ describe('status at a quota-out screen', () => {
     const sources: StatusSources = { live: () => live([{ name: 'agy-acme', screen: AGY_NO_RESET }]), branch: () => 'main', standing: () => standing, now: () => NOW, home };
     await runStatus([], io, sources);
     const row = rowFor(io.out, 'agy-acme');
-    expect(row).toMatch(/quota out/i);
+    expect(row).toMatch(/blocked: quota/i);
     expect(row).toMatch(/no reset/i);
     expect(row).not.toMatch(/resets?\s+(?:at|in)\s/i);
     expect(row).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -404,7 +416,7 @@ describe('status at a quota-out screen', () => {
     const sources: StatusSources = { live: () => live([{ name: 'gemini-acme', screen: GEMINI_LIMIT, status: 'done' }]), branch: () => 'main', standing: () => standing, now: () => NOW, home };
     await runStatus([], io, sources);
     const row = rowFor(io.out, 'gemini-acme');
-    expect(row).toMatch(/quota out/i);
+    expect(row).toMatch(/blocked: quota/i);
     expect(row).toContain('2:10 PM GMT+2');
   });
 
@@ -413,7 +425,7 @@ describe('status at a quota-out screen', () => {
     const sources: StatusSources = { live: () => live([{ name: 'deepseek-acme', screen: NO_COMPOSER }]), branch: () => 'main', standing: () => standing, now: () => NOW, home };
     await runStatus([], io, sources);
     const row = rowFor(io.out, 'deepseek-acme');
-    expect(row).toMatch(/quota out/i);
+    expect(row).toMatch(/blocked: quota/i);
     expect(row).toContain('11:00');
   });
 
@@ -487,5 +499,60 @@ describe('check at a quota-out screen', () => {
     ]);
     expect(linesAbout(out, 'codex-acme').filter((one) => one.includes('quota'))).toEqual([]);
     expect(linesAbout(out, 'cursor-acme').filter((one) => one.includes('quota'))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// watch: a walled seat is never woken while the wall is on its screen.
+
+const WAKE_MIN = 60_000;
+const WAKE_MACHINE: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+const WAKE_RULE = '─'.repeat(40);
+const WAKE_STATUS = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
+const WAKE_IDLE = `● Done.\n\n${WAKE_RULE}\n❯ \n${WAKE_RULE}\n${WAKE_STATUS}\n`;
+const WAKE_BUSY = `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${WAKE_RULE}\n❯ \n${WAKE_RULE}\n${WAKE_STATUS}\n`;
+
+function wakeTeam() {
+  const checked = validateTeamFile(TEAM);
+  if (!checked.ok) throw new Error('the quota acceptance team fixture does not validate');
+  return checked.team;
+}
+
+/** One live session with a working lead, one healthy idle worker, one busy worker and the agy
+ *  seat under test; every other declared seat stays off the session, so no missing-seat report
+ *  can enter the work list this scene reads. */
+function wakeLive(agyScreen: string): Live {
+  const agents: HerdrAgent[] = [
+    { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'working', cwd: null },
+    { name: 'deepseek-acme', agent: 'claude', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null },
+    { name: 'deepseek-acme-2', agent: 'claude', pane: 'w4:p1', workspace: 'w4', status: 'working', cwd: null },
+    { name: 'agy-acme', agent: 'agy', pane: 'w7:p1', workspace: 'w7', status: 'done', cwd: null },
+  ];
+  return { running: true, agents, workspaces: [], screens: { 'w1:p1': WAKE_BUSY, 'w3:p1': WAKE_IDLE, 'w4:p1': WAKE_BUSY, 'w7:p1': agyScreen } };
+}
+
+/** Three passes over one shared watch memory: the first starts the idle clocks, the second is
+ *  past `watch.idle_first`, the third is far past the agy frame's `Resets in 47h31m`. */
+function wakePasses(agyScreen: string) {
+  const team = wakeTeam();
+  const memory = newMemory();
+  const live = wakeLive(agyScreen);
+  const at = (now: number) => pass({ team, state: emptySession(), live, machine: WAKE_MACHINE, now, memory, watch: team.watch });
+  return { first: at(0), due: at(10 * WAKE_MIN), late: at(100 * 60 * WAKE_MIN) };
+}
+
+describe('watch at a quota-out screen', () => {
+  test('a walled agy seat is not woken at idle_first, at idle_repeat, or past the named reset', () => {
+    const { first, due, late } = wakePasses(AGY_QUOTA);
+    const seats = (result: ReturnType<typeof pass>): string[] => result.work.map((one) => one.seat);
+    expect(first.work).toEqual([]);
+    expect(seats(due)).toContain('deepseek-acme');
+    expect(seats(due)).not.toContain('agy-acme');
+    expect(seats(late)).not.toContain('agy-acme');
+  });
+
+  test('control: the same agy seat on a healthy idle frame is woken', () => {
+    const { due } = wakePasses(AGY_IDLE);
+    expect(due.work.map((one) => one.seat)).toContain('agy-acme');
   });
 });
