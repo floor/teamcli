@@ -98,6 +98,7 @@ export type InstallDecisionKind =
   | 'refuse-missing-tarball'
   | 'refuse-corrupt-tarball'
   | 'refuse-corrupt-installed-manifest'
+  | 'refuse-installed-bin-not-file'
   | 'refuse-installer-failed'
   | 'refuse-post-install-mismatch';
 
@@ -637,6 +638,9 @@ export function inspectInstalledPrefix(prefix: string):
 /**
  * Verifies the candidate tarball, its source stamp, the installed prefix, and the
  * forward-only / declared-rollback version guard before any installed-file mutation.
+ * A directory at `<prefix>/bin/team` is refused before dispatch, and a backend that
+ * throws after dispatch is reported through the same measured post-dispatch record
+ * as an npm failure: no rollback is claimed, and the prefix is inspected again.
  */
 export function installTarball(options: InstallTarballOptions): InstallTarballResult {
   const rollback = options.rollback ?? null;
@@ -682,6 +686,28 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
   }
 
   const installedVersion = installedState.version;
+
+  // A directory at the bin path cannot become the bin link. Refuse before any
+  // backend is dispatched, so no attempt is claimed and nothing is mutated.
+  let installedBinStat;
+  try {
+    installedBinStat = lstatSync(installedState.binPath);
+  } catch {
+    installedBinStat = null;
+  }
+  if (installedBinStat !== null && installedBinStat.isDirectory()) {
+    return refuseHere(
+      2,
+      'refuse-installed-bin-not-file',
+      null,
+      installedVersion,
+      null,
+      rollback,
+      preservedRollbackArtifacts,
+      `install: refusing to install over ${installedState.binPath}: it is a directory, not a file or symlink`,
+    );
+  }
+
   const resolvedTarball = resolve(options.tarball);
   if (!existsSync(resolvedTarball)) {
     return refuseHere(
@@ -1225,54 +1251,70 @@ export function installTarball(options: InstallTarballOptions): InstallTarballRe
       );
     };
 
-    const installer = options.installer ?? 'tar';
-    if (typeof installer === 'function') {
-      mutateCalls += 1;
-      installer({
-        tarball: candidateData.tarball,
-        unpackedPackageDir: candidateData.unpackedPackageDir,
-        prefix: installedState.prefix,
-        packageDir: installedState.packageDir,
-        binPath: installedState.binPath,
-        binRelPath: candidateData.binTeam,
-      });
-    } else if (installer === 'npm') {
-      mutateCalls += 1;
-      mkdirSync(installedState.prefix, { recursive: true });
-      const npmRun = spawnSync(
-        'npm',
-        [
-          'install',
-          '--global',
-          '--ignore-scripts',
-          '--no-audit',
-          '--no-fund',
-          '--prefix',
-          installedState.prefix,
-          candidateData.tarball,
-        ],
-        { encoding: 'utf8' },
-      );
-      if (npmRun.error !== undefined || npmRun.status !== 0) {
-        const detail = npmRun.error?.message ?? npmRun.stderr.trim();
-        return failAfterDispatch(
-          2,
-          'refuse-installer-failed',
-          guard.order,
-          installedVersion,
-          candidateVersion,
-          guard.rollback,
-          preservedRollbackArtifacts,
-          `install: npm install failed: ${detail}`,
+    // A backend may change `<prefix>` and then throw. The throw is reported through
+    // failAfterDispatch, which measures the prefix again; nothing claims rollback.
+    try {
+      const installer = options.installer ?? 'tar';
+      if (typeof installer === 'function') {
+        mutateCalls += 1;
+        installer({
+          tarball: candidateData.tarball,
+          unpackedPackageDir: candidateData.unpackedPackageDir,
+          prefix: installedState.prefix,
+          packageDir: installedState.packageDir,
+          binPath: installedState.binPath,
+          binRelPath: candidateData.binTeam,
+        });
+      } else if (installer === 'npm') {
+        mutateCalls += 1;
+        mkdirSync(installedState.prefix, { recursive: true });
+        const npmRun = spawnSync(
+          'npm',
+          [
+            'install',
+            '--global',
+            '--ignore-scripts',
+            '--no-audit',
+            '--no-fund',
+            '--prefix',
+            installedState.prefix,
+            candidateData.tarball,
+          ],
+          { encoding: 'utf8' },
+        );
+        if (npmRun.error !== undefined || npmRun.status !== 0) {
+          const detail = npmRun.error?.message ?? npmRun.stderr.trim();
+          return failAfterDispatch(
+            2,
+            'refuse-installer-failed',
+            guard.order,
+            installedVersion,
+            candidateVersion,
+            guard.rollback,
+            preservedRollbackArtifacts,
+            `install: npm install failed: ${detail}`,
+          );
+        }
+      } else {
+        mutateCalls += 1;
+        atomicExtractToPrefix(
+          candidateData.unpackedPackageDir,
+          installedState.packageDir,
+          installedState.binPath,
+          candidateData.binTeam,
         );
       }
-    } else {
-      mutateCalls += 1;
-      atomicExtractToPrefix(
-        candidateData.unpackedPackageDir,
-        installedState.packageDir,
-        installedState.binPath,
-        candidateData.binTeam,
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return failAfterDispatch(
+        2,
+        'refuse-installer-failed',
+        guard.order,
+        installedVersion,
+        candidateVersion,
+        guard.rollback,
+        preservedRollbackArtifacts,
+        `install: installer failed: ${detail}`,
       );
     }
 
