@@ -13,6 +13,7 @@ import type { Io } from '../src/io.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { proposeSecurityProfile, signSecurityProfile, type SecurityProfileName } from '../src/security/profile.ts';
 import { keyOf } from '../src/store/keys.ts';
+import { testIo } from './helpers.ts';
 
 const made: string[] = [];
 afterAll(() => { for (const b of made) rmSync(b, { recursive: true, force: true }); });
@@ -58,7 +59,7 @@ async function setup(profile: SecurityProfileName | null) {
     const code = await runInit(argv, io, home, undefined, { loggedIn: () => true, ownerSeatStore: store });
     return { code, json: argv.includes('--json') && out.trim().startsWith('{') ? JSON.parse(out) : null };
   };
-  return { home, root, run };
+  return { home, root, run, store };
 }
 
 describe('team init --execute and the security profile', () => {
@@ -82,4 +83,22 @@ describe('team init --execute and the security profile', () => {
     // Still single-use.
     expect((await s.run(['--execute', id])).code).toBe(1);
   });
+
+  for (const profile of [null, 'strict', 'relaxed'] as const) {
+    test(`plain team init from an agent's pane: ${profile ?? 'default'} ${profile === 'relaxed' ? 'folds the owner-terminal gate into a note' : 'keeps the owner-terminal gate'}`, async () => {
+      const s = await setup(profile);
+      const io = testIo(s.root, { kind: 'seat', name: 'iris', pane: 'w1:p1' });
+      const code = await runInit([], io, s.home, undefined, { loggedIn: () => true, ownerSeatStore: s.store });
+      if (profile === 'relaxed') {
+        expect(code).toBe(0);
+        expect(io.err).toContain('rule gate.owner-terminal');
+        expect(existsSync(join(s.root, '.agents', 'team.yaml'))).toBe(true);
+      } else {
+        expect(code).toBe(1);
+        expect(io.err + io.out).toContain('only the owner runs this');
+        expect(existsSync(join(s.root, '.agents', 'team.yaml'))).toBe(false);
+      }
+    });
+  }
 });
+
