@@ -16,6 +16,36 @@ import { claudeBox } from '../helpers.ts';
 const LOST = 'API Error: Connection lost mid-response. The response above may be incomplete.';
 const DONE = '✻ Cooked for 5m 51s · done 4:49 AM';
 const RULES = 'Synthetic rules.';
+const UPDATE_NOTICE = '✔ Update installed · Restart to update';
+const STATUS = '  no-git · …/lobbies/teamcli · deepseek-flash · S: $000.0 ⣿⣿⣿⣶⣀ 12% · L: 10% (0h00m) · W: 100% (-00.0%) (00h0m)';
+const BYPASS = '  ⏵⏵ bypass permissions on (shift+tab to cycle)';
+const WIDE_TOP = `${'─'.repeat(220)} builder-7 ─`;
+const WIDE_BOTTOM = '─'.repeat(WIDE_TOP.length);
+
+/** Atlas R4-6: the provider error wraps at a narrow pane width, then the idle frame follows. */
+const WRAPPED_ACTIVE_ERROR = [
+  '⏺ API Error: Connection lost mid-response. The response',
+  '  above may be incomplete.',
+  '',
+  `                        ${UPDATE_NOTICE}`,
+  `${'─'.repeat(48)} builder-7 ─`,
+  '❯',
+  '─'.repeat(60),
+  STATUS,
+  BYPASS,
+].join('\n');
+
+/** Atlas R4-5: the update notice shares the completion's terminal row, right-aligned. */
+const COMPLETED_WITH_INLINE_NOTICE = [
+  `⏺ ${LOST}`,
+  '',
+  `${DONE}${' '.repeat(81)}${UPDATE_NOTICE}`,
+  WIDE_TOP,
+  '❯',
+  WIDE_BOTTOM,
+  STATUS,
+  BYPASS,
+].join('\n');
 
 /** An older turn whose provider error is still visible, with the blank line a new turn follows. */
 const OLDER = [
@@ -116,5 +146,29 @@ describe('the liveRegion fail-safe over an older error', () => {
     const done = await retired;
     expect(done.result).toBe(false);
     expect(done.typed).toEqual([]);
+  });
+
+  test('a wrapped active provider error keeps a narrow idle-looking pane blocked', async () => {
+    const ran = await deliver(WRAPPED_ACTIVE_ERROR);
+    expect(readScreen('claude-code', WRAPPED_ACTIVE_ERROR)).toEqual({ kind: 'provider error' });
+    expect(dialogKind('claude-code', WRAPPED_ACTIVE_ERROR)).toBe('provider error');
+    expect(ran.read).toBe('provider error');
+    expect(ran.result).toBe(false);
+    expect(ran.typed).toEqual([]);
+    expect(ran.entered).toBe(0);
+    expect(ran.refusals[0]).toMatchObject({
+      stop: 'screen', typed: false, sent: false, kind: 'provider error', row: null,
+    });
+  });
+
+  test('a right-aligned update notice on the completion row leaves the prompt deliverable', async () => {
+    expect(readScreen('claude-code', COMPLETED_WITH_INLINE_NOTICE)).toEqual({ kind: 'idle' });
+    expect(dialogKind('claude-code', COMPLETED_WITH_INLINE_NOTICE)).toBeNull();
+    const ran = await deliver(COMPLETED_WITH_INLINE_NOTICE);
+    expect(ran.read).toBe('idle');
+    expect(ran.result).toBe(true);
+    expect(ran.typed).toEqual([RULES]);
+    expect(ran.entered).toBe(1);
+    expect(ran.refusals).toEqual([]);
   });
 });

@@ -928,6 +928,17 @@ function lineSomewhere(data: ScreenData, lines: string[], pattern: LinePattern, 
     const hit = matches(data, lines, i, pattern, tick, inWindow);
     if (hit === 'stop') return 'stop';
     if (hit) return true;
+    // Some terminal panes wrap a transcript row at their current width. A live rule can read
+    // that row as one sentence when the next live row is indented continuation text. The join
+    // is deliberately limited to one adjacent pair: separate transcript paragraphs never make
+    // a pattern match just because their words happen to fit together.
+    if (region === undefined || !region.has(i + 1)) continue;
+    const line = lines[i] ?? '';
+    const next = lines[i + 1] ?? '';
+    if (line.trimEnd() !== line || !/^\s+\S/.test(next)) continue;
+    const wrapped = matches(data, [`${line} ${next.trimStart()}`], 0, pattern, tick, false);
+    if (wrapped === 'stop') return 'stop';
+    if (wrapped) return true;
   }
   return false;
 }
