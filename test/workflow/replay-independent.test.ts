@@ -687,7 +687,14 @@ function stopFixture(source: string, run: string, stop: Record<string, unknown>,
     initial: workflow.initial ?? Object.keys(workflow.states)[0]!,
     start: { state: workflow.initial ?? Object.keys(workflow.states)[0]!, activation: 1, effects: [] },
     steps: [],
-    outcome: { kind: 'stopped', ...stop } as DryRunJournal['outcome'],
+    outcome: {
+      kind: 'stopped',
+      // A request-derived stop records the request's own precondition, unchanged by the fold.
+      ...(stop['signal'] !== undefined && stop['requestId'] !== undefined
+        ? { expectedRevision: stop['expectedRevision'] ?? stop['revision'] ?? 0 }
+        : {}),
+      ...stop,
+    } as DryRunJournal['outcome'],
   };
   return { source, workflow, definition, run, journal, truth, stop };
 }
