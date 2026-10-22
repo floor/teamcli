@@ -15,7 +15,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { deliverRules, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
+import { dialogKind } from '../../src/send/deliver.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
+import { claudeBox } from '../helpers.ts';
 
 const FIXTURE = readFileSync(
   new URL('../fixtures/claude-code/completed-error-empty-box-atlas.txt', import.meta.url),
@@ -47,12 +49,13 @@ function withoutNotice(screen: string): string {
   return kept.join('\n');
 }
 
-/** The frame with text in its one bare input row. */
+/** The frame with text in its input row, spelled with the prompt's own separator: the fixture
+ *  draws a bare `❯`, the captured composer slice draws `❯` then a non-breaking space. */
 function withDraft(screen: string, text: string): string {
   const rows = screen.split('\n');
-  const at = rows.indexOf('❯');
-  if (at < 0) throw new Error('the screen has no bare input row');
-  rows[at] = `❯ ${text}`;
+  const at = rows.findIndex((row) => row === '❯' || row === '❯ ');
+  if (at < 0) throw new Error('the screen has no empty input row');
+  rows[at] = rows[at] === '❯' ? `❯ ${text}` : `❯ ${text}`;
   return rows.join('\n');
 }
 
@@ -103,6 +106,7 @@ describe('the completed frame and the retained layout around it', () => {
   test('the completed frame delivers once: an ended turn is history above a ready box', async () => {
     const ran = await deliver(FIXTURE);
     expect(ran.read).toBe('idle');
+    expect(dialogKind('claude-code', FIXTURE)).toBeNull();
     expect(ran.result).toBe(true);
     expect(ran.typed).toEqual([RULES]);
     expect(ran.entered).toBe(1);
@@ -119,6 +123,7 @@ describe('the completed frame and the retained layout around it', () => {
     expect(rows[notice - 1]).toBe('');
     const ran = await deliver(screen);
     expect(ran.read).toBe('provider error');
+    expect(dialogKind('claude-code', screen)).toBe('provider error');
     expect(ran.result).toBe(false);
     expect(ran.typed).toEqual([]);
     expect(ran.entered).toBe(0);
@@ -133,6 +138,7 @@ describe('the completed frame and the retained layout around it', () => {
     expect(screen).not.toContain(NOTICE);
     const ran = await deliver(screen);
     expect(ran.read).toBe('provider error');
+    expect(dialogKind('claude-code', screen)).toBe('provider error');
     expect(ran.result).toBe(false);
     expect(ran.typed).toEqual([]);
     expect(ran.entered).toBe(0);
@@ -188,6 +194,57 @@ describe('the caution controls around that frame', () => {
     expect(ran.typed).toEqual([]);
     expect(ran.entered).toBe(0);
     expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+  });
+
+  test('a completion quoted in prose does not end the turn', async () => {
+    const screen = [LOST, `⏺ The log said "${DONE}"`, claudeBox('')].join('\n');
+    expect(readScreen('claude-code', screen)).toEqual({ kind: 'provider error' });
+    const ran = await deliver(screen);
+    expect(ran.result).toBe(false);
+    expect(ran.typed).toEqual([]);
+    expect(ran.entered).toBe(0);
+    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+  });
+
+  test('an indented completion row does not end the turn', async () => {
+    const screen = [LOST, `  ${DONE}`, claudeBox('')].join('\n');
+    expect(readScreen('claude-code', screen)).toEqual({ kind: 'provider error' });
+    const ran = await deliver(screen);
+    expect(ran.result).toBe(false);
+    expect(ran.typed).toEqual([]);
+    expect(ran.entered).toBe(0);
+    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+  });
+
+  test('a malformed completion row does not end the turn', async () => {
+    const screen = [LOST, '✻ Cooked for 5m 51s · done soon', claudeBox('')].join('\n');
+    expect(readScreen('claude-code', screen)).toEqual({ kind: 'provider error' });
+    const ran = await deliver(screen);
+    expect(ran.result).toBe(false);
+    expect(ran.typed).toEqual([]);
+    expect(ran.entered).toBe(0);
+    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+  });
+
+  test('an old error above its own completion stays history', async () => {
+    const screen = [LOST, DONE, claudeBox('')].join('\n');
+    expect(readScreen('claude-code', screen)).toEqual({ kind: 'idle' });
+    expect(dialogKind('claude-code', screen)).toBeNull();
+    const ran = await deliver(screen);
+    expect(ran.result).toBe(true);
+    expect(ran.typed).toEqual([RULES]);
+    expect(ran.entered).toBe(1);
+    expect(ran.refusals).toEqual([]);
+  });
+
+  test('a blank margin over its own completion does not make the old error live', async () => {
+    const screen = [LOST, '', DONE, claudeBox('')].join('\n');
+    expect(readScreen('claude-code', screen)).toEqual({ kind: 'idle' });
+    const ran = await deliver(screen);
+    expect(ran.result).toBe(true);
+    expect(ran.typed).toEqual([RULES]);
+    expect(ran.entered).toBe(1);
+    expect(ran.refusals).toEqual([]);
   });
 
   test('a working status refuses even over an idle-looking frame', async () => {
