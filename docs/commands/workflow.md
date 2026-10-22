@@ -18,7 +18,7 @@ Checks, dry-runs, or replays a workflow definition (`version: 1`):
   (`ref -> fixture` mapping in JSON or YAML), checking the definition digest and comparing every
   step and terminal stop to the pure reducer.
 
-Read-only: nothing writes to disk or any ledger, and no herdr session is needed.
+Read-only: nothing writes to disk or any ledger, and no terminal host session is needed.
 
 ## Synopsis
 
@@ -43,7 +43,7 @@ Read-only: nothing writes to disk or any ledger, and no herdr session is needed.
 
 | Caller | May |
 | --- | --- |
-| anyone — a seat, an agent-run CLI, CI, or the owner, from any folder | run `check`, `run --dry`, or `replay`: none of them needs a herdr session or a terminal |
+| anyone — a seat, an agent-run CLI, CI, or the owner, from any folder | run `check`, `run --dry`, or `replay`: none of them needs a terminal host session or a terminal |
 
 ## Output and exit codes
 

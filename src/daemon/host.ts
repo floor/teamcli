@@ -136,7 +136,7 @@ export type StartMachineDaemonInput = {
   stuckMs?: number;
   /** `absent` until the broker handler lands; never `on` without the owner's go. */
   features?: DaemonFeatures;
-  /** Injected for a test that must not touch the real pane/herdr sources. */
+  /** Injected for a test that must not touch the real terminal host's pane sources. */
   sendHost?: DaemonHost;
   /** Starts one root's per-project send server. The default starts the real server; a test
    *  injects its own to read the start input without binding a socket. */
@@ -1128,7 +1128,8 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           teamFile,
           log,
           // Proving a recorded pane watch is the process in its own pane needs this route's
-          // session; a pane herdr cannot read stays `unproven` and is never asked to hand over.
+          // session; a pane the terminal host cannot read stays `unproven` and is never asked
+          // to hand over.
           processInfo: (pane) => paneProcesses(pane, route.session),
           ...(presence === undefined
             ? {}
