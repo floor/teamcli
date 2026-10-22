@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { readSecurityProfile, ruleRelaxed } from '../security/profile.ts';
 
 export const TEAM_CREATE_TTL_MS = 15 * 60 * 1000;
 export const TEAM_CREATE_ID_PATTERN = /^tc_[0-9a-f]{24}$/;
@@ -208,12 +209,12 @@ export function revokeTeamCreateRule(home: string, ruleId: string): { ok: true }
  * verified owner-seat answer for exactly this id and hash, or by a verified `always` rule whose
  * scope holds the repository. Claims the request single-use and writes an audit entry.
  */
-export function admitTeamCreate(home: string, id: string, root: string, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; via: 'owner-seat' | 'rule' | 'policy'; ruleId?: string; signer: string } | { ok: false; why: string } {
+export function admitTeamCreate(home: string, id: string, root: string, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; via: 'owner-seat' | 'rule' | 'policy' | 'security-profile'; ruleId?: string; signer: string } | { ok: false; why: string } {
   const record = readRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
   if (record.params.root !== canonicalRoot(root)) return { ok: false, why: `request ${id} is for ${record.params.root}, not this repository` };
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
-  let via: 'owner-seat' | 'rule' | 'policy' | null = null;
+  let via: 'owner-seat' | 'rule' | 'policy' | 'security-profile' | null = null;
   let ruleId: string | undefined;
   let signer = '';
   let answerText: string | null = null;
@@ -238,15 +239,22 @@ export function admitTeamCreate(home: string, id: string, root: string, store: O
   } else {
     const rule = listTeamCreateRules(home, store, now).rules.find((r) => dirname(record.params.root) === r.scope);
     const none = rule === undefined ? noApprovalFor(home, record.params.root, store, now) : undefined;
-    if (rule === undefined && none !== undefined) {
-      via = 'policy';
-      ruleId = none.mode_id;
-      signer = none.signer;
-    } else if (rule === undefined) return { ok: false, why: `request ${id} has no verified owner-seat answer and no always rule covers it; the owner answers with team init --approve-as-owner-seat ${id} oui` };
-    else {
+    if (rule !== undefined) {
       via = 'rule';
       ruleId = rule.rule_id;
       signer = rule.signer;
+    } else if (none !== undefined) {
+      via = 'policy';
+      ruleId = none.mode_id;
+      signer = none.signer;
+    } else if (ruleRelaxed(home, 'team-create.owner-answer', store, { now, what: `team-create ${id} ${record.params.root}` })) {
+      // The owner-signed security profile relaxes the per-request answer; the profile's own
+      // signer is the authority recorded in the audit.
+      const profile = readSecurityProfile(home, store, now);
+      via = 'security-profile';
+      signer = profile.source === 'record' ? profile.record.signer : '';
+    } else {
+      return { ok: false, why: `request ${id} has no verified owner-seat answer and no always rule covers it; the owner answers with team init --approve-as-owner-seat ${id} oui` };
     }
   }
   const used = writeExclusive(join(actionRequestsFolder(home), `${id}.used`), `${now.toISOString()}\n`);
