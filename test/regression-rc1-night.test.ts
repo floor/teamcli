@@ -232,7 +232,9 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     );
     expect(host.typed).toHaveLength(1);
     expect(host.typed[0]?.pane).toBe('w1:p1');
-    expect(host.typed[0]?.text).toBe('From owner@acme: run team drops --read --seat lead --session acme and do that.');
+    // The typed wake is the message-display line: the sender, the body's first line, the fixed
+    // read hint. It opens the same header every transport carries.
+    expect(host.typed[0]?.text).toBe('Message from owner (owner@acme): hello Read it with: team drops --read.');
     expect(host.enters).toEqual(['w1:p1']);
     expect(host.dials()).toBe(0);
   });
@@ -426,9 +428,9 @@ describe('a registry record binds a caller only where the call stands as it', ()
     expect(code).toBe(0);
     expect(host.typed).toHaveLength(1);
     expect(host.typed[0]?.pane).toBe('w1:p2');
-    // The trigger is the drop's own line, never the body.
-    expect(host.typed[0]?.text).toContain(' and do that.');
-    expect(host.typed[0]?.text).not.toContain('hello');
+    // The trigger is the message-display line — sender, the body's first line as the summary,
+    // the fixed read hint — never the signed body and never a path the composer names.
+    expect(host.typed[0]?.text).toBe('Message from lead (lead@acme): hello Read it with: team drops --read.');
     expect(lastOutcome(w, 'helper')).toBe('sent (unconfirmed)');
   });
 });
