@@ -489,6 +489,23 @@ describe('the owner seat approves with its own credential-store key', () => {
     expect((await execute(w, r.json.target, [], undefined, store)).code).toBe(1);
   });
 
+  test('a forged seat answer dropped first never blocks the owner seat, nor the terminal answer', async () => {
+    const { w, store } = await seated('seat-squat');
+    const folder = grantRequestsFolder(w.home);
+    const a = await requestOf(w, noScreen as never);
+    writeFileSync(join(folder, `${a.json.target}.seat-answer.json`), '{"owner_seat_answer":{},"signer":"mac","signature":"00"}');
+    expect(await approve(w, store, a.json.target, 'oui')).toBe(0);
+    expect(await approve(w, store, a.json.target, 'oui')).toBe(1);
+    const done = await execute(w, a.json.target, [], undefined, store);
+    expect(done.code).toBe(0);
+    expect(done.io.out()).toContain('approved by: owner-seat');
+    // A squatted seat answer and a real terminal answer: the terminal answer stands.
+    const b = await requestOf(w, noScreen as never);
+    writeFileSync(join(folder, `${b.json.target}.seat-answer.json`), 'not json');
+    expect(await runGrant(['--answer', b.json.target, 'oui'], ownerIo(w), { home: w.home })).toBe(0);
+    expect((await execute(w, b.json.target, [], undefined, store)).code).toBe(0);
+  });
+
   test('another seat key, the shared message key, another id and an expired request are refused', async () => {
     const { w, store } = await seated('seat-refuse');
     const folder = grantRequestsFolder(w.home);

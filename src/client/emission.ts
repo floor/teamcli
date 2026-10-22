@@ -13,7 +13,7 @@
 
 import { createHash, randomBytes, randomInt, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
@@ -229,9 +229,23 @@ export function approveAsOwnerSeat(
   const summary = pendingSummary(record.params, now).text;
   const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} for ${summary}`, via.assertion);
   if (!signed.ok) return signed;
-  const written = writeExclusive(join(grantRequestsFolder(home), `${requestId}.seat-answer.json`), `${JSON.stringify(signed.signed, null, 2)}\n`);
-  if (written === 'exists') return { ok: false, why: `request ${requestId} was already answered by the owner seat` };
+  const path = join(grantRequestsFolder(home), `${requestId}.seat-answer.json`);
+  const text = `${JSON.stringify(signed.signed, null, 2)}\n`;
+  const written = writeExclusive(path, text);
   if (written === 'failed') return { ok: false, why: `the answer to ${requestId} could not be written` };
+  if (written === 'exists') {
+    // Only an answer that verifies as the owner seat's blocks this one. A file any same-user
+    // process could have dropped there first (unsigned, forged, for another request) is replaced.
+    if (readOwnerSeatAnswer(home, record, store, now).ok) return { ok: false, why: `request ${requestId} was already answered by the owner seat` };
+    const temp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+    if (writeExclusive(temp, text) !== 'written') return { ok: false, why: `the answer to ${requestId} could not be written` };
+    try {
+      renameSync(temp, path);
+    } catch {
+      try { unlinkSync(temp); } catch {}
+      return { ok: false, why: `the answer to ${requestId} could not be written` };
+    }
+  }
   return { ok: true, choice, summary };
 }
 
@@ -422,17 +436,24 @@ export function executePendingGrant(
   // With no code, the approval is the owner seat's answer (signed by its credential-store key)
   // when one was given, and otherwise the owner's terminal answer, both bound to this id and hash.
   let viaSeat = false;
-  if (input.code === undefined && existsSync(join(grantRequestsFolder(home), `${record.request_id}.seat-answer.json`))) {
-    const answer = readOwnerSeatAnswer(home, record, options.ownerSeatStore ?? systemOwnerSeatKeyStore(), now);
-    if (!answer.ok) return answer;
-    if (answer.choice === 'deny') return { ok: false, why: `the owner seat denied request ${input.requestId}` };
-    input = { ...input, approve: answer.choice };
-    viaSeat = true;
-  } else if (input.code === undefined) {
-    const answer = readOwnerAnswer(home, record, key);
-    if (!answer.ok) return answer;
-    if (answer.choice === 'deny') return { ok: false, why: `the owner denied request ${input.requestId}` };
-    input = { ...input, approve: answer.choice };
+  if (input.code === undefined) {
+    const folder = grantRequestsFolder(home);
+    const seat = existsSync(join(folder, `${record.request_id}.seat-answer.json`))
+      ? readOwnerSeatAnswer(home, record, options.ownerSeatStore ?? systemOwnerSeatKeyStore(), now)
+      : null;
+    if (seat !== null && seat.ok) {
+      if (seat.choice === 'deny') return { ok: false, why: `the owner seat denied request ${input.requestId}` };
+      input = { ...input, approve: seat.choice };
+      viaSeat = true;
+    } else if (seat !== null && !existsSync(join(folder, `${record.request_id}.answer.json`))) {
+      return seat;
+    } else {
+      // An owner-seat answer that does not verify never blocks the owner's terminal answer.
+      const answer = readOwnerAnswer(home, record, key);
+      if (!answer.ok) return seat !== null ? { ok: false, why: `${seat.why}; ${answer.why}` } : answer;
+      if (answer.choice === 'deny') return { ok: false, why: `the owner denied request ${input.requestId}` };
+      input = { ...input, approve: answer.choice };
+    }
   }
   const adapters = options.adapters ?? [oneTimeCodeAdapter(), localPresenceAdapter];
   const adapter: GrantApprovalAdapter | undefined = viaSeat ? ownerSeatAdapter : input.code === undefined ? ownerAnswerAdapter : adapters.find((candidate) => candidate.name === record.adapter);
