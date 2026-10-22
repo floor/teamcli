@@ -807,7 +807,19 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--inbox] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
+    team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
+    team grant --execute <request-id> [--json]
+    team grant --answer <request-id> <oui|always|non> [--json]
+    team grant --deny <request-id> [--json]
+    team grant --add-owner-seat --team <team> --signer <name> [--entity <entity>] [--json]
+    team grant --add-owner-signer --signer <name> --type <mac-keystore|webauthn> [--signer-public-key <hex>] [--credential-id <id>] [--rp-id <id>] [--json]
+    team grant --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--at <ISO>] [--json]
+    team grant --owner-seat-inbox [--json]
+    team grant --approvals [--json]
+    team grant --revoke-approval <rule-id> [--json]
+    team grant --client-request --via <master-grant-file> --key <client-key> --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--json]
 
 ### Who may run it
 
@@ -817,17 +829,45 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--add-owner-seat` | no | no | no |
+| `--add-owner-signer` | no | no | no |
+| `--allow-grant` | no | no | no |
+| `--answer` | yes | no | no |
+| `--approvals` | no | no | no |
+| `--approve` | yes | no | no |
+| `--approve-as-owner-seat` | yes | no | no |
+| `--assertion` | yes | no | no |
+| `--at` | yes | no | no |
 | `--capabilities` | yes | no | no |
 | `--client` | yes | no | no |
+| `--client-request` | no | no | no |
+| `--code` | yes | no | no |
+| `--credential-id` | yes | no | no |
+| `--deny` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--entity` | yes | no | no |
+| `--execute` | yes | no | no |
 | `--expires` | yes | no | no |
+| `--grant-entity` | yes | no | no |
+| `--grant-project` | yes | no | no |
+| `--grant-team` | yes | no | no |
 | `--help` | no | no | no |
 | `--inbox` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--name` | yes | no | no |
+| `--owner-seat-inbox` | no | no | no |
 | `--public-key` | yes | no | no |
+| `--request` | no | no | no |
+| `--revoke-approval` | yes | no | no |
+| `--rp-id` | yes | no | no |
 | `--scope` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--signer` | yes | no | no |
+| `--signer-public-key` | yes | no | no |
+| `--team` | yes | no | no |
+| `--type` | yes | no | no |
+| `--via` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -836,6 +876,7 @@ Usage:
 | --- | --- | --- |
 | `seat` | yes | no |
 | `seat\|@team` | yes | no |
+| `oui\|always\|non` | yes | no |
 
 ## `help`
 
@@ -893,6 +934,11 @@ Hidden: no
 Usage:
 
     team init [--restore] [--json]
+    team init --request [--json]
+    team init --execute <request-id> [--json]
+    team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
+    team init --approvals [--json]
+    team init --revoke-approval <rule-id> [--json]
 
 ### Who may run it
 
@@ -902,14 +948,23 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approvals` | no | no | no |
+| `--approve-as-owner-seat` | yes | no | no |
+| `--assertion` | yes | no | no |
+| `--execute` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--request` | no | no | no |
 | `--restore` | no | no | no |
+| `--revoke-approval` | yes | no | no |
+| `--signer` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `oui\|always\|non` | yes | no |
 
 ## `issues`
 

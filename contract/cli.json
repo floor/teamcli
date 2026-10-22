@@ -1327,6 +1327,60 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--add-owner-seat",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--add-owner-signer",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--allow-grant",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--answer",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--approvals",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--approve",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--approve-as-owner-seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--assertion",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--at",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--capabilities",
           "repeatable": false,
           "takesValue": true
@@ -1334,6 +1388,30 @@
         {
           "hidden": false,
           "name": "--client",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--client-request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--code",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--credential-id",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--deny",
           "repeatable": false,
           "takesValue": true
         },
@@ -1351,7 +1429,31 @@
         },
         {
           "hidden": false,
+          "name": "--execute",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--expires",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--grant-entity",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--grant-project",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--grant-team",
           "repeatable": false,
           "takesValue": true
         },
@@ -1375,9 +1477,21 @@
         },
         {
           "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--name",
           "repeatable": false,
           "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--owner-seat-inbox",
+          "repeatable": false,
+          "takesValue": false
         },
         {
           "hidden": false,
@@ -1387,7 +1501,61 @@
         },
         {
           "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--revoke-approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--rp-id",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--scope",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--signer",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--signer-public-key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--team",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--type",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--via",
           "repeatable": false,
           "takesValue": true
         },
@@ -1410,13 +1578,30 @@
           "name": "seat|@team",
           "optional": true,
           "repeatable": false
+        },
+        {
+          "name": "oui|always|non",
+          "optional": true,
+          "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
         "team grant <seat> --scope <act,...> [--dry-run] [--json]",
         "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]",
-        "team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--inbox] [--json]"
+        "team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]",
+        "team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]",
+        "team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]",
+        "team grant --execute <request-id> [--json]",
+        "team grant --answer <request-id> <oui|always|non> [--json]",
+        "team grant --deny <request-id> [--json]",
+        "team grant --add-owner-seat --team <team> --signer <name> [--entity <entity>] [--json]",
+        "team grant --add-owner-signer --signer <name> --type <mac-keystore|webauthn> [--signer-public-key <hex>] [--credential-id <id>] [--rp-id <id>] [--json]",
+        "team grant --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--at <ISO>] [--json]",
+        "team grant --owner-seat-inbox [--json]",
+        "team grant --approvals [--json]",
+        "team grant --revoke-approval <rule-id> [--json]",
+        "team grant --client-request --via <master-grant-file> --key <client-key> --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--json]"
       ],
       "who": {
         "gate": "owner-only",
@@ -1493,6 +1678,30 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approvals",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--approve-as-owner-seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--assertion",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--execute",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -1505,9 +1714,27 @@
         },
         {
           "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--restore",
           "repeatable": false,
           "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--revoke-approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--signer",
+          "repeatable": false,
+          "takesValue": true
         },
         {
           "hidden": true,
@@ -1518,10 +1745,21 @@
       ],
       "hidden": false,
       "name": "init",
-      "positionals": [],
+      "positionals": [
+        {
+          "name": "oui|always|non",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
       "subcommands": [],
       "usage": [
-        "team init [--restore] [--json]"
+        "team init [--restore] [--json]",
+        "team init --request [--json]",
+        "team init --execute <request-id> [--json]",
+        "team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]",
+        "team init --approvals [--json]",
+        "team init --revoke-approval <rule-id> [--json]"
       ],
       "who": {
         "gate": "owner-only",
