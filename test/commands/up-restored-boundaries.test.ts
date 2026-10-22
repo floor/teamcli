@@ -24,7 +24,9 @@ import { readState, updateState } from '../../src/state.ts';
 import { findAgent, registerAgent, updateAgent } from '../../src/registry/agents.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import type { Key } from '../../src/launch/terminal.ts';
+import { UP_OUTPUT_SCHEMA } from '../../src/output/schema.ts';
 import { CLAUDE_IDLE, testIo } from '../helpers.ts';
+import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
 
 const EXAMPLE = readFileSync(join(import.meta.dir, '../fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
 const FILE = ['--file', '.agents/team.yaml'];
@@ -309,14 +311,18 @@ describe('team up, a restored session: boundaries', () => {
         made,
       ),
     );
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(made.closes).toEqual([]);
     expect(keys).toEqual([]);
     expect(made.creates).not.toContain('deepseek-acme · implementer');
+    // The non-working doubt is refused and held: the plan's record says left out, the owner
+    // summary counts one refusal with the seat's reason, and nothing was touched.
+    expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
     expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
     // Not adopted: the record still names the pane it was launched on, with its original pids
     // and session; the stray pane's pids never reach it.
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   // Scene 4 — the stored session is present, but this session's agent list does not name the
@@ -346,10 +352,12 @@ describe('team up, a restored session: boundaries', () => {
         made,
       ),
     );
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(made.closes).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
     expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   // Scene 3 — the shell is in front (the program is gone). The seat's name survives on the
@@ -510,10 +518,12 @@ describe('team up, a restored session: boundaries', () => {
       io,
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(made.closes).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
     expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
+    expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] } });
     expect(seatsOf()['deepseek-acme']?.agent_session).toBeUndefined();
   });
 
@@ -535,10 +545,13 @@ describe('team up, a restored session: boundaries', () => {
       io,
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(made.closes).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
     expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
+    expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
     expect(seatsOf()['deepseek-acme']).toMatchObject({
+      stage: 'ready',
       pane: 'w93:p1',
       launched: { shell: 430, cli: [431] },
       agent_session: 'state-copy',
@@ -562,10 +575,12 @@ describe('team up, a restored session: boundaries', () => {
       io,
       sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
     );
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(made.closes).toEqual([]);
+    expect(io.out).toContain('deepseek-acme: left out: its pane holds a process this record cannot tie to the launch\n');
     expect(io.err).toContain('  its pane holds a process this record cannot tie to the launch\n');
-    expect(seatsOf()['deepseek-acme']).toMatchObject({ launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+    expect(io.err).toContain('0 seats repaired, 0 skipped (working), 1 refused (deepseek-acme: its pane holds a process this record cannot tie to the launch)\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 
   // Item 3 through `up` with no state copy: a restored seat whose model drifted is closed
@@ -985,5 +1000,135 @@ describe('team up, a restored session: boundaries', () => {
     expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
     expect(io.err).toContain('  its recorded conversation cannot be resumed');
     expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1' });
+  });
+
+  // The other side of the same doubt: the process in front of the record reads working. That
+  // seat is left to finish its turn — a successful skip, exit 0, nothing closed or typed, its
+  // record untouched — and the summary counts it as skipped working, not refused. The scene is
+  // row 312's (a matching session on another pane); only the recorded pane's screen differs.
+  test('a doubtful pane whose screen reads working is skipped, not refused', async () => {
+    await approve();
+    writeState('kept');
+    const { sameProcess, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? 'esc to interrupt' : IDLE);
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          agents: () => [
+            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
+            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
+            agent('deepseek-acme-2', 'w94:p1', 'idle'),
+            { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+          ],
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(keys).toEqual([]);
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
+    // The record is the working skip, not a left-out refusal.
+    expect(io.out).toContain('deepseek-acme: ready\n');
+    expect(io.err).toContain('  the process in its pane is working; nothing closed (stop it there, or run team remove deepseek-acme)\n');
+    expect(io.err).toContain('0 seats repaired, 1 skipped (working), 0 refused\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+  });
+
+  // The refusal contract under `--json`: the non-working doubt (row 312's scene, a free screen)
+  // is the run's own failure document, `up.pending`, whose message carries the refused count and
+  // the seat's reason. Stderr stays empty, the record is left ready, and nothing is touched.
+  test('a non-working doubt under --json is the up.pending error with the seat reason', async () => {
+    await approve();
+    writeState('kept');
+    const { sameProcess, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      ['--json', ...FILE],
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          agents: () => [
+            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
+            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
+            agent('deepseek-acme-2', 'w94:p1', 'idle'),
+            { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+          ],
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(1);
+    expect(io.err).toBe('');
+    const doc = assertJsonErrorShape(io.out, {
+      id: 'up.pending',
+      messageContains: 'deepseek-acme: its pane holds a process this record cannot tie to the launch',
+      repair: null,
+    });
+    expect(doc.error.message).toContain('1 refused');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
+  });
+
+  // And the working skip under `--json`: a success document, `team.up`, whose action summary and
+  // restore buckets count the seat as skipped working — the same doubt, resolved the other way.
+  test('a working doubt under --json is a team.up success counting it skipped', async () => {
+    await approve();
+    writeState('kept');
+    const { sameProcess, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? 'esc to interrupt' : IDLE);
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      ['--json', ...FILE],
+      io,
+      sources(
+        {
+          sessionState: () => 'running',
+          workspaces: () => [...workspaces(), { id: 'w99', label: 'DeepSeek V4.1 Flash' }],
+          agents: () => [
+            agent('claude-coordinator-acme', 'w91:p1', 'idle'),
+            agent('codex-acme', 'w92:p1', 'idle', 'codex'),
+            agent('deepseek-acme-2', 'w94:p1', 'idle'),
+            { ...agent('deepseek-acme', 'w99:p1', 'idle'), session: 'kept' },
+          ],
+          doctor: doctor(),
+        },
+        made,
+      ),
+    );
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    const doc = assertMatchesOutputSchema<{
+      status: string;
+      action_summary: string;
+      notes: string[];
+      restore_summary: { repaired: number; skipped_working: number; refused: number; line: string };
+    }>(io.out, UP_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.action_summary).toBe('0 seats repaired, 1 skipped (working), 0 refused');
+    expect(doc.restore_summary).toMatchObject({ repaired: 0, skipped_working: 1, refused: 0 });
+    expect(doc.notes).toContain('deepseek-acme: ready');
+    expect(made.closes).toEqual([]);
+    expect(made.creates).not.toContain('deepseek-acme · implementer');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({ stage: 'ready', pane: 'w93:p1', launched: { shell: 430, cli: [431] }, agent_session: 'kept' });
   });
 });
