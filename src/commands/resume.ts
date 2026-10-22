@@ -27,11 +27,11 @@ import { pauseText, stopText, updateState, type PauseRecord } from '../state.ts'
 // lead restarts each seat from the place the tool holds. The caller rule is the pause's own,
 // because resuming is the same lever in the other direction.
 
-export const USAGE = `Usage: team resume [<team>|<seat>] [--seat <seat>] [--team <team>] [--all] [--json]
+export const USAGE = `Usage: team resume [<name>] [--seat <seat>] [--team <team>] [--all] [--json]
 
 Clears the pause of a seat or of a whole team and prints the stop points it recorded; team next
-claims and the watch nudges again. <seat> is a seat the current folder's team declares, <team>
-is a registered team's name, project or id, --seat and --team say which one a name means, and
+claims and the watch nudges again. <name> is a seat the current folder's team declares, or a
+registered team's name, project or id; --seat and --team say which one a name that is both means.
 --all is every registered team. A seat's resume leaves a team-wide pause standing, and a team's
 resume leaves seats paused on their own. The owner or the team's orchestrator runs it.
 
