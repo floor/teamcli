@@ -2,8 +2,9 @@
 // typed wake appends so its seat knows where to read the signed record.
 //
 // The line is display, never transport: the signed record is what a seat reads, and every field
-// here is data. A sender writes the summary (`team send --subject`); when none is written the
-// first content line stands in, with the attribution header peeled off. Everything is neutralised
+// here is data. The summary is always the body's first content line, with the attribution header
+// peeled off; a sender's `team send --subject` is a distinct display field of its own, `{subject}`,
+// and never stands in for the summary. Everything is neutralised
 // to one printable line before it is put in front of a person or an agent, and the whole typed
 // line stays inside the measured pane width (100 characters), keeping the read hint whole.
 //
