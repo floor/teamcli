@@ -11,7 +11,7 @@ your own device when a rule is first set. Listed from fewest to more prompts:
 
 | Situation | How it passes with no prompt | The one-time owner act |
 | --- | --- | --- |
-| renewing the grok-bot grant every week | the `always` answer is a standing, owner-signed rule; a matching request is admitted at once (`approved by: standing rule`) | the Touch ID of the first answer (step 2 below) |
+| renewing the grok-bot grants every week | the `always` answer is a standing, owner-signed rule; a matching request is admitted at once (`approved by: standing rule`) | the Touch ID of each first answer (steps 2 and 3 below) |
 | creating another team under `~/Code/floor` | an `always` answer to one team request covers every sibling folder of its parent | the Touch ID of that first answer |
 | creating any team, any folder | the `relaxed` security profile relaxes `team-create.owner-answer` | one Touch ID to sign the profile, renewed at most every 30 days |
 | an agent running owner-only `team init` | `relaxed` relaxes `gate.owner-terminal` | the same profile signature |
@@ -28,20 +28,28 @@ rule already gives the no-prompt renewal.
 The profile is also the autonomy axis: `strict` = agents ask, `relaxed` = agents act inside what
 the signed profile lists, until its expiry.
 
-## Morning checklist (two Touch IDs, nothing to type)
+## Morning checklist (three Touch IDs, nothing to type)
 
 1. **Iris starts the setup** (`scripts/morning-owner-setup.sh`). It builds the owner-seat helper,
    installs this branch as `~/.local/bin/team-branch` next to the global `team` (the global one is
    left alone), registers your owner seat with a Secure Enclave key, and writes `owner-signers=mac`
-   and `grant-emission=conversational` for the entities `teamcli` (the grant) and `floor` (Floor Docs).
+   and `grant-emission=conversational` for the entities `floor` (Atlas's grant, Floor Docs) and `teamcli` (Agamemnon's grant).
    **You approve with Touch ID** once. The prompt reads:
-   *"Create the TeamCLI owner seat for floor and set owner-signers=mac, grant-emission=conversational for entities teamcli, floor"*.
-2. **Iris requests the grok-bot grant** (send + messages to `orchestrator@teamcli`, 7 days) and
-   answers it `always`. **You approve with Touch ID**. The prompt reads:
+   *"Create the TeamCLI owner seat for floor and set owner-signers=mac, grant-emission=conversational for entities floor, teamcli"*.
+2. **Iris requests the grok-bot grant to Atlas** (send + messages to `orchestrator@floor`, 7 days)
+   and answers it `always`. **You approve with Touch ID**. The prompt reads:
+   *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@floor (entity floor) until …"*.
+3. **Iris requests the grok-bot grant to Agamemnon** (send + messages to `orchestrator@teamcli`)
+   the same way. **You approve with Touch ID**:
    *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@teamcli (entity teamcli) until …"*.
-   Iris then runs `--execute` and the grant is written. Next week Iris re-runs the script: the
-   standing rule renews it with no prompt.
-3. *(Optional)* **Iris proposes the relaxed security profile** for a week of frictionless
+   Iris runs `--execute` after each answer and the grants are written. With "messages" Iris can
+   read the orchestrators' `team reply` answers. Next week Iris re-runs the script: both standing
+   rules renew the grants with no prompt.
+
+   Why two: a grant binds exactly one entity and one team, so one grant cannot reach both
+   orchestrators. Widening the grant format to several targets was rejected: it would make one
+   Touch ID authorise sends into two entities, which is harder to read on the prompt.
+4. *(Optional)* **Iris proposes the relaxed security profile** for a week of frictionless
    development; **you approve with Touch ID**: *"Set the TeamCLI security profile to relaxed until …"*.
    Then Floor Docs (below) needs no prompt at all.
 
