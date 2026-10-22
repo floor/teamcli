@@ -277,8 +277,11 @@ held-send retry and the unread wake.
   that seat, and for another team its team record listing that agent at that seat and recording
   the session the record is bound to. A sender those records cannot pin to one team, seat and
   session is reported to the lead only, and the missing metadata is named in the record and the
-  line. The report's words say whether a wake line was sent, was reserved with an unconfirmed
-  outcome, or was never typed, and `--no-nudge` skips the wake but still writes the report.
+  line. A signed client-origin record carries `from_client` and no agent id by construction; it
+  is reported to the receiving team's lead alone, no sender mailbox resolution is attempted for
+  it, and no missing-metadata reason is named. The report's words say whether a wake line was
+  sent, was reserved with an unconfirmed outcome, or was never typed, and `--no-nudge` skips the
+  wake but still writes the report.
 
 A nudge goes only to a seat whose box is an empty idle prompt; never to the operator, the
 orchestrator, the pane the watch runs in, a dialog, or a box holding unsent text. A box that
