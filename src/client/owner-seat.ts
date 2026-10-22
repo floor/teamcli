@@ -21,7 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
-import { loadAndResolvePolicyChain } from '../policy/sources.ts';
+import { loadAndResolvePolicyChain, writePolicySet } from '../policy/sources.ts';
 
 /** One credential store: user-presence signing keys, plus pins for keys held elsewhere. */
 export type OwnerSeatKeyStore = {
@@ -261,7 +261,24 @@ export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date
   if (mode !== undefined && mode !== 'any') return { why: `owner-signer-mode "${String(mode)}" is not one this build reads` };
   const listed = chain.policies['owner-signers']?.value;
   if (Array.isArray(listed)) return { names: listed.filter((n): n is string => typeof n === 'string'), source: 'policy' };
-  return { why: `no owner-signers policy is set for entity "${entity}"; no owner-seat answer is accepted (set it with team policy set entity owner-signers)` };
+  const names = record.signers.map((x) => x.name).join(',') || '<signer>';
+  return { why: `no owner-signers policy is set for entity "${entity}", so no owner-seat answer is accepted yet. To accept your registered signers, run: team policy set entity owner-signers ${names} --entity ${entity}` };
+}
+
+/**
+ * Makes `signer` one the entity's `owner-signers` policy accepts: writes the policy with it when
+ * none is set, or adds it to the list. Only the owner-gated registration commands call this, so
+ * registering a signer is the one explicit step that makes it count (no implicit fallback).
+ */
+export function acceptOwnerSigner(home: string, entity: string, signer: string, now: Date = new Date()): { ok: true; names: string[] } | { ok: false; why: string } {
+  const record = readOwnerSeat(home);
+  if (record === null) return { ok: false, why: 'no owner seat is registered' };
+  const current = acceptedSigners(home, record, now, entity);
+  const names = 'names' in current ? current.names : [];
+  if (names.includes(signer)) return { ok: true, names };
+  const next = [...names, signer];
+  const wrote = writePolicySet(home, { level: 'entity', target: entity, name: 'owner-signers', value: next }, { now });
+  return wrote.ok ? { ok: true, names: next } : { ok: false, why: wrote.why };
 }
 
 /** A signer's public key, confirmed against the credential store; fails closed. */

@@ -23,7 +23,7 @@ import {
   type ClientGrantScope,
 } from './client/records.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
-import { addOwnerSigner, deliverToOwnerSeat, ownerSeatMessages, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
+import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
 import { approveAsOwnerSeat, GRANT_CHOICES, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
 import type { Io } from './io.ts';
 import { plainText } from './launch/plain.ts';
@@ -453,8 +453,12 @@ export function runAddOwnerSeatMode(rawIo: Io, io: Io, team: string, json: boole
     else io.stderr(`team grant: ${result.why}\n`);
     return 'refused';
   }
+  const accepted = acceptOwnerSigner(home, result.record.entity, result.record.signers[0]!.name, approval.now);
+  const acceptedLine = accepted.ok
+    ? `owner-signers (entity ${result.record.entity}): ${accepted.names.join(', ')}`
+    : `owner-signers not set (${accepted.why}); run: team policy set entity owner-signers ${result.record.signers[0]!.name} --entity ${result.record.entity}`;
   if (json) writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: owner seat registered', project: null, session: null, target: `owner@${team}` });
-  else io.stdout(`owner seat: registered owner@${team}\nsigner: ${result.record.signers[0]!.name} (mac-keystore; private key never leaves the credential store)\npublic key: ${result.record.signers[0]!.public_key}\nrecord: ${result.path}\n`);
+  else io.stdout(`owner seat: registered owner@${team}\nsigner: ${result.record.signers[0]!.name} (mac-keystore; private key never leaves the credential store)\npublic key: ${result.record.signers[0]!.public_key}\nrecord: ${result.path}\n${acceptedLine}\n`);
   return 'ok';
 }
 
@@ -476,8 +480,13 @@ export function runAddOwnerSignerMode(rawIo: Io, io: Io, args: Args, json: boole
     else io.stderr(`team grant: ${result.why}\n`);
     return 'refused';
   }
+  const seat = readOwnerSeat(home);
+  const accepted = seat === null ? null : acceptOwnerSigner(home, seat.entity, result.signer.name, approval.now);
+  const acceptedLine = accepted === null || seat === null ? '' : accepted.ok
+    ? `owner-signers (entity ${seat.entity}): ${accepted.names.join(', ')}\n`
+    : `owner-signers not updated (${accepted.why}); run: team policy set entity owner-signers <names> --entity ${seat.entity}\n`;
   if (json) writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: owner signer added', project: null, session: null, target: result.signer.name });
-  else io.stdout(`owner signer added: ${result.signer.name} (${result.signer.type})\n`);
+  else io.stdout(`owner signer added: ${result.signer.name} (${result.signer.type})\n${acceptedLine}`);
   return 'ok';
 }
 

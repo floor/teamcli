@@ -103,7 +103,7 @@ describe('several owner signers, none preferred', () => {
     for (const unset of [viaMac, viaPhone]) {
       const refused = verifyOwnerAnswer(h.home, unset, store);
       expect(refused.ok).toBe(false);
-      if (!refused.ok) expect(refused.why).toContain('no owner-signers policy is set');
+      if (!refused.ok) expect(refused.why).toContain('run: team policy set entity owner-signers mac,phone --entity floor');
     }
     allowSigners(h.home, ['mac', 'phone']);
     expect(verifyOwnerAnswer(h.home, viaMac, store).ok).toBe(true);
