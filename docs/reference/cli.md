@@ -939,6 +939,8 @@ Usage:
     team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
     team init --approvals [--json]
     team init --revoke-approval <rule-id> [--json]
+    team init --approval-mode <none|always-rule|per-action> --scope <folder> [--signer <name>] [--assertion <file>] [--json]
+    team init --approval-modes [--json]
 
 ### Who may run it
 
@@ -948,6 +950,8 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval-mode` | yes | no | no |
+| `--approval-modes` | no | no | no |
 | `--approvals` | no | no | no |
 | `--approve-as-owner-seat` | yes | no | no |
 | `--assertion` | yes | no | no |
@@ -957,6 +961,7 @@ Usage:
 | `--request` | no | no | no |
 | `--restore` | no | no | no |
 | `--revoke-approval` | yes | no | no |
+| `--scope` | yes | no | no |
 | `--signer` | yes | no | no |
 | `-h` | no | no | yes |
 

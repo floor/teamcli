@@ -8,6 +8,10 @@ import { protectedLanding } from '../worktree/place.ts';
 import { canonicalLanding, fixedFolder, isLegacyTrust, isMigratedTrust } from './paths.ts';
 import type { LoadResult, Problem, TeamFile } from './types.ts';
 import { validateTeamFile } from './validate.ts';
+import { readPolicyChain } from '../policy/sources.ts';
+import { fileDeclaresWorkspaceMode, resolveWorkSettings } from '../policy/work-settings.ts';
+import { ofTeam as projectOfTeam } from '../registry/projects.ts';
+import { teamIdOf } from '../registry/teams.ts';
 
 export const TEAM_FILE = '.agents/team.yaml';
 
@@ -150,7 +154,7 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
   } catch {
     return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
   }
-  const result = validateTeamFile(text, { home: options.home, fs: options.fs, root });
+  const result = validateWithWorkspaceMode(text, root, options);
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };
   const errors = placedProblems(result.team, root, options.home, options.fs, options.session);
@@ -291,4 +295,28 @@ export function placedProblems(
   }
 
   return problems;
+}
+
+// A file that writes no `workspace.mode` works in the mode the signed policy chain resolves
+// (`workspace-mode`, src/policy/work-settings.ts): it is read once without the worktree
+// requirements to learn its entity and project, then validated for real in the resolved mode.
+// A file that writes its mode is validated once, as before; so is every file when the chain holds
+// no `workspace-mode` (the release default is `worktree`).
+function validateWithWorkspaceMode(text: string, root: string, options: { home?: string; fs?: FsReader }): ReturnType<typeof validateTeamFile> {
+  const plain = () => validateTeamFile(text, { home: options.home, fs: options.fs, root });
+  if (fileDeclaresWorkspaceMode(text)) return plain();
+  const probe = validateTeamFile(text, { home: options.home, fs: options.fs, root, workspaceMode: 'shared' });
+  if (!probe.ok) return plain();
+  let mode: 'worktree' | 'shared' = 'worktree';
+  try {
+    const home = options.home ?? homedir();
+    let projectId: string | null = null;
+    try {
+      projectId = projectOfTeam(home, teamIdOf(root))?.id ?? null;
+    } catch {}
+    mode = resolveWorkSettings(readPolicyChain({ home, teamRoot: root, team: probe.team, projectId }), {}, { home }).workspaceMode.value;
+  } catch {
+    mode = 'worktree';
+  }
+  return mode === 'shared' ? probe : plain();
 }

@@ -16,7 +16,7 @@ export const workspace: Section = {
     const project = valueOf<string>(ctx, 'project');
     const trust = valueOf<string[]>(ctx, 'trust');
     const seats = valueOf<DraftSeat[]>(ctx, 'seats');
-    return readWorkspace(entry, ctx.check, project, trust, seats, ctx.root.line);
+    return readWorkspace(entry, ctx.check, project, trust, seats, ctx.root.line, ctx.workspaceMode);
   },
   schema: {
     type: 'object',
@@ -36,10 +36,10 @@ export const workspace: Section = {
 };
 
 function readWorkspace(
-  entry: YamlEntry | undefined, check: Check, project: string, trust: string[], seats: DraftSeat[], topLine: number,
+  entry: YamlEntry | undefined, check: Check, project: string, trust: string[], seats: DraftSeat[], topLine: number, defaultMode: Mode = 'worktree',
 ): TeamFile['workspace'] {
   const fields = check.fields(entry?.value, 'workspace', ['mode', 'path', 'branch', 'base', 'setup', 'remove', 'protected', 'limit']);
-  const mode = check.oneOf(fields.get('mode'), 'workspace.mode', MODES) ?? 'worktree';
+  const mode = check.oneOf(fields.get('mode'), 'workspace.mode', MODES) ?? defaultMode;
   const usesWorktrees = seats.some((seat) => (seat.mode ?? mode) === 'worktree');
   const line = entry?.line ?? topLine;
 

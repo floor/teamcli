@@ -208,12 +208,12 @@ export function revokeTeamCreateRule(home: string, ruleId: string): { ok: true }
  * verified owner-seat answer for exactly this id and hash, or by a verified `always` rule whose
  * scope holds the repository. Claims the request single-use and writes an audit entry.
  */
-export function admitTeamCreate(home: string, id: string, root: string, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; via: 'owner-seat' | 'rule'; ruleId?: string; signer: string } | { ok: false; why: string } {
+export function admitTeamCreate(home: string, id: string, root: string, store: OwnerSeatKeyStore, now: Date = new Date()): { ok: true; via: 'owner-seat' | 'rule' | 'policy'; ruleId?: string; signer: string } | { ok: false; why: string } {
   const record = readRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
   if (record.params.root !== canonicalRoot(root)) return { ok: false, why: `request ${id} is for ${record.params.root}, not this repository` };
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
-  let via: 'owner-seat' | 'rule' | null = null;
+  let via: 'owner-seat' | 'rule' | 'policy' | null = null;
   let ruleId: string | undefined;
   let signer = '';
   let answerText: string | null = null;
@@ -237,14 +237,111 @@ export function admitTeamCreate(home: string, id: string, root: string, store: O
     signer = verified.signer.name;
   } else {
     const rule = listTeamCreateRules(home, store, now).rules.find((r) => dirname(record.params.root) === r.scope);
-    if (rule === undefined) return { ok: false, why: `request ${id} has no verified owner-seat answer and no always rule covers it; the owner answers with team init --approve-as-owner-seat ${id} oui` };
-    via = 'rule';
-    ruleId = rule.rule_id;
-    signer = rule.signer;
+    const none = rule === undefined ? noApprovalFor(home, record.params.root, store, now) : undefined;
+    if (rule === undefined && none !== undefined) {
+      via = 'policy';
+      ruleId = none.mode_id;
+      signer = none.signer;
+    } else if (rule === undefined) return { ok: false, why: `request ${id} has no verified owner-seat answer and no always rule covers it; the owner answers with team init --approve-as-owner-seat ${id} oui` };
+    else {
+      via = 'rule';
+      ruleId = rule.rule_id;
+      signer = rule.signer;
+    }
   }
   const used = writeExclusive(join(actionRequestsFolder(home), `${id}.used`), `${now.toISOString()}\n`);
   if (used !== 'written') return { ok: false, why: used === 'exists' ? `request ${id} was already used: an approval is single-use` : `request ${id} could not be claimed` };
   mkdirSync(actionAuditFolder(home), { recursive: true, mode: 0o700 });
   writeExclusive(join(actionAuditFolder(home), `${id}.json`), `${JSON.stringify({ request_id: id, kind: 'team-create', params: record.params, params_sha256: record.params_sha256, via, signer, ...(ruleId !== undefined ? { rule_id: ruleId } : {}), at: now.toISOString() }, null, 2)}\n`);
   return { ok: true, via, signer, ...(ruleId !== undefined ? { ruleId } : {}) };
+}
+
+// Approval mode, a policy per action kind: `per-action` (default: one signed answer per request),
+// `always-rule` (a signed `always` answer covers a folder), or `none` (no answer at action time).
+// `none` is itself an owner-signed record, signed once at setup by an accepted owner signer: the
+// requester never writes it, and it only ever names `team-create`, an action that grants no
+// authority. A grant, an owner-signers change or an approval-mode change can never be set to
+// `none`, so no principal widens its own authority through it.
+
+export const APPROVAL_MODES = ['none', 'always-rule', 'per-action'] as const;
+export type ApprovalMode = (typeof APPROVAL_MODES)[number];
+/** The only action kinds an approval mode of `none` may name. */
+export const NO_APPROVAL_ACTIONS = ['team-create'] as const;
+export const APPROVAL_MODE_ID_PATTERN = /^am_[0-9a-f]{24}$/;
+
+export type ApprovalModeParams = { action: string; mode: ApprovalMode; scope: string };
+export type ApprovalModeRecord = { mode_id: string; action: string; mode: ApprovalMode; scope: string; signer: string; created: string };
+
+export function approvalModeHash(p: ApprovalModeParams): string {
+  return createHash('sha256').update(JSON.stringify({ action: p.action, mode: p.mode, scope: p.scope }), 'utf8').digest('hex');
+}
+
+/** The owner signs one approval-mode record. Only `none` for `team-create` is stored; `per-action` and `always-rule` revoke the `none` records of that scope. */
+export function setApprovalMode(
+  home: string,
+  action: string,
+  mode: string,
+  scope: string,
+  store: OwnerSeatKeyStore,
+  now: Date = new Date(),
+  via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } } = {},
+): { ok: true; modeId?: string; revoked: string[] } | { ok: false; why: string } {
+  if (!(APPROVAL_MODES as readonly string[]).includes(mode)) return { ok: false, why: `"${mode}" is not an approval mode: ${APPROVAL_MODES.join(', ')}` };
+  if (!(NO_APPROVAL_ACTIONS as readonly string[]).includes(action)) return { ok: false, why: `approval mode applies to ${NO_APPROVAL_ACTIONS.join(', ')} only; "${action}" grants or widens authority and keeps per-action owner approval` };
+  const seat = readOwnerSeat(home);
+  if (seat === null) return { ok: false, why: 'no owner seat is registered: the owner runs team grant --add-owner-seat --team <team> --signer <name>' };
+  const folder = canonicalRoot(scope);
+  const revoked: string[] = [];
+  for (const r of listApprovalModes(home, store, now).modes) {
+    if (r.action === action && r.scope === folder) {
+      try { unlinkSync(join(actionApprovalsFolder(home), `${r.mode_id}.json`)); revoked.push(r.mode_id); } catch {}
+    }
+  }
+  if (mode !== 'none') return { ok: true, revoked };
+  const params: ApprovalModeParams = { action, mode: 'none', scope: folder };
+  const id = `am_${randomBytes(12).toString('hex')}`;
+  const answer: OwnerSeatAnswer = { kind: 'approval-mode', request_id: id, params_sha256: approvalModeHash(params), choice: 'always', team: seat.team, seat: 'owner', at: now.toISOString(), scope: folder };
+  const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: no per-action approval for ${action} under ${folder}`, via.assertion);
+  if (!signed.ok) return signed;
+  mkdirSync(actionApprovalsFolder(home), { recursive: true, mode: 0o700 });
+  if (writeExclusive(join(actionApprovalsFolder(home), `${id}.json`), `${JSON.stringify({ ...signed.signed, params }, null, 2)}\n`) !== 'written') return { ok: false, why: 'the approval mode could not be written' };
+  return { ok: true, modeId: id, revoked };
+}
+
+/** Every approval-mode record whose owner-signer signature verifies now and binds its parameters; others are ignored. */
+export function listApprovalModes(home: string, store: OwnerSeatKeyStore, now: Date = new Date()): { modes: ApprovalModeRecord[]; ignored: string[] } {
+  let names: string[];
+  try {
+    names = readdirSync(actionApprovalsFolder(home)).filter((n) => /^am_[0-9a-f]{24}\.json$/.test(n)).sort();
+  } catch {
+    return { modes: [], ignored: [] };
+  }
+  const modes: ApprovalModeRecord[] = [];
+  const ignored: string[] = [];
+  for (const name of names) {
+    const id = name.slice(0, -5);
+    try {
+      const path = join(actionApprovalsFolder(home), name);
+      if (!lstatSync(path).isFile()) throw new Error('kind');
+      const file = JSON.parse(readFileSync(path, 'utf8')) as SignedOwnerAnswer & { params: ApprovalModeParams };
+      const verified = verifyOwnerAnswer(home, file, store, now);
+      const a = file.owner_seat_answer;
+      const p = file.params;
+      if (!verified.ok || a.kind !== 'approval-mode' || a.request_id !== id || a.choice !== 'always') throw new Error('sig');
+      if (p === undefined || p.mode !== 'none' || !(NO_APPROVAL_ACTIONS as readonly string[]).includes(p.action) || p.scope !== a.scope || approvalModeHash(p) !== a.params_sha256) throw new Error('params');
+      modes.push({ mode_id: id, action: p.action, mode: p.mode, scope: p.scope, signer: file.signer, created: a.at });
+    } catch {
+      ignored.push(id);
+    }
+  }
+  return { modes, ignored };
+}
+
+function within(folder: string, path: string): boolean {
+  return path === folder || path.startsWith(folder.endsWith('/') ? folder : `${folder}/`);
+}
+
+/** The verified `none` record for `team-create` whose scope holds this repository, if any. */
+export function noApprovalFor(home: string, root: string, store: OwnerSeatKeyStore, now: Date = new Date()): ApprovalModeRecord | undefined {
+  return listApprovalModes(home, store, now).modes.find((m) => m.action === 'team-create' && within(m.scope, root));
 }

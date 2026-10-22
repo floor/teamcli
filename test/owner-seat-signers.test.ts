@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { addOwnerSigner, ownerSignerLabel, ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, registerOwnerSeat, verifyOwnerAnswer, webauthnChallenge, type OwnerSeatAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
-import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from '../src/client/team-create.ts';
+import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder, setApprovalMode } from '../src/client/team-create.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runPolicy } from '../src/commands/policy.ts';
 import { acceptOwnerSigner, acceptedSigners, readOwnerSeat } from '../src/client/owner-seat.ts';
@@ -384,5 +384,94 @@ describe('team init approved by the owner seat', () => {
     const c = io(root);
     expect(await runInit(['--request'], c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: fakeStore() })).toBe(1);
     expect(c.err()).toContain('no owner seat');
+  });
+});
+
+describe('approval mode none for team-create: one owner signature at setup, none at action time', () => {
+  function setup(label: string) {
+    const h = home(label);
+    const store = fakeStore();
+    let signs = 0;
+    const counted: OwnerSeatKeyStore = { ...store, sign: (l, m, r) => { signs += 1; return store.sign(l, m, r); } };
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, counted).ok).toBe(true);
+    allowSigners(h.home, ['mac']);
+    const run = async (cwd: string, argv: string[]) => {
+      const c = io(cwd);
+      const code = await runInit(argv, c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: counted });
+      return { code, out: c.out(), err: c.err(), json: argv.includes('--json') && c.out().trim().startsWith('{') ? JSON.parse(c.out()) : null };
+    };
+    return { ...h, store: counted, run, signs: () => signs };
+  }
+
+  test('a signed none mode lets request then execute run with no answer, audited via policy, no signature at action time', async () => {
+    const s = setup('mode-none');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const set = await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json']);
+    expect(set.code).toBe(0);
+    const modeId = set.json.mode_id as string;
+    expect(s.signs()).toBe(1);
+    const root = repo(s.base, 'solver');
+    const id = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(root, ['--execute', id])).code).toBe(0);
+    expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(true);
+    expect(s.signs()).toBe(1);
+    expect(JSON.parse(readFileSync(join(actionAuditFolder(s.home), `${id}.json`), 'utf8'))).toMatchObject({ via: 'policy', rule_id: modeId, signer: 'mac' });
+    expect((await s.run(root, ['--execute', id])).code).toBe(1);
+  });
+
+  test('outside its scope, edited, or forged with the shared message key, the mode admits nothing', async () => {
+    const s = setup('mode-scope');
+    const scope = join(s.base, 'code', 'inner');
+    mkdirSync(scope, { recursive: true });
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const outside = repo(s.base, 'outside');
+    const oid = (await s.run(outside, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(outside, ['--execute', oid])).code).toBe(1);
+    const path = join(actionApprovalsFolder(s.home), `${modeId}.json`);
+    const original = readFileSync(path, 'utf8');
+    const widened = JSON.parse(original);
+    widened.params.scope = '/';
+    widened.owner_seat_answer.scope = '/';
+    writeFileSync(path, JSON.stringify(widened));
+    expect((await s.run(s.base, ['--approval-modes', '--json'])).json.ignored).toEqual([modeId]);
+    const oid2 = (await s.run(outside, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(outside, ['--execute', oid2])).code).toBe(1);
+    const relabeled = JSON.parse(original);
+    relabeled.params.action = 'grant';
+    writeFileSync(path, JSON.stringify(relabeled));
+    expect((await s.run(s.base, ['--approval-modes', '--json'])).json.modes).toEqual([]);
+    const a = { ...widened.owner_seat_answer };
+    writeFileSync(path, JSON.stringify({ owner_seat_answer: a, signer: 'mac', signature: signDomain('team-owner-seat-answer-v2\n', a, messageKeyOf(s.home)), params: widened.params }));
+    expect((await s.run(s.base, ['--approval-modes', '--json'])).json.modes).toEqual([]);
+  });
+
+  test('no principal widens its authority: none never applies to grants; an unaccepted signer and a missing owner seat set nothing', async () => {
+    const s = setup('mode-invariant');
+    for (const action of ['grant', 'owner-signers', 'approval-mode']) {
+      const r = setApprovalMode(s.home, action, 'none', s.base, s.store);
+      expect(r.ok).toBe(false);
+    }
+    expect((await s.run(s.base, ['--approval-mode', 'sometimes', '--scope', s.base])).code).toBe(1);
+    allowSigners(s.home, ['phone']);
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    await s.run(s.base, ['--approval-mode', 'none', '--scope', scope]);
+    expect((await s.run(s.base, ['--approval-modes', '--json'])).json.modes).toEqual([]);
+    const bare = home('mode-noseat');
+    expect(setApprovalMode(bare.home, 'team-create', 'none', bare.base, fakeStore()).ok).toBe(false);
+  });
+
+  test('per-action (or always-rule) set by the owner revokes the none mode of that scope', async () => {
+    const s = setup('mode-revoke');
+    const scope = join(s.base, 'code');
+    mkdirSync(scope, { recursive: true });
+    const modeId = (await s.run(s.base, ['--approval-mode', 'none', '--scope', scope, '--json'])).json.mode_id as string;
+    const back = await s.run(s.base, ['--approval-mode', 'per-action', '--scope', scope, '--json']);
+    expect(back.code).toBe(0);
+    expect(back.json.revoked).toEqual([modeId]);
+    const root = repo(s.base, 'later');
+    const id = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(root, ['--execute', id])).code).toBe(1);
   });
 });

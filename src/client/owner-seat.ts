@@ -320,7 +320,7 @@ export const OWNER_SEAT_ANSWER_DOMAIN = 'team-owner-seat-answer-v2\n';
 /** One owner-seat answer. `kind` keeps a grant answer and a team-create answer apart; `scope`
  *  is signed so an `always` answer can stand as its own rule. */
 export type OwnerSeatAnswer = {
-  kind: 'grant' | 'team-create';
+  kind: 'grant' | 'team-create' | 'approval-mode';
   request_id: string;
   params_sha256: string;
   choice: 'once' | 'always' | 'deny';

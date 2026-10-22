@@ -129,6 +129,10 @@ export const ADVISED_POLICY_NAMES = [
   'seat-numbering',
   'board',
   'review-terms',
+  'workspace-mode',
+  'landing-mode',
+  'vault-root',
+  'entity-orchestrator',
 ] as const;
 
 export type AdvisedPolicyName = (typeof ADVISED_POLICY_NAMES)[number];
@@ -166,6 +170,11 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   seat_numbering: 'seat-numbering',
   pane_conduct: 'pane-conduct',
   review_terms: 'review-terms',
+  workspace_mode: 'workspace-mode',
+  landing_mode: 'landing-mode',
+  vault_root: 'vault-root',
+  entity_orchestrator: 'entity-orchestrator',
+  'chain.topology.entity.orchestrator': 'entity-orchestrator',
   event_thread_ttl_seconds: 'event-thread-ttl-seconds',
   thread_ttl_seconds: 'event-thread-ttl-seconds',
   'thread-ttl': 'event-thread-ttl-seconds',
@@ -1064,6 +1073,60 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: (raw: unknown) => (typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null),
     isWithin: (lower: string, higher: string) => lower === higher,
+  },
+  // Where a seat works: in its own worktree (the default) or straight on a branch of the shared
+  // checkout. Set at the entity, the project or the team; the nearest level chooses, and the team
+  // file's `workspace.mode`, then a seat's `mode`, override it (src/policy/work-settings.ts).
+  'workspace-mode': {
+    name: 'workspace-mode',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'worktree',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (raw === 'worktree' ? 'worktree' : raw === 'shared' || raw === 'branch' ? 'shared' : null),
+    valueProblem: (raw: unknown) => `workspace-mode is worktree or shared (branch), got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // How changes land: one pull request per change, a batch of reviewed commits per pull request, or
+  // reviewed commits landed directly on the integration branch. Every mode keeps review: the mode
+  // chooses how much lands at once, never whether it is reviewed.
+  'landing-mode': {
+    name: 'landing-mode',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'batch',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (raw === 'pr-per-change' || raw === 'batch' || raw === 'direct' ? raw : null),
+    valueProblem: (raw: unknown) => `landing-mode is pr-per-change, batch or direct, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // The root of the docs vault where seats keep memory (an absolute path, or `~/` relative to the
+  // home). Empty means no vault: memory stays where each CLI keeps it.
+  'vault-root': {
+    name: 'vault-root',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: '',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (typeof raw === 'string' && (raw.startsWith('/') || raw.startsWith('~/')) && !/[\x00-\x1f\x7f]/.test(raw) ? raw.replace(/\/+$/, '') || '/' : null),
+    valueProblem: (raw: unknown) => `vault-root is an absolute path or one under ~/, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // The entity's own orchestrator: `auto` (the root project's team lead plays it), `dedicated` (a
+  // seat of its own), or `off` (none; each team's orchestrator answers to the owner directly). It
+  // names a role, never a power: crossing the entity still needs a grant.
+  'entity-orchestrator': {
+    name: 'entity-orchestrator',
+    kind: 'advised',
+    levels: ['entity'],
+    defaultValue: 'auto',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'auto' || raw === 'dedicated' || raw === 'off' ? raw : null),
+    valueProblem: (raw: unknown) => `entity-orchestrator is auto, dedicated or off, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
   },
 };
 

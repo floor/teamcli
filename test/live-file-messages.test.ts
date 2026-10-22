@@ -69,6 +69,10 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^--approvals takes no other arguments$/, why: "the grant flag's invocation refusal" },
   { literal: /^init\.approval-refused$/, why: "init's owner-seat refusal id, a key in the JSON envelope" },
   { literal: /^team init: (?:team-create approval rules|approval rule revoked)/, why: "init's standing team-create rules: an owner-seat answer, not an approval copy" },
+  // The approval mode of team-create (`none | always-rule | per-action`): an owner-signed policy
+  // record, signed once at setup, never a copy of the live file.
+  { literal: /^(?:approval-mode|approval-modes|--approval-mode needs --scope <folder>)$/, why: "init's approval-mode flags and their invocation refusal" },
+  { literal: /^team init: approval mode(?:s$| for team-create is )/, why: "init's owner-signed approval mode for team-create, not an approval copy" },
 ];
 
 function sources(dir: string): string[] {

@@ -4749,7 +4749,7 @@ seats:
     });
     const io = testIo(place.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
     const code = await runReply([CLIENT_ROOT, 'the answer'], io, { home: world.home, now: () => NOW });
-    return show({ code, out: io.out, err: io.err }, 'client reply publication is not in this release');
+    return show({ code, out: io.out, err: io.err }, 'is send-only');
   } finally {
     rmSync(world.base, { recursive: true, force: true });
   }
