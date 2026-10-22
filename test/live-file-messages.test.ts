@@ -62,6 +62,13 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^approval\.json$/, why: "the store record file name read for its `root` index entry, never shown to a caller" },
   // The `queue.installer` repair line: the owner seals the `installer:` designation in the live file.
   { literal: /^the owner records `installer:` in the team file and approves it$/, why: "the `queue.installer` repair line for sealing the live file's `installer:` designation" },
+  // Grant emission and owner-seat approval (`team grant`, `team init`): the request/answer flags,
+  // the standing-rule listing and revocation, and their refusal id. These name the owner's answer
+  // to one request or a standing rule, never a verified copy of the live file.
+  { literal: /^(?:approve|approvals|approve-as-owner-seat|revoke-approval)$/, why: 'a grant or init flag name: an owner answer or a standing rule, not an approval copy' },
+  { literal: /^--approvals takes no other arguments$/, why: "the grant flag's invocation refusal" },
+  { literal: /^init\.approval-refused$/, why: "init's owner-seat refusal id, a key in the JSON envelope" },
+  { literal: /^team init: (?:team-create approval rules|approval rule revoked)/, why: "init's standing team-create rules: an owner-seat answer, not an approval copy" },
 ];
 
 function sources(dir: string): string[] {
