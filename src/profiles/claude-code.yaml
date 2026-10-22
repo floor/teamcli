@@ -273,9 +273,15 @@ screen:
     # holds can never be mistaken for the input.
     prompt: '^[❯›>]'
     # The box's two rules, as unsent-typed-ansi.txt draws them: one unbroken run of ─ from the
-    # pane's first column, the closing rule the window's last rule row. A rule-looking row the
-    # box holds is drawn at the content column and is content, never the frame.
-    rule: '^[─━]{8,}$'
+    # pane's first column, the closing rule the window's last rule row. The opening rule may
+    # carry a right-aligned label in its run, as Atlas's retained RC2 capture of builder-7 (an
+    # installed 0.5.4-rc.2 on source 4e50561d; CLI version unknown) draws
+    # `──── … ──── builder-7 ─` over an empty box, so the run may hold one label; the two rules
+    # still compare at one width. The label and the run after it are one optional group: a flat
+    # eight-column rule stays a rule (the run needs its eight columns with or without a label).
+    # A rule-looking row the box holds is drawn at the content column and is content, never the
+    # frame.
+    rule: '^[─━]{8,}(?: [^─━]+ [─━]+)?$'
     # Explicit subscription labels from the configurable quota status line; context percentages
     # and transcript text are not quota. The constructed fixture documents this format.
     status: '\b[LW]: [0-9]+% \((?:[0-9hm]+|[+\-±][0-9.]+%\))'
