@@ -52,8 +52,7 @@ and both are marked as such.
 | `working` | the seat is in a turn |
 | `idle` | the seat is at a prompt with nothing behind it |
 | `done` | the process the launch recorded is no longer in its pane |
-| `blocked` | the screen is neither mid-turn nor at a prompt: a dialog, a question, an error, or a composer holding unsent text |
-| `quota out` | the screen is the CLI's usage wall: nothing can be typed until it lifts |
+| `blocked` | the screen is neither mid-turn nor at a prompt: a dialog, a question, an error, a composer holding unsent text, or the CLI's usage wall |
 | `held` | a hold stands over the team |
 | `unreachable` | herdr cannot reach the seat |
 | `unknown` | no source was certain |
@@ -74,8 +73,9 @@ The reading answers the first source that is certain, in this order:
 2. herdr unable to reach the seat — `unreachable`;
 3. the launched process no longer in its pane — `done` (`process`);
 4. a screen that is a dialog, a question, an error, or a composer holding unsent text —
-   `blocked`, whatever any clock says; the CLI's usage wall reads its own word, `quota out`, with
-   the pool the seat spends and the reset the screen words;
+   `blocked`, whatever any clock says; the CLI's usage wall is `blocked` too, with reason
+   `quota`: `status` names the reset the screen words beside the word, and never falls back to
+   a bare `done` or `idle`;
 5. the CLI's own signal through the hooks the launch installed — `working` at turn start,
    `idle` at turn end, with the instant it wrote; a `working` hook older than the working window
    keeps its word only where the screen is absent or unknown;
@@ -420,10 +420,12 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
    messaged MUST read `working` while its prompt shows. *Source:* `src/labels/state.ts`.
    *Proof:* `test/labels-traces.test.ts`.
 3. **A dialog, a question, an error or unsent text reads `blocked`, whatever any clock says.**
-   The CLI's usage wall reads `quota out` the same way: it is never a bare done, and the word
-   carries the pool and the reset exactly as the screen words it. *Source:*
-   `src/labels/state.ts`, `src/watch/pass.ts` (`attentionOf`). *Proof:*
-   `test/seat-state.test.ts`, `test/quota-out-state.test.ts`.
+   The CLI's usage wall reads `blocked` the same way, with reason `quota`: it is never a bare
+   done, and `status` prints the reset exactly as the screen words it (`blocked: quota, resets
+   at 11:00`, `resets in 47h31m`, or an explicit no-reset line), without an account guess. The
+   JSON row keeps `seat_state: "blocked"` and carries the same text in `state`. *Source:*
+   `src/labels/state.ts`, `src/status/compare.ts`, `src/watch/pass.ts` (`attentionOf`). *Proof:*
+   `test/seat-state.test.ts`, `test/status.test.ts`, `test/quota-out-state.test.ts`.
 4. **An unknown seat past the blind threshold MUST count as not working and be flagged
    `blind`.** *Source:* `src/labels/state.ts`, `src/settings/inherit.ts`. *Proof:*
    `test/seat-state.test.ts`.
@@ -497,8 +499,7 @@ status` prints `unknown (blind)` for an unknown seat past the blind threshold.
 | `working` | in a turn | 0.5.0 | `src/labels/state.ts` | state word |
 | `idle` | at a prompt, nothing behind it | 0.5.0 | `src/labels/state.ts` | state word |
 | `done` | the launched process is no longer in its pane | 0.5.0 | `src/labels/state.ts` | state word |
-| `blocked` | the screen is a dialog, question, error or unsent text | 0.5.0 | `src/labels/state.ts` | state word |
-| `quota out` | the screen is the CLI's usage wall | 0.5.5 unreleased | `src/labels/state.ts` | state word |
+| `blocked` | the screen is a dialog, question, error, unsent text or usage wall | 0.5.0 | `src/labels/state.ts` | state word; a usage wall reads blocked with reason quota and its reset in `status` |
 | `held` | a hold stands over the team | 0.5.0 | `src/labels/state.ts` | state word |
 | `unreachable` | herdr cannot reach the seat | 0.5.0 | `src/labels/state.ts` | state word |
 | `unknown` | no source was certain | 0.5.0 | `src/labels/state.ts` | state word; blind past the threshold |
