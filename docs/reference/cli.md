@@ -1208,6 +1208,139 @@ Usage:
 
 None.
 
+## `owner-seat`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat [--json]
+    team owner-seat status [--json]
+    team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
+    team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
+    team owner-seat serve [--port <port>]
+
+### Who may run it
+
+`any-caller` — it reads the owner seat and the security profile; it changes nothing
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `profile`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
+
+#### Who may run it
+
+`any-caller` — an agent may propose a security profile; it counts only once signed by an owner-seat signer (Touch ID or passkey), with an expiry, and is audited
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--days` | yes | no | no |
+| `--help` | no | no | no |
+| `--reason` | yes | no | no |
+| `--signer` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `strict\|relaxed\|dev` | no | no |
+
+### `serve`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat serve [--port <port>]
+
+#### Who may run it
+
+`any-caller` — it serves the owner page on 127.0.0.1 behind a per-run token; every act on it needs an owner-device passkey or Touch ID signature
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--port` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `setup`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
+
+#### Who may run it
+
+`any-caller` — an agent may start it, but nothing is registered until the owner confirms with Touch ID on the Secure Enclave key it creates; the owner-device signature is the authority
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--entity` | yes | no | no |
+| `--grant-emission` | yes | no | no |
+| `--help` | no | no | no |
+| `--owner-signers` | yes | no | no |
+| `--policy-entity` | yes | no | no |
+| `--signer` | yes | no | no |
+| `--team` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `status`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat status [--json]
+
+#### Who may run it
+
+`any-caller` — it reads the owner seat and the security profile; it changes nothing
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `pause`
 
 Hidden: no
@@ -1283,6 +1416,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--owner-device` | no | no | yes |
 | `--seat` | yes | no | no |
 | `-h` | no | no | yes |
 

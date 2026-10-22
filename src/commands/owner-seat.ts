@@ -19,9 +19,10 @@ import { writePolicySet } from '../policy/sources.ts';
 import { serveOwnerPage } from '../security/owner-page.ts';
 import { audit, MAX_PROFILE_DAYS, profileNameOf, proposeSecurityProfile, readSecurityProfile, securityProfileLine, signSecurityProfile } from '../security/profile.ts';
 
-export const USAGE = `Usage: team owner-seat [status] [--json]
+export const USAGE = `Usage: team owner-seat [--json]
+       team owner-seat status [--json]
        team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
-       team owner-seat profile <strict|relaxed|dev> [--days <1-${MAX_PROFILE_DAYS}>] [--reason <text>] [--signer <name>]
+       team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
        team owner-seat serve [--port <port>]
 
 Exits 0 when done, 1 when refused, 2 when the invocation is invalid.
@@ -38,11 +39,11 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
   const home = options.home ?? homedir();
   const store = options.store ?? systemOwnerSeatKeyStore();
   const now = options.now ?? (() => new Date());
-  const sub = args.rest[0] ?? 'status';
+  const sub = args.rest[0];
   const refuse = (why: string, code = 1) => { io.stderr(`team owner-seat: ${why}\n`); return code; };
   if (args.error !== undefined) return refuse(`${args.error}\n${USAGE}`, 2);
 
-  if (sub === 'status') {
+  if (sub === undefined || sub === 'status') {
     const seat = readOwnerSeat(home);
     const line = securityProfileLine(readSecurityProfile(home, store, now()));
     if (args.flags.has('json')) {
@@ -83,7 +84,8 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
   }
 
   if (sub === 'profile') {
-    const name = profileNameOf(args.rest[1] ?? '');
+    const word = args.rest[1];
+    const name = word === 'strict' || word === 'relaxed' || word === 'dev' ? profileNameOf(word) : null;
     if (name === null) return refuse('profile is strict, relaxed or dev', 2);
     const days = args.values.days === undefined ? 7 : Number(args.values.days.replace(/d$/, ''));
     const proposed = proposeSecurityProfile(home, { profile: name, days, reason: args.values.reason ?? `${name} profile`, ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}) }, now());
@@ -107,5 +109,5 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
     else await new Promise<void>((resolve) => page.server.on('close', () => resolve()));
     return 0;
   }
-  return refuse(`unknown subcommand "${sub}"\n${USAGE}`, 2);
+  return refuse(`unknown subcommand "${String(sub)}"\n${USAGE}`, 2);
 }
