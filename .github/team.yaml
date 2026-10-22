@@ -336,3 +336,12 @@ seats:
     version: "6.1"
     display: GPT Sol 6.1
     launch: codex
+
+  - role: orchestrator
+    name: orchestrator-luna
+    cli: codex
+    vendor: openai
+    model: GPT Luna
+    version: "6"
+    display: GPT Luna 6
+    launch: codex
