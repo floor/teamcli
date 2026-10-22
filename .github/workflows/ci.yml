@@ -53,6 +53,13 @@ jobs:
       # source checkout, so this checks that the text still hashes to its pinned value.
       - run: bun run brief:check
 
+      # The tracked tree is public the moment it is pushed. `team commits check` reads commit
+      # messages and the pack guard reads shipped files; neither reads the repository's own
+      # tracked test tree. This reads every tracked file's name against the declared public
+      # patterns, and the internal ticket-id pattern against every tracked file's text. It
+      # rides in `bun run ci` too.
+      - run: bun run public-names:check
+
       # The release's tarball guard, on every pull request, so the real path is
       # exercised before any tag. The filename and SHA256 come from the pack
       # script's own JSON line, never a glob. The pack is stamped with the
