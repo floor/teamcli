@@ -305,6 +305,12 @@ export type TeamFile = {
    */
   installer: string | null;
   /**
+   * The seats an external client grant may address, by client id, or null when the file names
+   * none — then a client reaches only the orchestrator. An owner section: naming or widening a
+   * client's seats needs a new approval.
+   */
+  clients: Record<string, { seats: string[] }> | null;
+  /**
    * The orchestrator seat's grant, or null when the file has no `grant` section. An owner
    * section: changing it needs a new approval. `approve` in `scope` is an ordinary approval;
    * this section itself stays the owner's.

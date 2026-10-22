@@ -33,6 +33,7 @@ test('the generated owner sections equal the hand-kept list, in order', () => {
     'tasks',
     'tempo',
     'installer',
+    'clients',
     'grant',
     'delegates',
   ]);

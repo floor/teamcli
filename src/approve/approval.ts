@@ -84,6 +84,13 @@ export function approvedFingerprints(record: ApprovalRecord): Fingerprints {
     const omitted = fingerprints({ ...checked.team, grant: null }).sections.grant;
     if (omitted !== undefined) sections = { ...sections, grant: omitted };
   }
+  // A record written before `clients` has no fingerprint for it. The omitted section is null, so
+  // the arrival baseline is that null: a file that still omits `clients` matches, and a file that
+  // adds the section differs.
+  if (checked.ok && stored.sections.clients === undefined) {
+    const omitted = fingerprints({ ...checked.team, clients: null }).sections.clients;
+    if (omitted !== undefined) sections = { ...sections, clients: omitted };
+  }
   // A record written before `tempo` has no fingerprint for it. The omitted section is `normal`,
   // so the arrival baseline is that word: a file that still omits it, or sets `normal`, matches,
   // and `relaxed` or `urgent` differs. Filling from the live file would hide the change.

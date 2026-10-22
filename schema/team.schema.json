@@ -929,6 +929,33 @@
       "minLength": 1,
       "$comment": "the seat that records green-slice installs beside the owner: must name a declared seat, without count, and neither parked nor stopped. omitted means none, and only the owner records an install"
     },
+    "clients": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seats"
+        ],
+        "properties": {
+          "seats": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "$comment": "the seats this client may address: declared seats of this team, without count, never the operator or a human seat"
+          }
+        }
+      },
+      "$comment": "the seats an external client grant may address, by client id. omitted means a client reaches only the orchestrator. owner-only: a change needs a new approval"
+    },
     "grant": {
       "type": "object",
       "additionalProperties": false,

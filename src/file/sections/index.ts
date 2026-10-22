@@ -27,6 +27,7 @@ import { releases } from './releases.ts';
 import { delegates } from './delegate.ts';
 import { grant } from './grant.ts';
 import { installer } from './installer.ts';
+import { clients } from './clients.ts';
 import { tasks } from './tasks.ts';
 import { tempo } from './tempo.ts';
 import type { Section } from './section.ts';
@@ -93,6 +94,9 @@ export const SECTIONS: readonly Section[] = [
   // that writes or changes it is a difference against the last approval; a record written before
   // it reads the omitted designation from its own copy, so the arrival alone is no difference.
   installer,
+  // The seats an external client grant may address, by client id. An owner section; a record
+  // written before it reads the omitted section as null, so the arrival alone is no difference.
+  clients,
   // Immediately before `delegates`, so `delegates` stays the last owner section.
   grant,
   // Last, after every owner section there was: the owner-section list is filtered from this one,
