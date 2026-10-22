@@ -212,6 +212,17 @@ describe('team init approved by the owner seat', () => {
     expect((await s.run(again, ['--execute', id])).code).toBe(1);
   });
 
+  test('a forged answer dropped first never blocks the owner seat answer', async () => {
+    const s = setup('init-squat');
+    const root = repo(s.base, 'squat');
+    const req = await s.run(root, ['--request', '--json']);
+    const id = req.json.request_id as string;
+    writeFileSync(join(actionRequestsFolder(s.home), `${id}.seat-answer.json`), '{"owner_seat_answer":{},"signer":"mac","signature":"00"}');
+    expect((await s.run(root, ['--approve-as-owner-seat', id, 'oui'])).code).toBe(0);
+    expect((await s.run(root, ['--approve-as-owner-seat', id, 'oui'])).code).toBe(1);
+    expect((await s.run(root, ['--execute', id])).code).toBe(0);
+  });
+
   test('another key, the shared message key, another id, another repository, an expired request and a deny are refused', async () => {
     const s = setup('init-refuse');
     const root = repo(s.base, 'docs');

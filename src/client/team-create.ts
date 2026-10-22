@@ -9,7 +9,7 @@
 // never covers a grant: its signed `kind` is `team-create`.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
@@ -96,6 +96,31 @@ function readRecord(home: string, id: string): TeamCreateRecord | string {
   }
 }
 
+/** Whether the file at `path` holds a verified owner-seat answer bound to this request. */
+function heldAnswer(home: string, path: string, id: string, paramsSha256: string, store: OwnerSeatKeyStore, now: Date): boolean {
+  try {
+    if (!lstatSync(path).isFile()) return false;
+    const signed = JSON.parse(readFileSync(path, 'utf8')) as SignedOwnerAnswer;
+    const verified = verifyOwnerAnswer(home, signed, store, now);
+    return verified.ok && verified.answer.kind === 'team-create' && verified.answer.request_id === id && verified.answer.params_sha256 === paramsSha256;
+  } catch {
+    return false;
+  }
+}
+
+/** Replaces a file whole through a fresh temporary file and a rename. */
+function replaceFile(path: string, text: string): boolean {
+  const temp = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+  if (writeExclusive(temp, text) !== 'written') return false;
+  try {
+    renameSync(temp, path);
+    return true;
+  } catch {
+    try { unlinkSync(temp); } catch {}
+    return false;
+  }
+}
+
 /** The owner seat answers one team request; `always` signs the scope (the parent folder). */
 export function approveTeamCreate(
   home: string,
@@ -119,11 +144,19 @@ export function approveTeamCreate(
   const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} for ${teamCreateSummary(record.params)}`, via.assertion);
   if (!signed.ok) return signed;
   const text = `${JSON.stringify(signed.signed, null, 2)}\n`;
-  const written = writeExclusive(join(actionRequestsFolder(home), `${id}.seat-answer.json`), text);
-  if (written !== 'written') return { ok: false, why: written === 'exists' ? `request ${id} was already answered` : 'the answer could not be written' };
+  const path = join(actionRequestsFolder(home), `${id}.seat-answer.json`);
+  const written = writeExclusive(path, text);
+  if (written === 'failed') return { ok: false, why: 'the answer could not be written' };
+  // Only an answer that verifies and is bound to this request blocks this one; a file any
+  // same-user process could have dropped there first is replaced.
+  if (written === 'exists') {
+    if (heldAnswer(home, path, id, record.params_sha256, store, now)) return { ok: false, why: `request ${id} was already answered` };
+    if (!replaceFile(path, text)) return { ok: false, why: 'the answer could not be written' };
+  }
   if (choice === 'always') {
     mkdirSync(actionApprovalsFolder(home), { recursive: true, mode: 0o700 });
-    writeExclusive(join(actionApprovalsFolder(home), `${id}.json`), text);
+    const rulePath = join(actionApprovalsFolder(home), `${id}.json`);
+    if (writeExclusive(rulePath, text) === 'exists' && !heldAnswer(home, rulePath, id, record.params_sha256, store, now)) replaceFile(rulePath, text);
     return { ok: true, choice, ruleId: id };
   }
   return { ok: true, choice };
