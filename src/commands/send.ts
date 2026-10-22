@@ -47,7 +47,7 @@ import {
 import { bindPane, deliverTrigger, draftNote, showsHeldFrameDialog, showsTranscriptToken, TRIGGER_TAKEN_NOTE, type DeliverResult } from '../send/deliver.ts';
 import { POLL_MS, readTriggerLine, TRIGGER_MAX, type NativePane } from '../send/native.ts';
 import { awaitReceipt, claimBindingIn, inboxLive, INBOX_GRACE_MS, INBOX_POLL_MS, receiptHeld } from '../mcp/inbox.ts';
-import { channelLaunchEnabled, channelPushHeld, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
+import { channelLaunchEnabled, channelPushed, recordChannelHeld, CHANNEL_HELD_RECEIPT, CHANNEL_PUSH_GRACE_MS, CHANNEL_TICK_MS, CHANNEL_UNCONFIRMED_REASON } from '../mcp/channel.ts';
 import { beginFallbackWalk, type FallbackWalk, type WalkAttempt } from '../send/fallback-walk.ts';
 import type { AttemptOutcome, RelayReceipt } from '../send/fallback-events.ts';
 import { markTaken } from '../send/taken.ts';
@@ -1048,10 +1048,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // with either word missing walks its order exactly as a send without the channel would. A
   // declared order is walked as written, and the channel is never a declared word.
   const dropDir = join(to.dir, 'send-drops', to.session, to.seat);
-  const channelLive = !declaredOrder && to.cli === 'claude-code' && channelLaunchEnabled(declared?.launch)
+  // The listener is probed whenever the seat's launch enables the channel, even for a declared
+  // order the channel is never a word of: a serving channel this build cannot vouch for pushes
+  // whatever the sender's walk chooses, so the sender leaves its held marker before a wake of its
+  // own and the stale push cannot follow that wake as a second one.
+  const channelProbe = to.cli === 'claude-code' && channelLaunchEnabled(declared?.launch)
     ? inboxLive(dropDir, to.root, to.session, to.seat, host.build?.())
     : null;
+  const channelLive = declaredOrder ? null : channelProbe;
   const channelFirst = channelLive !== null && channelLive.live === true && channelLive.listener.channel === true;
+  const staleChannel = channelProbe !== null && channelProbe.live === false && channelProbe.listener?.channel === true
+    ? channelProbe
+    : null;
   const impliedFirst: readonly DeliveryLeg[] = !declaredOrder && to.cli === 'claude-code' && socketNow
     ? ['socket', ...order]
     : !declaredOrder && to.cli === 'codex'
@@ -1075,6 +1083,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const DIRECT_WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'headless-resume'];
   const directWalk = host.direct !== undefined || host.watch !== undefined;
   const walk: readonly DeliveryLeg[] = directWalk ? chosen.filter((leg) => DIRECT_WAKE_LEGS.includes(leg)) : chosen;
+  // The legs that put the message in front of the seat themselves: a typed trigger, a frame, or
+  // the socket. When one of them takes the send, a channel push for the same id would wake the
+  // seat a second time, so a stale serving channel is held off before the record is written.
+  const WAKE_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'typed'];
+  const wakesSeat = (legs: readonly DeliveryLeg[]): boolean => legs.some((leg) => WAKE_LEGS.includes(leg));
   // The ordered leg report the JSON documents carry. A real send lists the walk itself; the
   // states fill in as it runs and a leg it never reaches stays `not-reached`. A human's only
   // walked leg is the drop file, so the legs the ruling kept out are listed in the order they
@@ -1232,6 +1245,19 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const ensureEpisode = async (): Promise<void> => {
     if (stagedTried) return;
     stagedTried = true;
+    // A serving channel from an install this build cannot vouch for keeps its old code in memory
+    // and pushes every record it sees, whatever leg the sender chose. When this walk wakes the
+    // seat itself, the held marker goes down first: it holds the push marker's name, so the stale
+    // server skips the id when the record lands, and the seat is woken once.
+    if (staleChannel !== null && wakesSeat(walk)) {
+      recordChannelHeld(dropDir, {
+        v: 1,
+        kind: CHANNEL_HELD_RECEIPT,
+        id: msgId,
+        at: host.now().toISOString(),
+        reason: "the sender's own walk wakes the seat; the serving channel runs another install",
+      });
+    }
     stagedWalk = await writeSendRecord(dropDir, record, host.home, host.now);
     if (!stagedWalk.ok) return;
     const begun = beginFallbackWalk({
@@ -3246,14 +3272,16 @@ async function stageChannelRecord(
 }
 
 /** Polls for the server's push marker: one short look per tick, at most the grace window's worth.
- *  The wait is a fixed number of ticks so a clock that does not advance can never hold a send. */
+ *  The wait is a fixed number of ticks so a clock that does not advance can never hold a send.
+ *  Only the server's own push ends the wait: a held marker the sender left for another leg is at
+ *  the same name and is not a delivery. */
 async function awaitChannelPush(dropDir: string, id: string, graceMs: number, host: SendHost): Promise<boolean> {
   const polls = Math.max(1, Math.ceil(Math.max(0, graceMs) / CHANNEL_TICK_MS));
   for (let at = 0; at < polls; at += 1) {
-    if (channelPushHeld(dropDir, id)) return true;
+    if (channelPushed(dropDir, id)) return true;
     if (at + 1 < polls) await host.native.wait(CHANNEL_TICK_MS);
   }
-  return channelPushHeld(dropDir, id);
+  return channelPushed(dropDir, id);
 }
 
 /** A compose seat's typed leg: the drop file is written, then the profile's module walks the

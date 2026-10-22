@@ -103,6 +103,19 @@ inside its two seconds wrote a record nothing pushed: the marker is cleared and 
 with `failed: channel: no push receipt within <n> ms`, because this leg took nothing and no later
 pass may redeliver a send whose own run is still walking the order.
 
+A listener that runs another install is no route for the channel or the `mcp-inbox` leg: the
+marker names the version, the entry build and the packed commit the server started from, and a
+listener of another install cannot take a record this build signs, so the channel is not walked
+and the `mcp-inbox` leg records `mcp-inbox: <the stale reason>` and moves on. The serving inbox
+compares the install under it with the one it started from on every channel tick and after each
+tool call; when they differ it removes its marker, starts the installed entry with the same
+arguments and this process's stdio, and exits. A stale channel listener is still a running old
+server and would push the record after the sender's own wake, so a sender whose walk holds a
+waking leg — socket, native or typed — writes `<id>.channel-held.json` at the push marker's name
+before its record. Any serving server skips an id that already holds a marker, and the send's
+own wait never reads the held marker as a push: only the server's `channel-push` marker ends it
+as `sent (channel)`.
+
 The `mcp-inbox` leg writes the message whole into the seat's own inbox —
 `<root>/.agents/send-drops/<session>/<seat>`, the same 0600 record the typed leg would leave —
 and types nothing. It takes the send only when a server is serving that inbox: a marker

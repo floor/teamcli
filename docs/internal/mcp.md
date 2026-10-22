@@ -49,9 +49,13 @@ seat *read* the message, not that it acted on it: the status a send can honestly
 `delivered (read)`.
 
 While it runs, the server keeps `.inbox-listener` in the seat's own drop folder — `{v, seat,
-session, root, cli, pid, ts}` — and removes it at exit, but only while it still names this
-process's pid. A server that died without cleaning up leaves the marker behind naming a dead pid,
-which is how the send side can tell a live route from a stale one.
+session, root, cli, pid, ts}`, the install it started from (`version`, `build`, and the packed
+`head` when the package carries one), and `channel: true` when it declared the channel — and
+removes it at exit, but only while it still names this process's pid. A server that died without
+cleaning up leaves the marker behind naming a dead pid, which is how the send side can tell a
+live route from a stale one. A live server runs the code it started with, so a marker of another
+version, another packed commit or another entry build is no route for a sender of this install:
+the send side reads it as stale rather than feeding it a message its parsers cannot take.
 
 Nothing is ever written in another seat's folder, and no message is moved or rewritten: the drop
 file is still the message, and the receipt is the only mark. A message that is a symbolic link is

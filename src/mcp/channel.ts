@@ -29,6 +29,13 @@ export const CHANNEL_METHOD = 'notifications/claude/channel';
 export const CHANNEL_PUSH_RECEIPT = 'channel-push';
 export const CHANNEL_PUSH_STATUS = 'sent (channel)';
 
+/** The marker a sender leaves at the push marker's name when its own walk already wakes the seat
+ *  through another leg. Any serving server treats a marker for the id as a push and skips it —
+ *  including a long-lived server running an install this sender has already replaced, whose own
+ *  push after the fallback would be a second wake. It is not a push, and the sender's own wait
+ *  never reads it as one. */
+export const CHANNEL_HELD_RECEIPT = 'channel-held';
+
 /** How long a send waits for the server's push marker: the server polls its inbox on a short
  *  timer, so this is several polls, never a wait on the seat. */
 export const CHANNEL_PUSH_GRACE_MS = 2_000;
@@ -84,12 +91,50 @@ export function channelPushPath(dropDir: string, id: string): string {
   return join(dropDir, `${id}.${CHANNEL_PUSH_RECEIPT}.json`);
 }
 
-/** Whether a push marker for exactly this id is present and readable. The marker is written by
- *  the seat's own server; a file that does not parse, or that names another id, is no marker. */
+/** Whether a marker for exactly this id is present and readable. The marker is either the
+ *  server's push or the sender's held marker; both say this id is not to be pushed. A file that
+ *  does not parse, or that names another id, is no marker. */
 export function channelPushHeld(dropDir: string, id: string): boolean {
   try {
     const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown };
     return parsed !== null && typeof parsed === 'object' && parsed.id === id;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the server itself wrote the push marker for this id. The sender's held marker sits at
+ *  the same name but is not a push: the channel leg has not delivered anything when only that one
+ *  is there, and its walk goes on. */
+export function channelPushed(dropDir: string, id: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as { id?: unknown; kind?: unknown };
+    return parsed !== null && typeof parsed === 'object' && parsed.id === id && parsed.kind !== CHANNEL_HELD_RECEIPT;
+  } catch {
+    return false;
+  }
+}
+
+/** The sender's marker: its walk takes the message on another leg, so no serving channel may
+ *  push it. `reason` says which walk left it; `at` is the sender's clock, not a push time. */
+export type ChannelHeldReceipt = {
+  v: 1;
+  kind: 'channel-held';
+  id: string;
+  at: string;
+  reason: string;
+};
+
+/**
+ * Writes the sender's held marker whole, mode 0600. `wx` is the reservation: a marker already at
+ * the name is the server's push of the same id, and a push that already happened is never
+ * replaced. False when the marker could not be written or one was already there — the send goes
+ * on either way; the marker only ever prevents a later push.
+ */
+export function recordChannelHeld(dropDir: string, receipt: ChannelHeldReceipt): boolean {
+  try {
+    writeFileSync(channelPushPath(dropDir, receipt.id), `${JSON.stringify(receipt)}\n`, { flag: 'wx', mode: 0o600 });
+    return true;
   } catch {
     return false;
   }
