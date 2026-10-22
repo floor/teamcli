@@ -28,7 +28,10 @@ line names the seat and session, each waiting record is verified with the checko
 key, its signed `<id>.read.json` receipt is written before its body is printed, and at most ten
 bodies are handed over a run, newest first. A plain-text drop an earlier build wrote cannot be
 verified at all: the read skips it, reports it by count on stderr, and leaves it in place, and it
-does not use one of the ten. A record that is otherwise malformed, or an earlier delivery of the
+does not use one of the ten. A signed record an earlier build wrote under the `unread-<uuid>`
+name it gave a runtime report to the team's lead is served and receipted like any other record:
+the listing and the read agree on what is waiting, and the receipt takes it out of both. A
+record that is otherwise malformed, or an earlier delivery of the
 general seat brief, is not a body either and does not use one of the ten. It asks for no placed
 caller, because a CLI's hook runs outside any pane. The launch passes `--epoch <run_id>`, the
 runtime it started the reader under; a record the launch wrote is served only when the claim on
@@ -90,7 +93,9 @@ it cannot verify or receipt is a refusal, and its body is not printed; a receipt
 file that does not verify for the served claim is refused the same way, and the file is left in
 place. A plain-text drop an earlier build wrote is the exception: nothing in it can be verified,
 so the read skips it, reports it by count on stderr, and leaves it in place, while the signed
-records around it are still served.
+records around it are still served. A signed record an earlier build wrote under the
+`unread-<uuid>` name it gave a runtime report to the team's lead is not an exception: it is
+served and receipted like any other record, so it leaves the listing when it is read.
 
 ## Who may run it
 

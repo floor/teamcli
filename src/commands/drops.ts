@@ -69,7 +69,9 @@ Options:
              is written before its body is printed, and at most ten bodies are
              read a run, newest first. A plain-text file an earlier build wrote
              is not a signed record: it is skipped and counted, never served,
-             and the records around it are still read. The seat and session are
+             and the records around it are still read. A signed record an
+             earlier build wrote under an \`unread-<uuid>\` runtime-report name is
+             served and receipted like any other record. The seat and session are
              the launch's, as with \`team mcp serve\`: --seat is required and
              --session, when given, must be the team file's. A record the
              launch wrote is served only as the seat's current general brief;

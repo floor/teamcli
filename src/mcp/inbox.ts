@@ -14,8 +14,9 @@
 //
 // Path rules, which the server never relaxes: the seat and session are the launch's, never a tool
 // argument's; the folder is checked step by step so a link at `.agents`, `send-drops`, the
-// session or the seat refuses service; an id is a lowercase UUID and nothing else, so no id can
-// name a path; a drop or receipt that is a link is refused, never followed.
+// session or the seat refuses service; an id is a lowercase UUID — or the `unread-<uuid>` name a
+// build before 0.5.3 wrote for a runtime report to a lead — and nothing else, so no id can name a
+// path; a drop or receipt that is a link is refused, never followed.
 import type { KeyObject } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,6 +50,23 @@ export const LISTENER_FILE = '.inbox-listener';
 
 /** The only names the server serves: the ids `team send` writes (`randomUUID`, lowercase). */
 export const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The name a build before 0.5.3 gave a runtime report drop addressed to a team's lead: the source
+ * message's own lowercase UUID under `unread-`. The drop is a signed message record then and now;
+ * only its name kept it out of this inbox, so `team drops --json` listed it while `team drops
+ * --read` never served it and never wrote its receipt. Those files are residual state, not
+ * something this build writes — a current report drop carries the bare UUID — and this inbox
+ * serves one like any other record so the listing and the read agree on what is waiting.
+ */
+export const LEGACY_REPORT_ID = /^unread-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Whether `name` is a record name this inbox serves: a bare message id, or the `unread-<uuid>`
+ *  name an earlier build wrote for a lead's runtime report. Both are fixed shapes, so no other
+ *  string reaches the filesystem. */
+export function messageNameOk(name: string): boolean {
+  return MESSAGE_ID.test(name) || LEGACY_REPORT_ID.test(name);
+}
 
 /** How long a send on the mcp-inbox leg waits for the read receipt before it reports
  *  `sent (unconfirmed)`: long enough for a seat that checks its inbox at a turn boundary, short
@@ -318,7 +336,8 @@ export function currentClaimIn(root: string, session: string, seat: string): Cur
 }
 
 /**
- * Every message waiting in this seat's own folder: a UUID-named regular file with no signed read
+ * Every message waiting in this seat's own folder: a record-named regular file (a message id, or
+ * the `unread-<uuid>` name an earlier build wrote for a lead's runtime report) with no signed read
  * receipt beside it. Oldest first. Anything else in the folder — a link, a marker, a directory —
  * is not a message and is skipped; a receipt the message key did not sign proves nothing, so the
  * message still waits. An earlier delivery of the seat's general seat brief is not waiting mail:
@@ -343,7 +362,7 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
   const superseded = new Set(claim?.superseded ?? []);
   const messages: InboxMessage[] = [];
   for (const name of names) {
-    if (!MESSAGE_ID.test(name)) continue;
+    if (!messageNameOk(name)) continue;
     if (superseded.has(name)) continue;
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
@@ -441,7 +460,8 @@ export type InboxTarget = { dropDir: string; root: string; seat: string; session
  * writes, its signature is checked with the checkout's message key, and it must name this inbox —
  * its seat, session and root — before any body is shown. A file that is not a record, a tampered
  * signature, an absent key and a record bound elsewhere are all refused with no body and no
- * receipt written. The id is a lowercase UUID; no other string reaches the filesystem.
+ * receipt written. The id is a lowercase UUID, or the `unread-<uuid>` name an earlier build gave a
+ * lead's runtime report; no other string reaches the filesystem.
  *
  * A record the launch wrote is read only as the seat's **current** brief: when `brief` is given,
  * the record's sender and rule must be the launch's, and the id, incarnation and delivered
@@ -465,7 +485,7 @@ export type InboxTarget = { dropDir: string; root: string; seat: string; session
  * message, and a crash before the receipt leaves no shared trace, so a later reader may serve.
  */
 export function readMessage(target: InboxTarget, id: string, home: string, brief?: BriefRead): InboxRead {
-  if (!MESSAGE_ID.test(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  if (!messageNameOk(id)) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const at = join(target.dropDir, id);
   if (heldAt(at).kind !== 'file') return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
   const atReceipt = heldAt(receiptPath(target.dropDir, id));

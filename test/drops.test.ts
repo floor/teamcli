@@ -684,6 +684,50 @@ describe('team drops --read', () => {
     expect(readdirSync(dropDir).filter((name) => name.endsWith('.read.json'))).toHaveLength(12);
   });
 
+  test('a signed runtime report an earlier build named `unread-<uuid>` is served and receipted like any record', async () => {
+    // The report a build before 0.5.3 left in the lead's folder: the source message's own UUID
+    // under `unread-`, a signed message record like any other. The listing offered it while the
+    // read never touched it, so it stayed listed forever; both agree now.
+    const legacyId = `unread-${D_RECORD}`;
+    const reportPath = plantRecord(
+      home,
+      root,
+      'acme',
+      'lead',
+      legacyId,
+      'writer-01: a message from architect has been unread for 4 min',
+      {
+        from: 'runtime',
+        from_id: null,
+        rule: "the team's unread-message report",
+        thread: legacyId,
+        at: '2026-10-21T07:02:00.000Z',
+      },
+    );
+    const context = { to: 'lead', root, session: 'acme' };
+    // Before the read the two agree: the report is waiting mail in the listing and in the inbox.
+    const listing = listDrops(dropDir);
+    if (listing.kind !== 'ok') throw new Error(listing.reason);
+    expect(listing.rows.map((row) => row.path)).toEqual([reportPath]);
+    expect(listUnread(dropDir, context, home).map((message) => message.id)).toEqual([legacyId]);
+
+    const result = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(result).toEqual({
+      code: 0,
+      out: 'writer-01: a message from architect has been unread for 4 min\n',
+      err: '',
+    });
+    // Its receipt is the signed read receipt every record gets, at the name its id derives.
+    expectReceipt(legacyId);
+    // The receipt takes the report out of both listings, and a second turn hands over nothing.
+    const key = messageKeyState(home);
+    if (key.kind !== 'key') throw new Error('the fixture wrote no key');
+    expect(listDrops(dropDir, key.key, context)).toEqual({ kind: 'ok', rows: [] });
+    expect(listUnread(dropDir, context, home)).toEqual([]);
+    const again = await run(['--read', '--seat', 'lead', '--session', 'acme'], { kind: 'owner' });
+    expect(again).toEqual({ code: 0, out: '', err: '' });
+  });
+
   test('a file an earlier build wrote is never handed over and gets no receipt', async () => {
     drop(D_RECORD, `${OWNER_HEADER}\n\nan old raw drop\n`);
     const result = await run(['--read', '--seat', 'lead'], { kind: 'owner' });
