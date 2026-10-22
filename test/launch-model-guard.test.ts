@@ -191,6 +191,8 @@ describe('up and add under the entity model rule', () => {
     const made = {
       launch: {} as Launch,
       labels: [] as string[],
+      /** Every pane run the plan actually executed, in order. */
+      runs: [] as { pane: string; command: string }[],
       session: 'absent' as 'absent' | 'running',
       seed(pane: string, text: string, agent: boolean) {
         panes.set(pane, { text, agent });
@@ -209,9 +211,10 @@ describe('up and add under the entity model rule', () => {
         made.labels.push(label);
         return { pane: `w${n}:p1`, workspace: `w${n}` };
       },
-      paneRun(_session, pane) {
+      paneRun(_session, pane, command) {
         const known = panes.get(pane);
         if (known) known.agent = true;
+        made.runs.push({ pane, command });
         return true;
       },
       renameAgent: () => true,
@@ -226,9 +229,10 @@ describe('up and add under the entity model rule', () => {
     return made;
   }
 
-  async function up(argv: string[], made: ReturnType<typeof world>) {
+  async function up(argv: string[], made: ReturnType<typeof world>, extra: Partial<UpSources> = {}) {
     const io = testIo(root, OWNER);
     const sources: UpSources = {
+      ...extra,
       sessionRunning: () => made.session === 'running',
       sessionState: () => made.session,
       agents: () => [],
@@ -322,6 +326,61 @@ describe('up and add under the entity model rule', () => {
       '  skip worker: would refuse: the model "deepseek-flash" runs under the lab "deepseek", which the entity model rule in force does not allow on this seat\n',
     );
     expect(dry.out).not.toContain('<pane of worker>');
+  });
+
+  /** The state a relaunch that never reached ready leaves: the record is `launched`, the host
+   *  still lists its pane and workspace, the agent list is readable but names no seat, and no
+   *  process identity can be read. The plan runs the launch line again in the recorded pane. */
+  function launcherStopped(made: ReturnType<typeof world>): void {
+    updateState(join(root, '.agents'), (state) => {
+      const session = (state.sessions.acme ??= emptySession());
+      session.seats.worker = {
+        stage: 'launched',
+        pane: 'w7:p1',
+        workspace: 'w7',
+        launched: { shell: 1, cli: [2] },
+      };
+    });
+    made.seed('w7:p1', IDLE, false);
+    made.session = 'running';
+  }
+
+  const LISTED = () => [{ id: 'w7', label: 'worker' }];
+
+  test('up refuses a recorded pane the host lists when no agent is live in it', async () => {
+    // The line runs again in the recorded pane, so it is judged even though no workspace is made
+    // and the plan carries the record's stage and pane.
+    setRule(home, REFUSED);
+    const dryWorld = world();
+    launcherStopped(dryWorld);
+    const dry = await up(['--dry-run'], dryWorld, { workspaces: LISTED });
+    expect(dry.code).toBe(0);
+    expect(dry.out).toContain(`  skip worker: would refuse: ${SENTENCE}\n`);
+    expect(dryWorld.runs).toEqual([]);
+
+    const liveWorld = world();
+    launcherStopped(liveWorld);
+    const live = await up([], liveWorld, { workspaces: LISTED });
+    expect(live.code).toBe(1);
+    expect(live.out).toContain(`worker: left out: refused: ${SENTENCE}\n`);
+    expect(liveWorld.runs.filter((run) => run.pane === 'w7:p1')).toEqual([]);
+  });
+
+  test('up still runs an allowed line in the same recorded pane', async () => {
+    setRule(home, ALLOWED);
+    const made = world();
+    launcherStopped(made);
+    const dry = await up(['--dry-run'], made, { workspaces: LISTED });
+    expect(dry.out).not.toContain('would refuse');
+    expect(dry.out).toContain('claude --model claude-opus-5-5');
+
+    const liveWorld = world();
+    launcherStopped(liveWorld);
+    const live = await up([], liveWorld, { workspaces: LISTED });
+    expect(live.code).toBe(0);
+    const runs = liveWorld.runs.filter((run) => run.pane === 'w7:p1');
+    expect(runs.length).toBe(1);
+    expect(runs[0]?.command).toContain('claude --model claude-opus-5-5');
   });
 
   test('add refuses the seat before it edits the file or makes a workspace', async () => {

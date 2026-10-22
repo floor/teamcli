@@ -68,7 +68,7 @@ import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, launchWillRun, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -1681,11 +1681,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       continue;
     }
     const placed = planned.stage === undefined || !planned.pane;
+    // Whether this plan runs the seat's launch line — the same test the plan's launch step and
+    // its launch refusal use. A recorded seat whose pane the host still lists while no agent is
+    // live in it launches again in that pane, so its line is judged even though nothing new is
+    // placed. A waiting seat and one resumed into a live pane run nothing now, and are not judged.
+    const willLaunch = launchWillRun(planned);
     // The entity model rule's word on the model this line names, read before the workspace is
     // made. The planned line is the one the launch runs — the file's, or the registry's recorded
-    // line for a restored seat. A seat resumed into an existing pane starts nothing now, so its
-    // line is not judged.
-    const policyProblem = placed
+    // line for a restored seat.
+    const policyProblem = willLaunch
       ? launchRefusal({ name: seat.name, role: seat.role, cli: planned.cli, launch: planned.launch }, ruleOf())
       : null;
     // The seat's own launch line, checked where the seat starts: a `miss` leaves this seat out

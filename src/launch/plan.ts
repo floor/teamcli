@@ -359,6 +359,21 @@ export interface UpSeat {
   grantKeep?: string;
 }
 
+/**
+ * Whether this plan runs the seat's launch line now: the one test every launch step and every
+ * launch refusal uses. A fresh seat launches; so does a recorded seat whose pane the host still
+ * lists while no agent is live in it (a launch that stopped before ready) — the line runs again
+ * in that pane, with no workspace made. A waiting seat never launches, and a ready or named one
+ * is left as it is.
+ */
+export function launchWillRun(
+  seat: Pick<UpSeat, 'stage' | 'pane' | 'agentLive' | 'waiting'>,
+): boolean {
+  const waiting = seat.waiting;
+  const fresh = !waiting && (seat.stage === undefined || !seat.pane);
+  return !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
+}
+
 export interface UpInput {
   /** The project root; seats start in it. */
   root: string;
@@ -757,7 +772,7 @@ export function upPlan(input: UpInput): Step[] {
     const fresh = !waiting && (seat.stage === undefined || !seat.pane);
     // The same condition as the launch step below. A seat already running keeps
     // its idle wait, rename and rules, and hears the reading as a notice.
-    const wouldLaunch = !waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive));
+    const wouldLaunch = launchWillRun(seat);
     if (seat.launchProblem && wouldLaunch) {
       steps.push({
         // The dry run prints the finding in full, as it always did; the record is left out with
@@ -881,7 +896,7 @@ export function upPlan(input: UpInput): Step[] {
       && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
-    if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {
+    if (wouldLaunch) {
       const said = takeNotice();
       const watched = watcherNote(watcher);
       // `would launch` joins a notice or a resume gap; a plain watcher note stands alone.
