@@ -55,6 +55,7 @@ import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runAck } from '../src/commands/ack.ts';
 import { runDevelopmentMode } from '../src/commands/development-mode.ts';
+import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
@@ -1423,6 +1424,19 @@ scene('development-mode.invocation', async (place) => {
     { code: await runDevelopmentMode(['set', 'maybe'], io, { home: place.home, now: NOW }), out: io.out, err: io.err },
     'the mode must be one of local-fast|pr-per-change|off',
   );
+});
+
+scene('owner-seat.done', async (place) => {
+  const io = testIo(place.root, other);
+  return show({ code: await runOwnerSeat(['status'], io, { home: place.home }), out: io.out, err: io.err }, 'security profile: strict');
+});
+scene('owner-seat.refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show({ code: await runOwnerSeat(['profile', 'relaxed'], io, { home: place.home }), out: io.out, err: io.err }, 'no owner seat is registered');
+});
+scene('owner-seat.invocation', async (place) => {
+  const io = testIo(place.root, other);
+  return show({ code: await runOwnerSeat(['profile', 'maybe'], io, { home: place.home }), out: io.out, err: io.err }, 'profile is strict, relaxed or dev');
 });
 
 scene('doctor.invocation', async (place) => {

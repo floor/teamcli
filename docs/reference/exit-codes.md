@@ -325,6 +325,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.swap` | `next` | 1 | the seat waits on a queued model swap, so nothing was claimed | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
+| `owner-seat.done` | `owner-seat` | 0 | the owner seat was read, set up, its security profile signed or proposed, or the owner page served | `team owner-seat status` |
+| `owner-seat.refused` | `owner-seat` | 1 | no owner seat, a cancelled or unverifiable owner-device signature, or a profile outside its bounds | `team owner-seat profile relaxed` |
+| `owner-seat.invocation` | `owner-seat` | 2 | the command arguments are invalid | `team owner-seat profile maybe` |
 | `pause.placed` | `pause` | 0 | the team was paused | `team pause` |
 | `pause.caller` | `pause` | 1 | not the owner or the orchestrator | `team pause` |
 | `pause.detached` | `pause` | 1 | a run with no terminal | `team pause` |

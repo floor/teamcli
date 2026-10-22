@@ -2236,6 +2236,27 @@
     },
     {
       "code": 0,
+      "command": "owner-seat",
+      "id": "owner-seat.done",
+      "meaning": "the owner seat was read, set up, its security profile signed or proposed, or the owner page served",
+      "trigger": "team owner-seat status"
+    },
+    {
+      "code": 1,
+      "command": "owner-seat",
+      "id": "owner-seat.refused",
+      "meaning": "no owner seat, a cancelled or unverifiable owner-device signature, or a profile outside its bounds",
+      "trigger": "team owner-seat profile relaxed"
+    },
+    {
+      "code": 2,
+      "command": "owner-seat",
+      "id": "owner-seat.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team owner-seat profile maybe"
+    },
+    {
+      "code": 0,
       "command": "pause",
       "id": "pause.placed",
       "meaning": "the team was paused",
