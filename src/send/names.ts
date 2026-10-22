@@ -103,6 +103,14 @@ function nicknameOf(sender: SenderIdentity, team: string | null, naming: SenderN
   return line?.nickname ?? null;
 }
 
+/** The nickname a reading resolves for one sender, and nothing else: null when neither the
+ *  signed seat record nor the roster holds one. A caller that prints another name in the
+ *  nickname's place reads this first, so an absent nickname is told from one spelled like the
+ *  seat name; `senderDisplayName` renders both the same way on purpose. */
+export function senderNickname(sender: SenderIdentity, naming: SenderNaming): string | null {
+  return nicknameOf(sender, teamOf(sender, naming), naming);
+}
+
 /** The team's own name — the team file's `project:` key — or the id no record names, the same
  *  spelling an earlier build printed. */
 function teamNameOf(team: string, teams: Readonly<Record<string, TeamRecord>>): string {

@@ -34,7 +34,7 @@ import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord,
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
-import { namingFor } from '../send/names.ts';
+import { namingFor, senderNickname, type SenderNaming } from '../send/names.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -1262,7 +1262,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameIdentityHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null));
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -3544,6 +3544,48 @@ const NATIVE_LEG_UNAVAILABLE = "unavailable; the native leg is the sending sessi
 /** How long a socket write's pane is read for the held-message dialog, in all. */
 const HELD_READ_MS = 1000;
 
+/** The taker a socket-delivered record's read receipt names: the frame was taken, and no reader
+ *  served the record. It is display for the receipt's readers and signed with the payload. */
+const SOCKET_READ_BY = 'socket delivery';
+
+/**
+ * The human name a seat's written label carries: the text before its middle dot, trimmed. A label
+ * the file writes reads `<name> · <role>` — the workspace title `up` gives it — and its first half
+ * is the name people call the seat by. A written label with no middle dot is the name whole. A
+ * seat with no written label has no such name: the stored label is its model and version, and its
+ * workspace title its seat name and role, so the seat name stands in its place. Display only.
+ */
+function labelNameOf(team: TeamFile, seat: string): string | null {
+  const found = team.seats.find((one) => one.name === seat);
+  if (found === undefined || found.labelWritten !== true) return null;
+  const name = (found.label.split('·')[0] ?? '').trim();
+  return name === '' ? null : name;
+}
+
+/**
+ * The display line an accepted socket frame opens with: the sender as a person reads it — the
+ * nickname the registry (or the seat's own setting) holds, the name its written label carries
+ * before the middle dot, then the seat name — and the address it sits at in the team this run
+ * sends from. Display only: the signed record below it is the message, and the record's body
+ * keeps its own `from … — admitted by: …` line. A registry that cannot answer reads as no
+ * nickname, so a frame always names its sender.
+ */
+function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, teamName: string, labelName: string | null): string {
+  let name = '';
+  try {
+    name = senderNickname(
+      { seat: record.from, ...(record.from_id === null ? {} : { id: record.from_id }) },
+      naming,
+    ) ?? '';
+  } catch {
+    // A registry that cannot answer is no nickname.
+  }
+  // A nickname wins; then the name the seat's written label carries; then the seat name, so the
+  // line always names its sender.
+  if (name === '') name = labelName ?? '';
+  return `Message from ${name === '' ? record.from : name} (${record.from}@${teamName})`;
+}
+
 /** Reads the target pane until the held-message dialog shows, or ~1s passes: the dialog renders
  *  right after the write lands, and a write the session holds is not a delivery. A host with no
  *  pane reader keeps the write's own answer — there is nothing to look at. */
@@ -3583,6 +3625,8 @@ async function deliverSocketFrame(
   inbound: InboundDeclaration = { policy: null, declaredAt: null, source: null },
   /** The sending run's team root: the entity an owner-origin reply line is read from. */
   callerRoot: string,
+  /** The display line the frame opens with; empty, the body alone. */
+  header = '',
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -3599,7 +3643,11 @@ async function deliverSocketFrame(
   }
   const reply = frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
   if ('missing' in reply) return { kind: 'fallback', reason: reply.missing };
-  const frame = frameFor(body, msgId, reply.line);
+  // The frame opens with the sender's display line, then the signed record's own body: the
+  // header is display, and the body it precedes still carries the attribution line a reader
+  // judges. One blank line separates them, so no body line can pass for the header.
+  const content = header === '' ? body : `${header}\n\n${body}`;
+  const frame = frameFor(content, msgId, reply.line);
   if (frame.length > FRAME_LIMIT) {
     return { kind: 'fallback', reason: `the frame is ${String(frame.length)} characters, past the socket's measured limit of ${String(FRAME_LIMIT)}` };
   }
@@ -3650,6 +3698,30 @@ async function deliverSocketFrame(
   if (await heldAtDialog(to.session, found.pane, host)) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'held', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
     return { kind: 'held', reason: HELD_FRAME_REASON };
+  }
+  // The frame was taken and no held dialog answered it: the receiving session has the message,
+  // so an ordinary send's record is read now. The signed receipt is what keeps the watch from
+  // ringing for a message the socket already delivered, and what keeps `team drops --read` and
+  // `team messages` from serving it again — the same receipt a reader would have written. A held
+  // frame returned above writes none: it was not a delivery, and the watch's retry stays the
+  // attempt.
+  //
+  // A direct-only run is the watch's own dispatch, and there the frame is a request: the
+  // receiving runtime reads it through the read gate and acts on it, so the send leaves the
+  // record unread — a receipt here would stop the very reader the push exists for.
+  if (host.direct === undefined) {
+    try {
+      const receipt = signReceiptPayload(
+        { kind: 'receipt', status: 'read', id: msgId, to: payload.to, root: payload.root, session: payload.session, at: host.now().toISOString(), read_by: SOCKET_READ_BY },
+        host.home,
+      );
+      const receiptWrite = writeReceipt(copy.dir, receipt, host.home);
+      if (!receiptWrite.ok) {
+        logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written (${receiptWrite.reason})`, host.now());
+      }
+    } catch {
+      logLine(to.dir, 'send', who, `${to.seat}: the frame was taken, but its read receipt was not written`, host.now());
+    }
   }
   if (!wait) {
     appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: payload.thread, outcome: 'delivered', ms: host.now().getTime() - startedAt, via: 'socket', ...failed });
