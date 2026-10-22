@@ -1,7 +1,12 @@
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { renderSignature } from '../file/signature.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
+import { readPolicyChain } from '../policy/sources.ts';
+import { landingRule, resolveWorkSettings, vaultRule, type WorkSettings } from '../policy/work-settings.ts';
+import { ofTeam as projectOfTeam } from '../registry/projects.ts';
+import { teamIdOf } from '../registry/teams.ts';
 
 /** What the rules of a seat are written from. */
 export interface RulesInput {
@@ -23,6 +28,8 @@ export interface RulesInput {
     branch?: string;
     cwd?: string;
   };
+  /** Work-setting lines (landing mode, memory vault), present only when a policy sets them. */
+  work?: readonly string[];
 }
 
 const COMMIT_PLACE: Record<RulesInput['signature']['commitPosition'], string> = {
@@ -66,7 +73,7 @@ export function seatRules(input: RulesInput): string[] {
   } else if (workspace.mode === 'shared' && workspace.cwd) {
     working.push(`Change to ${workspace.cwd} before any project work.`);
   }
-  return [...own, ...(input.profileRules ?? []), ...input.rules, ...signing, ...working];
+  return [...own, ...(input.profileRules ?? []), ...input.rules, ...signing, ...working, ...(input.work ?? [])];
 }
 
 /** How the rules reach a seat: typed as its first message, carried as a launch option, or
@@ -99,7 +106,7 @@ export function rulesText(input: RulesInput, delivery: RulesDelivery): string {
  *  the text a launch option embeds and the text the seat's rules file holds, byte for byte. A
  *  shared seat starts in the machine lobby like every seat, so the text names its folder from
  *  the project root — the same text every caller that checks the file must build. */
-export function rulesOf(team: TeamFile, seat: Seat, root: string): string {
+export function rulesOf(team: TeamFile, seat: Seat, root: string, work: WorkSettings | null = workSettingsFor(team, root)): string {
   const { commits, pullRequests } = team.identity.signature;
   const profile = profileFor(seat.cli);
   const delivery: RulesDelivery = profile?.rulesMode ?? 'message';
@@ -122,7 +129,32 @@ export function rulesOf(team: TeamFile, seat: Seat, root: string): string {
         branch: team.workspace.branch,
         cwd: resolve(root, seat.cwd),
       },
+      work: workLines(work, team.project),
     },
     delivery,
   );
+}
+
+/** The work settings a seat's rules read: the signed chain for this team, or null when it cannot be read. */
+export function workSettingsFor(team: TeamFile, root: string, home: string = homedir()): WorkSettings | null {
+  try {
+    let projectId: string | null = null;
+    try {
+      projectId = projectOfTeam(home, teamIdOf(root))?.id ?? null;
+    } catch {}
+    const work = resolveWorkSettings(readPolicyChain({ home, teamRoot: root, team, projectId }), {}, { home });
+    return work.unreadable === undefined ? work : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The lines a set work setting adds; a setting left at its release default adds none, so a team
+ *  that sets nothing keeps its rules byte for byte. */
+export function workLines(work: WorkSettings | null, project: string): string[] {
+  if (work === null) return [];
+  const lines: string[] = [];
+  if (work.landingMode.from !== 'default') lines.push(landingRule(work.landingMode.value));
+  if (work.vaultRoot.value !== null) lines.push(vaultRule(work.vaultRoot.value, project));
+  return lines;
 }
