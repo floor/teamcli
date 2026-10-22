@@ -83,3 +83,15 @@ describe('team owner-seat serve without a seat', () => {
     expect(r.err).toContain('no owner seat is registered yet');
   });
 });
+
+describe('team owner-seat setup checks the confirmation', () => {
+  test('a confirmation that does not verify under the new key registers nothing', async () => {
+    const h = home();
+    const s = store();
+    const forged = { ...s, sign: () => ({ ok: true as const, signature: '3006020101020101' }) };
+    const r = await run(['setup', '--team', 'floor', '--signer', 'mac'], h, forged);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain('does not verify');
+    expect(existsSync(ownerSeatFile(h))).toBe(false);
+  });
+});

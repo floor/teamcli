@@ -10,10 +10,11 @@
 //                                                              proposes the profile; a Secure Enclave signer
 //                                                              signs now (Touch ID), a passkey signs on the page
 //   team owner-seat serve [--port N]                           the owner page (passkeys, profile, team requests)
+import { verify as cryptoVerify } from 'node:crypto';
 import { renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
-import { ownerSeatFile, readOwnerSeat, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { ownerSeatFile, ownerSeatPublicKey, readOwnerSeat, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { writePolicySet } from '../policy/sources.ts';
 import { serveOwnerPage } from '../security/owner-page.ts';
@@ -67,11 +68,21 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
     if (args.values['grant-emission'] !== undefined) policies.push({ name: 'grant-emission', value: args.values['grant-emission'] });
     const policyEntity = args.values['policy-entity'] ?? made.record.entity;
     const said = policies.length === 0 ? '' : ` and set ${policies.map((p) => `${p.name}=${Array.isArray(p.value) ? p.value.join(',') : String(p.value)}`).join(', ')} for entity ${policyEntity}`;
-    const confirmed = store.sign(signer.label, Buffer.from(`team-owner-seat-setup-v1\n${JSON.stringify({ team: made.record.team, public_key: signer.public_key, entity: policyEntity, policies })}`, 'utf8'), `Create the TeamCLI owner seat for ${made.record.team}${said}`);
-    if (!confirmed.ok) {
+    const statement = Buffer.from(`team-owner-seat-setup-v1\n${JSON.stringify({ team: made.record.team, public_key: signer.public_key, entity: policyEntity, policies })}`, 'utf8');
+    const confirmed = store.sign(signer.label, statement, `Create the TeamCLI owner seat for ${made.record.team}${said}`);
+    const statementOk = confirmed.ok && (() => {
+      const key = ownerSeatPublicKey(signer.public_key);
+      try {
+        return key !== null && cryptoVerify('sha256', statement, { key, dsaEncoding: 'der' }, Buffer.from(confirmed.signature, 'hex'));
+      } catch {
+        return false;
+      }
+    })();
+    if (!confirmed.ok || !statementOk) {
       renameSync(ownerSeatFile(home), `${ownerSeatFile(home)}.unconfirmed-${now().getTime()}`);
-      audit(home, 'seat-unconfirmed', { team: made.record.team, why: confirmed.why }, now());
-      return refuse(`the owner did not confirm the seat (${confirmed.why}); nothing is registered`);
+      const why = confirmed.ok ? 'the confirmation signature does not verify under the new key' : confirmed.why;
+      audit(home, 'seat-unconfirmed', { team: made.record.team, why }, now());
+      return refuse(`the owner did not confirm the seat (${why}); nothing is registered`);
     }
     audit(home, 'seat-registered', { team: made.record.team, signer: signer.name, policies }, now());
     for (const p of policies) {
