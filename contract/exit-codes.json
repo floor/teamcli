@@ -1740,6 +1740,13 @@
     {
       "code": 0,
       "command": "init",
+      "id": "init.approval",
+      "meaning": "an owner-seat team request was recorded, answered, listed or revoked",
+      "trigger": "team init --request"
+    },
+    {
+      "code": 0,
+      "command": "init",
       "id": "init.restored",
       "meaning": "the approved copy was restored",
       "trigger": "team init --restore"
@@ -1750,6 +1757,13 @@
       "id": "init.wrote",
       "meaning": "a skeleton was written",
       "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.approval-refused",
+      "meaning": "an owner-seat team request, answer, rule or execute was refused",
+      "trigger": "team init --execute <request-id>"
     },
     {
       "code": 1,

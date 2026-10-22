@@ -254,8 +254,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `hold.until` | `hold` | 1 | --until is not a clock or an instant | `team hold "freeze deploys" --until tomorrow` |
 | `hold.file` | `hold` | 2 | the team file can't be read | `team hold "freeze deploys"` |
 | `hold.invocation` | `hold` | 2 | the invocation can't be read | `team hold` |
+| `init.approval` | `init` | 0 | an owner-seat team request was recorded, answered, listed or revoked | `team init --request` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
+| `init.approval-refused` | `init` | 1 | an owner-seat team request, answer, rule or execute was refused | `team init --execute <request-id>` |
 | `init.detached` | `init` | 1 | a run with no terminal | `team init` |
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |

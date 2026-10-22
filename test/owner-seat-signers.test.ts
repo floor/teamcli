@@ -1,0 +1,231 @@
+// The owner seat with several signers (mac-keystore and webauthn, neither preferred), the
+// owner-signers policy, and owner-seat approval of `team init`. Synthetic homes and repositories;
+// a fake credential store and a simulated passkey stand in for the system ones.
+
+import { afterAll, describe, expect, test } from 'bun:test';
+import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { addOwnerSigner, ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, registerOwnerSeat, verifyOwnerAnswer, webauthnChallenge, type OwnerSeatAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from '../src/client/team-create.ts';
+import { runInit } from '../src/commands/init.ts';
+import type { Io } from '../src/io.ts';
+import { writePolicySet } from '../src/policy/sources.ts';
+import { keyOf, messageKeyOf, signDomain } from '../src/store/keys.ts';
+
+const made: string[] = [];
+afterAll(() => {
+  for (const base of made) rmSync(base, { recursive: true, force: true });
+});
+
+const raw = (key: KeyObject) => {
+  const jwk = key.export({ format: 'jwk' }) as { x: string; y: string };
+  return `04${Buffer.from(jwk.x, 'base64url').toString('hex')}${Buffer.from(jwk.y, 'base64url').toString('hex')}`;
+};
+
+function fakeStore(): OwnerSeatKeyStore {
+  const keys = new Map<string, ReturnType<typeof generateKeyPairSync>>();
+  const pins = new Map<string, string>();
+  return {
+    name: 'fake-credential-store',
+    available: () => true,
+    create: (label) => {
+      const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+      keys.set(label, pair);
+      return { ok: true, publicKey: raw(pair.publicKey) };
+    },
+    publicKey: (label) => (keys.has(label) ? { ok: true, publicKey: raw(keys.get(label)!.publicKey) } : { ok: false, why: 'no key' }),
+    sign: (label, message) => (keys.has(label) ? { ok: true, signature: cryptoSign('sha256', message, { key: keys.get(label)!.privateKey, dsaEncoding: 'der' }).toString('hex') } : { ok: false, why: 'no key' }),
+    pinSet: (label, value) => (pins.has(label) ? { ok: false, why: 'exists' } : (pins.set(label, value), { ok: true })),
+    pinGet: (label) => (pins.has(label) ? { ok: true, value: pins.get(label)! } : { ok: false, why: 'no pin' }),
+  };
+}
+
+/** A simulated passkey: a P-256 credential producing WebAuthn assertions over a challenge. */
+function passkey(rpId: string) {
+  const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  return {
+    publicKey: raw(pair.publicKey),
+    assert: (answer: OwnerSeatAnswer, flags = 0x05) => {
+      const authData = Buffer.concat([createHash('sha256').update(rpId).digest(), Buffer.from([flags]), Buffer.from([0, 0, 0, 1])]);
+      const clientData = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: webauthnChallenge(answer), origin: `https://${rpId}` }));
+      const signature = cryptoSign('sha256', Buffer.concat([authData, createHash('sha256').update(clientData).digest()]), { key: pair.privateKey, dsaEncoding: 'der' }).toString('hex');
+      return { authenticator_data: authData.toString('base64url'), client_data_json: clientData.toString('base64url'), signature };
+    },
+  };
+}
+
+function home(label: string) {
+  const base = realpathSync(mkdtempSync(join(process.cwd(), `.owner-signers-${label}-`)));
+  made.push(base);
+  const h = join(base, 'home');
+  mkdirSync(join(h, '.config', 'team'), { recursive: true });
+  keyOf(h);
+  return { base, home: h };
+}
+
+function repo(base: string, name: string): string {
+  const root = join(base, 'code', name);
+  mkdirSync(root, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+  return root;
+}
+
+function io(cwd: string): { io: Io; out: () => string; err: () => string } {
+  let out = '';
+  let err = '';
+  return { io: { stdout: (t) => { out += t; }, stderr: (t) => { err += t; }, cwd, env: {}, stdinIsTTY: false }, out: () => out, err: () => err };
+}
+
+const answerOf = (id: string, choice: OwnerSeatAnswer['choice'] = 'once'): OwnerSeatAnswer => ({ kind: 'grant', request_id: id, params_sha256: 'a'.repeat(64), choice, team: 'floor', seat: 'owner', at: new Date().toISOString() });
+
+describe('several owner signers, none preferred', () => {
+  test('mac-keystore and webauthn signers each verify; the policy chooses which are accepted', () => {
+    const h = home('signers');
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    const phone = passkey('owner.example');
+    expect(addOwnerSigner(h.home, { signer: 'phone', type: 'webauthn', publicKey: phone.publicKey, credentialId: 'Y3JlZGVudGlhbC1pZA', rpId: 'owner.example' }, store).ok).toBe(true);
+    const a = answerOf('gr_000000000000000000000001');
+    const macSig = (store.sign('owner-floor-mac', ownerSeatAnswerBytes(a), 'r') as { signature: string }).signature;
+    const assertion = phone.assert(a);
+    const viaMac = { owner_seat_answer: a, signer: 'mac', signature: macSig };
+    const viaPhone = { owner_seat_answer: a, signer: 'phone', signature: assertion.signature, webauthn: { authenticator_data: assertion.authenticator_data, client_data_json: assertion.client_data_json } };
+    expect(verifyOwnerAnswer(h.home, viaMac, store).ok).toBe(true);
+    expect(verifyOwnerAnswer(h.home, viaPhone, store).ok).toBe(true);
+    // A passkey assertion over another answer, without user presence, or for another relying party fails.
+    expect(verifyOwnerAnswer(h.home, { ...viaPhone, owner_seat_answer: answerOf('gr_000000000000000000000002') }, store).ok).toBe(false);
+    const noPresence = phone.assert(a, 0x00);
+    expect(verifyOwnerAnswer(h.home, { ...viaPhone, signature: noPresence.signature, webauthn: { authenticator_data: noPresence.authenticator_data, client_data_json: noPresence.client_data_json } }, store).ok).toBe(false);
+    // Policy: only the phone.
+    const wrote = writePolicySet(h.home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['phone'] }, { now: new Date() });
+    if (!wrote.ok) throw new Error(wrote.why);
+    const refusedMac = verifyOwnerAnswer(h.home, viaMac, store);
+    expect(refusedMac.ok).toBe(false);
+    if (!refusedMac.ok) expect(refusedMac.why).toContain('not accepted by the owner-signers policy');
+    expect(verifyOwnerAnswer(h.home, viaPhone, store).ok).toBe(true);
+  });
+
+  test('a swapped passkey key in the record fails its pin; an unavailable store fails closed', () => {
+    const h = home('pin');
+    const store = fakeStore();
+    registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store);
+    const phone = passkey('owner.example');
+    addOwnerSigner(h.home, { signer: 'phone', type: 'webauthn', publicKey: phone.publicKey, credentialId: 'Y3JlZGVudGlhbC1pZA', rpId: 'owner.example' }, store);
+    const attacker = passkey('owner.example');
+    const record = JSON.parse(readFileSync(ownerSeatFile(h.home), 'utf8'));
+    record.signers[1].public_key = attacker.publicKey;
+    writeFileSync(ownerSeatFile(h.home), JSON.stringify(record));
+    const a = answerOf('gr_000000000000000000000003');
+    const forged = attacker.assert(a);
+    const result = verifyOwnerAnswer(h.home, { owner_seat_answer: a, signer: 'phone', signature: forged.signature, webauthn: { authenticator_data: forged.authenticator_data, client_data_json: forged.client_data_json } }, store);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.why).toContain('does not match the key in the credential store');
+    const closed = verifyOwnerAnswer(h.home, { owner_seat_answer: a, signer: 'mac', signature: '00' }, { ...store, available: () => false });
+    expect(closed.ok).toBe(false);
+  });
+});
+
+describe('team init approved by the owner seat', () => {
+  function setup(label: string) {
+    const h = home(label);
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    const sources = (now?: Date) => ({ loggedIn: () => true, ownerSeatStore: store, ...(now ? { now: () => now } : {}) });
+    const run = async (cwd: string, argv: string[], now?: Date) => {
+      const c = io(cwd);
+      const code = await runInit(argv, c.io, h.home, undefined, sources(now));
+      return { code, out: c.out(), err: c.err(), json: argv.includes('--json') && c.out().trim().startsWith('{') ? JSON.parse(c.out()) : null };
+    };
+    return { ...h, store, run };
+  }
+
+  test('a non-owner request lands in the owner seat inbox; execute needs the signed answer; once is single-use', async () => {
+    const s = setup('init-ok');
+    const root = repo(s.base, 'docs');
+    expect((await s.run(root, [])).code).toBe(1);
+    const req = await s.run(root, ['--request', '--json']);
+    expect(req.code).toBe(0);
+    const id = req.json.request_id as string;
+    expect(req.json.text).toContain(`Team request ${id}: Create team "docs"`);
+    expect(readdirSync(ownerSeatInbox(s.home))).toEqual([`${id}.json`]);
+    const early = await s.run(root, ['--execute', id]);
+    expect(early.code).toBe(1);
+    expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(false);
+    expect((await s.run(root, ['--approve-as-owner-seat', id, 'oui'])).code).toBe(0);
+    const done = await s.run(root, ['--execute', id]);
+    expect(done.code).toBe(0);
+    expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(true);
+    const audit = JSON.parse(readFileSync(join(actionAuditFolder(s.home), `${id}.json`), 'utf8'));
+    expect(audit).toMatchObject({ via: 'owner-seat', signer: 'mac', kind: 'team-create' });
+    const again = repo(s.base, 'docs2');
+    expect((await s.run(again, ['--execute', id])).code).toBe(1);
+  });
+
+  test('another key, the shared message key, another id, another repository, an expired request and a deny are refused', async () => {
+    const s = setup('init-refuse');
+    const root = repo(s.base, 'docs');
+    const id1 = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    const record = JSON.parse(readFileSync(join(actionRequestsFolder(s.home), `${id1}.json`), 'utf8'));
+    const answer: OwnerSeatAnswer = { kind: 'team-create', request_id: id1, params_sha256: record.params_sha256, choice: 'once', team: 'floor', seat: 'owner', at: new Date().toISOString() };
+    const other = fakeStore();
+    other.create('x');
+    writeFileSync(join(actionRequestsFolder(s.home), `${id1}.seat-answer.json`), JSON.stringify({ owner_seat_answer: answer, signer: 'mac', signature: (other.sign('x', ownerSeatAnswerBytes(answer), 'r') as { signature: string }).signature }));
+    expect((await s.run(root, ['--execute', id1])).code).toBe(1);
+    const id2 = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    const record2 = JSON.parse(readFileSync(join(actionRequestsFolder(s.home), `${id2}.json`), 'utf8'));
+    const answer2 = { ...answer, request_id: id2, params_sha256: record2.params_sha256 };
+    writeFileSync(join(actionRequestsFolder(s.home), `${id2}.seat-answer.json`), JSON.stringify({ owner_seat_answer: answer2, signer: 'mac', signature: signDomain('team-owner-seat-answer-v2\n', answer2, messageKeyOf(s.home)) }));
+    expect((await s.run(root, ['--execute', id2])).code).toBe(1);
+    const id3 = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    const id4 = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(root, ['--approve-as-owner-seat', id3, 'oui'])).code).toBe(0);
+    writeFileSync(join(actionRequestsFolder(s.home), `${id4}.seat-answer.json`), readFileSync(join(actionRequestsFolder(s.home), `${id3}.seat-answer.json`)));
+    const moved = await s.run(root, ['--execute', id4]);
+    expect(moved.code).toBe(1);
+    expect(moved.err).toContain('not bound');
+    const elsewhere = repo(s.base, 'elsewhere');
+    expect((await s.run(elsewhere, ['--execute', id3])).code).toBe(1);
+    const id5 = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(root, ['--approve-as-owner-seat', id5, 'oui'])).code).toBe(0);
+    expect((await s.run(root, ['--execute', id5], new Date(Date.now() + 16 * 60 * 1000))).code).toBe(1);
+    const id6 = (await s.run(root, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(root, ['--approve-as-owner-seat', id6, 'non'])).code).toBe(0);
+    expect((await s.run(root, ['--execute', id6])).code).toBe(1);
+    expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(false);
+  });
+
+  test('always stores a signed team-create rule for the parent folder; a sibling is auto-approved and audited; revoke stops it', async () => {
+    const s = setup('init-always');
+    const first = repo(s.base, 'docs');
+    const id = (await s.run(first, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(first, ['--approve-as-owner-seat', id, 'always'])).code).toBe(0);
+    expect((await s.run(first, ['--execute', id])).code).toBe(0);
+    const list = await s.run(first, ['--approvals', '--json']);
+    expect(list.json.rules).toHaveLength(1);
+    expect(list.json.rules[0]).toMatchObject({ rule_id: id, kind: 'team-create' });
+    const sibling = repo(s.base, 'notes');
+    const sid = (await s.run(sibling, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(sibling, ['--execute', sid])).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(actionAuditFolder(s.home), `${sid}.json`), 'utf8'))).toMatchObject({ via: 'rule', rule_id: id });
+    // A rule whose file is edited is ignored.
+    const rulePath = join(actionApprovalsFolder(s.home), `${id}.json`);
+    const original = readFileSync(rulePath, 'utf8');
+    writeFileSync(rulePath, original.replace(/"scope": "[^"]*"/, '"scope": "/"'));
+    expect((await s.run(first, ['--approvals', '--json'])).json.ignored).toEqual([id]);
+    writeFileSync(rulePath, original);
+    expect((await s.run(first, ['--revoke-approval', id])).code).toBe(0);
+    const third = repo(s.base, 'more');
+    const tid = (await s.run(third, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(third, ['--execute', tid])).code).toBe(1);
+  });
+
+  test('with no owner seat a request is refused', async () => {
+    const h = home('init-noseat');
+    const root = repo(h.base, 'docs');
+    const c = io(root);
+    expect(await runInit(['--request'], c.io, h.home, undefined, { loggedIn: () => true, ownerSeatStore: fakeStore() })).toBe(1);
+    expect(c.err()).toContain('no owner seat');
+  });
+});
