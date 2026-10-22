@@ -186,7 +186,10 @@ describe('conversational requests and approvals', () => {
     conversational(w);
     const s = screen();
     const a = await requestOf(w, s);
-    expect((await execute(w, a.json.target, [])).code).toBe(1);
+    const unanswered = await execute(w, a.json.target, []);
+    expect(unanswered.code).toBe(1);
+    expect(unanswered.io.err()).toContain('no owner answer yet');
+    expect(unanswered.io.err()).toContain(`--approve-as-owner-seat ${a.json.target}`);
     const wrong = s.codes[0] === '000000' ? '111111' : '000000';
     expect((await execute(w, a.json.target, ['--code', wrong])).code).toBe(1);
     const burned = await execute(w, a.json.target, ['--code', s.codes[0]!]);

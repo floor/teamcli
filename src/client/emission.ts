@@ -260,7 +260,7 @@ function readOwnerAnswer(home: string, record: PendingGrantRecord, key: KeyObjec
     if (!lstatSync(path).isFile()) return no(`the answer to ${record.request_id} is not a plain file`);
     parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch {
-    return no(`request ${record.request_id} has no owner answer yet: the owner runs team grant --answer ${record.request_id} oui (or passes --code)`);
+    return no(`request ${record.request_id} has no owner answer yet: the owner runs team grant --answer ${record.request_id} oui from the owner terminal, or team grant --approve-as-owner-seat ${record.request_id} oui from the owner seat (or passes --code)`);
   }
   const body = parsed.grant_answer;
   if (body === undefined || typeof parsed.signature !== 'string') return no(`the answer to ${record.request_id} is not signed`);
