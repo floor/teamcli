@@ -15,6 +15,7 @@
 // fall-back.
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -98,20 +99,44 @@ function installChanged(running: BuildIdentity, onDisk: InstallIdentity): boolea
   return running.version !== onDisk.version || (running.head ?? null) !== onDisk.head;
 }
 
+/** The spawn and exit `restartSelf` uses. The launch passes none; a scene supplies them so it can
+ *  drive the child's events without spawning a process or ending the suite. */
+export type RestartHooks = {
+  spawnChild?: typeof spawn;
+  exit?: (code: number) => void;
+  say?: (line: string) => void;
+};
+
 /** Starts a fresh server from the entry this process loaded and leaves this one. The new process
  *  inherits the client's stdio, so it is the same MCP session; the listener marker is removed
  *  before this is called, and the fresh process writes its own. A stdin line the old process had
- *  already read is not replayed: the client's next call is the new process's first. */
-function restartSelf(): void {
+ *  already read is not replayed: the client's next call is the new process's first.
+ *
+ *  A start that fails reports `error` on the child after `spawn` has already returned, so the
+ *  failure cannot be caught around the call: this process leaves only after the child's `spawn`
+ *  event (unref, exit 0), and an `error` instead writes the reason and exits 1. A quiet exit 0
+ *  would end the client's session as if the fresh server had taken over. */
+export function restartSelf(hooks: RestartHooks = {}): void {
+  const start = hooks.spawnChild ?? spawn;
+  const exit = hooks.exit ?? ((code: number) => process.exit(code));
+  const say = hooks.say ?? ((line: string) => process.stderr.write(line));
   const { command, entry } = selfRunner();
+  let child: ChildProcess;
   try {
-    spawn(command, [entry, ...process.argv.slice(2)], { stdio: 'inherit' }).unref();
+    child = start(command, [entry, ...process.argv.slice(2)], { stdio: 'inherit' });
   } catch {
-    // The fresh process could not start: this session ends, and the next launch is the reload.
-    process.stderr.write('team mcp serve: the fresh server could not start; the next launch reloads\n');
+    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
+    exit(1);
     return;
   }
-  process.exit(0);
+  child.once('spawn', () => {
+    child.unref();
+    exit(0);
+  });
+  child.once('error', () => {
+    say('team mcp serve: the fresh server could not start; the next launch reloads\n');
+    exit(1);
+  });
 }
 
 type Serving = {
@@ -498,7 +523,7 @@ export async function runMcpServe(
   // the installed entry. A pinned build with no installed source is its own install, so a scene
   // that states a build never reloads unless it says how.
   const installedNow = host.installed ?? (host.build === undefined ? installIdentity : () => installIdentityOf(host.build as BuildIdentity));
-  const restart = host.restart ?? restartSelf;
+  const restart = host.restart ?? (() => restartSelf());
   let installed: InstallIdentity | null = null;
   const notice = (): boolean => {
     if (installed !== null) return true;

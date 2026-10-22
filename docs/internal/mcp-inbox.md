@@ -151,13 +151,14 @@ vouch for.
 On every channel tick, and after each line its client writes, the server compares the install
 under it — the version and packed commit the installed entry names — with the one it started
 from. When they differ it stops its channel, closes its input, removes its marker and starts the
-installed entry with the same arguments and this process's stdio, then exits 0: the installed
-build reads the same stdin, so the calls that arrive there next are answered by it. A line the
-old process had already read is not replayed. When the installed entry cannot be started, the
-server says so on stderr and exits; the next launch starts the installed build. A server started
-from a build before this one has none of this: it cannot learn to reload, so restarting the
-seat's client is what moves it, and until then a sender of this build protects the seat itself by
-holding the push name whenever its walk wakes the seat.
+installed entry with the same arguments and this process's stdio, then exits 0 once the fresh
+process reports that it started: the installed build reads the same stdin, so the calls that
+arrive there next are answered by it. A line the old process had already read is not replayed.
+When the installed entry cannot be started — the start call fails, or it reports an error on the
+child after returning — the server says so on stderr and exits 1; the next launch starts the
+installed build. A server started from a build before this one has none of this: it cannot learn
+to reload, so restarting the seat's client is what moves it, and until then a sender of this
+build protects the seat itself by holding the push name whenever its walk wakes the seat.
 
 A sender that falls back from a stale channel listener has a second hazard: the old server still
 watches the folder and would push the record after the sender's own wake. Before it writes the
