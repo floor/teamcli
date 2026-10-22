@@ -175,9 +175,17 @@ an install, or a listener, can change between any check and the wake, so the nam
 the wake rather than after a verdict that could be stale by the time the wake lands. The one
 listener fact it reads is whether a channel-declaring server is running at all: a seat whose
 current launch no longer names the channel still reserves while a live listener started with the
-flag is alive, because that server can still push. A server started after the record arrived
-pushes nothing — its first listing is marked seen — so a dead marker leaves no push to race. The
-record stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the name never
+flag is alive, because that server can still push. The marker must name this seat, this session
+and this root, and its pid must be live; a marker naming another inbox proves nothing and holds
+nothing. The marker is one file and last-writer-wins: when a second server starts for the same
+inbox it overwrites the first's marker, so a newer marker that declares no channel hides an older
+channel server that is still running. This build has no per-seat singleton at server startup, so
+the launch-drift reservation covers one serving process per inbox. With two servers the older
+channel one is not covered and can still display the record after the wake — the same display
+duplicate the in-flight tick produces, the full body appearing once more, never a second record
+or id and never a second valid read receipt. A server started after the record arrived pushes
+nothing — its first listing is marked seen — so a dead marker leaves no push to race. The record
+stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the name never
 withholds the message.
 
 The hold is permanent for the id, and nothing removes it. If the wake it precedes is never taken

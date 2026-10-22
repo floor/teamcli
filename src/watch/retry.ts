@@ -24,7 +24,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
-import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, listenerLive, readListener, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, inboxLive, receiptHeld } from '../mcp/inbox.ts';
 import {
   channelLaunchEnabled,
   CHANNEL_CONFIRM_MS,
@@ -141,13 +141,17 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
 /** Whether a wake of this seat can race a channel push at all: the channel is a Claude Code
  *  launch feature, and a launch without the flag has no server that could push. A listener
  *  started with the flag can still be running after the team file stops naming it, so a live
- *  listener marker that declared the channel counts too. A server started after the record
- *  arrived pushes nothing — its first listing is marked seen — so a dead marker leaves no push
- *  to race. */
-function channelSeat(seat: Seat, dropDir: string): boolean {
+ *  marker that declares the channel counts too — but only when it names this seat, this session
+ *  and this root, the same binding the sender's live check uses; a marker naming another inbox
+ *  proves nothing and holds nothing. A server started after the record arrived pushes nothing
+ *  (its first listing is marked seen), so a dead marker leaves no push to race. The marker is
+ *  one file and last-writer-wins: a newer server that declares no channel hides an older channel
+ *  server still running, and that older one is not covered — the one-process scope the docs
+ *  state. */
+function channelSeat(scene: RetryScene, seat: Seat, dropDir: string): boolean {
   if (seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch)) return true;
-  const listener = readListener(dropDir);
-  return listener !== null && listener.channel === true && listenerLive(listener);
+  const live = inboxLive(dropDir, scene.root, scene.session, seat.name);
+  return live.live && live.listener.channel === true;
 }
 
 /** Reserve the push name before a retry wake. The reservation is made before the wake whichever
@@ -173,7 +177,9 @@ function channelSeat(seat: Seat, dropDir: string): boolean {
  *  It creates no second record and no second valid read receipt: the receipt is per id, so the
  *  claim is no second record or id, not at-most-once display. The server's seen set is per
  *  process, and two servers for one inbox are not excluded, so each live server can do that once;
- *  every later tick of every process finds the name held. */
+ *  every later tick of every process finds the name held. The launch-drift fallback reads one
+ *  marker, so in a two-server inbox an older channel server hidden by a newer non-channel marker
+ *  is not covered; the docs state that one-process scope. */
 function holdChannelPush(scene: RetryScene, dropDir: string, drop: PendingDrop): void {
   recordChannelHeld(dropDir, {
     v: 1,
@@ -269,7 +275,7 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
     // record on top of it. The push name is reserved before the line, without waiting to judge
     // the listener: a marker already at that name is the server's own push, and the write is
     // refused while the retry goes on.
-    if (channelSeat(seat, dropDir)) holdChannelPush(scene, dropDir, drop);
+    if (channelSeat(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
@@ -395,7 +401,7 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
   // The socket leg is a wake of its own, and the typed leg inside `retryOne` reserves again: the
   // push name is held before the first of them, whichever install is listening, so a server that
   // appears or changes between this point and the wake still finds the record held.
-  if (channelSeat(seat, dropDir)) holdChannelPush(scene, dropDir, drop);
+  if (channelSeat(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
   const marked: PendingDrop = { ...drop, redelivered: CHANNEL_UNCONFIRMED };
   if (scene.socketRedeliver !== undefined) {
     const socket = await scene.socketRedeliver(dropDir, marked);

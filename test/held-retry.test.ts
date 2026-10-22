@@ -1659,6 +1659,49 @@ describe('retryHeldDrops and a stale channel', () => {
     expect(readPending(dropDir)).toEqual([]);
   });
 
+  test.each([
+    ['another seat', { seat: 'helper' }],
+    ['another session', { session: 'other-session' }],
+    ['another root', { root: '/elsewhere' }],
+  ] as const)('a live channel marker naming %s proves nothing, so the retry types without a hold', async (_label, patch) => {
+    const made = world();
+    // The fallback binds the marker to this seat, this session and this root. A marker naming
+    // another inbox could otherwise hold the push name for good on a seat with no channel.
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const id = 'lead-held-4';
+    const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
+    writeListener(dropDir, {
+      v: 1,
+      seat: 'lead',
+      session: 'acme',
+      root: realpathSync(made.root),
+      cli: 'claude-code',
+      pid: process.pid,
+      ts: NOW.toISOString(),
+      channel: true,
+      ...patch,
+    });
+    const one = pane(claudeBox(''));
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'w1:p1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: () => {},
+    });
+
+    expect(one.typed).toHaveLength(1);
+    expect(one.enters).toBe(1);
+    expect(channelPushHeld(dropDir, id)).toBe(false);
+    expect(existsSync(channelPushPath(dropDir, id))).toBe(false);
+    expect(readPending(dropDir)).toEqual([]);
+  });
+
   test('a dead channel listener leaves no push to race, so the retry types without a hold', async () => {
     const made = world();
     // The same marker, but its process is gone. A server started after the record arrived pushes
