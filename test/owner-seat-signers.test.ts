@@ -322,6 +322,37 @@ describe('team init approved by the owner seat', () => {
     expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(false);
   });
 
+  test('a forged rule file dropped first is replaced by the real always rule', async () => {
+    const s = setup('init-rule-squat');
+    const first = repo(s.base, 'docs');
+    const id = (await s.run(first, ['--request', '--json'])).json.request_id as string;
+    mkdirSync(actionApprovalsFolder(s.home), { recursive: true });
+    writeFileSync(join(actionApprovalsFolder(s.home), `${id}.json`), 'forged');
+    expect((await s.run(first, ['--approve-as-owner-seat', id, 'always'])).code).toBe(0);
+    const list = await s.run(first, ['--approvals', '--json']);
+    expect(list.json.rules).toHaveLength(1);
+    expect(list.json.ignored).toEqual([]);
+  });
+
+  test('a team-create rule lives for approval-rule-ttl: listed and used before it, ignored after', async () => {
+    const s = setup('init-ttl');
+    const first = repo(s.base, 'docs');
+    const id = (await s.run(first, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(first, ['--approve-as-owner-seat', id, 'always'])).code).toBe(0);
+    expect((await s.run(first, ['--execute', id])).code).toBe(0);
+    const at = (days: number) => new Date(Date.now() + days * 86_400_000);
+    expect((await s.run(first, ['--approvals', '--json'], at(29))).json.rules).toHaveLength(1);
+    const late = await s.run(first, ['--approvals', '--json'], at(31));
+    expect(late.json.rules).toHaveLength(0);
+    expect(late.json.ignored).toEqual([id]);
+    const old = repo(s.base, 'old');
+    const oid = (await s.run(old, ['--request', '--json'], at(31))).json.request_id as string;
+    expect((await s.run(old, ['--execute', oid], at(31))).code).toBe(1);
+    const fresh = repo(s.base, 'fresh');
+    const fid = (await s.run(fresh, ['--request', '--json'], at(29))).json.request_id as string;
+    expect((await s.run(fresh, ['--execute', fid], at(29))).code).toBe(0);
+  });
+
   test('always stores a signed team-create rule for the parent folder; a sibling is auto-approved and audited; revoke stops it', async () => {
     const s = setup('init-always');
     const first = repo(s.base, 'docs');

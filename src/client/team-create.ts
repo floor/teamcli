@@ -156,7 +156,9 @@ export function approveTeamCreate(
   if (choice === 'always') {
     mkdirSync(actionApprovalsFolder(home), { recursive: true, mode: 0o700 });
     const rulePath = join(actionApprovalsFolder(home), `${id}.json`);
-    if (writeExclusive(rulePath, text) === 'exists' && !heldAnswer(home, rulePath, id, record.params_sha256, store, now)) replaceFile(rulePath, text);
+    const ruleWritten = writeExclusive(rulePath, text);
+    const ruleHeld = ruleWritten === 'written' || (ruleWritten === 'exists' && (heldAnswer(home, rulePath, id, record.params_sha256, store, now) || replaceFile(rulePath, text)));
+    if (!ruleHeld) return { ok: false, why: `the answer was recorded but the always rule ${id} could not be written; the request can still run once` };
     return { ok: true, choice, ruleId: id };
   }
   return { ok: true, choice };
