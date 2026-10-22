@@ -11,7 +11,7 @@ import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles, 
 import { grantApprovalsFolder, grantEmissionAuditFolder, grantEmissionOf, grantRequestsFolder } from '../src/client/emission.ts';
 import { runGrant } from '../src/commands/grant.ts';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
-import { ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { ownerSeatAnswerBytes, ownerSignerLabel, ownerSeatFile, ownerSeatInbox, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { messageKeyOf, signDomain as signShared } from '../src/store/keys.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { Io } from '../src/io.ts';
@@ -552,7 +552,7 @@ describe('the owner seat approves with its own credential-store key', () => {
   test('a swapped owner-seat record is refused, and a missing store fails closed with the terminal answer still working', async () => {
     const { w, store } = await seated('seat-swap');
     const attacker = fakeStore();
-    const forgedKey = attacker.create('owner-floor-mac') as { publicKey: string };
+    const forgedKey = attacker.create(ownerSignerLabel(w.home, 'floor', 'mac')) as { publicKey: string };
     const path = ownerSeatFile(w.home);
     const original = readFileSync(path, 'utf8');
     const swapped = JSON.parse(original);

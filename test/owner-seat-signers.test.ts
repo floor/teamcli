@@ -7,7 +7,7 @@ import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } f
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addOwnerSigner, ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, registerOwnerSeat, verifyOwnerAnswer, webauthnChallenge, type OwnerSeatAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
+import { addOwnerSigner, ownerSignerLabel, ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, registerOwnerSeat, verifyOwnerAnswer, webauthnChallenge, type OwnerSeatAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from '../src/client/team-create.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runPolicy } from '../src/commands/policy.ts';
@@ -95,7 +95,7 @@ describe('several owner signers, none preferred', () => {
     const phone = passkey('owner.example');
     expect(addOwnerSigner(h.home, { signer: 'phone', type: 'webauthn', publicKey: phone.publicKey, credentialId: 'Y3JlZGVudGlhbC1pZA', rpId: 'owner.example' }, store).ok).toBe(true);
     const a = answerOf('gr_000000000000000000000001');
-    const macSig = (store.sign('owner-floor-mac', ownerSeatAnswerBytes(a), 'r') as { signature: string }).signature;
+    const macSig = (store.sign(ownerSignerLabel(h.home, 'floor', 'mac'), ownerSeatAnswerBytes(a), 'r') as { signature: string }).signature;
     const assertion = phone.assert(a);
     const viaMac = { owner_seat_answer: a, signer: 'mac', signature: macSig };
     const viaPhone = { owner_seat_answer: a, signer: 'phone', signature: assertion.signature, webauthn: { authenticator_data: assertion.authenticator_data, client_data_json: assertion.client_data_json } };
@@ -127,7 +127,7 @@ describe('several owner signers, none preferred', () => {
     expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
     allowSigners(h.home, ['mac']);
     const a = answerOf('gr_000000000000000000000004');
-    const viaMac = { owner_seat_answer: a, signer: 'mac', signature: (store.sign('owner-floor-mac', ownerSeatAnswerBytes(a), 'r') as { signature: string }).signature };
+    const viaMac = { owner_seat_answer: a, signer: 'mac', signature: (store.sign(ownerSignerLabel(h.home, 'floor', 'mac'), ownerSeatAnswerBytes(a), 'r') as { signature: string }).signature };
     expect(verifyOwnerAnswer(h.home, viaMac, store, new Date(), 'floor').ok).toBe(true);
     const other = verifyOwnerAnswer(h.home, viaMac, store, new Date(), 'acme');
     expect(other.ok).toBe(false);
@@ -152,6 +152,18 @@ describe('several owner signers, none preferred', () => {
     if (!result.ok) expect(result.why).toContain('does not match the key in the credential store');
     const closed = verifyOwnerAnswer(h.home, { owner_seat_answer: a, signer: 'mac', signature: '00' }, { ...store, available: () => false });
     expect(closed.ok).toBe(false);
+  });
+});
+
+describe('credential-store labels', () => {
+  test('two homes registering the same team and signer use two keys', () => {
+    const a = home('label-a');
+    const b = home('label-b');
+    const store = fakeStore();
+    expect(ownerSignerLabel(a.home, 'floor', 'mac')).not.toBe(ownerSignerLabel(b.home, 'floor', 'mac'));
+    expect(registerOwnerSeat(a.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    expect(registerOwnerSeat(b.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    expect(JSON.parse(readFileSync(ownerSeatFile(a.home), 'utf8')).signers[0].label).toMatch(/^owner-floor-mac-[0-9a-f]{8}$/);
   });
 });
 

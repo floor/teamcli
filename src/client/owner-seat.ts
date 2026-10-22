@@ -18,7 +18,7 @@
 
 import { createHash, createPublicKey, verify as cryptoVerify, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
@@ -167,6 +167,17 @@ function replaceRecord(home: string, record: OwnerSeatRecord): boolean {
 }
 
 /** Registers the owner seat with its first signer, a `mac-keystore` key created in the store. */
+/** The credential-store label of one signer. The store is per user, not per HOME, so the label
+ *  carries a short digest of the home folder: two homes (a test home, a second profile) never
+ *  share or collide on one key. A record keeps its own label, so seats registered earlier hold. */
+export function ownerSignerLabel(home: string, team: string, signer: string): string {
+  let at = home;
+  try {
+    at = realpathSync(home);
+  } catch {}
+  return `owner-${team}-${signer}-${createHash('sha256').update(at).digest('hex').slice(0, 8)}`;
+}
+
 export function registerOwnerSeat(
   home: string,
   input: { team: string; entity?: string; signer: string },
@@ -177,7 +188,7 @@ export function registerOwnerSeat(
   if (!SIGNER_NAME.test(input.signer)) return { ok: false, why: `"${input.signer}" is not a signer name` };
   if (existsSync(ownerSeatFile(home))) return { ok: false, why: `an owner seat is already registered (${ownerSeatFile(home)}); add a signer with --add-owner-signer` };
   if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available; build the helper: swiftc helpers/owner-seat-keystore.swift -o ${ownerSeatHelperPath(home)}` };
-  const label = `owner-${input.team}-${input.signer}`;
+  const label = ownerSignerLabel(home, input.team, input.signer);
   const created = store.create(label);
   if (!created.ok) return created;
   if (ownerSeatPublicKey(created.publicKey) === null) return { ok: false, why: 'the credential store returned a key that is not a P-256 public key' };
@@ -207,7 +218,7 @@ export function addOwnerSigner(
   if (!SIGNER_NAME.test(input.signer)) return { ok: false, why: `"${input.signer}" is not a signer name` };
   if (record.signers.some((s) => s.name === input.signer)) return { ok: false, why: `signer "${input.signer}" is already registered` };
   if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available` };
-  const label = `owner-${record.team}-${input.signer}`;
+  const label = ownerSignerLabel(home, record.team, input.signer);
   let signer: OwnerSigner;
   if (input.type === 'mac-keystore') {
     const created = store.create(label);
