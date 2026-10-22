@@ -15,9 +15,9 @@
 //     ended with its pane cleared.
 //  5. A pending record already consistent with its pane is left pending and unchanged.
 //
-// Every reading is a fixture: no live herdr, no registry outside the disposable home. The three
-// partial-replacement scenes are the positive cases; the failed-launch, working-doubt, stopped
-// and pending scenes are the negative controls.
+// Every reading is a fixture: no live terminal host, no registry outside the disposable home.
+// The three partial-replacement scenes are the positive cases; the failed-launch, working-doubt,
+// stopped and pending scenes are the negative controls.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -194,10 +194,10 @@ function agentNow() {
 
 type Trace = { created: string[]; closed: string[]; runs: { pane: string; command: string }[]; renames: string[]; typed: string[] };
 
-/** The readings one run takes. Before the replacement's fresh workspace exists, herdr lists the
- *  seat on its old pane with `live` as its conversation and `status` as its own status (the
- *  working-doubt scene); after the create, it lists the new pane and the conversation measured
- *  there. `create` false is a world where the new pane already exists (a pending record). */
+/** The readings one run takes. Before the replacement's fresh workspace exists, the terminal
+ *  host lists the seat on its old pane with `live` as its conversation and `status` as its own
+ *  status (the working-doubt scene); after the create, it lists the new pane and the conversation
+ *  measured there. `create` false is a world where the new pane already exists (a pending record). */
 function sources(opts: {
   run?: boolean;
   named?: boolean;
@@ -423,7 +423,7 @@ test('a failed launch after a proven close clears the dead route and keeps the a
 });
 
 test('a failed launch that closed nothing leaves the prior record exactly as it was', async () => {
-  // The registry knows a seat in another herdr session, on a pane this run never reads. The
+  // The registry knows a seat in another terminal-host session, on a pane this run never reads. The
   // file declares a different model and line: a write taken from the declaration would rewrite
   // the signing, the line and the session, which is the outcome this scene forbids.
   const id = registry({ session: 'other', differing: true });
