@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTeamFile } from '../src/file/load.ts';
+import type { TeamFile } from '../src/file/types.ts';
 import { rulesOf, workLines } from '../src/launch/rules.ts';
 import { readPolicyChain, writePolicySet } from '../src/policy/sources.ts';
 import { memoryFolder, resolveWorkSettings } from '../src/policy/work-settings.ts';
@@ -53,7 +54,7 @@ function set(home: string, level: 'entity' | 'project' | 'team', name: string, v
   return writePolicySet(home, { level, target, ...(level === 'team' ? { teamRoot: root! } : {}), name, value }, { now: NOW });
 }
 
-const chainOf = (w: { home: string; root: string }, team: Parameters<typeof readPolicyChain>[0]['team'] = null) =>
+const chainOf = (w: { home: string; root: string }, team: TeamFile | null = null) =>
   readPolicyChain({ home: w.home, entity: 'acme-corp', projectId: 'acme', teamRoot: w.root, team });
 
 describe('workspace-mode: worktree by default, entity < project < team policy < team file < seat', () => {
