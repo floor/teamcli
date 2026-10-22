@@ -382,6 +382,36 @@ The record is read only once the rules above have refused, and it admits the sen
 caller — its `to` names the receiver, and `expires` is still ahead. A record that fails any of
 those, or a symbolic link, is not a grant: the send is refused as if the folder were empty.
 
+## The client send
+
+`team send --client` is the one send a client grant admits. The grant is the owner's, the request
+is signed with the client's own key, and the destination is the entity's orchestrator —
+`orchestrator@floor` is the only address this build admits. The request id is used once, and the
+drop is written under the grant lock after the grant, the key, the registry binding and the
+request's target are read again. The record keeps the client's own principal: `from` is
+`client:grok-bot`, `from_id` is null, and `from_client` carries the client id and the grant id.
+
+Writing that drop is the message. The same signed record is then carried through the coordinator
+seat's resolved delivery order, restricted to the legs a client grant has — its own inbox channel,
+the cross-session socket, and the typed trigger — so a seat in the middle of a turn can take the
+message. With no declared order the walk is that order: channel, then socket when the seat's
+launch declares `crossSessionInbound: accept`, then typed. A level that declares an order is
+walked as written. The drop, native and headless-resume legs are never walked here: the drop the
+grant wrote is already the durable copy, and the other two belong to the seat's own runtime.
+
+Every leg keeps its ordinary pane-safety checks. A human's pane is never dialed or typed into, a
+bare shell is never typed into, and a held frame keeps the socket out until the seat's
+declaration is re-confirmed. No leg writes a second record: each write accepts the record at the
+same id, and a frame the socket takes writes its one signed read receipt beside it. The frame
+names its sender `Message from Grok Bot (owner)`, with the owner's reply target as its reply
+line, so the receiving seat reads a person's message and not a seat address. The walk's ending
+never changes the invocation: the drop is on disk, the confirmation already printed, and the
+client's two streams carry only their own lines. A leg's reason is recorded in the receiving
+team's log and history.
+
+The client's side of a thread — reading the seat's answers — is
+[`team messages`](messages.md) `--client`.
+
 ## The native channel
 
 When the recipient's CLI carries the cross-session channel and the sender's own file declares

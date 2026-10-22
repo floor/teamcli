@@ -54,6 +54,12 @@ export const CLIENT_SLICE_ENTITY = 'floor';
 export const CLIENT_SLICE_SEAT = 'orchestrator';
 export const CLIENT_SLICE_ADDRESS = `${CLIENT_SLICE_SEAT}@${CLIENT_SLICE_ENTITY}`;
 
+/** How a client-origin frame names its sender: the person's client, never a seat of the team.
+ *  The frame's header is `Message from Grok Bot (owner)` — the same shape a seat frame uses,
+ *  with the client's display name and the owner origin, so the receiving seat reads a person's
+ *  message, not an address it would answer as a seat. */
+export const CLIENT_SLICE_DISPLAY_NAME = 'Grok Bot';
+
 /** The entity coordinator's immutable binding, signed into every grant. */
 export const CLIENT_TEAM_ID_PATTERN = /^[0-9a-f]{12}$/;
 export const CLIENT_AGENT_ID_PATTERN = /^agt_[0-9a-f]{12}$/;

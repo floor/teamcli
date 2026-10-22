@@ -1,12 +1,18 @@
 // The one delivery a client grant admits: a normal signed drop to the entity's orchestrator seat.
-// Nothing here reads caller placement, so a terminal can never make the run the owner; nothing
-// here walks a socket, a typed leg or a native handoff, so there is no terminal fallback. The
-// grant is re-read under the grant lock immediately before the request id is claimed and the
-// record is written, so a revocation appended at that moment is seen, not raced past.
+// Nothing here reads caller placement, so a terminal can never make the run the owner. The grant
+// is re-read under the grant lock immediately before the request id is claimed and the record is
+// written, so a revocation appended at that moment is seen, not raced past.
 //
 // The drop is signed with the checkout's message key like every other record and carries the
 // client principal as `from_client`; `from` names the client (`client:<id>`) and `from_id` is
 // null because the registry holds no agent for it.
+//
+// Writing the drop is this module's whole effect. The send command then hands the same signed
+// payload to its own walk, through `ClientSendDelivery`, which resolves the coordinator seat's
+// order and tries the channel, socket and typed legs under their usual pane-safety checks. That
+// walk is injected so this module still reads no pane, holds no seat lock and types nothing: a
+// client invocation with no delivery callback (the tests that exercise the record alone) writes
+// the drop and stops.
 
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -51,6 +57,17 @@ export type ResolvedClientTarget = {
   session: string;
   dropDir: string;
 };
+
+/**
+ * The walk the send command injects after a drop is written: the same signed payload, carried
+ * through the coordinator seat's own order. It is asynchronous because every leg is; its
+ * outcome is the receiving team's record, never a client refusal — the drop is already durable,
+ * so a leg that cannot take the send leaves the message where the seat reads it.
+ */
+export type ClientSendDelivery = (sent: {
+  record: RecordPayload;
+  target: ResolvedClientTarget;
+}) => Promise<void>;
 
 /**
  * Resolves `orchestrator@floor` to the entity coordinator the grant signs. The address is
@@ -108,7 +125,7 @@ export function writeClientDrop(input: {
   body: string;
   now: Date;
   id?: string;
-}): { ok: true; path: string; id: string; recipientId: string } | { ok: false; why: string } {
+}): { ok: true; path: string; id: string; recipientId: string; record: RecordPayload } | { ok: false; why: string } {
   const id = input.id ?? randomUUID();
   const payload: RecordPayload = {
     kind: 'message',
@@ -133,15 +150,23 @@ export function writeClientDrop(input: {
   }
   const written = ensureRecord(input.target.dropDir, signed);
   if (!written.ok) return { ok: false, why: written.reason };
-  return { ok: true, path: written.path, id, recipientId: input.target.recipientId };
+  return { ok: true, path: written.path, id, recipientId: input.target.recipientId, record: payload };
 }
 
 /**
  * `team send --client <grant-file> --key <key-file> orchestrator@<entity> [--request-id <id>] <text>`.
- * Always prints the key-isolation line once, first, on stderr. Only the drop leg runs. Exit 0 on a
- * written drop, 1 on a refusal, 2 on an invocation that cannot be read.
+ * Always prints the key-isolation line once, first, on stderr. The signed drop is written here,
+ * and the injected `deliver` then carries that same payload through the coordinator seat's
+ * channel, socket and typed legs. Exit 0 on a written drop (whatever the walk's outcome), 1 on a
+ * refusal, 2 on an invocation that cannot be read.
  */
-export async function runClientSend(args: Args, io: Io, host: SendHost, json: boolean): Promise<number> {
+export async function runClientSend(
+  args: Args,
+  io: Io,
+  host: SendHost,
+  json: boolean,
+  deliver?: ClientSendDelivery,
+): Promise<number> {
   // The declared limitation goes out exactly once per client invocation, before any outcome; the
   // JSON documents carry the same line in `key_isolation`, so no reader sees one form without it.
   io.stderr(`${KEY_ISOLATION_LINE}\n`);
@@ -192,7 +217,16 @@ export async function runClientSend(args: Args, io: Io, host: SendHost, json: bo
   if (body.trim() === '') return usage('a message is required');
 
   let outcome:
-    | { ok: true; path: string; id: string; recipientId: string; to: string; request: ClientRequest }
+    | {
+      ok: true;
+      path: string;
+      id: string;
+      recipientId: string;
+      record: RecordPayload;
+      target: ResolvedClientTarget;
+      to: string;
+      request: ClientRequest;
+    }
     | { ok: false; why: string };
   try {
     outcome = withClientGrantLock(
@@ -248,6 +282,7 @@ export async function runClientSend(args: Args, io: Io, host: SendHost, json: bo
         if (!written.ok) return written;
         return {
           ...written,
+          target: rebound.target,
           to: `${rebound.target.recipientSeat}@${rebound.target.entity}`,
           request,
         };
@@ -259,12 +294,22 @@ export async function runClientSend(args: Args, io: Io, host: SendHost, json: bo
   }
   if (!outcome.ok) return refuse(outcome.why);
 
+  // The drop is the message, and its confirmation is printed before the walk: a leg that is
+  // slow, refused or held never changes what this invocation has already written.
   if (json) {
     io.stdout(
       `${document({ sent: { to: outcome.to, record: outcome.id, request_id: outcome.request.request_id } })}\n`,
     );
   } else {
     io.stdout(`sent: ${outcome.to} (drop ${outcome.id})\n`);
+  }
+  if (deliver !== undefined) {
+    try {
+      await deliver({ record: outcome.record, target: outcome.target });
+    } catch {
+      // The walk records its own endings in the receiving team's log; a walk that throws has
+      // still left the signed drop, which is the message. It is never a client refusal.
+    }
   }
   return 0; // exit: send.client-sent
 }
