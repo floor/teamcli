@@ -4,20 +4,46 @@ You never open a terminal. Iris (the orchestrator agent) runs every command; you
 native prompts on your own devices: Touch ID on the Mac, or a tap on your iPhone for a passkey.
 That signature from your device is the authority; nothing else (no TTY, no chat click) is.
 
-## Morning checklist (two Touch IDs)
+## Paths with no Touch ID and no code
+
+What policy can decide, it decides; the only owner act that never goes away is a signature from
+your own device when a rule is first set. Listed from fewest to more prompts:
+
+| Situation | How it passes with no prompt | The one-time owner act |
+| --- | --- | --- |
+| renewing the grok-bot grant every week | the `always` answer is a standing, owner-signed rule; a matching request is admitted at once (`approved by: standing rule`) | the Touch ID of the first answer (step 2 below) |
+| creating another team under `~/Code/floor` | an `always` answer to one team request covers every sibling folder of its parent | the Touch ID of that first answer |
+| creating any team, any folder | the `relaxed` security profile relaxes `team-create.owner-answer` | one Touch ID to sign the profile, renewed at most every 30 days |
+| an agent running owner-only `team init` | `relaxed` relaxes `gate.owner-terminal` | the same profile signature |
+| numeric codes | never needed on these paths: the owner seat replaces them | none |
+
+What stays a prompt, whatever the profile says (the self-grant invariant): writing the policy
+store or the profile itself, registering the owner seat, adding a signer. No agent can grant,
+widen or renew its own authority: a standing rule only re-admits exactly what you signed, and an
+agent cannot sign. Grants are not auto-approved by `relaxed` (`grant.owner-answer.low-risk` is
+registered but not wired): a request carries no proof of who asks, so "low risk" could not tell
+a grant for another principal from a self-grant. Decision taken tonight; the standing `always`
+rule already gives the no-prompt renewal.
+
+The profile is also the autonomy axis: `strict` = agents ask, `relaxed` = agents act inside what
+the signed profile lists, until its expiry.
+
+## Morning checklist (two Touch IDs, nothing to type)
 
 1. **Iris starts the setup** (`scripts/morning-owner-setup.sh`). It builds the owner-seat helper,
    installs this branch as `~/.local/bin/team-branch` next to the global `team` (the global one is
-   left alone), registers your owner seat with a Secure Enclave key, and writes the `teamcli`
-   entity policies `owner-signers=mac` and `grant-emission=conversational`.
+   left alone), registers your owner seat with a Secure Enclave key, and writes `owner-signers=mac`
+   and `grant-emission=conversational` for the entities `teamcli` (the grant) and `floor` (Floor Docs).
    **You approve with Touch ID** once. The prompt reads:
-   *"Create the TeamCLI owner seat for floor and set owner-signers=mac, grant-emission=conversational for entity teamcli"*.
-2. **Iris requests the grok-bot grant** (send + messages to `orchestrator@teamcli`, 7 days).
-   **You approve with Touch ID**. The prompt reads:
-   *"TeamCLI: once for Grant for grok-bot: send + messages to orchestrator@teamcli (entity teamcli) until …"*.
-   Iris then runs `--execute` and the grant is written.
-3. *(Optional, once)* **Iris proposes the relaxed security profile** for a week of frictionless
+   *"Create the TeamCLI owner seat for floor and set owner-signers=mac, grant-emission=conversational for entities teamcli, floor"*.
+2. **Iris requests the grok-bot grant** (send + messages to `orchestrator@teamcli`, 7 days) and
+   answers it `always`. **You approve with Touch ID**. The prompt reads:
+   *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@teamcli (entity teamcli) until …"*.
+   Iris then runs `--execute` and the grant is written. Next week Iris re-runs the script: the
+   standing rule renews it with no prompt.
+3. *(Optional)* **Iris proposes the relaxed security profile** for a week of frictionless
    development; **you approve with Touch ID**: *"Set the TeamCLI security profile to relaxed until …"*.
+   Then Floor Docs (below) needs no prompt at all.
 
 There is no keychain "Allow" dialog by default: the helper is ad-hoc signed and keeps its key
 through CryptoKit, which needs no entitlement (see [Why no codesigning](#why-no-codesigning)). If
@@ -25,7 +51,7 @@ you ever want the codesigned build, Iris runs the script with `--identity`: you 
 dialog *"codesign wants to sign using key … in your keychain"* and click **Allow**.
 
 If you cancel a prompt nothing is written; Iris simply runs the script again (each step is skipped
-when already done).
+when already done). Before running it, Iris can show you the exact prompts with `--dry-run`.
 
 ## Creating "Floor Docs" (`~/Code/floor/docs`)
 
