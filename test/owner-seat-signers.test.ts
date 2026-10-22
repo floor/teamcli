@@ -11,7 +11,8 @@ import { addOwnerSigner, ownerSignerLabel, ownerSeatAnswerBytes, ownerSeatFile, 
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from '../src/client/team-create.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runPolicy } from '../src/commands/policy.ts';
-import { acceptedSigners, readOwnerSeat } from '../src/client/owner-seat.ts';
+import { acceptOwnerSigner, acceptedSigners, readOwnerSeat } from '../src/client/owner-seat.ts';
+import { runGrant } from '../src/commands/grant.ts';
 import type { Io } from '../src/io.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { keyOf, messageKeyOf, signDomain } from '../src/store/keys.ts';
@@ -152,6 +153,59 @@ describe('several owner signers, none preferred', () => {
     if (!result.ok) expect(result.why).toContain('does not match the key in the credential store');
     const closed = verifyOwnerAnswer(h.home, { owner_seat_answer: a, signer: 'mac', signature: '00' }, { ...store, available: () => false });
     expect(closed.ok).toBe(false);
+  });
+});
+
+describe('acceptOwnerSigner: registering a signer is the explicit step that makes it accepted', () => {
+  test('no policy: writes the signer; then appends; idempotent; the request entity is the one written', () => {
+    const h = home('accept');
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    const record = readOwnerSeat(h.home)!;
+    const before = acceptedSigners(h.home, record);
+    expect('missing' in before && before.missing).toBe(true);
+    expect(acceptOwnerSigner(h.home, 'floor', 'mac')).toEqual({ ok: true, names: ['mac'] });
+    expect(acceptOwnerSigner(h.home, 'floor', 'phone')).toEqual({ ok: true, names: ['mac', 'phone'] });
+    expect(acceptOwnerSigner(h.home, 'floor', 'phone')).toEqual({ ok: true, names: ['mac', 'phone'] });
+    expect(acceptedSigners(h.home, record)).toEqual({ names: ['mac', 'phone'], source: 'policy' });
+    // Another entity is untouched.
+    const other = acceptedSigners(h.home, record, new Date(), 'acme');
+    expect('missing' in other && other.missing).toBe(true);
+  });
+
+  test('a policy that does not verify is never overwritten', () => {
+    const h = home('accept-tamper');
+    const store = fakeStore();
+    expect(registerOwnerSeat(h.home, { team: 'floor', signer: 'mac' }, store).ok).toBe(true);
+    allowSigners(h.home, ['mac']);
+    const files = execFileSync('grep', ['-rl', 'owner-signers', join(h.home, '.config')]).toString().trim().split('\n');
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) writeFileSync(file, readFileSync(file, 'utf8').replace(/[0-9a-f]{128}/g, (sig) => (sig[0] === '0' ? '1' : '0') + sig.slice(1)));
+    const snapshot = files.map((f) => readFileSync(f, 'utf8'));
+    const result = acceptOwnerSigner(h.home, 'floor', 'phone');
+    expect(result.ok).toBe(false);
+    expect(files.map((f) => readFileSync(f, 'utf8'))).toEqual(snapshot);
+  });
+
+  test('the owner-terminal commands --add-owner-seat and --add-owner-signer set owner-signers and say so', async () => {
+    const h = home('accept-cli');
+    const store = fakeStore();
+    const owner = () => {
+      const c = io(h.base);
+      return { c, io: { ...c.io, caller: { kind: 'owner' } } as Io };
+    };
+    const seat = owner();
+    expect(await runGrant(['--add-owner-seat', '--team', 'floor', '--signer', 'mac'], seat.io, { home: h.home, ownerSeatStore: store })).toBe(0);
+    expect(seat.c.out()).toContain('owner-signers (entity floor): mac');
+    const phone = passkey('owner.example');
+    const add = owner();
+    expect(await runGrant(['--add-owner-signer', '--signer', 'phone', '--type', 'webauthn', '--signer-public-key', phone.publicKey, '--credential-id', 'Y3JlZGVudGlhbC1pZA', '--rp-id', 'owner.example'], add.io, { home: h.home, ownerSeatStore: store })).toBe(0);
+    expect(add.c.out()).toContain('owner-signers (entity floor): mac, phone');
+    expect(acceptedSigners(h.home, readOwnerSeat(h.home)!)).toEqual({ names: ['mac', 'phone'], source: 'policy' });
+    // A non-owner caller changes nothing.
+    const agent = io(h.base);
+    expect(await runGrant(['--add-owner-signer', '--signer', 'evil', '--type', 'mac-keystore'], { ...agent.io, caller: { kind: 'seat', name: 'x', pane: 'w1:p1' } } as Io, { home: h.home, ownerSeatStore: store })).not.toBe(0);
+    expect(acceptedSigners(h.home, readOwnerSeat(h.home)!)).toEqual({ names: ['mac', 'phone'], source: 'policy' });
   });
 });
 

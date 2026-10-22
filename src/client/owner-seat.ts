@@ -249,7 +249,7 @@ export function readOwnerSeat(home: string): OwnerSeatRecord | null {
 
 /** The signer names an entity accepts: its `owner-signers` policy. No policy, no signer (approvals.md rule 6: no fallback).
  *  `entity` is the entity the approved request acts on; it defaults to the owner seat's own. */
-export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date = new Date(), entity: string = record.entity): { names: string[]; source: 'policy' } | { why: string } {
+export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date = new Date(), entity: string = record.entity): { names: string[]; source: 'policy' } | { why: string; missing?: true } {
   let chain;
   try {
     chain = loadAndResolvePolicyChain({ home, entity, projectId: null, teamRoot: null, team: null }, { now, upToLevel: 'entity' });
@@ -262,7 +262,7 @@ export function acceptedSigners(home: string, record: OwnerSeatRecord, now: Date
   const listed = chain.policies['owner-signers']?.value;
   if (Array.isArray(listed)) return { names: listed.filter((n): n is string => typeof n === 'string'), source: 'policy' };
   const names = record.signers.map((x) => x.name).join(',') || '<signer>';
-  return { why: `no owner-signers policy is set for entity "${entity}", so no owner-seat answer is accepted yet. To accept your registered signers, run: team policy set entity owner-signers ${names} --entity ${entity}` };
+  return { missing: true, why: `no owner-signers policy is set for entity "${entity}", so no owner-seat answer is accepted yet. To accept your registered signers, run: team policy set entity owner-signers ${names} --entity ${entity}` };
 }
 
 /**
@@ -274,6 +274,8 @@ export function acceptOwnerSigner(home: string, entity: string, signer: string, 
   const record = readOwnerSeat(home);
   if (record === null) return { ok: false, why: 'no owner seat is registered' };
   const current = acceptedSigners(home, record, now, entity);
+  // Only an absent policy is written fresh; one that cannot be read or verified is left for the owner.
+  if ('why' in current && current.missing !== true) return { ok: false, why: current.why };
   const names = 'names' in current ? current.names : [];
   if (names.includes(signer)) return { ok: true, names };
   const next = [...names, signer];
