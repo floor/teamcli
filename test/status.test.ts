@@ -947,13 +947,12 @@ describe('team status', () => {
     expect(readable.out).toMatch(/codex-acme-tmp-1\s+done, temporary/);
   });
 
-  test('C4: a seat stopped at its usage limit: the row names the pool and the reset time', async () => {
+  test('C4: a seat stopped at its usage limit: the row reads blocked: quota and the reset time', async () => {
     const limitScreen = readFileSync(new URL('./fixtures/claude-code/rate-limit.txt', import.meta.url), 'utf8');
-    // A file seat whose cli is Claude Code: the pool is its vendor, as the counting rules resolve it.
     live = { ...built(), screens: { ...built().screens, 'w3:p1': limitScreen } };
     const stopped = await status();
-    expect(stopped.out).toMatch(/deepseek-acme\s+done \(rate limit on deepseek, resets at 11:00\)/);
-    // A temporary seat's row names the pool of the seat it is like.
+    expect(stopped.out).toMatch(/deepseek-acme\s+blocked: quota, resets at 11:00/);
+    // A temporary seat's row carries the same blocked quota detail and the temporary mark.
     const tmp = agent('deepseek-acme-tmp-1', 'w5', 'done');
     live = { ...built(), agents: [...built().agents, tmp], screens: { ...built().screens, 'w5:p1': limitScreen } };
     updateState(join(dir, '.agents'), (state) => {
@@ -962,7 +961,7 @@ describe('team status', () => {
       };
     });
     const temp = await status();
-    expect(temp.out).toMatch(/deepseek-acme-tmp-1\s+done \(rate limit on deepseek, resets at 11:00\), temporary/);
+    expect(temp.out).toMatch(/deepseek-acme-tmp-1\s+blocked: quota, resets at 11:00, temporary/);
   });
 
   test('a permission prompt is the lead\'s difference, a trust prompt the owner\'s', async () => {

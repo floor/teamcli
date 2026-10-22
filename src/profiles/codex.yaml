@@ -150,6 +150,25 @@ screen:
           - 'Update available ·'
           - '^\s*›?\s*1\. Update now\b'
         footer: 'enter continue · esc skip'
+  rate_limit:
+    # The exhaustion wording, from Codex's own upstream source at the tested tags — the
+    # usage-limit errors its turn renders as a transcript error cell: the 429 `Quota exceeded.
+    # Check your plan and billing details.`, the plan messages `You’ve hit your usage limit …
+    # try again at …`, and the CLI's own `Usage limit reached. You've reached your usage
+    # limit.` No pane capture of an exhausted Codex seat exists, so every test frame is
+    # synthetic. The cell is a transcript row above the prompt, so `at_composer` reads the block
+    # of matching rows directly above the box: a sentence quoted inside a turn is not the wall,
+    # and a frame the TUI wraps past that block stays unread rather than match somewhere else.
+    # The reset follows `try again at`; the source formats a
+    # local clock (`3:05 PM`, `Oct 23rd, 2026 3:05 PM`), printed as the screen words it. The
+    # near-cap warning (`less than N% of your… limit left`) is not exhaustion: it is never
+    # this stage.
+    - any:
+        - 'Quota exceeded\. Check your plan and billing details\.'
+        - 'You(?:’|'')ve hit your usage limit'
+        - 'Usage limit reached\. You(?:''|’)ve reached your usage limit\.'
+      live: true
+      at_composer: true
   working:
     - any: ['esc to interrupt']
   composer:

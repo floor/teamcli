@@ -46,10 +46,13 @@ describe('the reading, best source first', () => {
       { kind: 'trust' } as const,
       { kind: 'question' } as const,
       { kind: 'provider error' } as const,
-      { kind: 'rate limit', reset: null } as const,
     ]) {
       expect(seatState({ screen }, NOW)).toEqual({ state: 'blocked', source: 'cli', blind: false });
     }
+    // A usage wall is a blocked seat, not a state word of its own: nothing can be typed into
+    // that screen until it lifts, and `status` names the quota and its reset beside the word.
+    expect(seatState({ screen: { kind: 'rate limit', reset: null } }, NOW))
+      .toEqual({ state: 'blocked', source: 'cli', blind: false });
   });
 
   test("a screen this version cannot read falls through to herdr's own status", () => {

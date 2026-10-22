@@ -165,7 +165,8 @@ One line per held seat, by the screen's kind:
   Write(note.txt)`, its lead's to answer in the pane;
 - a **trust** prompt: `stuck at a trust prompt`, the owner's to answer in the pane;
 - a **quota** prompt, the watch's rate limit: `stuck at a quota prompt`, with `resets at 11:00`
-  when the screen names a reset, the owner's — `team` never types into that screen;
+  or `resets in 47h31m` when the screen names a reset (the screen's own phrase), `the screen names
+  no reset time` when it names none, the owner's — `team` never types into that screen;
 - a **confirm** prompt, the CLI's own exit question: `stuck at a confirm prompt`, the owner's to
   answer in the pane, or `team down --abandon` closes it;
 - an **unrecognised** prompt: a screen no profile reads whose safety floor carries a prompt row.

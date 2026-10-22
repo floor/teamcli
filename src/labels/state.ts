@@ -153,12 +153,15 @@ export function seatState(
   // need no help.
   const withinWindow = age <= limits.trace_window_seconds * 1000;
   // Every screen this version reads that is neither mid-turn nor at the prompt — a permission
-  // dialog, a question, a trust screen, a rate limit, a provider error, a vendor notice, a
-  // composer holding unsent text — is the seat not working and waiting on someone: blocked. It
-  // outranks every clock, the hook included: the hook cannot see the dialog that the CLI stopped
-  // at after its last write, and nothing can be typed into a composer holding a line until its
-  // owner clears or sends it, however recent the last turn's end. It is also the terminal-host
-  // fallback: it answers only when no presence projection exists at all.
+  // dialog, a question, a trust screen, a provider error, a vendor notice, a usage wall, a
+  // composer holding unsent text — is the seat not working and waiting on someone: blocked. A
+  // usage wall is blocked with the reason `quota`: nothing can be typed into that screen until
+  // the wall lifts, so it is never reported as a bare done, and `status` names the pool and the
+  // reset beside the word. All of them outrank every clock, the hook included: the hook cannot
+  // see the dialog that the CLI stopped at after its last write, and nothing can be typed into
+  // a composer holding a line until its owner clears or sends it, however recent the last
+  // turn's end. They are also the terminal-host fallback: they answer only when no presence
+  // projection exists at all.
   if (screen !== undefined && screen.kind !== 'working' && screen.kind !== 'idle'
     && screen.kind !== 'unknown') {
     return { state: 'blocked', source: 'cli', blind: false };

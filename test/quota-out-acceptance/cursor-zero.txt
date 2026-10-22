@@ -1,0 +1,20 @@
+  wait for it. Reply with only the word ready
+  once it is running.
+
+
+  I'll start sleep 240 in the background and
+  reply once it's running.
+
+  $ sleep 240 4.1s (background)
+
+  ready
+
+
+
+
+  → Add a follow-up
+
+
+  1 task
+  Grok 4.7 256K High · 0%           Run Everything
+  <workspace>

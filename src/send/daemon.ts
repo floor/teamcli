@@ -44,6 +44,7 @@ import { classify, readScreen } from '../watch/screen.ts';
 import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { appendHistory, type HistoryEntry } from './history.ts';
 import { bindPane, deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE } from './deliver.ts';
+import { quotaOutDetail, quotaOutOf } from './quota-out.ts';
 import { dropMessage, TRIGGER_MAX, triggerLine, type NativePane } from './native.ts';
 import { openReplyListener, readReply } from './reply.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from './uds.ts';
@@ -1060,6 +1061,24 @@ async function executeQueuedSend(
       failed: request.failed,
     });
     return { v: 1, ok: false, id: msgId, seat: seatName, outcome: 'unreachable', detail };
+  }
+
+  // The quota preflight runs before the drop file is staged: a walled screen takes no drop and
+  // no key, because a stored copy would only be retried into a dead turn. Only a positive read
+  // refuses — an unreadable pane keeps the delivery-time caution below — and the host's
+  // `working` word does not cancel a wall the screen proves. Nothing is written: no history
+  // line, no pending record; the sender's refusal is the caller's to make.
+  const wallText = host.native.paneText?.(team.session, pane) ?? null;
+  const wall = quotaOutOf(configured.cli, wallText);
+  if (wall !== null) {
+    return {
+      v: 1,
+      ok: false,
+      id: msgId,
+      seat: seatName,
+      outcome: 'refused',
+      detail: `${seatName}: ${quotaOutDetail(configured, wall)}`,
+    };
   }
 
   // Write the 0600 drop file under the project state folder `<storeDir>/drops/<session>/<seat>/<id>`

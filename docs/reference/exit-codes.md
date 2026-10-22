@@ -316,21 +316,21 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.caller` | `next` | 1 | the caller is not a seat of this team on its recorded pane | `team next` |
 | `next.file` | `next` | 1 | the team file can't be read, or its task source or task path can't be used | `team next` |
 | `next.missing` | `next` | 1 | the task file is not there | `team next` |
-| `next.paused` | `next` | 1 | the team is paused, so nothing was claimed | `team next` |
+| `next.paused` | `next` | 1 | the team or the calling seat is paused, so nothing was claimed | `team next` |
 | `next.policy` | `next` | 1 | a task policy the validator refuses | `team next` |
 | `next.read` | `next` | 1 | the broker failed the read | `team next` |
 | `next.shape` | `next` | 1 | nothing was taken, and a record is not a task or the task file is not a list | `team next` |
 | `next.swap` | `next` | 1 | the seat waits on a queued model swap, so nothing was claimed | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
-| `pause.placed` | `pause` | 0 | the team was paused | `team pause` |
+| `pause.placed` | `pause` | 0 | the team or the named seat was paused | `team pause` |
 | `pause.caller` | `pause` | 1 | not the owner or the orchestrator | `team pause` |
 | `pause.detached` | `pause` | 1 | a run with no terminal | `team pause` |
 | `pause.io` | `pause` | 1 | the state or the registry can't be read or written | `team pause` |
-| `pause.paused` | `pause` | 1 | the team is already paused | `team pause` |
+| `pause.paused` | `pause` | 1 | the team or the named seat is already paused | `team pause` |
 | `pause.file` | `pause` | 2 | the team file can't be read | `team pause` |
 | `pause.invocation` | `pause` | 2 | the invocation can't be read | `team pause --all --json` |
-| `pause.team` | `pause` | 2 | the team name is not registered or names more than one | `team pause other` |
+| `pause.team` | `pause` | 2 | the name is neither a declared seat nor a registered team, or names more than one | `team pause other` |
 | `plan.none` | `plan` | 0 | nothing is takeable | `team plan` |
 | `plan.shown` | `plan` | 0 | the takeable queue was printed | `team plan` |
 | `plan.broker` | `plan` | 1 | no broker is running, or its answer was not one this build knows | `team plan` |
@@ -515,14 +515,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.unknown` | `restart` | 1 | the seat is not a declared seat | `team restart missing` |
 | `restart.configuration` | `restart` | 2 | the team file can't be read or parsed, or not inside a git repository | `team restart worker --file missing.yaml` |
 | `restart.usage` | `restart` | 2 | the invocation can't be read | `team restart` |
-| `resume.resumed` | `resume` | 0 | the team resumed | `team resume` |
+| `resume.resumed` | `resume` | 0 | the team or the named seat resumed | `team resume` |
 | `resume.caller` | `resume` | 1 | not the owner or the orchestrator | `team resume` |
 | `resume.detached` | `resume` | 1 | a run with no terminal | `team resume` |
 | `resume.io` | `resume` | 1 | the state or the registry can't be read or written | `team resume` |
-| `resume.not-paused` | `resume` | 1 | no pause stands | `team resume` |
+| `resume.not-paused` | `resume` | 1 | no pause stands on the target; under a team pause, a seat has no own record | `team resume` |
 | `resume.file` | `resume` | 2 | the team file can't be read | `team resume` |
 | `resume.invocation` | `resume` | 2 | the invocation can't be read | `team resume --all --json` |
-| `resume.team` | `resume` | 2 | the team name is not registered or names more than one | `team resume other` |
+| `resume.team` | `resume` | 2 | the name is neither a declared seat nor a registered team, or names more than one | `team resume other` |
 | `revoke.done` | `revoke` | 0 | the authority was removed or matched, the standing grant's revocation was appended or already named, or a write-free preview passed | `team revoke flag-gate` |
 | `revoke.refused` | `revoke` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team revoke grant` |
 | `revoke.invalid` | `revoke` | 2 | the team file, the named target or the proposed authority record is invalid or cannot be read | `team revoke delegate malformed` |

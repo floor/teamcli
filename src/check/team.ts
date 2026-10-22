@@ -453,6 +453,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     now: sources.now(),
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     pause: whole.pause ?? null,
+    seatPauses: whole.seat_pauses ?? null,
     swaps: Object.keys(whole.swaps ?? {}),
   });
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
@@ -1095,7 +1096,13 @@ function stuckPromptDifference(
   // Every detail below is text the screen showed, not text `team` wrote: each is cleaned the way
   // the report cleans a difference line, so the same string is safe in `--json`, which renders
   // `what` as it stands (a control sequence or a `\r` in it would otherwise reach the document).
-  if (screen.kind === 'rate limit' && screen.reset !== null) details.push(`resets at ${plainLine(screen.reset)}`);
+  if (screen.kind === 'rate limit') {
+    // The reset in the screen's own phrase: `at` a clock or `in` a span, never the other. A
+    // screen that names none says so, rather than leaving the reader to guess one.
+    details.push(screen.reset === null
+      ? 'the screen names no reset time'
+      : `resets ${screen.reset.kind} ${plainLine(screen.reset.value)}`);
+  }
   if (screen.kind === 'unknown' && screen.matched !== undefined) details.push(`matched "${plainLine(screen.matched)}"`);
   const tool = toolTrace(cli, screenText);
   if (tool !== null) details.push(plainLine(tool.what));

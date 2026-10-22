@@ -228,8 +228,13 @@ export function statusQuota(cli: string, screen: string | null, target: SeatTarg
   }
   const kind = readScreen(cli, screen);
   const phrase = wallOf(screen);
-  const reset = kind.kind === 'rate limit' ? kind.reset : phrase.reset;
   if (phrase.wall || kind.kind === 'rate limit') {
+    // The classifier's reset carries its own preposition — `at 11:00`, `in 47h31m` — so it is
+    // printed as it stands; the owner's wall phrases read a time and keep the `at` the earlier
+    // writer used. The text follows "resets ", never a second preposition.
+    const resetText = kind.kind === 'rate limit'
+      ? kind.reset === null ? null : kind.reset.kind === 'at' ? `at ${kind.reset.value}` : `in ${kind.reset.value}`
+      : phrase.reset === null ? null : `at ${phrase.reset.replace(/^at\s+/i, '')}`;
     found.push({
       account: target.account,
       ...(target.pool ? { pool: target.pool } : {}),
@@ -237,7 +242,7 @@ export function statusQuota(cli: string, screen: string | null, target: SeatTarg
       used: null,
       left: null,
       resetsAt: null,
-      resetText: reset === null ? null : `at ${reset.replace(/^at\s+/i, '')}`,
+      resetText,
       observedAt: now,
       source: 'quota screen',
       seat: target.seat,
