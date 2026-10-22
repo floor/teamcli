@@ -6,8 +6,9 @@
 //   owner-seat-keystore public <label>          prints the public key of an existing key
 //   owner-seat-keystore sign <label> <reason>   reads hex bytes on stdin, prints a DER ECDSA-SHA256 signature (hex)
 //
-//   owner-seat-keystore selftest                creates a throwaway Secure Enclave key (no prompt, never stored),
-//                                               signs and verifies with it, and reports the backend in use
+//   owner-seat-keystore selftest [--emit]       creates a throwaway Secure Enclave key (no prompt, never stored),
+//                                               reloads it from its handle, signs and verifies; --emit prints
+//                                               its public key and the DER signature for an outside check
 //
 // Build: scripts/build-owner-seat-helper.sh (see docs/owner-seat-setup.md).
 //
@@ -106,13 +107,23 @@ func blobCreate(_ label: String) -> String {
 let errSecMissingEntitlementCode: OSStatus = -34018
 
 let args = CommandLine.arguments
-if args.count == 2 && args[1] == "selftest" {
+if args.count >= 2 && args[1] == "selftest" {
+  // A throwaway key with no access control (so no prompt), never written anywhere. It goes through
+  // the same path a stored key does: created in the enclave, reloaded from its dataRepresentation,
+  // then signing. `selftest --emit` also prints the public key and the DER signature over the
+  // fixed message, so a caller can check that TeamCLI's verifier accepts this helper's format.
   guard SecureEnclave.isAvailable else { fail("selftest: no Secure Enclave on this Mac") }
+  let message = Data("teamcli owner-seat selftest".utf8)
   do {
-    let key = try SecureEnclave.P256.Signing.PrivateKey()
-    let message = Data("teamcli owner-seat selftest".utf8)
+    let created = try SecureEnclave.P256.Signing.PrivateKey()
+    let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: created.dataRepresentation)
+    guard key.publicKey.x963Representation == created.publicKey.x963Representation else { fail("selftest: the reloaded key differs") }
     let signature = try key.signature(for: message)
-    guard key.publicKey.isValidSignature(signature, for: message) else { fail("selftest: signature did not verify") }
+    guard created.publicKey.isValidSignature(signature, for: message) else { fail("selftest: signature did not verify") }
+    if args.count == 3 && args[2] == "--emit" {
+      print(hex(key.publicKey.x963Representation))
+      print(hex(signature.derRepresentation))
+    }
   } catch { fail("selftest: Secure Enclave signing failed: \(error)") }
   print("ok secure-enclave")
   exit(0)
