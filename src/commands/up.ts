@@ -57,6 +57,7 @@ import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endp
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
+import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
@@ -1457,6 +1458,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   });
   const seats: UpSeat[] = [];
   const refused = new Set<string>();
+  // The entity model rule, read at the first seat this run would launch and kept for the rest:
+  // a run with nothing to start reads no policy.
+  let launchRule: EntityModelRule | null = null;
+  const ruleOf = (): EntityModelRule => (launchRule ??= readEntityModelRule(sources.home, team));
   for (const seat of team.seats) {
     const planned = seatPlan(
       standing,
@@ -1497,6 +1502,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       continue;
     }
     const placed = planned.stage === undefined || !planned.pane;
+    // The entity model rule's word on the model this line names, read before the workspace is
+    // made. The planned line is the one the launch runs — the file's, or the registry's recorded
+    // line for a restored seat. A seat resumed into an existing pane starts nothing now, so its
+    // line is not judged.
+    const policyProblem = placed
+      ? launchRefusal({ name: seat.name, role: seat.role, cli: planned.cli, launch: planned.launch }, ruleOf())
+      : null;
     // The seat's own launch line, checked where the seat starts: a `miss` leaves this seat out
     // before its workspace is made, and the other seats go on. A note is told, never refused —
     // once, on the terminal, and on stderr on a real run as `doctor` says it. A seat resumed
@@ -1539,7 +1551,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
             launchProblem: line.record ?? line.why,
             ...(line.record ? { launchProblemDetail: line.why } : {}),
           }
-        : {};
+        : policyProblem === null
+          ? {}
+          : { launchProblem: policyProblem };
     if (!placed) {
       const budget = budgetOf(seat);
       seats.push({ ...planned, ...launchProblem, ...(budget.kind === 'clear' ? {} : { budget }) });

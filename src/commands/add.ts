@@ -44,6 +44,7 @@ import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } f
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
+import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
 import { lobbyPretrustLine } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -753,10 +754,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (dry) out.stdout(`${plainLine(note)}\n`);
     else records.detail(note);
   }
+  // The entity model rule's word on the model this line names, read before the file is edited:
+  // a seat adopted into a pane team did not launch runs nothing now, so its line is not judged.
+  // A refused line is the seat's doctor miss below, the same way an unavailable launch is.
+  const policyProblem = stray ? null : launchRefusal(built.seat, readEntityModelRule(sources.home, prepared.team));
   // The plan, the record and the log hold the reason in words (`record`); the full finding — the
   // start folder it names — is the record's stderr detail and the doctor line below, both for a
   // terminal. Without a `record` the words are the whole finding.
-  const launchProblem = line?.level === 'miss' ? line.record ?? line.why : null;
+  const launchProblem = line?.level === 'miss' ? line.record ?? line.why : policyProblem;
   const launchProblemDetail = line?.level === 'miss' && line.record ? line.why : undefined;
   const doctorTeam = built.temporary
     ? { ...prepared.team, seats: prepared.team.seats.map((item) => item.name === built.temporary?.like ? { ...item, stopped: false } : item) }
