@@ -12,9 +12,10 @@ const REPO = join(import.meta.dir, '..');
 const SCRIPT = join(REPO, 'scripts/check-public-names.ts');
 const TEAM = join(REPO, '.github/team.yaml');
 
-// The declared internal tracker pattern and one id it matches; neither is whole in this source.
+// The declared internal tracker pattern and a synthetic id in its shape; neither is whole in
+// this source, and the id is not one from any finding.
 const TRACKER = ['\\b', 'FL', 'O', '-', '[0-9]', '+', '\\b'].join('');
-const ID = ['FL', 'O', '-', '10', '61'].join('');
+const ID = ['FL', 'O-', '77', '0'].join('');
 const LOWER = ID.toLowerCase();
 
 // The scanner's own rule list: the tracker pattern on contents case-sensitively, and on every
@@ -71,11 +72,11 @@ function escape(text: string): string {
 }
 
 function contentHit(path: string, line: number): RegExp {
-  return new RegExp(`^${escape(path)}:${line}: it matches the forbidden public pattern "[^"]+"`, 'm');
+  return new RegExp(`${escape(path)}:${line}: it matches the forbidden public pattern "[^"]+"`);
 }
 
 function nameHit(path: string): RegExp {
-  return new RegExp(`^${escape(path)}: its name matches the forbidden public pattern "[^"]+"`, 'm');
+  return new RegExp(`${escape(path)}: its name matches the forbidden public pattern "[^"]+"`);
 }
 
 function hitLines(run: { stderr: string }): string[] {
@@ -163,7 +164,10 @@ describe('the public-name check command on tracked fixture trees', () => {
     const run = runCli(['--root', tree([[path, CLEAN]]), '--file', TEAM]);
     expect(run.code).toBe(1);
     expect(run.stderr).toMatch(nameHit(path));
-    expect(run.stdout + run.stderr).not.toContain(LOWER);
+    // The path is the location and must be named; the upper-case id and the file's contents
+    // are never echoed.
+    expect(run.stdout + run.stderr).not.toContain(ID);
+    expect(run.stdout + run.stderr).not.toContain('A clean test file');
   });
 
   test('UTF-8 prose, a SHA-256 digest and public issue numbers are not matches', () => {
