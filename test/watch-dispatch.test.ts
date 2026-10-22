@@ -930,7 +930,7 @@ describe('the watch seam', () => {
   });
 
   test('an unread record does not ring a seat whose work episode the dispatcher owns', async () => {
-    waitingMail('ring-1', 'deepseek-acme');
+    waitingMail('11111111-1111-4111-8111-111111111111', 'deepseek-acme');
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);
@@ -943,7 +943,7 @@ describe('the watch seam', () => {
 
   test('a stamped idle seat outside any work episode is still rung', async () => {
     rmSync(join(dir, '.agents', 'queue.yaml'));
-    waitingMail('ring-3', 'deepseek-acme-2');
+    waitingMail('22222222-2222-4222-8222-222222222222', 'deepseek-acme-2');
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources());
     expect(code).toBe(0);

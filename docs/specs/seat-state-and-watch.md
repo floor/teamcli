@@ -233,9 +233,12 @@ held-send retry and the unread wake.
   `watch.nudge`, or the fixed line `Team watch: reports are waiting in .agents/team.log` when
   the file omits it.
 - **The ring**: `Team: run team drops --read --seat <seat> --session <session>`, named for the
-  waiting seat and its own session, typed when a message already waits for that seat and the
-  seat's box is an empty idle prompt. A signed read receipt that lands after the pass read the
-  mailbox keeps the line untyped: the mailbox is read again before the ring is delivered.
+  waiting seat and its own session, typed when a message already waits for that seat in the
+  seat's own drop folder — the folder that read serves — and the seat's box is an empty idle
+  prompt. A record waiting in the older mailbox store `.agents/messages/<seat>/` is not rung: the
+  read the line names would serve nothing, and the line would fire every pass. A signed read
+  receipt that lands after the pass read the mailbox keeps the line untyped: the mailbox is read
+  again before the ring is delivered.
 - **The held-send retry**: `Run team drops --read --seat <seat> --session <session> and do
   that.`, the seat's own drop read for the drop of a send held while a pane was busy, typed on a
   local pass unless `--no-nudge` is set. It is the same line a typed send types, so a seat that

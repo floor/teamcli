@@ -29,6 +29,7 @@ import { dropMessage, triggerLine } from '../send/native.ts';
 import { listUnacked } from './messages.ts';
 import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, NUDGE_TEXT, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { listUnread } from '../mcp/inbox.ts';
 import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
@@ -940,7 +941,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           readings: stored, foreground, processes,
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
-          mailbox: !foreign && sources.home ? mailboxWaiting(root, team, live, sources.home) : [],
+          mailbox: !foreign && sources.home ? mailboxWaiting(root, dir, team, live, sources.home) : [],
         });
         // The pass folds its figures where the state is held: two watches of the project fold one
         // after the other, not over each other. A watch on a foreign session still folds, for its
@@ -1331,7 +1332,23 @@ function spendOf(outcomes: readonly CheckOutcome[]): SpendReading[] {
 // prompt may have appeared since. An empty idle prompt is typed into; a box still holding the
 // line this same process typed itself and never sent is sent instead of typed into; anything
 // else — another person's or agent's text, or the same text found after a restart — stays.
-function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string): MailboxWaiting[] {
+function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, home: string): MailboxWaiting[] {
+  // The ring's line names the seat's own drop read, so a record is ringable only while that read
+  // would serve it. `listUnread` is the reader's own list — a message in the seat's drop folder
+  // with no verifying read receipt — so the ring and `team drops --read` can never disagree. A
+  // record in the older mailbox store (`.agents/messages/<seat>`) waits for `team messages`, a
+  // reader the ring never names; ringing it typed a command that served nothing and re-fired
+  // every pass. Such a record still raises the owner's waiting note when its box is not free.
+  const servedByDrops = new Map<string, Set<string>>();
+  const waitingIds = (seat: string): Set<string> => {
+    let ids = servedByDrops.get(seat);
+    if (ids === undefined) {
+      const dropDir = join(dir, 'send-drops', team.session, seat);
+      ids = new Set(listUnread(dropDir, { to: seat, root, session: team.session }, home).map((one) => one.id));
+      servedByDrops.set(seat, ids);
+    }
+    return ids;
+  };
   // The owner's inbox is delivered by the Runtime, not a seat's message: a record there never
   // counts as mail waiting in a pane.
   return listUnacked(root, team.session, home).filter((record) => record.to !== 'owner').map((record) => {
@@ -1346,6 +1363,7 @@ function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string):
       status: agent?.status ?? null,
       cli: seat?.cli ?? '',
       screen: agent ? live.screens[agent.pane] : undefined,
+      served: waitingIds(record.to).has(record.id),
     };
   });
 }
