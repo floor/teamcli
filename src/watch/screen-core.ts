@@ -582,15 +582,18 @@ export function composerBox(data: ScreenData, lines: string[], options?: ScreenO
 
 /**
  * The rows a `live` rule's patterns are read on: the composer's own region — every row from its
- * frame to the window's end, the box's rows, rules and footers among them — and the newest turn
- * of transcript above it: the run of non-blank rows directly above the frame, once the blank
- * margin the captures draw is skipped. A sentence further up is a turn the pane has scrolled
- * past, not the live screen. A profile whose CLI draws a turn-end row closes a turn there: the
- * newest turn is what follows the last turn-end row of that run, so a sentence a completion
- * already ended is history, while a fresh sentence after the completion is still the live
- * screen. The turn-end is only looked for in the transcript above the frame: a box's own rows
- * are typed text, never a completion. Null when the composer cannot be read, and the rule then
- * reads the whole window, as a rule without `live` does.
+ * frame to the window's end, the box's rows, rules and footers among them — and the transcript
+ * above it. A profile whose CLI draws a turn-end row closes a turn there: the live transcript is
+ * what follows the last turn-end row above the frame, so a sentence a completion already ended
+ * is history, while a fresh sentence after the completion is still the live screen. The row is
+ * looked for across the whole transcript above the frame, not only its newest block, so a
+ * completion followed by the blank margin the captures draw and a right-aligned notice still
+ * closes its turn; with no turn-end row above the frame nothing has proved any of that
+ * transcript history, and all of it is live — an error with no completion after it is the
+ * screen whether or not the margin carries a notice. The turn-end is only looked for above the
+ * frame: a box's own rows are typed text, never a completion. A profile that names no turn-end
+ * row keeps its newest non-blank block above the frame, as it always has. Null when the composer
+ * cannot be read, and the rule then reads the whole window, as a rule without `live` does.
  */
 function liveRegion(
   data: ScreenData,
@@ -606,12 +609,13 @@ function liveRegion(
   for (let i = Math.max(0, hit.from); i < plain.length; i++) region.add(i);
   let hi = hit.from - 1;
   while (hi >= 0 && !(plain[hi] ?? '').trim()) hi--;
-  let lo = hi;
-  while (lo >= 0 && (plain[lo] ?? '').trim()) lo--;
-  lo++;
-  let start = lo;
-  if (data.turnEnd !== undefined) {
-    for (let i = hi; i >= lo; i--) {
+  let start = 0;
+  if (data.turnEnd === undefined) {
+    start = hi;
+    while (start >= 0 && (plain[start] ?? '').trim()) start--;
+    start++;
+  } else {
+    for (let i = hi; i >= 0; i--) {
       if (data.turnEnd.test(plain[i] ?? '')) {
         start = i + 1;
         break;
