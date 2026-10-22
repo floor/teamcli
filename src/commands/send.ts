@@ -1475,7 +1475,17 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameIdentityHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null), human);
+      // The accepted frame opens with the sender's identity line alone. `#682` pinned that shape:
+      // no summary, no rule. The message-display line is the typed wake's, where the seat reads
+      // it in its own composer; an agent handling a socket frame has the whole signed record.
+      const identityHeader = frameIdentityHeader(
+        record,
+        naming,
+        fileTeamId,
+        team.project,
+        caller.kind === 'seat' ? labelNameOf(team, caller.name) : null,
+      );
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, identityHeader, human);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -4159,11 +4169,13 @@ function labelNameOf(team: TeamFile, seat: string): string | null {
  * keeps its own `from … — admitted by: …` line. A registry that cannot answer reads as no
  * nickname, so a frame always names its sender.
  */
-function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, teamName: string, labelName: string | null): string {
+function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, senderTeam: string, teamName: string, labelName: string | null): string {
   let name = '';
   try {
     name = senderNickname(
-      { seat: record.from, ...(record.from_id === null ? {} : { id: record.from_id }) },
+      // This is a frame header for the sender's own team. Omitting the id keeps senderNickname's
+      // team lookup pinned here even if a stale or foreign roster also repeats that id.
+      { seat: record.from, team: senderTeam },
       naming,
     ) ?? '';
   } catch {
@@ -4402,7 +4414,7 @@ export async function redeliverChannelOnSocket(input: {
     false,
     inbound,
     root,
-    frameIdentityHeader(payload, naming, input.team.project, labelNameOf(input.team, seat)),
+    frameIdentityHeader(payload, naming, fromTeam, input.team.project, labelNameOf(input.team, seat)),
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };
