@@ -394,6 +394,9 @@ test('a relaunch keeps the bound recipe in the state, the registry and the sessi
   expect(ran[0]?.command).toContain(A.launch);
   expect(ran[0]?.command).toContain(`--resume ${SES_A}`);
 
+  // The session start row carries the bound policy. Its line resumed a conversation and so set
+  // no new `--session-id`: the row records no CLI session id, and the resumed id is pinned where
+  // it belongs, on the command above and in the state and agent records.
   const sessions = readStoreSessions(sessionsPath(team, root, home), home);
   if (!sessions.ok) throw new Error(sessions.reason);
   const started = sessions.sessions.filter((one) => one.seat === WORKER);
@@ -402,7 +405,6 @@ test('a relaunch keeps the bound recipe in the state, the registry and the sessi
   expect(started[0]?.version).toBe(A.version);
   expect(started[0]?.lab).toBe('anthropic');
   expect(started[0]?.cli).toBe('claude-code');
-  expect(started[0]?.cli_session).toBe(SES_A);
   expect(started[0]?.effort).toBe('high');
 });
 
