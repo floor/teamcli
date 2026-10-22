@@ -83,7 +83,7 @@
     },
     "claude-code": {
       "idle": {
-        "real": 8,
+        "real": 9,
         "constructed": 2,
         "undocumented": 0
       },
@@ -1018,6 +1018,12 @@
       "file": "claude-code/2.1.303/unsent-multiline-ansi.txt",
       "cli": "claude-code",
       "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "claude-code/completed-error-empty-box-atlas.txt",
+      "cli": "claude-code",
+      "kind": "idle",
       "provenance": "capture"
     },
     {
