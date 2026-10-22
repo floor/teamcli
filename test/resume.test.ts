@@ -224,6 +224,23 @@ describe('the seat form', () => {
     expect(doc.resumed.by).toBe('owner');
   });
 
+  test('a name that is both a declared seat and a registered team refuses, and points at resume', async () => {
+    const where = place();
+    const other = join(files[0] as string, 'worker');
+    mkdirSync(join(other, '.agents'), { recursive: true });
+    writeFileSync(
+      join(other, '.agents', 'team.yaml'),
+      TEAM.replace('project: acme', 'project: worker').replace('session: acme', 'session: worker'),
+    );
+    upsertTeam(where.home, teamIdOf(other), { project: 'worker', session: 'worker', root: other, roster: [] });
+    const ran = await resume(['worker'], where);
+    expect(ran.code).toBe(2);
+    expect(ran.err).toBe(
+      'team resume: "worker" names both a seat of acme and a registered team; use team resume --seat worker or team resume --team worker\n',
+    );
+    expect(readState(join(where.root, '.agents')).seat_pauses).toBeUndefined();
+  });
+
   test('a seat with no own record under a team pause names the team; with no pause at all it is not paused', async () => {
     const paused = place();
     await pause(paused);

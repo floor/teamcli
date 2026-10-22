@@ -45,19 +45,22 @@ export type TargetResult = { ok: true; targets: PauseTarget[]; skipped: string[]
  *
  * A positional that the current folder's team declares as a seat is that seat; a positional
  * that is not a declared seat is resolved as a registered team, as it always was. A name that
- * is both is refused, and the two flags keep either meaning reachable.
+ * is both is refused, and the two flags keep either meaning reachable; `command` is the word
+ * that refusal's repair names, because the same resolution serves pause and resume.
  */
 export function resolveTargets(options: {
   key: string | undefined;
   seat?: string;
   team?: string;
   all: boolean;
+  command?: 'pause' | 'resume';
   io: Pick<Io, 'cwd'>;
   home?: string;
   now: () => Date;
   owner: boolean;
 }): TargetResult {
   const home = options.home ?? homedir();
+  const command = options.command ?? 'pause';
   if (options.seat !== undefined) {
     const current = currentTarget(options, home);
     if (!current.ok) return current;
@@ -80,7 +83,7 @@ export function resolveTargets(options: {
       return {
         ok: false,
         kind: 'team',
-        message: `"${plainText(options.key)}" names both a seat of ${project ?? 'this folder'} and a registered team; use team pause --seat ${plainText(options.key)} or team pause --team ${plainText(options.key)}`,
+        message: `"${plainText(options.key)}" names both a seat of ${project ?? 'this folder'} and a registered team; use team ${command} --seat ${plainText(options.key)} or team ${command} --team ${plainText(options.key)}`,
       };
     }
     if (declared !== undefined && current.ok) return seatTarget(current.target, options.key);
