@@ -185,7 +185,8 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     expect(received).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = dropRecord(drops);
-    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    // The typed line is the message-display line, so the summary is the body's first word.
+    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
     expect(host.pane.enters).toBe(1);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
@@ -229,8 +230,10 @@ describe('team send: a typed send with no socket at all', () => {
     expect(host.pane.enters).toBe(1);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = dropRecord(drops);
-    expect(host.pane.typed[0]).toBe(readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string);
-    expect(host.pane.typed[0]).not.toContain('hello');
+    // The typed line is the message-display line, so the summary is the body's first word; the
+    // signed body's own attribution is never typed.
+    expect(host.pane.typed[0]).toBe(readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string);
+    expect(host.pane.typed[0]).not.toContain('admitted by:');
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 });

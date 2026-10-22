@@ -97,7 +97,7 @@ from the owner, or from a sender whose own file does not declare `cli: claude-co
 handoff](#the-native-channel) instead — one pending record, the exact target, the body and the
 `--confirm` line — and makes the call itself. The typed leg types the rendered
 `message-display` header and the fixed hint `Read it with: team drops --read.` — one printable
-line of at most 100 characters, asking for the seat's own drop read, whose first act is the
+line of at most 80 characters, asking for the seat's own drop read, whose first act is the
 signed read receipt beside the drop — and a receipt that verifies inside the window is
 `delivered (read)`, the one word that line earns. Without one, a typed send ends `sent
 (unconfirmed)` when the line has left

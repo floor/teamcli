@@ -6,7 +6,9 @@
 // peeled off; a sender's `team send --subject` is a distinct display field of its own, `{subject}`,
 // and never stands in for the summary. Everything is neutralised
 // to one printable line before it is put in front of a person or an agent, and the whole typed
-// line stays inside the measured pane width (100 characters), keeping the read hint whole.
+// line stays inside a narrow 80-column box, keeping the read hint whole. A composer that wraps
+// the line draws continuation rows the read-back cannot join on a CLI whose profile has no wrap
+// rule, so the line is cut rather than wrapped.
 //
 // The vocabulary lives here so the catalogue can parse a value without importing the resolver
 // back into itself, the same split `sender-line` keeps.
@@ -17,8 +19,13 @@ export const MESSAGE_DISPLAY_DEFAULT = 'Message from {name} ({seat}@{team}): {su
 /** The fixed sentence an agent seat's typed wake ends with. The template cannot remove it. */
 export const MESSAGE_READ_HINT = 'Read it with: team drops --read.';
 
-/** The longest rendered typed line; the hint is kept whole and the header is cut to fit. */
-export const MESSAGE_LINE_MAX = 100;
+/**
+ * The longest rendered typed line; the hint is kept whole and the header is cut to fit. The
+ * ceiling is 80 columns so the line stays inside a narrow composer: a longer line wraps, and a
+ * wrapped row is not a read-back match for a CLI whose profile declares no wrap rule, so the
+ * line is cut rather than wrapped.
+ */
+export const MESSAGE_LINE_MAX = 80;
 
 /** The longest one field may be before the whole line is measured. */
 export const MESSAGE_FIELD_MAX = 100;

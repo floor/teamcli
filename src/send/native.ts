@@ -125,8 +125,8 @@ export function triggerLine(path: string, sender?: TriggerSender): string | null
  * The trigger a message's typed leg types: the message's header — the receiving team's
  * `message-display` template, the sender's nickname, the address and the body's first line — then
  * the one fixed read sentence, `Read it with: team drops --read.` The line is a hint, never a
- * command: the seat reads it and runs its read. The whole line stays inside the measured pane
- * width (`MESSAGE_LINE_MAX`, 100); the hint is kept whole and the header gives way. Null when no
+ * command: the seat reads it and runs its read. The whole line stays inside a narrow composer
+ * (`MESSAGE_LINE_MAX`, 80); the hint is kept whole and the header gives way. Null when no
  * line can carry both, and the caller keeps the drop and ends held with its reason. The nameless
  * form is used only by callers with no message sender (a work nudge).
  */

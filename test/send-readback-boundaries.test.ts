@@ -11,6 +11,7 @@ import { runSend, type SendHost } from '../src/commands/send.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { startSendDaemon, daemonDropDir, type DaemonHost, type SendDaemonHandle } from '../src/send/daemon.ts';
+import { readTriggerLine } from '../src/send/native.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readPending } from '../src/send/pending.ts';
 import { filed } from './send-native-fixtures.ts';
@@ -25,6 +26,26 @@ const QUESTION_SCREEN = [
   '  2. src/cli.ts',
   'Enter to select · ↑/↓ to navigate · Esc to cancel',
 ].join('\n');
+
+/**
+ * The composer as the narrowest box draws it: 80 columns of text. A line wider than that wraps
+ * at a space onto continuation rows at the content column. The claude-code profile has no wrap
+ * rule, so a wrapped row is not a read-back match — the typed line must fit, not wrap.
+ */
+function narrowBox(text: string): string {
+  const width = 80;
+  const rows: string[] = [];
+  let rest = text;
+  while (rest.length > width) {
+    const cut = rest.lastIndexOf(' ', width);
+    const at = cut <= 0 ? width : cut;
+    rows.push(rest.slice(0, at));
+    rest = rest.slice(at).trimStart();
+  }
+  rows.push(rest);
+  const box = [`❯ ${rows[0] ?? ''}`, ...rows.slice(1).map((row) => `  ${row}`)].join('\n');
+  return `${RULE}\n${box}\n${RULE}`;
+}
 
 let base = '';
 const handles: SendDaemonHandle[] = [];
@@ -177,9 +198,10 @@ describe('the composer read-back at its boundaries', () => {
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'the pane refused the Enter'], io, host)).toBe(1);
     expect(io.err).toContain('not-submitted: the seat did not take the trigger after 0 Enters; the box holds');
-    // The typed line is the sender-prefixed read form, so the quoted box proves which line was
-    // left unsent: the seat's own drop read, never a path the composer had to name.
-    expect(io.err).toContain('the box holds "From owner@acme: run team drops --read --seat lead --session acme and do that."');
+    // The typed line is the message-display line — sender, the body's first line, the fixed read
+    // hint — so the quoted box proves which line was left unsent.
+    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'the pane refused the Enter' }) as string;
+    expect(io.err).toContain(`the box holds ${JSON.stringify(line)}`);
     expect(host.enters.length).toBe(1);
     expect(outcomes(world)).toEqual(['not-submitted']);
 
@@ -292,6 +314,34 @@ describe('the composer read-back at its boundaries', () => {
     expect(await runSend(['lead', 'delivered unread'], io, host)).toBe(0);
     expect(host.typed.length).toBe(1);
     expect(host.enters.length).toBe(1);
+    expect(outcomes(world)).toEqual(['sent (unconfirmed)']);
+  });
+});
+
+describe('the composer at the narrowest box', () => {
+  test('an 80-column box takes the whole display line, its summary trimmed to fit', async () => {
+    const world = setupWorld();
+    const host = makeHost(world);
+    // The pane draws 80 columns of text; a line wider than that would wrap and the read-back
+    // would refuse the composer before any Enter (the claude-code profile declares no wrap rule).
+    host.native.paneText = (_session, pane) => {
+      const last = [...host.typed].reverse().find((entry) => entry.pane === pane);
+      return narrowBox(last !== undefined && !host.enters.includes(pane) ? last.text : '');
+    };
+
+    const io = ownerIo(world.root);
+    // A summary far wider than the line's room: the line is cut, never wrapped.
+    const body = 'a summary that keeps going and going far past the room the line has';
+    const code = await runSend(['lead', body], io, host);
+    if (code !== 0) throw new Error(`exit ${String(code)}: ${io.err}${io.out}`);
+    expect(code).toBe(0);
+    expect(host.typed).toHaveLength(1);
+    const line = host.typed[0]?.text ?? '';
+    expect(line.length).toBeLessThanOrEqual(80);
+    expect(line.endsWith(' Read it with: team drops --read.')).toBe(true);
+    expect(line).toContain('…');
+    // The box read back whole, so the delivery took its one Enter.
+    expect(host.enters).toHaveLength(1);
     expect(outcomes(world)).toEqual(['sent (unconfirmed)']);
   });
 });
