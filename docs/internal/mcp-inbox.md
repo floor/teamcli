@@ -168,8 +168,14 @@ a push already made and skips it. The marker is not a push: the sender's wait re
 server's `channel-push` marker as delivery, and a wait that finds the held marker alone has
 delivered nothing.
 
-The watch's typed retry makes the same identity check at its own wake, because an install can
-land between the send and the retry, and leaves the same held marker before a waking line.
+The watch's retry makes the same identity check before its first wake leg — the socket frame or
+the typed trigger — and leaves the same held marker at the push marker's name; the typed leg
+checks again at its own wake, because an install can land between the two. A serving server's
+check and the retry's write are two processes' steps, not one: a tick that has already passed its
+check can still announce the record, and its own marker write then fails on the held name. That
+race is bounded: the announcement names the same id, a server records an id once in its own seen
+set, and the signed receipt is per id — the seat may notice the same message twice, but it never
+receives two messages or two receipts, and every later tick finds the name held.
 
 ## The evidence rule
 

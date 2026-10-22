@@ -21,9 +21,12 @@ import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import {
   CHANNEL_CONFIRM_MS,
+  CHANNEL_HELD_RECEIPT,
   CHANNEL_UNCONFIRMED,
   CHANNEL_UNCONFIRMED_REASON,
+  channelPushHeld,
   channelPushPath,
+  channelPushed,
   recordChannelPush,
   type ChannelPushReceipt,
 } from '../src/mcp/channel.ts';
@@ -78,6 +81,27 @@ function listening(made: World, seat = 'lead'): string {
     cli: 'claude-code',
     pid: process.pid,
     ts: NOW.toISOString(),
+    channel: true,
+  });
+  return dir;
+}
+
+/** The marker of a channel server running another install: a live pid, an older version and
+ *  another packed commit, so a sender or a retry of this build cannot vouch for its code. */
+function staleListening(made: World, seat = 'lead'): string {
+  const dir = dropDir(made.dir, seat);
+  mkdirSync(dir, { recursive: true });
+  writeListener(dir, {
+    v: 1,
+    seat,
+    session: SESSION,
+    root: realpathSync(made.root),
+    cli: 'claude-code',
+    pid: process.pid,
+    ts: NOW.toISOString(),
+    version: '0.5.4-hotfix.9',
+    build: 'a'.repeat(16),
+    head: 'a'.repeat(40),
     channel: true,
   });
   return dir;
@@ -521,6 +545,37 @@ describe('the channel redelivery', () => {
       via: 'socket',
       failed: [CHANNEL_UNCONFIRMED_REASON],
     });
+  });
+
+  test('the socket redelivery holds the push name first, so a stale channel server cannot push it too', async () => {
+    const made = channelWorld();
+    staleListening(made);
+    const dir = seedChannel(made, SOCKET_ID, BODY);
+    const box = pane(claudeBox(''));
+    const said: string[] = [];
+    const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
+    // The socket leg reads the push name as it is handed the drop: the reservation must already
+    // be there, before any wake, or a later tick of the stale server would find the id free.
+    let heldAtSocket: boolean | undefined;
+    const scene = sceneOf(made, box, due, said, {
+      build: () => ({ version: '0.5.5', build: 'b'.repeat(16), builtAt: NOW.getTime(), head: 'b'.repeat(40) }),
+      socketRedeliver: async (dropDir, drop) => {
+        heldAtSocket = channelPushHeld(dropDir, drop.id);
+        return { ok: true };
+      },
+    });
+
+    await retryHeldDrops(scene);
+
+    expect(heldAtSocket).toBe(true);
+    const marker = JSON.parse(readFileSync(channelPushPath(dir, SOCKET_ID), 'utf8')) as Record<string, unknown>;
+    expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id: SOCKET_ID });
+    // The held marker is not a push: the socket delivery is the one wake that happened.
+    expect(channelPushed(dir, SOCKET_ID)).toBe(false);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([]);
+    expect(said).toEqual([`lead: a channel send from owner was redelivered on the socket`]);
   });
 
   test('a socket that will not take the frame falls to the typed trigger, with the reason said', async () => {
