@@ -493,6 +493,7 @@ type StopParts = {
   code: string;
   state?: string;
   revision?: number;
+  expectedRevision?: number;
   signal?: SignalName | null;
   requestId?: string | null;
   evidence: EvidenceRef[];
@@ -517,6 +518,11 @@ function stopped(fixture: World, parts: StopParts): DryRunJournal {
     ...(parts.waitingOn !== undefined ? { waitingOn: parts.waitingOn } : {}),
     ...(signal !== undefined ? { signal } : {}),
     ...(requestId !== undefined ? { requestId } : {}),
+    // A request-derived stop records the request's own precondition; a request-less stop carries
+    // none, so it stays distinct.
+    ...(signal !== undefined && requestId !== undefined
+      ? { expectedRevision: parts.expectedRevision ?? parts.revision ?? 0 }
+      : {}),
     evidence: parts.evidence,
     ...(parts.guard !== undefined ? { guard: parts.guard } : {}),
   };
