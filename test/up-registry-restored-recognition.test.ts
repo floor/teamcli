@@ -248,8 +248,12 @@ test('a live conversation that is not the recorded one is left as it is', async 
 
   const made = sources('ses_other');
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(await runUp([], io, made.sources)).toBe(1);
+  // The doubt is refused and held: the record says left out with the reason, the summary counts
+  // the refusal, and the run exits nonzero even though nothing was touched.
+  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
   expect(io.err).toContain(DOUBT);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
   // The record is not re-pointed at a conversation it cannot prove.
   expect(seatState()?.agent_session).toBeUndefined();
@@ -260,9 +264,11 @@ test('a state naming another session withholds the registry binding', async () =
   record({ ...RECORD, agent_session: 'ses_stale' });
   const made = sources(SESSION_ID);
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(await runUp([], io, made.sources)).toBe(1);
   // The two records disagree: neither speaks for the seat.
+  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
   expect(io.err).toContain(DOUBT);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
   expect(seatState()?.agent_session).toBe('ses_stale');
 });
@@ -271,8 +277,10 @@ test('a record that ran another CLI is not this seat', async () => {
   record(RECORD, { cli: 'claude-code', session: 'ses_claude' });
   const made = sources('ses_claude');
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(await runUp([], io, made.sources)).toBe(1);
+  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
   expect(io.err).toContain(DOUBT);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
 });
 
@@ -280,8 +288,10 @@ test('a seat herdr names on another pane is not adopted', async () => {
   record(RECORD);
   const made = sources(SESSION_ID, { pane: 'w9:p1' });
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(await runUp([], io, made.sources)).toBe(1);
+  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
   expect(io.err).toContain(DOUBT);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
   // The recorded workspace is not closed: the match on the pane is what would allow it.
   expect(made.trace.closed).toEqual([]);
   expect(made.trace.typed).toEqual([]);
@@ -307,8 +317,8 @@ test('a working pane nothing ties is left out as a working skip, nothing closed 
   record(RECORD);
   // The pane runs another conversation and reads working: this is the doubt the close refuses
   // to resolve. A working doubt is a restore skip, not a failed run: the record stays ready,
-  // the reason is on stderr, and the run exits clean (FLO-1061 restore buckets; `skipped
-  // (working)` is M in the owner summary).
+  // the reason is on stderr, and the run exits clean (`skipped (working)` is M in the owner
+  // summary).
   const made = sources('ses_other', { status: 'working' });
   const io = testIo(root, { kind: 'owner' });
   expect(await runUp([], io, made.sources)).toBe(0);
@@ -321,7 +331,9 @@ test('a record that names no session proves nothing and is left as it is', async
   record(RECORD, { session: null });
   const made = sources(SESSION_ID);
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(await runUp([], io, made.sources)).toBe(1);
+  expect(io.out).toContain(`${SEAT}: left out: ${DOUBT}\n`);
   expect(io.err).toContain(DOUBT);
+  expect(io.err).toContain(`0 seats repaired, 0 skipped (working), 1 refused (${SEAT}: ${DOUBT})\n`);
   expect(touchedSeat(made.trace)).toEqual({ created: [], closed: [], typed: [] });
 });

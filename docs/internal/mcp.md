@@ -30,8 +30,9 @@ file declares, `--session` (when given) must be the team's own session, and the 
 `<root>/.agents/send-drops/<session>/<seat>` for that team. `--file` names the team file the
 launch read; with no `--file` the server reads the team file of the folder it starts in, which a
 seat launched into a lobby does not have. No tool argument can name another
-seat's folder or a path: a message id must be a lowercase UUID, and a string that is anything else
-never reaches the filesystem.
+seat's folder or a path: a message id must be a lowercase UUID (or the `unread-<uuid>` name a
+build before 0.5.3 wrote for a lead's runtime report), and a string that is anything else never
+reaches the filesystem.
 
 `inbox_read` writes `<id>.read.json` beside the message **before** it returns the body — a read that
 cannot leave that receipt is refused, so the server never hands over a body it did not record. The

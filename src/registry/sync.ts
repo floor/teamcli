@@ -381,17 +381,36 @@ export function registerSessionEnd(input: RegistryTeam, why: SessionEndReason = 
   }
 }
 
+/** One seat `up` left standing, as this run read its outcome. */
+export type RunSeat = {
+  seat: Seat;
+  /** The pane of a seat this run left ready: it is registered, or re-pointed there. */
+  pane: string | null;
+  handle?: string;
+  agent_session?: string;
+  /** The pane a launch this run positively started (its session began) and then left short of
+   *  ready, without this run closing it: the record follows that pane, never claiming ready. */
+  partial?: { pane: string };
+  /** This run confirmed a close and no launch it started survives on a pane: the route the
+   *  record held is dead. Only the scoped route goes; the agent id, signed settings and
+   *  conversation stay. */
+  closed?: true;
+};
+
 /** The seats `up` left standing, written once at the end of its run. A seat the file stops is
- *  ended as `stopped`; a ready one is registered or re-pointed. A seat not yet ready — launched,
- *  named, held at a dialog — keeps the record its launch wrote: only a real stop or `down` ends
- *  a session. The team record is stopped when no seat is left running. */
+ *  ended as `stopped`; a ready one is registered or re-pointed, and so is one a launch this run
+ *  positively started and left short of ready on a pane that survives. A seat not yet ready with
+ *  no such outcome keeps the record its launch wrote: only a real stop or `down` ends a session,
+ *  and a bare stage word never moves a route. A seat this run confirmed closed, with no started
+ *  successor on a pane, has that dead route ended while its agent id, signed settings and
+ *  conversation stay readable. The team record is stopped when no seat is left running. */
 export function registerRun(
   input: RegistryTeam,
-  seats: ReadonlyArray<{ seat: Seat; pane: string | null; handle?: string; agent_session?: string }>,
+  seats: ReadonlyArray<RunSeat>,
 ): string[] {
   const notes: string[] = [];
   let running = 0;
-  for (const { seat, pane, handle, agent_session } of seats) {
+  for (const { seat, pane, handle, agent_session, partial, closed } of seats) {
     if (seat.stopped) {
       const ended = registerEnd(input, seat.name, 'stopped');
       if (ended) notes.push(ended.note);
@@ -399,10 +418,20 @@ export function registerRun(
     }
     // A seat still finding its feet has a live session, even when this run did not see it ready:
     // ending it here would close a record the process still fills, with no start to reopen it.
-    if (pane === null) continue;
-    const made = registerLaunch(input, seat, pane, handle, agent_session);
-    if ('note' in made) notes.push(made.note);
-    else running += 1;
+    // The plan's own outcome decides the pane; a null one alone still ends nothing.
+    const route = pane ?? partial?.pane;
+    if (route !== null && route !== undefined) {
+      const made = registerLaunch(input, seat, route, handle, agent_session);
+      if ('note' in made) notes.push(made.note);
+      // A started partial launch is a live session: it counts as running even without readiness.
+      else running += 1;
+      continue;
+    }
+    // The close was confirmed and no started successor survives: the record's route is dead.
+    if (closed === true) {
+      const ended = registerEnd(input, seat.name, 'stopped');
+      if (ended) notes.push(ended.note);
+    }
   }
   try {
     const teamId = teamIdOf(input.root);

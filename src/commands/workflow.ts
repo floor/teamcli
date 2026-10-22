@@ -14,7 +14,7 @@
 // - Runtime transition and effect decision codes (`src/workflow/codes.ts`) belong to run/replay
 //   evaluation and are a separate family from static `Finding` codes and CLI exit ids.
 //
-// Read only: nothing here writes, and no herdr session is needed.
+// Read only: nothing here writes, and no terminal host session is needed.
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';

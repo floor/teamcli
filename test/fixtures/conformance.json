@@ -302,6 +302,13 @@
       "provenance": "capture"
     },
     {
+      "file": "claude-code/completed-error-empty-box-atlas.txt",
+      "cli": "claude-code",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/leftover-box.txt",
       "cli": "claude-code",
       "classify": "unknown",

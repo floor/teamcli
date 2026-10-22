@@ -380,8 +380,10 @@ function reportDropId(messageIds: readonly string[]): string {
 }
 
 /** A report addressed to this team's lead is a signed send-drop under an ordinary message id:
- *  `team drops --read` serves a lowercase UUID and writes its receipt, while a legacy mailbox
- *  record and an `unread-…` name are both invisible to that reader. One drop lists every message
+ *  `team drops --read` serves a lowercase UUID and writes its receipt. The `unread-<uuid>` name
+ *  a build before 0.5.3 gave this drop is served by the same reader too, so residual reports from
+ *  that build are handed over and receipted instead of being listed forever; a legacy mailbox
+ *  record lives in a different store and never reaches this folder. One drop lists every message
  *  due in the pass, and its id is fixed by that set. */
 function writeLeadReportDrop(
   target: ReportTarget,

@@ -18,7 +18,7 @@
 # Never push this repository's version tags to another repository with a
 # publish workflow (floor/material's Release runs on any v* tag): a pushed tag
 # starts a publish there.
-# A workflow_dispatch runs verify on Linux and macOS through the pack. The
+# A workflow_dispatch runs verify on both matrix systems through the pack. The
 # publish job and the GitHub release job require a push of a v* tag, so that
 # run does not publish.
 name: Release
@@ -90,8 +90,8 @@ jobs:
       # stamped pack's own report, never a glob over whatever tarballs happen to
       # be around. scripts/pack.ts refuses a dirty tree, an uncommitted version
       # or an unpinned compressor, and writes the full HEAD SHA into the
-      # tarball's manifest. Both matrix systems print the SHA256: the same
-      # commit must print the same value on Linux and macOS.
+      # tarball's manifest. Each matrix system prints the SHA256: the same
+      # commit must print the same value on both.
       - name: Pack the tarball
         id: pack
         run: |

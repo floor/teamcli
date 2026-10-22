@@ -1101,13 +1101,14 @@ describe('early and missing-setting paths keep the core in authority', () => {
 
   test('the real replay records the early refusal with the run unmoved', () => {
     const fixture = cycleFixture();
-    const stop: DryStop = {
+    const stop: DryStop & { expectedRevision: number } = {
       decision: 'refused',
       code: 'core.wait-not-reached',
       why: 'the recorded instant is before the wait setting',
       at: EARLY,
       state: 'open',
       revision: 0,
+      expectedRevision: 0,
       signal: 'time-reached',
       requestId: 'req-stop-early',
       evidence: ['ev-timer-1', 'ev-open-1'],
@@ -1134,13 +1135,14 @@ describe('early and missing-setting paths keep the core in authority', () => {
 
   test('the real replay records the missing-setting hold with the run unmoved', () => {
     const fixture = cycleFixture();
-    const stop: DryStop = {
+    const stop: DryStop & { expectedRevision: number } = {
       decision: 'held',
       code: 'settings.missing',
       why: 'the wait setting is not supplied',
       at: LATE,
       state: 'open',
       revision: 0,
+      expectedRevision: 0,
       waitingOn: { kind: 'setting', name: 'open-at' },
       signal: 'time-reached',
       requestId: 'req-stop-missing',

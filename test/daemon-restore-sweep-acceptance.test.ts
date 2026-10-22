@@ -1,4 +1,4 @@
-// Gap 4C at the daemon boundary (FLO-1061 item 4): the restore sweep is scheduled once per
+// Gap 4C at the daemon boundary: the restore sweep is scheduled once per
 // canonical route after serving is wired, logs its owner summary, is drained by close, and
 // never starts for a route that is not a canonical accepted route. The runner is injected here,
 // so these scenes prove the schedule and the drain, never a real launch.

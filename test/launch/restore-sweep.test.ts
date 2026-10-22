@@ -1,4 +1,4 @@
-// The daemon's per-route restore entry (FLO-1061 item 4, Gap 4C): it decides from the route's
+// The daemon's per-route restore entry (Gap 4C): it decides from the route's
 // own state whether a restore pass may run, holds the session's run lock for the whole pass, and
 // never cold-starts a team. These scenes drive the real `runUp` against a synthetic world, so the
 // grants the sweep hands it (the owner caller, the held lock, the detached dialog mode) are

@@ -456,6 +456,20 @@ function unidentifiedHold(
   return `its screen runs ${running.model} ${running.version}; the file says ${declaredModel(seat)}; its process was never recorded (${repair})`;
 }
 
+/** The seat as this run launches it: the file's own role, vendor, CLI and capabilities, with the
+ *  bound record's model, version and base launch recipe substituted where the plan resolved one.
+ *  `planned` comes from the UpSeat this run already resolved, so it carries the bound policy when
+ *  the binding was valid and the declaration otherwise; no registry is read again here. */
+function effectiveSeatOf(seat: Seat, planned: UpSeat | undefined): Seat {
+  if (planned === undefined) return seat;
+  return {
+    ...seat,
+    launch: planned.launch,
+    model: planned.model ?? seat.model,
+    version: planned.version ?? seat.version,
+  };
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -622,7 +636,6 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         sessionDoubt: why,
-        doubtHeld: true,
         ...(named.some(working) ? { doubtWorking: true } : {}),
       };
     }
@@ -631,7 +644,6 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         sessionDoubt: 'its recorded pane is gone and the pane naming this seat gives no process identity; nothing closed',
-        doubtHeld: true,
         ...(working(candidate) ? { doubtWorking: true } : {}),
       };
     }
@@ -672,8 +684,9 @@ function seatPlan(
   // no CLI, or one whose process is not the recorded one, is not the seat. Its workspace is
   // closed without input and the seat is launched fresh — the stage it stopped at is not
   // resumed. No workspace recorded, no close to make: the seat is left as it is. The close
-  // itself reads herdr again, immediately before it (`execute.ts`), so this reading only
-  // decides that the seat needs repair, never that its recorded workspace is still its own.
+  // itself reads the terminal host again, immediately before it (`execute.ts`), so this
+  // reading only decides that the seat needs repair, never that its recorded workspace is
+  // still its own.
   const verdict = seatProcessVerdict(recorded.launched, processes[seat.name] ?? null);
   const onRecordedPane = recorded.pane
     ? known.find((agent) => agent.name === seat.name && agent.pane === recorded.pane)
@@ -735,7 +748,6 @@ function seatPlan(
       ...planned,
       stage: recorded.stage,
       sessionDoubt: refusal ?? 'its pane holds a process this record cannot tie to the launch',
-      ...(held ? { doubtHeld: true } : {}),
       ...(held?.working ? { doubtWorking: true } : {}),
     };
   }
@@ -885,8 +897,9 @@ function placementRefusal(caller: Caller): string {
 }
 
 /** The one command that unblocks a run this caller cannot start: a `leads` seat's own, from its
- *  pane, or the owner's, in this folder from a terminal outside herdr. The flags the caller named
- *  are kept, spelled the way the plan spells a word, so the printed line is a command that runs. */
+ *  pane, or the owner's, in this folder from a terminal outside a terminal host session. The
+ *  flags the caller named are kept, spelled the way the plan spells a word, so the printed line
+ *  is a command that runs. */
 function unblockingUpRun(values: { file?: string; session?: string }): string {
   const words = ['team up'];
   if (values.file !== undefined) words.push('--file', shellQuote(values.file));
@@ -1240,7 +1253,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: UpRefusal[] = [];
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
-  // record, and a caller outside herdr has none.
+  // record, and a caller outside a terminal host session has none.
   if (detached !== undefined && !createGranted) {
     refusals.push({ id: 'up.detached', message: detached });
   } else if (!named) {
@@ -1549,6 +1562,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...(budget.kind === 'clear' ? {} : { budget }),
     });
   }
+  // The policy this run resolved per seat, cached before any writer runs: a later writer must
+  // use what the launch actually ran, never re-read a record an earlier writer may have changed.
+  const plannedByName = new Map(seats.map((planned) => [planned.name, planned]));
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
   let createLobby = false;
@@ -1926,6 +1942,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // The seats whose state entry the plan took away before their line ran — a repair closes the
     // old pane and drops the record first.
     const droppedSeats = new Set<string>();
+    // The pane each seat's state held when a close this run confirmed took that entry away: the
+    // negative boundary a launch is read against. A closed pane is never the route the registry
+    // keeps, and the pane a later line started on is told apart from it here.
+    const closedPanes = new Map<string, string | undefined>();
     if (agents) {
       const byName = new Map(team.seats.map((seat) => [seat.name, seat]));
       for (const agent of agents) {
@@ -2094,13 +2114,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           if (current.retained_seats?.[name]) delete current.retained_seats[name];
           const id = prior.id ?? retained?.id ?? mintSeatId();
           const isSkipReady = current.seats[name]?.stage === 'ready' && patch.stage === 'ready';
-          const declared = isSkipReady ? undefined : team.seats.find((seat) => seat.name === name);
+          const declared = team.seats.find((seat) => seat.name === name);
+          // The policy this run kept or launched with: the bound record's model, version and
+          // base recipe where the plan resolved them, the declaration otherwise. A keep writes
+          // it back like a launch, so the next recognition compares against what is on the pane
+          // and never against a declaration this run did not use.
+          const effective = declared === undefined ? undefined : effectiveSeatOf(declared, plannedByName.get(name));
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
-          const cli = team.seats.find((seat) => seat.name === name)?.cli ?? prior.cli;
-          const model = declared?.model ?? prior.model;
-          const version = declared?.version ?? prior.version;
-          const effort = declared ? declared.effort : prior.effort;
-          const launch_line = declared?.launch ?? prior.launch_line;
+          const cli = declared?.cli ?? prior.cli;
+          const model = effective?.model ?? prior.model;
+          const version = effective?.version ?? prior.version;
+          const effort = isSkipReady ? prior.effort : (declared?.effort ?? prior.effort);
+          const launch_line = effective?.launch ?? prior.launch_line;
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
@@ -2151,8 +2176,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // The session registry records the launch itself, with the id TeamCLI set where the CLI
       // takes one; a registry that cannot be written is a note in the run's log, never a refusal.
       sessionStarted(name, started) {
-        const seat = team.seats.find((item) => item.name === name);
-        if (!seat) return;
+        const declared = team.seats.find((item) => item.name === name);
+        if (!declared) return;
+        // The session's model and version are the effective policy the line ran, as the seat
+        // record and the agent registry state it; the command and session history are the
+        // launch's own reading (`started`), never rewritten from the file.
+        const seat = effectiveSeatOf(declared, plannedByName.get(name));
         startedSeats.add(name);
         // The pane ran this seat's launch line: the settings file the install wrote is in a
         // process now, so its minted successor is the seat's from here on, whatever the run
@@ -2205,6 +2234,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           }
           delete current.seats[name];
         });
+        closedPanes.set(name, pane);
         if (pane) forgetLaunchedPane(sources.home, pane, session);
       },
       // What is not a record — a skip line, a session failure, the watch's sentence — is cleaned
@@ -2384,13 +2414,34 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       },
       team.seats.map((seat) => {
         const held = afterwards[seat.name];
+        const readyPane = held?.stage === 'ready' ? (held.pane ?? null) : null;
+        // A launch this run positively started (its line ran, `sessionStarted`) and left short of
+        // ready on a pane this run did not close: the registry follows that pane, and never claims
+        // ready. A created workspace alone is not this evidence, and a pane the run closed after
+        // starting is not either.
+        const partial = readyPane === null
+          && startedSeats.has(seat.name)
+          && held !== undefined
+          && held.pane !== undefined
+          && closedPanes.get(seat.name) !== held.pane
+          ? { pane: held.pane }
+          : undefined;
+        // A close this run confirmed, with no live successor: the record's route is dead. That is
+        // any seat whose pane this run closed and did not replace with a pane a line started on —
+        // including a replaced seat whose line never ran. A refused or unproven close never gets
+        // here: only a real close calls `drop`.
+        const ended = readyPane === null && partial === undefined && closedPanes.has(seat.name);
         return {
-          seat,
-          pane: held?.stage === 'ready' ? (held.pane ?? null) : null,
+          // The registry records the policy this run kept or launched with: the bound record's
+          // recipe where the plan resolved one, the declaration otherwise.
+          seat: effectiveSeatOf(seat, plannedByName.get(seat.name)),
+          pane: readyPane,
           ...(held?.id ? { handle: held.id } : {}),
           // The same measured id the launch wrote into the seat's record: the registry keeps it
           // beside the pane, and a seat with no reading leaves the record's own id in place.
           ...(held?.agent_session ? { agent_session: held.agent_session } : {}),
+          ...(partial === undefined ? {} : { partial }),
+          ...(ended ? { closed: true as const } : {}),
         };
       }),
     )) logLine(dir, 'up', callerLabel(caller), note, now());

@@ -1,6 +1,6 @@
 {
   "name": "team",
-  "version": "0.5.4-rc.2",
+  "version": "0.5.4-rc.4",
   "description": "Ship with a team that never sleeps. Specialized agents, from any lab.",
   "keywords": [
     "ai-agents",
@@ -59,7 +59,8 @@
     "readme:check": "bun scripts/check-readmes.ts",
     "brief": "bun scripts/brief.ts",
     "brief:check": "bun scripts/brief.ts --check",
-    "ci": "bun run typecheck && bun test && bun run build && node dist/cli.js --version && bun run conformance && bun run schema:check && bun run contract:check && bun run coverage:check && bun run brief:check && bun run exit-codes:check && bun run readme:check"
+    "public-names:check": "bun scripts/check-public-names.ts",
+    "ci": "bun run typecheck && bun test && bun run build && node dist/cli.js --version && bun run conformance && bun run schema:check && bun run contract:check && bun run coverage:check && bun run brief:check && bun run public-names:check && bun run exit-codes:check && bun run readme:check"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",

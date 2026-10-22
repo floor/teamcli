@@ -18,7 +18,7 @@ Checks, dry-runs, or replays a workflow definition (`version: 1`):
   (`ref -> fixture` mapping in JSON or YAML), checking the definition digest and comparing every
   step and terminal stop to the pure reducer.
 
-Read-only: nothing writes to disk or any ledger, and no herdr session is needed.
+Read-only: nothing writes to disk or any ledger, and no terminal host session is needed.
 
 ## Synopsis
 
@@ -43,7 +43,7 @@ Read-only: nothing writes to disk or any ledger, and no herdr session is needed.
 
 | Caller | May |
 | --- | --- |
-| anyone — a seat, an agent-run CLI, CI, or the owner, from any folder | run `check`, `run --dry`, or `replay`: none of them needs a herdr session or a terminal |
+| anyone — a seat, an agent-run CLI, CI, or the owner, from any folder | run `check`, `run --dry`, or `replay`: none of them needs a terminal host session or a terminal |
 
 ## Output and exit codes
 
@@ -64,6 +64,7 @@ Read-only: nothing writes to disk or any ledger, and no herdr session is needed.
 Under `--json`:
 - `check` writes the `team.workflow` check document (`schema/workflow.schema.json`) on exit 0 or 1, and `team.error` on exit 2.
 - `run --dry` writes the bare `DryRunJournal` (`format: 1`, `kind: "workflow-run-dry"`, `authoritative: false`, `notice: "dry run — no record is written"`) on exit 0 (`workflow.run-dry`) and exit 1 (`workflow.refused`), so its stdout can be passed directly to `team workflow replay`; pre-journal refusals (`workflow.dry-only`, `workflow.script`, `workflow.evidence`, `workflow.invocation`, `workflow.file`) write `team.error` with `notice: "dry run — no record is written"`.
+- a stopped outcome records the stopped request's own effective `expectedRevision` (`0` or more), including a stale value the core refused, and replay re-evaluates that request unchanged, so the producer's own journal replays to the same refusal. A request-derived stop (one naming a `signal` and a `requestId`) without the field is refused as `workflow.journal` rather than replayed under the folded revision; a request-less stop (the reachable `uses:` refusal) carries none. The journal `format` stays 1; this contract is unpublished, so no older journal shape is kept.
 - `replay` writes the `team.workflow` replay document (`kind: "workflow-replay"`, `authoritative: false`, `notice: "dry run — no record is written"`, `ok: true | false`) on exit 0 and exit 1, and `team.error` with `notice: "dry run — no record is written"` on exit 2.
 
 The three code families stay distinct:

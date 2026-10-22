@@ -1,4 +1,4 @@
-// Restore-sweep summary aggregation and output contract (FLO-1061 item 6):
+// Restore-sweep summary aggregation and output contract:
 // - Consumes `restoreSummaryOf(report.restoreBuckets)` directly in `src/commands/up.ts`.
 // - Emits the canonical one-line summary (`N seat(s) repaired, M skipped (working), K refused`)
 //   with `(seat: why; ...)` when `K > 0`, and emits `0 seats repaired, 0 skipped (working), 0 refused`
@@ -378,7 +378,7 @@ function buildWorld(
   return { sources, closes, creates, runs };
 }
 
-describe('FLO-1061 item 6: canonical restore-summary line in plain, --json, and team.log', () => {
+describe('canonical restore-summary line in plain, --json, and team.log', () => {
   test('healthy 0/0/0 restore pass emits 0 seats repaired, 0 skipped (working), 0 refused in plain, --json, and team.log and exits 0', async () => {
     const place = makePlace();
     const seeds = healthySeeds(place.home, place.root);

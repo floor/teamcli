@@ -2910,6 +2910,7 @@ export const WORKFLOW_OUTPUT_SCHEMA: CommandSchemaSpec = {
             waitingOn: { type: 'object' },
             signal: { type: 'string', minLength: 1 },
             requestId: { type: 'string', minLength: 1 },
+            expectedRevision: { type: 'integer', minimum: 0 },
             evidence: {
               type: 'array',
               items: { type: 'string', minLength: 1 },

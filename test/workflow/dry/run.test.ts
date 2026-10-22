@@ -377,6 +377,8 @@ signals:
     if (journal.outcome.kind !== 'stopped') throw new Error('expected a stop');
     expect(journal.outcome.decision).toBe('refused');
     expect(journal.outcome.code).toBe(DECISION_CODES.revisionStale);
+    // The producer keeps the stopped request's own precondition, including the stale supplied value.
+    expect(journal.outcome).toMatchObject({ expectedRevision: 2 });
     expect(journal.steps).toHaveLength(0);
     expect(run.revision).toBe(0);
     expect(run.occurrences.size).toBe(1); // only the start entry's effect occurrence
