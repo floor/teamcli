@@ -314,7 +314,7 @@ describe('the walk records the channel and the legs it skipped', () => {
     expect(code).toBe(0);
     expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
     // The typed leg is the one that wakes an idle seat: one trigger line, no frame, no dial.
-    expect(host.typed).toEqual([{ pane: 'pane-lead', text: readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string }]);
+    expect(host.typed).toEqual([{ pane: 'pane-lead', text: readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string }]);
     expect(host.enters).toEqual(['pane-lead']);
     expect(host.frames).toEqual([]);
     expect(host.dials()).toBe(0);

@@ -310,7 +310,7 @@ seats:
     // the sender's side has only the unconfirmed ending until the seat's own read writes the
     // receipt. The typed leg wrote the record the trigger reads.
     expect(io.out).toContain('sent (unconfirmed)');
-    expect(typed).toEqual([{ pane: 'w1:p1', text: readTriggerLine(SEAT, SESSION, { seat: 'owner', team: 'acme' }) as string }]);
+    expect(typed).toEqual([{ pane: 'w1:p1', text: readTriggerLine(SEAT, SESSION, { seat: 'owner', team: 'acme', body: 'hello' }) as string }]);
     const dir = dropsAt();
     const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
     if (id === undefined) throw new Error('the send wrote no drop');

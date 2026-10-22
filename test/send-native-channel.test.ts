@@ -83,7 +83,7 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
   expect(pane.typed.length).toBe(1);
-  expect(pane.typed[0]).not.toContain('hello');
+  expect(pane.typed[0]).toContain('hello');
   expect(pane.enters).toBe(1);
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
@@ -128,7 +128,7 @@ test('the direct typed leg names the signed sender and the team it wrote from', 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(pane.typed).toEqual(['From owner@acme: run team drops --read --seat lead --session acme and do that.']);
+  expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: team drops --read.']);
 });
 
 test('--wait to a claude-code seat walks the typed leg without dialing the socket and waits on the thread', async () => {
@@ -1008,7 +1008,7 @@ test('expiry typed leg whose trigger writes the read receipt is delivered (read)
   await expirePendingNative(scene);
 
   expect(existsSync(pending(made))).toBe(false);
-  expect(watchPane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme' }) as string]);
+  expect(watchPane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme', body: 'hello' }) as string]);
   expect(watchPane.enters).toBe(1);
   expect(receipt.at).toBe(join(drops, `${ID}.read.json`));
   expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.read.json`]);
