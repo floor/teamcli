@@ -14,10 +14,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { addOwnerSigner, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { approveTeamCreate } from '../client/team-create.ts';
-import { readProposal, readSecurityProfile, securityProfileChallenge, securityProfileLine, signSecurityProfile } from './profile.ts';
+import { ownerDeviceConsent, readProposal, readSecurityProfile, securityProfileChallenge, securityProfileLine, signSecurityProfile } from './profile.ts';
 
 export const OWNER_PAGE_RP_ID = 'localhost';
-export const ADD_SIGNER_DOMAIN = 'team-owner-seat-add-signer-v1\n';
 
 /** The uncompressed P-256 point (hex) inside a SubjectPublicKeyInfo, as `getPublicKey()` returns it. */
 export function spkiToPoint(spki: Buffer): string | null {
@@ -78,12 +77,9 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       registrations.delete(clientData.challenge!);
       const point = spkiToPoint(Buffer.from(String(b.publicKey ?? ''), 'base64url'));
       if (point === null) return { status: 400, body: { error: 'the passkey is not a P-256 key (ES256)' } };
-      const seat = readOwnerSeat(home)!;
-      // The existing Secure Enclave signer confirms the new passkey: one Touch ID on the Mac.
-      const confirmer = seat.signers.find((s) => s.type === 'mac-keystore');
-      if (confirmer === undefined) return { status: 409, body: { error: 'no Secure Enclave signer to confirm a new passkey' } };
-      const statement = Buffer.from(ADD_SIGNER_DOMAIN + JSON.stringify({ team: seat.team, signer: name, public_key: point, credential_id: credentialId, rp_id: OWNER_PAGE_RP_ID }), 'utf8');
-      const confirmed = store.sign(confirmer.label, statement, `Add passkey "${name}" as a TeamCLI owner signer`);
+      // The existing Secure Enclave signer confirms the new passkey: one Touch ID on the Mac,
+      // verified under the key the credential store confirms, and audited.
+      const confirmed = ownerDeviceConsent(home, store, { act: 'add-passkey-signer', signer: name, public_key: point, credential_id: credentialId, rp_id: OWNER_PAGE_RP_ID }, `Add passkey "${name}" as a TeamCLI owner signer`, now());
       if (!confirmed.ok) return { status: 403, body: { error: confirmed.why } };
       const added = addOwnerSigner(home, { signer: name, type: 'webauthn', publicKey: point, credentialId, rpId: OWNER_PAGE_RP_ID }, store, now());
       return added.ok ? { status: 200, body: { ok: true, signer: name } } : { status: 400, body: { error: added.why } };

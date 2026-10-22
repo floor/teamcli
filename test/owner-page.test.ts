@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { readOwnerSeat, registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { createTeamCreateRequest, actionRequestsFolder } from '../src/client/team-create.ts';
@@ -135,4 +135,28 @@ describe('owner page', () => {
     expect(done.status).toBe(200);
     expect(existsSync(join(actionRequestsFolder(s.home), `${id}.seat-answer.json`))).toBe(true);
   });
+
+  test('a passkey the owner does not confirm with Touch ID is not added', async () => {
+    const s = await setup();
+    const p = phone();
+    const sign = s.store.sign;
+    s.store.sign = () => ({ ok: false, why: 'the user-presence prompt was cancelled' });
+    const reg = await registerPhone(s, p);
+    expect(reg.status).toBe(403);
+    expect(readOwnerSeat(s.home)!.signers.map((x) => x.name)).toEqual(['mac']);
+    s.store.sign = sign;
+    expect((await registerPhone(s, p)).status).toBe(200);
+    expect(readFileSync(join(s.home, '.config', 'team', 'security-profile.log'), 'utf8')).toContain('"act":"add-passkey-signer"');
+  });
+
+  test('a request from another Host is refused even with the token', async () => {
+    const s = await setup();
+    const { request } = await import('node:http');
+    const status = await new Promise<number>((resolve) => {
+      const req = request({ host: '127.0.0.1', port: s.page.port, path: `/api/state?t=${s.page.token}`, headers: { host: 'evil.example' } }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+      req.end();
+    });
+    expect(status).toBe(403);
+  });
 });
+
