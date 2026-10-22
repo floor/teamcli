@@ -1154,7 +1154,7 @@ Hidden: no
 
 Usage:
 
-    team pause [<team>] [--reason <text>] [--all] [--json]
+    team pause [<name>] [--seat <seat>] [--team <team>] [--reason <text>] [--all] [--json]
 
 ### Who may run it
 
@@ -1170,13 +1170,15 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--reason` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `team` | yes | no |
+| `name` | yes | no |
 
 ## `plan`
 
@@ -1894,7 +1896,7 @@ Hidden: no
 
 Usage:
 
-    team resume [<team>] [--all] [--json]
+    team resume [<name>] [--seat <seat>] [--team <team>] [--all] [--json]
 
 ### Who may run it
 
@@ -1909,13 +1911,15 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | `--all` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--seat` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `team` | yes | no |
+| `name` | yes | no |
 
 ## `revoke`
 

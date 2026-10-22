@@ -1,19 +1,29 @@
 # team pause
 
-A pause stops the team taking new work. It lives in the team state
-(`.agents/team.state.json`), never in the team file: the file waits for the owner's approval, and a
-stop that waits is no stop. While the record stands, `team next` claims nothing and `team watch`
-sends no work — a push or a typed nudge — each seat that takes work being told once, when the
-pause lands, to finish the step it is on. `team status` and `team seats` print the pause above
-their rows. `team resume` clears it and restarts the queue.
+A pause stops a seat taking new work: the whole team's, or one seat's own. It lives in the team
+state (`.agents/team.state.json`), never in the team file: the file waits for the owner's approval,
+and a stop that waits is no stop. A team-wide pause stops every seat: `team next` claims nothing and
+`team watch` sends no work — a push or a typed nudge — each seat that takes work being told once,
+when the pause lands, to finish the step it is on. A per-seat pause, `team pause <seat>`, stops that
+seat alone: it claims nothing and gets no work nudge, while the rest of the team keeps claiming and
+being nudged. `team status` prints the pause, and each seat paused on its own, above their rows.
+`team resume` clears the team's record, `team resume <seat>` one seat's; each leaves the other
+standing.
 
 The pause records a stop point for every declared seat that is not a human's: what the seat's
 record held when the pause landed (its stage and last activity) and the worktree it was given (its
-branch and folder). A human seat is never touched and records nothing.
+branch and folder). A per-seat pause records one stop point, for that seat. A human seat is never a
+target and records nothing.
 
 ## Synopsis
 
-    team pause [<team>] [--reason <text>] [--all] [--json]
+    team pause [<name>] [--seat <seat>] [--team <team>] [--reason <text>] [--all] [--json]
+
+The first positional is resolved against the seats the current folder's team declares first, then
+against the registered teams by name, project or id. A name that is both a declared seat and a
+registered team is refused, and the explicit `--seat <name>` or `--team <team>` says which one was
+meant. `team pause --seat <name>` is the explicit seat form even outside the folder's team;
+`team pause --team <team>` is the explicit team-wide form.
 
 ## What it reads and writes
 
@@ -36,9 +46,25 @@ record at the top level of the state:
 
 `reason` is absent when `--reason` was not given. A stop point carries `stage`, `branch`, `path`
 and `last_active` only when the tool holds them; a seat with no record and no worktree is a seat
-name alone. Pausing under a pause writes nothing and is refused, naming the record in force. A
-hand-edited value that is not the record this command writes is dropped when the state is read, so
-it is never printed by any reader.
+name alone. A per-seat pause writes one entry in a top-level `seat_pauses` map instead, with one
+stop point for that seat:
+
+    {
+      "format": 1,
+      "seat_pauses": {
+        "worker": {
+          "by": "owner",
+          "at": "2026-10-04T09:00:00.000Z",
+          "stops": [{ "seat": "worker", "stage": "ready" }]
+        }
+      },
+      "sessions": {}
+    }
+
+The team's `pause` and the `seat_pauses` map are independent: a seat may be paused while the team
+is, and one record clearing leaves the other standing. Pausing under a pause on the same target
+writes nothing and is refused, naming the record in force. A hand-edited value that is not the
+record this command writes is dropped when the state is read, so it is never printed by any reader.
 
 `--all` writes to every registered team it could read and names the ones it could not on `stderr`:
 that team is left as it is, and the run goes on. A team named as `<team>` whose file does not load
@@ -64,8 +90,11 @@ its own seat. The operator's lever is `team hold`, not a pause.
 | Flag | Meaning |
 | --- | --- |
 | `<team>` | a registered team's id, project or session name; without it, the team file of the current folder |
+| `<seat>` | a seat the current folder's team declares; pauses that seat alone |
+| `--seat <seat>` | the explicit seat form: the named seat of the current folder's team |
+| `--team <team>` | the explicit team-wide form, even when a declared seat has that name |
 | `--reason <text>` | the line stored as the pause's reason |
-| `--all` | every registered team; a team whose file does not load is named on `stderr` and left as it is |
+| `--all` | every registered team; a team whose file does not load is named on `stderr` and left as it is; refused with `--seat`, `--team` and `--json` |
 | `--json` | emit a `team.pause` v1 JSON document (`schema/pause.schema.json`) on `stdout`; refused with `--all` |
 | `--help`, `-h` | the usage, and exit 0 |
 
@@ -75,26 +104,36 @@ its own seat. The operator's lever is `team hold`, not a pause.
 | --- | --- |
 | `team pause: unexpected "<word>"` (with the usage) | 2 |
 | `team pause: --all takes no <team>` (with the usage) | 2 |
+| `team pause: --all and --seat can't be used together` (with the usage) | 2 |
+| `team pause: --all and --team can't be used together` (with the usage) | 2 |
+| `team pause: --seat and --team can't be used together` (with the usage) | 2 |
+| `team pause: --seat takes no positional name` (with the usage) | 2 |
+| `team pause: --team takes no positional name` (with the usage) | 2 |
 | `team pause: --all and --json can't be used together` (with the usage) | 2 |
 | `team pause: --reason needs text` (with the usage) | 2 |
 | `team pause: <why the team file did not load>` | 2 |
 | `team pause: no team named "<team>" is registered on this machine` | 2 |
 | `team pause: "<team>" names more than one team on this machine; name one by its id` | 2 |
+| `team pause: "<name>" names both a seat of <project> and a registered team; use team pause --seat <name> or team pause --team <name>` | 2 |
+| `team pause: no seat named "<name>" is declared in <project>` | 2 |
+| `team pause: no seat named "<name>" is declared in <project>, and no registered team has that name` | 2 |
+| `team pause: <name> is a human seat; a pause never touches it` | 2 |
 | `team pause: no team is registered on this machine` (`--all`) | 2 |
 | `team pause: only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat` | 1 |
 | `team pause: only the owner or the orchestrator pauses the team; this call is <caller>` | 1 |
 | `team pause: no pane is recorded for seat <name> in this session: a lead stops that seat and runs \`team up\`` | 1 |
 | `team pause: the state records pane <recorded> for seat <name> in this session, not the pane this call is on: a lead stops the team and starts it again (\`team down\`, then \`team up\`)` | 1 |
-| `team pause: already paused: <pause line>` | 1 |
+| `team pause: already paused: <pause line>` (team-wide) | 1 |
+| `team pause: already paused: <seat> (<pause line>)` | 1 |
 | `team pause: <why the state or the registry could not be read or written>` | 1 |
 
 ## Exit codes
 
-- `0` — the team was paused.
-- `1` — it was refused: the caller may not pause the team, a pause already stands, the run has no
+- `0` — the team, or the one seat, was paused.
+- `1` — it was refused: the caller may not pause, a pause already stands, the run has no
   terminal, or the state or the registry can't be read or written.
-- `2` — the invocation can't be read, the team file can't, or `<team>` names no registered team or
-  more than one.
+- `2` — the invocation can't be read, the team file can't, or the name resolves to no seat and no
+  registered team, or to more than one team.
 
 ## Example
 

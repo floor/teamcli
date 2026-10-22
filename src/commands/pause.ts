@@ -26,13 +26,13 @@ import { emptySession, pauseText, stopText, updateState, type PauseRecord } from
 // file declares that is not a human's, so the resume starts the lead from what the tool holds.
 // The caller rule is narrower than `hold`'s: the owner, or the team's own orchestrator.
 
-export const USAGE = `Usage: team pause [<team>|<seat>] [--seat <seat>] [--team <team>] [--reason <text>] [--all] [--json]
+export const USAGE = `Usage: team pause [<name>] [--seat <seat>] [--team <team>] [--reason <text>] [--all] [--json]
 
 Stops a seat or a whole team taking new work: team next claims nothing and the watch types no
-work nudge to it until team resume. <seat> is a seat the current folder's team declares,
-<team> is a registered team's name, project or id, --seat and --team say which one a name means,
-and --all is every registered team. The stop points of every declared seat are recorded in the
-state. The owner or the team's orchestrator runs it; a human seat is never touched.
+work nudge to it until team resume. <name> is a seat the current folder's team declares, or a
+registered team's name, project or id; --seat and --team say which one a name that is both means.
+--all is every registered team. The stop points of every declared seat are recorded in the state.
+The owner or the team's orchestrator runs it; a human seat is never touched.
 
 Exits 0 when the seat or team is paused, 1 when it is refused or state I/O fails, 2 when the
 invocation or team file can't be read.
