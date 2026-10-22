@@ -106,6 +106,9 @@ function idleSeatsOf(
     if (seat.human === true || seat.parked || seat.stopped) continue;
     if (seat.name === team.orchestrator || seat.name === team.operator) continue;
     if (input.swaps?.includes(seat.name) === true) continue;
+    // A seat paused on its own is not an idle worker: no wake and no typed work until its
+    // resume, while the rest of the team keeps being nudged.
+    if (input.seatPauses?.[seat.name] !== undefined) continue;
     const record = state.seats[seat.name];
     const since = sinceOf(record?.last_active);
     if (reads !== null) {

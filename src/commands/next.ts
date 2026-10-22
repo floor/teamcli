@@ -208,6 +208,14 @@ async function pass(
   // and `team status` print for the record.
   const placed = place(loaded.team, loaded.root, io);
   if (placed.kind === 'refused') return callerRefuse(io, placed.message, emit.json);
+  // The seat's own pause: `team pause <seat>` stops this seat alone, while the rest of the team
+  // keeps claiming. It is read after the seat is placed, because the record is keyed by the
+  // seat's name, and `--release` has already skipped the state read above.
+  const seatStanding = state?.seat_pauses?.[placed.seat];
+  if (seatStanding !== undefined) {
+    const message = `the seat is paused (${pauseText(seatStanding)}); nothing new is claimed until \`team resume ${placed.seat}\``;
+    return pausedAnswer(io, message, `team resume ${placed.seat}`, emit.json);
+  }
   const waiting = state === undefined ? null : queuedSwap(state, placed.seat);
   if (waiting !== null) {
     const now = (sources.now ?? Date.now)();

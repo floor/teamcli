@@ -108,10 +108,23 @@
     },
     "target": {
       "type": "string",
-      "const": "team"
+      "enum": [
+        "team",
+        "seat"
+      ]
     },
     "value": {
-      "type": "null"
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "still_paused": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "resumed": {
       "type": "object",
