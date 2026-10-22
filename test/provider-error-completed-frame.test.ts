@@ -49,6 +49,19 @@ function narrowerOpeningRule(screen: string): string {
   return screen.replace(/^─+ builder-7 ─$/mu, (row) => row.replace(/^─/u, ''));
 }
 
+/** The captured frame with its plain closing rule one column shorter, the width mismatch on the
+ *  other side of the box. */
+function narrowerClosingRule(screen: string): string {
+  const lines = screen.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^─{8,}$/u.test(lines[i] as string)) {
+      lines[i] = (lines[i] as string).slice(1);
+      return lines.join('\n');
+    }
+  }
+  throw new Error('the frame has no plain closing rule');
+}
+
 describe('the completed-provider-error frame', () => {
   test('the fixture keeps the captured rows the reading is about', () => {
     const rows = FRAME.split('\n');
@@ -91,6 +104,20 @@ describe('the completed-provider-error frame', () => {
     expect(plain).not.toBe(FRAME);
     expect(readScreen('claude-code', plain)).toEqual({ kind: 'idle' });
     expect(classifyComposer('claude-code', plain.split('\n')).kind).toBe('idle');
+  });
+
+  test('a box drawn with the minimum eight-column borders reads ready', () => {
+    // The capture's box is wide and its opening rule is labelled; the shortest border the
+    // profile accepts is the flat eight-column rule, and the ended turn above it stays history.
+    const screen = [LOST, DONE, '────────', '❯', '────────'].join('\n');
+    expect(readScreen('claude-code', screen)).toEqual({ kind: 'idle' });
+    expect(classifyComposer('claude-code', screen.split('\n')).kind).toBe('idle');
+  });
+
+  test('a closing rule drawn at another width fails closed', () => {
+    const narrower = narrowerClosingRule(FRAME);
+    expect(narrower).not.toBe(FRAME);
+    expect(readScreen('claude-code', narrower)).toEqual({ kind: 'provider error' });
   });
 });
 
