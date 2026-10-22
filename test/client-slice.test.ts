@@ -620,6 +620,7 @@ describe('client send', () => {
     const io = capture(f);
     const words = ['--client', issued.path, '--key', join(keyDir, 'client.key'), 'orchestrator@teamcli', 'hello'];
     expect(await sendClient(f, words, io.io, { sendId: 'drop-t' })).toBe(0);
+    expect(io.out()).toContain('sent: orchestrator@teamcli (drop drop-t)');
     expect(existsSync(join(teamcliRoot, '.agents', 'send-drops', 'teamcli', 'orchestrator', 'drop-t'))).toBe(true);
     const refused = capture(f);
     expect(await sendClient(f, [...words.slice(0, 4), 'orchestrator@floor', 'hello'], refused.io, { sendId: 'drop-u' })).toBe(1);

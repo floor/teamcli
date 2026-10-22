@@ -248,7 +248,7 @@ export async function runClientSend(args: Args, io: Io, host: SendHost, json: bo
         if (!written.ok) return written;
         return {
           ...written,
-          to: `${rebound.target.recipientSeat}@${rebound.target.entity}`,
+          to: clientAddressOf(active.grant),
           request,
         };
       },
