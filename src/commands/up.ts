@@ -684,8 +684,9 @@ function seatPlan(
   // no CLI, or one whose process is not the recorded one, is not the seat. Its workspace is
   // closed without input and the seat is launched fresh — the stage it stopped at is not
   // resumed. No workspace recorded, no close to make: the seat is left as it is. The close
-  // itself reads herdr again, immediately before it (`execute.ts`), so this reading only
-  // decides that the seat needs repair, never that its recorded workspace is still its own.
+  // itself reads the terminal host again, immediately before it (`execute.ts`), so this
+  // reading only decides that the seat needs repair, never that its recorded workspace is
+  // still its own.
   const verdict = seatProcessVerdict(recorded.launched, processes[seat.name] ?? null);
   const onRecordedPane = recorded.pane
     ? known.find((agent) => agent.name === seat.name && agent.pane === recorded.pane)
@@ -896,8 +897,9 @@ function placementRefusal(caller: Caller): string {
 }
 
 /** The one command that unblocks a run this caller cannot start: a `leads` seat's own, from its
- *  pane, or the owner's, in this folder from a terminal outside herdr. The flags the caller named
- *  are kept, spelled the way the plan spells a word, so the printed line is a command that runs. */
+ *  pane, or the owner's, in this folder from a terminal outside a terminal host session. The
+ *  flags the caller named are kept, spelled the way the plan spells a word, so the printed line
+ *  is a command that runs. */
 function unblockingUpRun(values: { file?: string; session?: string }): string {
   const words = ['team up'];
   if (values.file !== undefined) words.push('--file', shellQuote(values.file));
@@ -1251,7 +1253,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: UpRefusal[] = [];
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
-  // record, and a caller outside herdr has none.
+  // record, and a caller outside a terminal host session has none.
   if (detached !== undefined && !createGranted) {
     refusals.push({ id: 'up.detached', message: detached });
   } else if (!named) {
