@@ -63,10 +63,6 @@ if (import.meta.main) {
       `public-names:check: ${where}: ${reads} the forbidden public pattern ${JSON.stringify(hit.pattern)}`,
     );
   }
-  if (scan.hits.length > 0) {
-    const count = `${String(scan.hits.length)} forbidden public name${scan.hits.length === 1 ? '' : 's'}`;
-    console.error(`public-names:check: ${count} in ${String(scan.scanned)} tracked files`);
-    process.exit(1);
-  }
+  if (scan.hits.length > 0) process.exit(1);
   console.log(`public-names:check: ${String(scan.scanned)} tracked files carry no forbidden public name`);
 }
