@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runStatus } from '../src/commands/status.ts';
-import { plantMessage, plantRecord, type MessagePayload } from '../src/commands/messages.ts';
+import { listUnacked, plantMessage, plantRecord, type MessagePayload } from '../src/commands/messages.ts';
 import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { findRoot } from '../src/file/load.ts';
@@ -2053,11 +2053,11 @@ describe('team watch', () => {
     expect(Object.values(pointedBudgets).every((one) => 'was' in one)).toBe(true);
   });
 
-  function planted(seat: string, body: string, at: string): MessagePayload {
+  function planted(seat: string, body: string, at: string, id = 'm1'): MessagePayload {
     const root = findRoot(dir);
     if (!root) throw new Error('the watch fixture is not a git checkout');
     const payload: MessagePayload = {
-      kind: 'message', id: 'm1', to: seat, root, session: 'acme-web', at, body, from: 'harness',
+      kind: 'message', id, to: seat, root, session: 'acme-web', at, body, from: 'harness',
     };
     plantMessage(join(dir, 'home'), root, seat, payload.id, payload);
     return payload;
@@ -2108,6 +2108,27 @@ describe('team watch', () => {
     // was handed over.
     expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.json'))).toBe(true);
     expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.read.json'))).toBe(false);
+  });
+
+  test('an older-store evt-work record is never rung, and types nothing', async () => {
+    // The RC3 observation: `team ack` refused every `evt-work-*` record as an earlier-build one
+    // and `team messages` listed none, yet the wake kept naming them. They wait in the older
+    // mailbox store, which the ring's line — the seat's `team drops --read` — does not read, so
+    // ringing one would type a command that serves nothing, pass after pass.
+    const id = 'evt-work-empty-lead-idle-20261021T000000Z';
+    planted('deepseek-acme', 'the message body itself', '2026-10-03T13:00:00.000Z', id);
+    // The watch's own unread source holds the record — the ring's line is the only thing that
+    // must not name it, because the read that line names would serve nothing.
+    const root = findRoot(dir);
+    if (!root) throw new Error('the watch fixture is not a git checkout');
+    expect(listUnacked(root, 'acme-web', join(dir, 'home')).map((one) => one.id)).toContain(id);
+    const io = testIo(dir, { kind: 'owner' });
+    await runWatch(['--file', file], io, sources(2, { home: join(dir, 'home') }));
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme');
+    const legacy = join(dir, '.agents', 'messages', 'deepseek-acme', `${id}.json`);
+    expect(existsSync(legacy)).toBe(true);
+    expect(existsSync(`${legacy}.read.json`)).toBe(false);
   });
 
   test('a message read after the pass read the mailbox is not rung', async () => {
