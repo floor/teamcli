@@ -1667,6 +1667,8 @@ scene('init.refused', async (place) => show(
   'does not verify',
 ));
 scene('init.wrote', async (place) => show(await initial(place, []), 'Wrote'));
+scene('init.approval', async (place) => show(await initial(place, ['--approvals']), 'team-create approval rules'));
+scene('init.approval-refused', async (place) => show(await initial(place, ['--revoke-approval', 'nope']), 'is not a rule id'));
 scene('init.restored', async (place) => {
   approve(place, TEAM);
   rmSync(place.file);
