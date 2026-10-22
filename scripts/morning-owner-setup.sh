@@ -7,16 +7,20 @@
 #      (the global /opt/homebrew/bin/team is replaced only with --replace-global)
 #   3. register the owner seat (Secure Enclave key; Touch ID confirms it)
 #   4. set the entity's owner-signers and grant-emission policies
-#   5. team grant --client grok-bot … --request (the grant to orchestrator@<team>)
-#   6. the owner seat answers always (Touch ID) and the script runs --execute; a re-run renews
-#      the grant through that standing rule with no prompt
+#   5. for each target, team grant --client grok-bot … --inbox --request: send AND messages, so the
+#      target's orchestrator can `team reply` and Iris reads it with `team messages --client`.
+#      One grant binds one entity and one team, so floor (Atlas) and teamcli (Agamemnon) are two.
+#   6. the owner seat answers always (Touch ID, once per target) and the script runs --execute; a
+#      re-run renews each grant through its standing rule with no prompt
 #
 # Every step is skipped when already done, so the script can be re-run after a cancelled prompt.
 #
-#   scripts/morning-owner-setup.sh [--home DIR] [--owner-team floor] [--entity teamcli] [--team teamcli] [--seat orchestrator]
+#   scripts/morning-owner-setup.sh [--home DIR] [--owner-team floor] [--targets floor/floor,teamcli/teamcli] [--seat orchestrator]
 #        [--client grok-bot] [--signer mac] [--identity SHA1 --team-id TEAMID [--profile FILE]]
 #        [--answer always|oui] [--test-signer] [--dev-mode] [--replace-global] [--set-policies] [--dry-run]
 #
+# --targets      comma list of <entity>/<team> the grant goes to (default floor/floor,teamcli/teamcli:
+#                orchestrator@floor is Atlas, orchestrator@teamcli is Agamemnon)
 # --answer       the owner seat's answer to the grant request (default always: a standing, owner-signed
 #                rule, so the weekly renewal of this same grant needs no Touch ID; oui is single-use)
 #
@@ -29,14 +33,13 @@
 # --dry-run      prints the steps and the owner dialogs they will raise; changes nothing.
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
-home=$HOME; owner_team=floor; entity=teamcli; team=teamcli; seat=orchestrator; client=grok-bot; signer=mac
+home=$HOME; owner_team=floor; targets=floor/floor,teamcli/teamcli; seat=orchestrator; client=grok-bot; signer=mac
 identity=""; team_id=""; profile=""; test_signer=0; dev_mode=0; replace_global=0; dry=0; set_policies=0; answer=always
 while [ $# -gt 0 ]; do
   case "$1" in
     --home) home=$2; shift 2 ;;
-    --entity) entity=$2; shift 2 ;;
+    --targets) targets=$2; shift 2 ;;
     --owner-team) owner_team=$2; shift 2 ;;
-    --team) team=$2; shift 2 ;;
     --seat) seat=$2; shift 2 ;;
     --client) client=$2; shift 2 ;;
     --signer) signer=$2; shift 2 ;;
@@ -52,6 +55,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
+entities=$(printf '%s\n' "$owner_team" $(printf '%s' "$targets" | tr ',' '\n' | cut -d/ -f1) | awk 'NF && !seen[$0]++' | paste -sd, -)
 case "$home" in /private/tmp/*|/tmp/*) isolated=1 ;; *) isolated=0 ;; esac
 if [ "$test_signer" = 1 ] || [ "$dev_mode" = 1 ]; then
   [ "$isolated" = 1 ] || { echo "--test-signer and --dev-mode are for an isolated home under /private/tmp only" >&2; exit 2; }
@@ -66,15 +70,18 @@ say() { printf '%s\n' "== $*"; }
 owner() { printf '%s\n' "   OWNER: $*"; }
 
 if [ "$dry" = 1 ]; then
-  say "dry run for HOME=$HOME (owner seat owner@$owner_team, grant $client -> $seat@$team of entity $entity)"
+  say "dry run for HOME=$HOME (owner seat owner@$owner_team, grant $client with inbox -> $seat@ each of $targets)"
   if [ -n "$identity" ]; then say "1 build + codesign helper"; owner "macOS dialog 'codesign wants to sign using key … in your keychain': click Allow (or Always Allow)";
   else say "1 build helper (ad-hoc, no dialog)"; fi
   say "2 build branch, install $team_bin"; [ "$replace_global" = 1 ] && owner "none (but /opt/homebrew/bin/team is replaced: only with your prior OK)"
-  say "3+4 owner seat '$signer' (owner@$owner_team) with entity $entity policies owner-signers=$signer, grant-emission=conversational"
-  owner "Touch ID: 'Create the TeamCLI owner seat for $owner_team and set owner-signers=$signer, grant-emission=conversational for entities $entity, $owner_team'"
-  say "5 grant request $client -> $seat@$team"
-  say "6 owner seat answers $answer"; owner "Touch ID: 'TeamCLI: $answer for Grant for ${client} …' (always: later renewals inside this rule need no prompt)"
-  say "7 grant --execute"
+  say "3+4 owner seat '$signer' (owner@$owner_team) with policies owner-signers=$signer, grant-emission=conversational for $entities"
+  owner "Touch ID: 'Create the TeamCLI owner seat for $owner_team and set owner-signers=$signer, grant-emission=conversational for entities $(printf '%s' "$entities" | sed 's/,/, /g')'"
+  for t in $(printf '%s' "$targets" | tr ',' ' '); do
+    e=${t%%/*}; tm=${t#*/}
+    say "5+6 grant request $client -> $seat@$tm (entity $e), send + messages, answered $answer"
+    owner "Touch ID: 'TeamCLI: $answer for Grant for $client: send + messages to $seat@$tm (entity $e) until …'"
+  done
+  say "7 grant --execute for each answered request (no prompt)"
   exit 0
 fi
 
@@ -118,26 +125,29 @@ if T owner-seat status | grep -q '^owner seat: owner@'; then
   echo "owner seat already registered"
   if [ "$set_policies" = 1 ]; then
     # one owner-device Touch ID per policy write
-    T policy set entity owner-signers "$signer" --entity "$entity"
-    T policy set entity grant-emission conversational --entity "$entity"
+    for e in $(printf '%s' "$entities" | tr ',' ' '); do
+      T policy set entity owner-signers "$signer" --entity "$e"
+      T policy set entity grant-emission conversational --entity "$e"
+    done
   fi
 else
-  T owner-seat setup --team "$owner_team" --signer "$signer" --policy-entity "$entity,$owner_team" --owner-signers "$signer" --grant-emission conversational
+  T owner-seat setup --team "$owner_team" --signer "$signer" --policy-entity "$entities" --owner-signers "$signer" --grant-emission conversational
 fi
 
-say "5 grant request"
 [ -f "$pub" ] || T client keygen --out "$(dirname "$pub")" >/dev/null
-out=$(T grant --client "$client" --entity "$entity" --public-key "$pub" --team "$team" --seat "$seat" --inbox --request --json)
-echo "$out"
-id=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.request_id||j.target||"")})')
-case "$id" in
-  cg_*) echo "already granted by a standing rule: $id"; exit 0 ;;
-  "") echo "no request id" >&2; exit 1 ;;
-esac
-
-say "6 owner answer (Touch ID)"
-T grant --approve-as-owner-seat "$id" "$answer"
-
-say "7 execute"
-T grant --execute "$id"
+for t in $(printf '%s' "$targets" | tr ',' ' '); do
+  e=${t%%/*}; tm=${t#*/}
+  say "5 grant request $client -> $seat@$tm (entity $e), send + messages"
+  out=$(T grant --client "$client" --entity "$e" --public-key "$pub" --team "$tm" --seat "$seat" --inbox --request --json)
+  id=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.request_id||j.target||"")})')
+  case "$id" in
+    cg_*) echo "renewed by the standing rule, no prompt: $id"; continue ;;
+    gr_*) echo "request $id" ;;
+    *) printf '%s\n' "$out" >&2; echo "no request id for $seat@$tm" >&2; exit 1 ;;
+  esac
+  say "6 owner answer $answer (Touch ID)"
+  T grant --approve-as-owner-seat "$id" "$answer"
+  say "7 execute"
+  T grant --execute "$id"
+done
 T owner-seat status
