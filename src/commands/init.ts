@@ -19,6 +19,7 @@ import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts'
 import { version } from '../version.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { ruleRelaxed } from '../security/profile.ts';
 import { admitTeamCreate, approveTeamCreate, createTeamCreateRequest, listApprovalModes, listTeamCreateRules, revokeTeamCreateRule, setApprovalMode } from '../client/team-create.ts';
 import { assertionFile } from '../client-cli.ts';
 
@@ -338,7 +339,8 @@ export async function runInit(
   const notes: string[] = [];
   if (!isOwner(caller) && !createGranted) {
     const ownerLine = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}${devModeExpiryNote(dev)}`;
-    const folded = devModeCallerGate(dev, ownerLine);
+    const folded = devModeCallerGate(dev, ownerLine)
+      ?? (ruleRelaxed(actionHome, 'gate.owner-terminal', store, { now, what: `init by ${describeCaller(caller)}` }) ? `owner terminal gate relaxed by the owner-signed security profile (rule gate.owner-terminal); this call is ${describeCaller(caller)}` : null);
     if (folded === null) {
       refuse(io, json, 'init', {
         id: 'init.not-owner',
