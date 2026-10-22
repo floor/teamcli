@@ -114,12 +114,7 @@ if args.count == 2 && args[1] == "selftest" {
     let signature = try key.signature(for: message)
     guard key.publicKey.isValidSignature(signature, for: message) else { fail("selftest: signature did not verify") }
   } catch { fail("selftest: Secure Enclave signing failed: \(error)") }
-  // Probe whether this binary may keep permanent keychain keys (entitled build) or not.
-  let probe: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecUseDataProtectionKeychain as String: true,
-                              kSecAttrService as String: "com.teamcli.owner-seat.probe", kSecReturnData as String: false]
-  let status = SecItemCopyMatching(probe as CFDictionary, nil)
-  let backend = status == errSecMissingEntitlementCode ? "enclave-blob" : "keychain+enclave-blob"
-  print("ok secure-enclave backend=\(backend)")
+  print("ok secure-enclave")
   exit(0)
 }
 guard args.count >= 3 else { fail("usage: owner-seat-keystore create|public|sign|pin-set|pin-get <label> [reason] | selftest") }
