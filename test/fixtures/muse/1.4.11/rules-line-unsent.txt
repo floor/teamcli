@@ -1,0 +1,10 @@
+
+  Muse Code 1.4.11
+
+  Skills: 56 loaded · 2 warnings (ctrl+o to expand)
+
+── Voice input (⌥ + v to start) ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Read /Users/example/.config/team/demo-3f9c2a8e1d7b/rules/builder-6.md (sha256 68952ad875fc): your standing rules for this session; reply ready and wait for your brief.
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  muse-wonder-full-1.0 · high · ~/fixture/project · YOLO
