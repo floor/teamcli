@@ -191,7 +191,8 @@ and `remove` treat the idle table as free where they would otherwise wait on a w
 give. Status, check and the watch read the seat's state from the same screen: its idle table is
 idle, a running turn is working, and only a screen the profile cannot read is unknown.
 
-The Cursor profile is tested with CLI 2026.10.01 to 2026.10.16 (`cursor-agent`).
+The Cursor profile is tested with CLI 2026.10.01 to 2026.10.19 (`cursor-agent`); the 2026.10.19
+capture is its ready screen, and its dialog and working shapes are those captured at 2026.10.16.
 
 Launching a Cursor seat, like launching cursor-agent by hand, creates Cursor's own project record
 under ~/.cursor/projects for that folder; team writes no trust (.workspace-trusted) and no Cursor

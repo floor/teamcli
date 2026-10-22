@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { profileFor } from '../../src/profiles/index.ts';
 import { launchCommand, statusOnLine, versionVerdict } from '../../src/profiles/profile.ts';
-import { classify, classifyComposer, readBox, readFold, readScreen, screenData } from '../../src/watch/screen.ts';
+import { classify, classifyComposer, readBox, readFold, readScreen, screenData, statusRow } from '../../src/watch/screen.ts';
 import { runningModel } from '../../src/status/statusline.ts';
 import { boxHoldsText, deliverRules, refusalReport, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
 import { rulesLine } from '../../src/launch/rules-file.ts';
@@ -38,7 +38,8 @@ describe('Cursor launch and captured screens', () => {
     expect(versionVerdict('2026.10.02', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.14-0f9edde', cursor.tested)).toBe('tested');
     expect(versionVerdict('2026.10.16-e3cb207', cursor.tested)).toBe('tested');
-    expect(versionVerdict('2026.10.17', cursor.tested)).toBe('newer');
+    expect(versionVerdict('2026.10.19-6bbf2c4', cursor.tested)).toBe('tested');
+    expect(versionVerdict('2026.10.20', cursor.tested)).toBe('newer');
     expect(versionVerdict('2026.09.30', cursor.tested)).toBe('older');
   });
 
@@ -62,8 +63,94 @@ describe('Cursor launch and captured screens', () => {
     expect(readScreen('cursor', current('permission')).kind).toBe('permission');
     expect(readScreen('cursor', current('exit')).kind).toBe('unknown');
     // The folder is the profile's ceiling, and the composer's status row is its model.
-    expect(profileFor('cursor')?.tested.to).toBe('2026.10.16');
+    expect(profileFor('cursor')?.tested.to).toBe('2026.10.19');
     expect(runningModel('cursor', current('idle'))).toEqual({ model: 'Grok', version: '4.7' });
+  });
+
+  test('the 2026.10.19 ready frame reads idle, and its row names Gemini Argon 4', () => {
+    const ready = readFileSync(new URL('../fixtures/cursor/2026.10.19/idle.txt', import.meta.url), 'utf8');
+    const row = '  Gemini 4 Argon High' + ' '.repeat(188 - 21 - 14) + 'Run Everything';
+    // The frame is the composer's ready screen: the status row in its captured place, the
+    // workspace line under it, the prompt row inside the box's two border rows.
+    expect(ready.split('\n')[10]).toBe(row);
+    expect(readScreen('cursor', ready).kind).toBe('idle');
+    expect(classifyComposer('cursor', ready.split('\n')).kind).toBe('idle');
+    // The status row is the one line a quota figure may come from, and it names the model the
+    // launch line's `gemini-4-argon-high` selects: the canonical split is Gemini Argon, version 4.
+    expect(statusRow('cursor', ready)).toBe(row);
+    expect(runningModel('cursor', ready)).toEqual({ model: 'Gemini Argon', version: '4' });
+    expect(statusOnLine('cursor', row)).toEqual({ model: 'Gemini Argon', version: '4' });
+    expect(cursor.modelOf('cursor-agent --model gemini-4-argon-high')).toEqual({ model: 'Gemini Argon', version: '4' });
+    expect(cursor.modelFlag('Gemini Argon', '4')).toEqual({ option: '--model', id: 'gemini-4-argon-high' });
+    // The captured row carries the effort token; the same closed tokens the other families take
+    // are read on this family too, and a row nothing on the pane draws is not the row.
+    expect(statusOnLine('cursor', '  Gemini 4 Argon High · 93.8% · 15 files edited  Run Everything')).toEqual(
+      { model: 'Gemini Argon', version: '4' },
+    );
+    for (const spoof of [
+      '  Gemini 4 Argon Turbo             Run Everything',
+      '  Gemini 4 Argon High  Run Everything and more',
+      ' Gemini 4 Argon High              Run Everything',
+      '  Gemini 4 Argon High',
+    ]) {
+      expect(statusOnLine('cursor', spoof)).toBeNull();
+    }
+  });
+
+  test('the 2026.10.19 row is a position, not just a grammar line', () => {
+    const lines = readFileSync(new URL('../fixtures/cursor/2026.10.19/idle.txt', import.meta.url), 'utf8')
+      .replace(/\n+$/, '')
+      .split('\n');
+    const screen = (rows: string[]) => rows.join('\n');
+    // The captured frame itself.
+    expect(readScreen('cursor', screen(lines)).kind).toBe('idle');
+    // No workspace line under the row: it is not in the position, so nothing is read.
+    expect(readScreen('cursor', screen(lines.slice(0, -1))).kind).toBe('unknown');
+    expect(runningModel('cursor', screen(lines.slice(0, -1)))).toBeNull();
+    // A blank between the row and the workspace line: same.
+    const gapped = [...lines];
+    gapped.splice(gapped.length - 1, 0, '');
+    expect(readScreen('cursor', screen(gapped)).kind).toBe('unknown');
+    // A non-workspace line under the row: same.
+    const wrong = [...lines];
+    wrong[wrong.length - 1] = '  something else';
+    expect(readScreen('cursor', screen(wrong)).kind).toBe('unknown');
+    // A spoofed Argon row in the transcript, above the real frame: the real row below still
+    // sits in its place and wins, exactly as the capture reads.
+    const above = [...lines];
+    above.splice(above.findIndex((line) => /^ {2}→/.test(line)) - 2, 0, lines[10] ?? '');
+    expect(readScreen('cursor', screen(above)).kind).toBe('idle');
+    expect(runningModel('cursor', screen(above))).toEqual({ model: 'Gemini Argon', version: '4' });
+  });
+
+  test('the working queue and a live dialog keep their readings with the Argon row', () => {
+    // The quiet follow-up queue, from the transcribed 2026.10.01 capture: with the spinner row
+    // removed, only the queue rule can read it working, and it carries the Argon status row
+    // the composer draws. The row is chrome the queue's exception must name, or the screen
+    // would fall to the composer and read idle.
+    const queue = readFileSync(new URL('../fixtures/cursor/2026.10.01/follow-up-queue-hint.txt', import.meta.url), 'utf8')
+      .split('\n')
+      .filter((line) => !/^\s*[⠀-⣿]/.test(line));
+    const at = queue.findIndex((line) => /^ {2}Grok /.test(line));
+    queue[at] = '  Gemini 4 Argon High · 93.8% · 15 files edited    Run Everything';
+    expect(readScreen('cursor', queue.join('\n')).kind).toBe('working');
+    // The same queue with a row the grammar refuses: not chrome, so the queue already ended;
+    // the composer reads no row either, and the screen is unknown — never idle.
+    queue[at] = '  Gemini 4 Argon Turbo             Run Everything';
+    expect(readScreen('cursor', queue.join('\n')).kind).toBe('unknown');
+    // A live trust dialog below the ready frame is still the dialog: the core reads dialogs
+    // before the composer, and the ready frame above it cannot hide it.
+    const ready = readFileSync(new URL('../fixtures/cursor/2026.10.19/idle.txt', import.meta.url), 'utf8');
+    const argonRow = ready.split('\n')[10] ?? '';
+    const trust = readFileSync(new URL('../fixtures/cursor/2026.10.16/trust.txt', import.meta.url), 'utf8');
+    expect(readScreen('cursor', ready + '\n' + trust).kind).toBe('trust');
+    // The Argon grammar is also the composer's placed row pattern, so out of place it is
+    // ordinary text and cannot close a live trust dialog: caution wins over a grammar line.
+    const dialog = trust.replace(/\n+$/, '').split('\n');
+    expect(readScreen('cursor', dialog.join('\n') + '\n' + argonRow + '\n  <workspace>').kind).toBe('trust');
+    // The same dialog over the full ready frame reads idle: the status row is in its place,
+    // the trust rule's none_after sees the composer, and the dialog is answered, not live.
+    expect(readScreen('cursor', dialog.join('\n') + '\n' + ready).kind).toBe('idle');
   });
 
   test.each([
@@ -1156,6 +1243,8 @@ describe('the closed Cursor status row', () => {
       row('Composer .'),
       row('Composer 2.5 · 4..2%'),
       row('Gemini 3.8 Flash · .%'),
+      row('Gemini 4..2 Argon High'),
+      row('Gemini 4 Argon · .%'),
       row('Composer 2.5 · 12. files edited'),
       row('Composer 2.5.1. High'),
     ]) {
@@ -1342,6 +1431,7 @@ describe('the closed Cursor status row', () => {
     const captured = [
       '  GPT-5.6 Sol 272K High              Run Everything',
       '  Gemini 3.8 Flash High              Run Everything',
+      '  Gemini 4 Argon High                Run Everything',
       '  Composer 2.5                       Run Everything',
     ];
     for (const row of captured) expect(statusOnLine('cursor', `x${row}`)).toBeNull();
