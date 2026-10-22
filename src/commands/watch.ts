@@ -25,10 +25,11 @@ import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '
 import { watchCommand, watchWouldRead } from './up.ts';
 import { realHost, sendDirect } from './send.ts';
 import { notify } from '../watch/notify.ts';
-import { dropMessage, triggerLine } from '../send/native.ts';
-import { listUnacked } from './messages.ts';
+import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
+import { listUnacked, listUnackedMessages } from './messages.ts';
+import { wakeTrigger } from '../send/wake.ts';
 import { labelSweep } from '../watch/label-tick.ts';
-import { newMemory, NUDGE_TEXT, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { newMemory, NUDGE_TEXT, ownUnsent, pass, ringText, type MailboxWaiting, type Memory } from '../watch/pass.ts';
 import { listUnread } from '../mcp/inbox.ts';
 import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
@@ -941,7 +942,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           readings: stored, foreground, processes,
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
-          mailbox: !foreign && sources.home ? mailboxWaiting(root, dir, team, live, sources.home) : [],
+          mailbox: !foreign && sources.home ? mailboxWaiting(root, dir, team, live, sources.home, new Date(now)) : [],
         });
         // The pass folds its figures where the state is held: two watches of the project fold one
         // after the other, not over each other. A watch on a foreign session still folds, for its
@@ -1332,7 +1333,7 @@ function spendOf(outcomes: readonly CheckOutcome[]): SpendReading[] {
 // prompt may have appeared since. An empty idle prompt is typed into; a box still holding the
 // line this same process typed itself and never sent is sent instead of typed into; anything
 // else — another person's or agent's text, or the same text found after a restart — stays.
-function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, home: string): MailboxWaiting[] {
+function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, home: string, now: Date): MailboxWaiting[] {
   // The ring's line names the seat's own drop read, so a record is ringable only while that read
   // would serve it. `listUnread` is the reader's own list — a message in the seat's drop folder
   // with no verifying read receipt — so the ring and `team drops --read` can never disagree. A
@@ -1351,10 +1352,15 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
   };
   // The owner's inbox is delivered by the Runtime, not a seat's message: a record there never
   // counts as mail waiting in a pane.
-  return listUnacked(root, team.session, home).filter((record) => record.to !== 'owner').map((record) => {
+  return listUnackedMessages(root, team.session, home).filter((record) => record.to !== 'owner').map((record) => {
     const named = live.agents.filter((agent) => agent.name === record.to);
     const agent = named.length === 1 ? named[0] : undefined;
     const seat = team.seats.find((item) => item.name === record.to);
+    // The oldest waiting record's own line: its header, then the fixed read hint. A sender this
+    // home cannot name falls back to the shipped nameless ring rather than ringing nothing.
+    const sender = wakeTrigger(record, home, { root, session: team.session, team }, now);
+    const text = (sender === null ? null : readTriggerLine(record.to, team.session, sender))
+      ?? ringText(record.to, team.session);
     return {
       id: record.id,
       to: record.to,
@@ -1364,6 +1370,7 @@ function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, h
       cli: seat?.cli ?? '',
       screen: agent ? live.screens[agent.pane] : undefined,
       served: waitingIds(record.to).has(record.id),
+      text,
     };
   });
 }

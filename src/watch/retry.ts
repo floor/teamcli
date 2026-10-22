@@ -37,8 +37,7 @@ import { deliverTrigger, draftNote, TRIGGER_TAKEN_NOTE, type DeliverHost } from 
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
 import { markTaken } from '../send/taken.ts';
-import { verifiedPayloadOf, wakeSender } from '../send/wake.ts';
-import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
+import { verifiedPayloadOf, wakeTrigger } from '../send/wake.ts';
 import type { Live } from '../status/compare.ts';
 import { readScreen } from './screen.ts';
 
@@ -146,13 +145,12 @@ async function retryOne(scene: RetryScene, cli: string, pane: string, dropDir: s
     giveUp(scene, dropDir, drop, "its signed record does not verify with this home's key");
     return;
   }
-  const sender = wakeSender(payload, home, { root: scene.root, session: scene.session, team: scene.team });
+  const sender = wakeTrigger(payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
   if (sender === null) {
     giveUp(scene, dropDir, drop, 'its signed record does not name a sender this home can pin');
     return;
   }
-  const format = senderLineFormatInForce({ home, root: scene.root, team: scene.team, now: scene.now });
-  const line = readTriggerLine(drop.to, scene.session, { ...sender, format });
+  const line = readTriggerLine(drop.to, scene.session, sender);
   if (line === null) {
     giveUp(scene, dropDir, drop, 'its trigger line would not fit in a pane');
     return;
