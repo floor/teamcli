@@ -429,7 +429,7 @@ describe('publication recovers without another push', () => {
     expect(main).toMatch(/^evt-work-push-main-worker-1-[0-9a-f]{16}\.json$/);
     expect(noticeBytes('crew-lead', lead)).toContain(REFUSED_BODY);
     expect(noticeBytes('head-lead', main, entityRoot)).toContain(
-      'acme-web: worker-1 is idle with takeable work and its direct work request was refused earlier in this idle episode; nothing was typed for it',
+      'acme-web: worker-1 is idle with takeable work and its direct work request was refused earlier in this idle episode; the attempt is spent and will not be repeated',
     );
     // The main team's own reader serves that recovered body once.
     const read = await readMail(entityRoot);

@@ -190,6 +190,45 @@ describe("the watch's direct-work sender", () => {
     expect(pane.enters).toBe(0);
   });
 
+  test('an epoch replaced during a refused socket dial stops the walk before the typed fallback', async () => {
+    const made = world(null);
+    cleanup = made.cleanup;
+    accepting(made);
+    registered(made);
+    verifiable(made);
+    watching(made);
+    const pane = scripted(['idle', 'working'], null);
+    const dials: string[] = [];
+    const host = fake(made, {
+      native: pane,
+      deliver: async (_socketPath, frame) => {
+        dials.push(frame);
+        // The receiver refuses the frame as a replacement watch takes the session: the walk this
+        // refusal hands the send to is the typed fallback, which must run the principal's recheck
+        // again before any key leaves.
+        replaced(made);
+        throw new Error('the session closed the connection before it took the frame');
+      },
+    });
+
+    const result = await sendWatchDirect(
+      { root: made.root, session: SESSION, capturedEpoch: EPOCH },
+      { seat: 'lead', pane: PANE, cli: 'claude-code', body: 'a note' },
+      host,
+    );
+
+    // The socket attempt was made and refused; the typed fallback was refused by the recheck, not
+    // attempted. The ending names the fallback and the verifier's own reason.
+    expect(result).toEqual({
+      ok: false,
+      refused: "typed: refused: the recorded watch is another watch's epoch",
+    });
+    expect(stagedIds(made)).toHaveLength(1);
+    expect(dials).toHaveLength(1);
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+  });
+
   test('a principal from another root is refused before anything is staged, whatever the io caller', async () => {
     const captured = world(null);
     cleanup = captured.cleanup;

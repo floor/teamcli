@@ -3,9 +3,12 @@
 // (`idleWorkReport`) once per pass and never picks, claims or leases on its own, so the watch
 // cannot disagree with `status` about who is idle or what is takeable. One attempt is spent per
 // seat per idle episode, refusals included; the episode ends only when a later reading no longer
-// counts the seat. The old typed work nudge is suppressed for every episode this dispatcher
-// owns, whether or not a direct route is wired: a seat the dispatcher cannot reach is told
-// nothing rather than typed at by a second path.
+// counts the seat. The legacy typed work nudge is retired for every episode this dispatcher owns:
+// the attempt is the direct route's, and the dispatcher itself never types. The route may type
+// once as its own fallback — the typed trigger behind a socket leg the route actually dialed and
+// the receiver refused (`src/commands/send.ts`) — and that keystroke is part of the same single
+// attempt, under the same admission, seat lock, draft move and authority recheck. A seat whose
+// route never dialed the socket is told nothing rather than typed at by a second path.
 //
 // The spend is durable: the episode's identity is the seat's persisted `last_active`, and the
 // claim that spends its one attempt lives in the session's state record (src/watch/claim.ts).
@@ -57,8 +60,18 @@ export function workPushResultOf(result: DirectSendResult | null, said: string):
 }
 
 /** The direct route a watch's sources may wire. Absent, this dispatcher sends nothing and types
- *  nothing; it never falls back to a keystroke of its own. */
+ *  nothing; it never falls back to a keystroke of its own. A wired route's own typed fallback
+ *  (behind a socket leg it dialed and the receiver refused) is the route's, not a second path
+ *  from here. */
 export type WorkPush = (request: WorkPushRequest) => Promise<WorkPushResult>;
+
+/** Whether a route's refusal came from the typed fallback that stands behind a refused socket
+ *  leg. The fallback's own transport names itself first, exactly as `workPushResultOf` formats
+ *  every ending (`typed: <outcome>[: <reason>]`), so the notice can say a fallback was tried
+ *  instead of promising nothing was typed. */
+export function typedFallbackRefused(refused: string): boolean {
+  return refused.startsWith('typed: ');
+}
 
 export type PushedWork =
   | { seat: string; ok: true; outcome: string }
@@ -389,8 +402,11 @@ async function followClaim(
   }
   if (claim.state === 'refused') {
     if (claim.notice !== 'refused') return;
+    // The record keeps no route, so this replay cannot say whether the route's typed fallback
+    // was tried: it says only what is true of every refused claim, and promises no keystroke it
+    // cannot prove.
     replayNotice(input, result, claim.claim_id, 'push', seat,
-      `${input.team.project}: ${seat} is idle with takeable work and its direct work request was refused earlier in this idle episode; nothing was typed for it`,
+      `${input.team.project}: ${seat} is idle with takeable work and its direct work request was refused earlier in this idle episode; the attempt is spent and will not be repeated`,
       pushBinding(seat, claim));
     return;
   }
@@ -418,7 +434,10 @@ function unknownBinding(seat: string, claim: IdleClaim): string {
 }
 
 function refusalText(input: IdleDispatchInput, seat: string, refused: string): string {
-  return `${input.team.project}: ${seat} is idle with takeable work but was not told directly (${refused}); nothing was typed for it`;
+  const tail = typedFallbackRefused(refused)
+    ? 'its typed fallback did not take it'
+    : 'nothing was typed for it';
+  return `${input.team.project}: ${seat} is idle with takeable work but was not told directly (${refused}); ${tail}`;
 }
 
 function stalledText(input: IdleDispatchInput, seat: string): string {

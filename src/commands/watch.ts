@@ -35,7 +35,7 @@ import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
-import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
+import { dispatchIdleWork, typedFallbackRefused, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
 import { nativeHeldSeats } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
@@ -309,7 +309,8 @@ export const realWatchSources: WatchSources = {
   pushWork: async (request) => {
     // The send runs in this process, through the same admission, delivery order and route rules
     // an ordinary send runs; only routes that reach a live receiver without a keystroke are
-    // walked. What the dispatcher reads back is that route's own ending, never an exit code.
+    // walked, plus the typed fallback behind a socket leg this run dialed and the receiver
+    // refused. What the dispatcher reads back is that route's own ending, never an exit code.
     const said: string[] = [];
     const run = await sendDirect(watchIo((text) => said.push(text)), realHost, request);
     return workPushResultOf(run.result, said.join(''));
@@ -1000,7 +1001,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           });
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;
-          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); nothing was typed for it this episode`, false);
+          const tail = typedFallbackRefused(item.refused)
+            ? 'its typed fallback did not take it this episode'
+            : 'nothing was typed for it this episode';
+          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); ${tail}`, false);
         }
         for (const line of idleDispatch.fallback?.failed ?? []) tell(line, true);
         for (const line of idleDispatch.fallback?.missing ?? []) say(line, false);

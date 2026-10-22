@@ -358,11 +358,17 @@ spent before the route is called. The route is the sources' own direct push (`pu
 carries the seat, its pane, its CLI and the rendered body — `watch.nudge` with `<your seat name>`
 replaced by the seat's name, or the fixed line `Team watch: reports are waiting in
 .agents/team.log` when the file sets none. The send the watch runs in its own process stages
-its signed record in the seat's `send-drops` folder and walks only the routes that reach a live
-receiver without a keystroke (`socket`, `headless-resume`); the watch types nothing. A route that
-is absent, refuses or throws leaves one signed Runtime mailbox record for the team lead and one
-for the main orchestrator, deduplicated when they are the same target, and types nothing; a
-target the registry cannot map is named as missing, never replaced by an owner or a guessed
+its signed record in the seat's `send-drops` folder and walks the routes that reach a live
+receiver without a keystroke (`socket`, `headless-resume`), plus the typed leg behind a `socket`
+leg it actually dialed when the receiver refused the frame: the seat's own drop-read trigger,
+under the same admission, seat lock and draft move a typed send uses, with the watch principal's
+authority rechecked immediately before that keystroke exactly as before the socket dial. A socket
+the walk did not dial — another CLI, no declaration, a held mark, an order without the leg, a
+declared order without `typed` — types nothing. A route that is absent, refuses or throws leaves
+one signed Runtime mailbox record for the team lead and one for the main orchestrator,
+deduplicated when they are the same target; its body says nothing was typed, or that the route's
+typed fallback did not take the work when the refusal came from that fallback. A target the
+registry cannot map is named as missing, never replaced by an owner or a guessed
 seat. A wake the route accepted is checked at the first pass at least a minute later: a live
 lease the seat holds, or an activity clock at or past the wake, settles it silently; otherwise
 one still-idle record is written and the episode wakes the seat no more.
@@ -372,11 +378,13 @@ stretch — `<project>: <n> idle, nothing queued (<names>)` — and none under a
 notices are the word. The stretch's signature is the idle seats and their clocks, so a changed
 cast is a new stretch.
 
-Automatic work is never typed by the watch: the pass's own work-entry typing and the status
-engine's automatic-work nudges are drained without typing. The typed lines that remain are the
-ring, the pause notice, the held-send retry and the unread wake (§3.6); the ring is suppressed
-for a seat whose idle episode the dispatcher owns that pass. The dispatcher publishes no bus
-event kind and invents none.
+The dispatcher never types, and the body of automatic work is never typed: the pass's own
+work-entry typing and the status engine's automatic-work nudges are drained without typing. The
+one automatic keystroke is the route's own typed fallback described above, and a route that never
+dialed the socket is not typed at by a second path. The typed lines that remain are the ring, the
+pause notice, the held-send retry and the unread wake (§3.6); the ring is suppressed for a seat
+whose idle episode the dispatcher owns that pass. The dispatcher publishes no bus event kind and
+invents none.
 
 Hosting: the daemon-hosted watch lifecycle — the same pass driven by the daemon's fixed
 heartbeat tick, with an existing pane watch asked to hand over through its own loop and stood by

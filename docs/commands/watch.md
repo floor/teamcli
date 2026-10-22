@@ -8,8 +8,10 @@ A report is never typed into a seat. It goes to `.agents/team.log` and to the de
 notification; the operator reads the log. The watch's fixed typed lines are the ring, a pause
 notice, a held send's retry and the wake of a seat whose message has gone unread; none carries a
 report's text, and the retry and the wake name the drop rather than the body. An automatic work
-request is not typed at all. Every pass reads one shared idle snapshot and asks the direct send
-route to deliver the work prompt; `watch.nudge`, when the file sets it, is the body, and when the
+request's body is never typed. Every pass reads one shared idle snapshot and asks the direct send
+route to deliver the work prompt; the route walks the wake channels that need no keystroke, and
+the one keystroke it may make is the seat's own drop read, as its fallback behind a socket leg it
+dialed and the receiver refused. `watch.nudge`, when the file sets it, is the body, and when the
 file omits it the body is the fixed line `Team watch: reports are waiting in .agents/team.log`.
 The snapshot counts a seat idle only when it is declared, exactly one herdr agent carries its
 name, herdr reports that agent idle or done, its screen is an empty prompt, the seat is not the
@@ -306,7 +308,7 @@ what it did instead. The lines around them:
 | `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the line is tried again on the next pass |
 | `rang <seat>: Team: run team drops --read --seat <seat> --session <session>` | a message was already waiting, that seat's box was an empty idle prompt, and the dispatcher did not own an episode for it that pass; the line was typed and sent, and the body was not |
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
-| `<seat>: its work was not dispatched directly (<why>); nothing was typed for it this episode` | the shared idle reading counted the seat idle with takeable work, and the direct route was absent or refused, once per idle episode |
+| `<seat>: its work was not dispatched directly (<why>); nothing was typed for it this episode` | the shared idle reading counted the seat idle with takeable work, and the direct route was absent or refused, once per idle episode; when the refusal is the route's own typed fallback (`<why>` begins `typed: `), the tail reads `its typed fallback did not take it this episode` instead |
 | `<seat> was not told: <why>` / `<role> <seat> was not told: <why>` | a dispatcher record could not be written to the team lead or the main orchestrator; the target and the reason are named, and no identity is invented in its place |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |
 | `<account>: its check is unreadable` | the check command failed, timed out, or printed something other than one to three lines for a subscription or one line for a spend account; its output is never logged |
@@ -329,11 +331,16 @@ what it did instead. The lines around them:
 
 The dispatcher also leaves signed records in the team lead's and the main orchestrator's
 mailboxes, and their bodies are its words, not console lines: `<project>: <seat> is idle with
-takeable work but was not told directly (<why>); nothing was typed for it`; `<project>: <n> idle,
+takeable work but was not told directly (<why>); nothing was typed for it`, whose tail reads
+`its typed fallback did not take it` when `<why>` begins `typed: ` — the route's own trigger was
+refused, so the notice does not promise no keystroke was made; `<project>: <n> idle,
 nothing queued (<names>)`, once per continuous idle stretch and not under a pause; and
 `<project>: <seat> accepted a work wake a minute ago and is still idle with no observed claim; it
 will not be woken again in this idle episode`, once, when a pass at least a minute after an
-accepted wake finds no live lease and no activity clock at or past the wake.
+accepted wake finds no live lease and no activity clock at or past the wake. A refusal replayed
+from a claim an earlier pass settled says only that the direct work request was refused earlier
+in the episode and that the attempt is spent and will not be repeated: the claim keeps no route,
+so the replay claims nothing about a keystroke.
 
 A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, the watch types the seat's own read — `Team: run team drops --read --seat <seat> --session <session>` — and not the body. `--no-nudge` types neither line. A message whose signed read receipt lands after the pass read the mailbox is not rung: the receipt is read once more before the line is typed, and an already-read message is not reminded. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. A seat whose idle episode the dispatcher owns this pass is not rung either: that episode is delivered, or reported undelivered, by the dispatcher, and an unread record waiting is not a second typed wake. The episode stays the dispatcher's whether the route delivered or refused, so neither case types the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes a seat's record there; the owner's
 mailbox is the one the Runtime writes. A report is never typed. A seat the team file marks `human: true` is never typed into: a work drop or ring addressed there is not typed, and the report says whose pane was spared; a held send's retry is given up on with the reason, and its message waits in the drop file.
