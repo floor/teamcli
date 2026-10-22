@@ -24,7 +24,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
-import { claimBindingIn, inboxLive, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, receiptHeld } from '../mcp/inbox.ts';
 import {
   channelLaunchEnabled,
   CHANNEL_CONFIRM_MS,
@@ -33,7 +33,6 @@ import {
   CHANNEL_UNCONFIRMED_REASON,
   recordChannelHeld,
 } from '../mcp/channel.ts';
-import { buildIdentity, type BuildIdentity } from '../version.ts';
 import {
   clearPending,
   markRedelivered,
@@ -78,10 +77,6 @@ export type RetryScene = {
   ownPane: string | null;
   sources: RetrySources;
   now: Date;
-  /** The build this retry delivers as. A channel listener this build cannot vouch for is stale,
-   *  and the retry holds the push name before its wake. Absent, the install on disk is read at
-   *  the wake: a watch started before an install must see the install that is there now. */
-  build?: () => BuildIdentity;
   say(text: string, desktop: boolean): void;
   /** The pass's native hold by seat: nothing is typed at a seat whose presence proves a turn, a
    *  person wait, a session end, or cannot be trusted. Absent, the retry is exactly today's. */
@@ -143,29 +138,33 @@ function hostOf(scene: RetryScene, pane: string): DeliverHost {
   };
 }
 
-/** Whether a channel-enabled listener serves this seat from an install this build cannot vouch
- *  for. Read at the wake, not at the pass start: an install can land, and a listener can be
- *  replaced, between the sender's first probe and this pass. */
-function staleChannelAt(scene: RetryScene, seat: Seat, dropDir: string): boolean {
-  if (seat.cli !== 'claude-code' || !channelLaunchEnabled(seat.launch)) return false;
-  const live = inboxLive(dropDir, scene.root, scene.session, seat.name, (scene.build ?? buildIdentity)());
-  return live.live === false && live.listener?.channel === true;
+/** Whether a wake of this seat can race a channel push at all: the channel is a Claude Code
+ *  launch feature, and a launch without the flag has no server that could push. */
+function channelSeat(seat: Seat): boolean {
+  return seat.cli === 'claude-code' && channelLaunchEnabled(seat.launch);
 }
 
-/** Reserve the push name while this retry wakes the seat. A channel-enabled listener running an
- *  install this build cannot vouch for would otherwise push the same record on top of the wake:
- *  every serving server treats a marker for the id as a push already made, and every later tick
- *  finds this one. The reservation cannot fence a tick that has already passed its own check —
- *  that tick announces the record and its own marker write then fails on this file — but that
- *  announcement names the same id, a server records an id once, and the signed receipt is per
- *  id: the seat may notice the same message twice, never receive two messages. */
+/** Reserve the push name before a retry wake. The reservation is made before the wake whichever
+ *  install is listening, not after judging a listener: a listener can be replaced, or an install
+ *  can land, between any check and the wake, and the name must already be held when that happens.
+ *  Every serving server treats a marker for the id as a push already made, so every later tick of
+ *  every server skips the record, and the retry's socket frame or typed trigger is the one wake
+ *  this pass adds. The record stays in the inbox and `inbox_check`/`inbox_read` still serve it, so
+ *  holding the name never withholds the message.
+ *
+ *  The reservation cannot fence a tick that already passed its own marker check. That tick writes
+ *  the notification — the body is displayed — and its push marker write then fails on this file.
+ *  It creates no second record and no second valid receipt: the receipt is per id, so the claim
+ *  is no second record or id, not at-most-once display. The server's seen set is per process, and
+ *  two servers for one inbox are not excluded, so each live server can do that once; every later
+ *  tick of every process finds the name held. */
 function holdChannelPush(scene: RetryScene, dropDir: string, drop: PendingDrop): void {
   recordChannelHeld(dropDir, {
     v: 1,
     kind: CHANNEL_HELD_RECEIPT,
     id: drop.id,
     at: scene.now.toISOString(),
-    reason: 'the watch retry wakes the seat; the serving channel runs another install',
+    reason: 'the watch retry wakes the seat; the channel push name is held first',
   });
 }
 
@@ -250,11 +249,11 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
       scene.say(`${drop.to}: ${heldWords(drop)} was read on retry (receipt)`, false);
       return;
     }
-    // The retry is a wake of its own, and a channel listener from an install this build cannot
-    // vouch for would push the same record on top of it. The listener is checked again here, at
-    // the wake, and the push name is held before the line is typed; a marker already at that
-    // name is the server's own push, and the write is refused while the retry goes on.
-    if (staleChannelAt(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
+    // The retry is a wake of its own, and any channel server could push the same record on top
+    // of it. The push name is reserved before the line, without waiting to judge the listener:
+    // a marker already at that name is the server's own push, and the write is refused while
+    // the retry goes on.
+    if (channelSeat(seat)) holdChannelPush(scene, dropDir, drop);
     const result = await deliverTrigger(hostOf(scene, pane), pane, line, seat.cli, {
       submitHeld: true,
       dropPath: join(dropDir, drop.id),
@@ -342,14 +341,15 @@ async function retryOne(scene: RetryScene, seat: Seat, pane: string, dropDir: st
 /**
  * The channel's one redelivery: a push whose confirmation window ended with no signed receipt is
  * written again through the next leg — the receiving session's socket, then the typed trigger —
- * and the marker is marked before either attempt, so no later pass can redeliver it. A
- * channel-enabled listener running another install cannot vouch for its code, so the push name is
- * held before the first wake leg; `retryOne` checks again before typing. A receipt that landed
- * first is the read itself: nothing is typed and the record is settled, exactly as the promotion
- * pass would settle it. A socket delivery writes its own receipt and history line; the typed leg
- * is the ordinary retry, whose history line carries `redelivered: channel unconfirmed` as the
- * failed note. A pane this pass cannot type at spends the one redelivery all the same: the marker
- * says the watch tried, and the message stays where a person can send it again.
+ * and the marker is marked before either attempt, so no later pass can redeliver it. A channel
+ * server could push the same record at any tick, so the push name is reserved before the first
+ * wake leg, whichever install is listening; `retryOne` reserves again before typing. A receipt
+ * that landed first is the read itself: nothing is typed and the record is settled, exactly as
+ * the promotion pass would settle it. A socket delivery writes its own receipt and history line;
+ * the typed leg is the ordinary retry, whose history line carries `redelivered: channel
+ * unconfirmed` as the failed note. A pane this pass cannot type at spends the one redelivery all
+ * the same: the marker says the watch tried, and the message stays where a person can send it
+ * again.
  */
 async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dropDir: string, drop: PendingDrop): Promise<void> {
   const home = scene.home;
@@ -375,10 +375,10 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
     return;
   }
   markRedelivered(dropDir, drop, CHANNEL_UNCONFIRMED);
-  // The socket leg is a wake of its own, and the typed leg inside `retryOne` rechecks at its own
-  // wake: the push name is held before the first of them, so a stale channel listener cannot
-  // push the same record on top of either.
-  if (staleChannelAt(scene, seat, dropDir)) holdChannelPush(scene, dropDir, drop);
+  // The socket leg is a wake of its own, and the typed leg inside `retryOne` reserves again: the
+  // push name is held before the first of them, whichever install is listening, so a server that
+  // appears or changes between this point and the wake still finds the record held.
+  if (channelSeat(seat)) holdChannelPush(scene, dropDir, drop);
   const marked: PendingDrop = { ...drop, redelivered: CHANNEL_UNCONFIRMED };
   if (scene.socketRedeliver !== undefined) {
     const socket = await scene.socketRedeliver(dropDir, marked);

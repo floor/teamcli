@@ -1573,7 +1573,9 @@ describe('retryHeldDrops and a stale channel', () => {
     // The send and its record: a held drop, nothing typed yet, and no listener to ask.
     const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
     // The install changes under the watch: the listener serving this seat now runs another
-    // version and another packed commit of the same CLI, with the channel declared.
+    // version and another packed commit of the same CLI, with the channel declared. The retry
+    // reserves the push name before its wake whichever listener is there, so the change does
+    // not open a window: the name is held before the typed line.
     writeListener(dropDir, {
       v: 1,
       seat: 'lead',
@@ -1598,7 +1600,6 @@ describe('retryHeldDrops and a stale channel', () => {
       ownPane: null,
       sources: scripts(one),
       now: NOW,
-      build: () => ({ version: '0.5.5', build: 'bbbbbbbbbbbbbbbb', builtAt: NOW.getTime(), head: 'b'.repeat(40) }),
       say: () => {},
     });
 
