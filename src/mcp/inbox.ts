@@ -103,6 +103,10 @@ export type InboxListener = {
   ts: string;
   version?: string;
   build?: string | null;
+  /** True when this server declared the development channel: it pushes new messages and serves
+   *  the `ack` tool. A marker without it is a serving inbox with no channel, and the send walks
+   *  its next leg. */
+  channel?: true;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` and the marker's `ts` are there when
@@ -187,6 +191,7 @@ export function readListener(dropDir: string): InboxListener | null {
       ts: parsed.ts,
       ...(typeof parsed.version === 'string' ? { version: parsed.version } : {}),
       ...(typeof parsed.build === 'string' || parsed.build === null ? { build: parsed.build } : {}),
+      ...(parsed.channel === true ? { channel: true as const } : {}),
     };
   } catch {
     return null;
