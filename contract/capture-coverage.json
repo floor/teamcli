@@ -426,7 +426,7 @@
     "muse": {
       "idle": {
         "real": 5,
-        "constructed": 2,
+        "constructed": 3,
         "undocumented": 0
       },
       "working": {
@@ -435,7 +435,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 1,
+        "real": 2,
         "constructed": 1,
         "undocumented": 0
       },
@@ -2182,6 +2182,18 @@
       "file": "muse/1.4.11/idle.txt",
       "cli": "muse",
       "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "muse/1.4.11/placeholder-synthetic.txt",
+      "cli": "muse",
+      "kind": "idle",
+      "provenance": "constructed"
+    },
+    {
+      "file": "muse/1.4.11/rules-line-unsent.txt",
+      "cli": "muse",
+      "kind": "unsent",
       "provenance": "capture"
     },
     {
