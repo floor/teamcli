@@ -558,7 +558,6 @@ describe('the channel redelivery', () => {
     // be there, before any wake, or a later tick of the stale server would find the id free.
     let heldAtSocket: boolean | undefined;
     const scene = sceneOf(made, box, due, said, {
-      build: () => ({ version: '0.5.5', build: 'b'.repeat(16), builtAt: NOW.getTime(), head: 'b'.repeat(40) }),
       socketRedeliver: async (dropDir, drop) => {
         heldAtSocket = channelPushHeld(dropDir, drop.id);
         return { ok: true };
@@ -571,6 +570,35 @@ describe('the channel redelivery', () => {
     const marker = JSON.parse(readFileSync(channelPushPath(dir, SOCKET_ID), 'utf8')) as Record<string, unknown>;
     expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id: SOCKET_ID });
     // The held marker is not a push: the socket delivery is the one wake that happened.
+    expect(channelPushed(dir, SOCKET_ID)).toBe(false);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([]);
+    expect(said).toEqual([`lead: a channel send from owner was redelivered on the socket`]);
+  });
+
+  test('an install that changes at the socket wake finds the push name already held', async () => {
+    const made = channelWorld();
+    // Nothing serves this seat when the pass starts, and a legacy channel listener appears inside
+    // the socket leg. A reservation made after judging the listener would see nothing to judge
+    // and leave the name free; the retry reserves before the leg instead, so the listener that
+    // appears mid-wake still finds the id held.
+    const dir = seedChannel(made, SOCKET_ID, BODY);
+    const box = pane(claudeBox(''));
+    const said: string[] = [];
+    const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
+    let heldWhenChanged: boolean | undefined;
+    const scene = sceneOf(made, box, due, said, {
+      socketRedeliver: async (dropDir, drop) => {
+        staleListening(made);
+        heldWhenChanged = channelPushHeld(dropDir, drop.id);
+        return { ok: true };
+      },
+    });
+
+    await retryHeldDrops(scene);
+
+    expect(heldWhenChanged).toBe(true);
     expect(channelPushed(dir, SOCKET_ID)).toBe(false);
     expect(box.typed).toEqual([]);
     expect(box.enters).toBe(0);

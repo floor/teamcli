@@ -168,14 +168,21 @@ a push already made and skips it. The marker is not a push: the sender's wait re
 server's `channel-push` marker as delivery, and a wait that finds the held marker alone has
 delivered nothing.
 
-The watch's retry makes the same identity check before its first wake leg — the socket frame or
-the typed trigger — and leaves the same held marker at the push marker's name; the typed leg
-checks again at its own wake, because an install can land between the two. A serving server's
-check and the retry's write are two processes' steps, not one: a tick that has already passed its
-check can still announce the record, and its own marker write then fails on the held name. That
-race is bounded: the announcement names the same id, a server records an id once in its own seen
-set, and the signed receipt is per id — the seat may notice the same message twice, but it never
-receives two messages or two receipts, and every later tick finds the name held.
+The watch's retry reserves the same name before its first wake leg — the socket frame or the
+typed trigger — and again before its typed line, without judging the listener first. That is
+deliberate: an install, or a listener, can change between any check and the wake, so the name is
+held before the wake rather than after a verdict that could be stale by the time the wake lands.
+The record stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the name
+never withholds the message.
+
+One window remains, and it is a display duplicate, not a second message. A serving server writes
+the notification before its push marker. A tick that has already passed its marker check before
+the retry's write can therefore display the full body of the same id, and its own marker write
+then fails on the held name. No second record is created and no second valid receipt is written:
+both are per id. So the claim is no second record or id, not at-most-once display. Two serving
+processes for one inbox are not excluded — the listener marker is last-writer-wins and each
+process's seen set is its own — so each live server can do that once; every later tick of every
+process finds the name held.
 
 ## The evidence rule
 
