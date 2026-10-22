@@ -27,7 +27,7 @@ function watched(health: DaemonHealth): Watched[] {
 export function hostedWatchNotes(health: DaemonHealth, now: Date): string[] {
   const entries = watched(health);
   return entries.flatMap((entry) => [
-    qualify(watchPhaseLine(entry.watch, now), entry, entries.length),
+    qualify(watchPhaseLine(entry.watch, health.version), entry, entries.length),
     ...(entry.watch.effects === 'blocked' ? [qualify(BLOCKED_LINE, entry, entries.length)] : []),
   ]);
 }
@@ -55,9 +55,9 @@ export function hostedWatchCheckNotes(
     const { watch } = entry;
     if (watch.phase === 'standby') {
       const stoodDownForThisRoute = ownPane !== undefined && entry.root === ownPane.route;
-      if (!stoodDownForThisRoute || ownPane!.live) lines.push(watchPhaseLine(watch, now));
+      if (!stoodDownForThisRoute || ownPane!.live) lines.push(watchPhaseLine(watch, health.version));
     } else if ((watch.phase === 'stopped' || watch.phase === 'failed') && watch.required) {
-      lines.push(watchPhaseLine(watch, now));
+      lines.push(watchPhaseLine(watch, health.version));
     } else if (watch.phase === 'running' && watch.lastCycleOutcome === 'failed') {
       const at = watch.lastCycleAt === null ? '' : ` ${formatRelativeTime(watch.lastCycleAt, now)}`;
       lines.push(`watch: the last cycle failed${at}`);
@@ -103,19 +103,23 @@ export function paneWatchCheckNotes(
   return ['watch: none running; the next team up starts one'];
 }
 
-/** One watched route's phase, with no cycle claim it cannot support: a running watch that has
- *  not completed a pass says "not yet cycled", never a last-cycle time. */
-function watchPhaseLine(watch: HostedWatchState, now: Date): string {
+/** One watched route's phase. A running watch names the instant it started in this daemon and
+ *  the build the daemon reports: an install that changed the package's version or packaged
+ *  commit is a restart of the daemon, and the line says which identity is cycling. A watch that
+ *  has not completed a pass yet still says it is running — `starting` is the host's own state
+ *  for a loop that has not reached its first pass, and that state is said separately. */
+function watchPhaseLine(watch: HostedWatchState, version: string | null): string {
   if (watch.phase === 'standby') {
     const why = watch.why === null || watch.why === '' ? '' : ` (${watch.why})`;
     return `watch: standing by; a live pane watch owns this session${why}`;
   }
   if (watch.phase === 'starting') return 'watch: starting in the daemon, not yet cycled';
+  if (watch.phase === 'running') {
+    return `watch: running in the daemon since ${watch.startedAt}, version ${version ?? 'unknown'}`;
+  }
   if (watch.phase === 'stopping') return 'watch: stopping in the daemon';
   if (watch.phase === 'stopped') return `watch: stopped in the daemon (${reason(watch.why)})`;
-  if (watch.phase === 'failed') return `watch: failed in the daemon (${reason(watch.why)})`;
-  if (watch.lastCycleAt === null) return 'watch: in daemon, not yet cycled';
-  return `watch: in daemon, last cycle ${formatRelativeTime(watch.lastCycleAt, now)}`;
+  return `watch: failed in the daemon (${reason(watch.why)})`;
 }
 
 function reason(why: string | null): string {
