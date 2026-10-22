@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { readArgs } from '../src/args.ts';
 import type { CheckSources } from '../src/check/team.ts';
@@ -38,9 +38,14 @@ import { clientRequestBody, signClientRequest, type ClientRequest } from '../src
 import { CLIENT_REQUEST_DOMAIN } from '../src/client/verify.ts';
 import type { Caller } from '../src/caller.ts';
 import type { Io } from '../src/io.ts';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
+import { resolveLobby } from '../src/lobby/gate.ts';
 import { emptySession, updateState, type SessionState } from '../src/state.ts';
 import { registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { readHistory, type HistoryEntry } from '../src/send/history.ts';
 import { signedRecordOf, verifyRecord } from '../src/send/record.ts';
+import type { SendOutcome } from '../src/send/uds.ts';
+import type { DeliveryLeg } from '../src/settings/inherit.ts';
 import { keyOf, messageKeyState, verifyDomain } from '../src/store/keys.ts';
 import { testIo } from './helpers.ts';
 
@@ -854,5 +859,306 @@ describe('the client pane guard on keygen', () => {
     const io: Io = { stdout: () => {}, stderr: () => {}, cwd: base, env: {}, stdinIsTTY: false, caller: { kind: 'unplaced', reason: 'it is run by an agent (cursor-agent) outside herdr' } };
     expect(runClient(['keygen', '--out', out], io, home)).toBe(0);
     expect(existsSync(join(out, 'client.key'))).toBe(true);
+  });
+});
+
+// The client send's walk, against the public `runSend`/`SendHost` seam: the same signed drop the
+// grant wrote, carried through the coordinator seat's resolved order — its own inbox channel, the
+// cross-session socket, then the typed trigger — with every leg keeping its ordinary pane-safety
+// checks. The grant, the registry binding and the drop folder are the client fixture's; only the
+// receiving team's file, its seat's declaration and the fake host are added here.
+
+const WALK_RULE = '─'.repeat(30);
+
+/** The one trigger the typed leg types for this record: the receiver's own read, named by the
+ *  signed sender. `from` is the client principal the record carries, not a seat. */
+const WAKE_LINE = 'Message from client:grok-bot (client:grok-bot@… Read it with: team drops --read.';
+
+type WalkWorld = Fixture & { dir: string; sockets: string };
+
+/** The receiving team the grant's coordinator resolves to: one Claude Code seat, no declared
+ *  delivery order, so the client default (channel, socket when declared, typed) is what runs. */
+function walkFixture(label: string): WalkWorld {
+  const f = fixture(label);
+  const dir = join(f.teamRoot, '.agents');
+  const sockets = join(f.base, 'sockets');
+  // The lobby an entity's team starts in, which its trust list must name. The team names the
+  // same entity the grant's coordinator resolves to, so an owner-origin frame has its default
+  // reply target (`orchestrator@floor`) and no declaration is needed.
+  const lobby = resolveLobby(f.home, { entity: 'floor' });
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(sockets, { recursive: true });
+  mkdirSync(lobby, { recursive: true });
+  // The receiving team is its own checkout: the team file is found from the team root, never
+  // from the worktree this test file runs in.
+  execFileSync('git', ['init', '-q'], { cwd: f.teamRoot, stdio: 'ignore' });
+  writeFileSync(
+    join(dir, 'team.yaml'),
+    `format: 1
+project: floor
+entity: floor
+coordinator: orchestrator
+operator: orchestrator
+session: floor
+workspace:
+  mode: shared
+trust:
+  - ${f.teamRoot}
+  - ${lobby}
+seats:
+  - role: orchestrator
+    name: orchestrator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+    leads: true
+`,
+  );
+  return { ...f, dir, sockets };
+}
+
+/** A live inbox server's marker beside the seat's drop folder: this process's pid, and the
+ *  fixture's own seat, session and root. */
+function liveInboxIn(w: WalkWorld): void {
+  mkdirSync(w.dropDir, { recursive: true });
+  writeFileSync(
+    join(w.dropDir, '.inbox-listener'),
+    `${JSON.stringify({
+      v: 1,
+      seat: 'orchestrator',
+      session: 'floor',
+      root: w.teamRoot,
+      cli: 'claude-code',
+      pid: process.pid,
+      ts: NOW.toISOString(),
+    })}\n`,
+  );
+}
+
+/** The receiving session's own declaration that it accepts cross-session frames, and the socket
+ *  its pane exposes. The declaration's file predates the socket, so the session was started after
+ *  the declaration took effect and the socket leg is live. */
+function acceptInbound(w: WalkWorld): void {
+  const path = cliHookSettingsPath(w.dir, 'floor', 'orchestrator');
+  if (path === null) throw new Error('the fixture seat declares no settings path');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ crossSessionInbound: 'accept' }));
+  const at = Date.now() - 60_000;
+  utimesSync(path, new Date(at), new Date(at));
+  writeFileSync(join(w.sockets, '222.sock'), '');
+}
+
+type WalkHost = SendHost & {
+  typed: { pane: string; text: string }[];
+  enters: string[];
+  frames: string[];
+  dials: () => number;
+};
+
+/** The host every scene is handed: one idle Claude pane, a socket the pane's second pid owns, and
+ *  a dial that records the frame and answers `ok` unless the scene refuses it. The pane reads back
+ *  the trigger it was typed before Enter, the idle box after it — the shape the proof gate reads. */
+function walkHost(
+  w: WalkWorld,
+  options: {
+    delivery?: Partial<Record<'seat' | 'team', readonly DeliveryLeg[]>>;
+    dial?: (socketPath: string, frame: string) => Promise<SendOutcome>;
+    onDial?: () => void;
+  } = {},
+): WalkHost {
+  const typed: { pane: string; text: string }[] = [];
+  const enters: string[] = [];
+  const frames: string[] = [];
+  const statusByPane: Record<string, string> = { 'pane-orchestrator': 'idle' };
+  let dials = 0;
+  return {
+    typed,
+    enters,
+    frames,
+    dials: () => dials,
+    delivery: options.delivery,
+    agents: () => [{ name: 'orchestrator', pane: 'pane-orchestrator' }],
+    processInfo: () => ({ shell: 111, foreground: [222] }),
+    socketsDir: w.sockets,
+    deliver: async (socketPath: string, frame: string): Promise<SendOutcome> => {
+      dials += 1;
+      frames.push(frame);
+      options.onDial?.();
+      if (options.dial !== undefined) return options.dial(socketPath, frame);
+      return { ok: true };
+    },
+    native: {
+      typeText: (_session: string, pane: string, text: string) => {
+        typed.push({ pane, text });
+        return true;
+      },
+      pressEnter: (_session: string, pane: string) => {
+        enters.push(pane);
+        statusByPane[pane] = 'working';
+        return true;
+      },
+      status: (_session: string, pane: string) => statusByPane[pane] ?? 'idle',
+      wait: async () => {},
+      paneText: (_session: string, pane: string) => {
+        const last = [...typed].reverse().find((one) => one.pane === pane);
+        if (last && !enters.includes(pane)) return `${WALK_RULE}\n❯ ${last.text}\n${WALK_RULE}`;
+        return `${WALK_RULE}\n❯ \n${WALK_RULE}`;
+      },
+    },
+    now: () => NOW,
+    home: w.home,
+    sendId: () => 'drop-1',
+    inboxGraceMs: 0,
+    deliverWaitMs: 50,
+    pollReadyMs: 5,
+  } as unknown as WalkHost;
+}
+
+/** The receiving team's history, oldest first. */
+function walkHistory(w: WalkWorld): HistoryEntry[] {
+  const read = readHistory('floor', w.teamRoot, w.home);
+  if (!read.ok) throw new Error(read.reason);
+  return read.entries;
+}
+
+describe('the client send walk', () => {
+  test('a live inbox channel takes the drop and nothing is typed', async () => {
+    const w = walkFixture('walk-inbox');
+    liveInboxIn(w);
+    const host = walkHost(w);
+    const io = capture(w);
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    // The client contract is unchanged by the walk: one confirmation line, one key-isolation line.
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(existsSync(join(w.dropDir, 'drop-1'))).toBe(true);
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
+    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox', outcome: 'sent (unconfirmed)' });
+  });
+
+  test('a receiving session that declares accept takes the frame mid-turn, under the owner header', async () => {
+    const w = walkFixture('walk-socket');
+    acceptInbound(w);
+    const host = walkHost(w);
+    const io = capture(w);
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(host.frames).toHaveLength(1);
+    const frame = JSON.parse(host.frames[0] as string) as { type: string; message: { role: string; content: string }; msg_id: string };
+    expect(frame.type).toBe('user');
+    expect(frame.msg_id).toBe('drop-1');
+    expect(frame.message.content).toBe(
+      'Message from Grok Bot (owner)\n\nhello orchestrator\n\nReply with: team send orchestrator@floor "…"',
+    );
+    // One signed record and the one receipt the socket write leaves, never a second of either.
+    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1', 'drop-1.read.json']);
+    const receipt = JSON.parse(readFileSync(join(w.dropDir, 'drop-1.read.json'), 'utf8')) as {
+      payload: { id: string; status: string; to: string; read_by: string };
+    };
+    expect(receipt.payload).toMatchObject({ id: 'drop-1', status: 'read', to: 'orchestrator', read_by: 'socket delivery' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'socket', outcome: 'delivered' });
+  });
+
+  test('a refused socket frame falls back to the typed trigger with the same record', async () => {
+    const w = walkFixture('walk-fallback');
+    acceptInbound(w);
+    const host = walkHost(w, {
+      dial: async () => ({ ok: false, reason: 'the session closed the connection before it took the frame' }),
+    });
+    const io = capture(w);
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
+    expect(host.dials()).toBe(1);
+    expect(host.typed.map((one) => one.text)).toEqual([WAKE_LINE]);
+    expect(host.enters).toEqual(['pane-orchestrator']);
+    // The frame was never taken, so no read receipt exists for it.
+    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
+    const last = walkHistory(w).at(-1);
+    expect(last).toMatchObject({ via: 'typed', outcome: 'sent (unconfirmed)' });
+    expect(last?.failed).toContain('socket: the session closed the connection before it took the frame');
+  });
+
+  test('with no channel and no inbound declaration, the typed trigger wakes the seat', async () => {
+    const w = walkFixture('walk-typed');
+    const host = walkHost(w);
+    const io = capture(w);
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(host.dials()).toBe(0);
+    expect(host.frames).toEqual([]);
+    expect(host.typed.map((one) => one.text)).toEqual([WAKE_LINE]);
+    expect(host.enters).toEqual(['pane-orchestrator']);
+    expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed', outcome: 'sent (unconfirmed)' });
+  });
+
+  test('a declared order is walked as written, and a live channel is not reached ahead of it', async () => {
+    const w = walkFixture('walk-declared');
+    liveInboxIn(w);
+    const host = walkHost(w, { delivery: { seat: ['typed', 'mcp-inbox'] } });
+    const io = capture(w);
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    // The typed leg is first in the receiver's own word and took the send; the channel never ran,
+    // so no pending marker was written for it.
+    expect(host.typed.map((one) => one.text)).toEqual([WAKE_LINE]);
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed' });
+  });
+
+  test('a declared order naming a leg a client grant cannot walk keeps only the client legs', async () => {
+    const w = walkFixture('walk-declared-drop');
+    liveInboxIn(w);
+    // `drop` is the durable copy the grant already wrote; the walk skips it and takes the channel.
+    const host = walkHost(w, { delivery: { seat: ['drop', 'mcp-inbox'] } });
+    const io = capture(w);
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    expect(host.typed).toEqual([]);
+    expect(host.frames).toEqual([]);
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox' });
+  });
+
+  test('the record the walk carries is the grant\'s own: one drop, one receipt, client principal intact', async () => {
+    const w = walkFixture('walk-identity');
+    acceptInbound(w);
+    let atDial: { names: string[]; bytes: string } = { names: [], bytes: '' };
+    const host = walkHost(w, {
+      onDial: () => {
+        atDial = {
+          names: readdirSync(w.dropDir).sort(),
+          bytes: readFileSync(join(w.dropDir, 'drop-1'), 'utf8'),
+        };
+      },
+    });
+    const io = capture(w);
+    expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
+    // The record was on disk, alone, before the frame was dialed; the walk did not rewrite it.
+    expect(atDial.names).toEqual(['drop-1']);
+    expect(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')).toBe(atDial.bytes);
+    expect(readdirSync(w.dropDir).sort()).toEqual(['drop-1', 'drop-1.read.json']);
+    const parsed = signedRecordOf(JSON.parse(readFileSync(join(w.dropDir, 'drop-1'), 'utf8')));
+    expect(parsed).not.toBeNull();
+    if (parsed === null) return;
+    expect(parsed.payload.from).toBe(`client:${CLIENT_ID}`);
+    expect(parsed.payload.from_id).toBeNull();
+    expect(parsed.payload.from_client).toEqual({ client_id: CLIENT_ID, grant_id: w.grant.grantId });
+    expect(parsed.payload.to).toBe('orchestrator');
+    expect(parsed.payload.to_id).toBe(w.grant.recipientId);
+    const messageKey = messageKeyState(w.home);
+    expect(messageKey.kind).toBe('key');
+    if (messageKey.kind === 'key') expect(verifyRecord(parsed, messageKey.key)).toBe(true);
+    // The frame names the sender as the person's client, never as a seat address.
+    const frame = JSON.parse(host.frames[0] as string) as { message: { content: string } };
+    expect(frame.message.content).toContain('Message from Grok Bot (owner)');
+    expect(frame.message.content).not.toContain('client:grok-bot@');
   });
 });

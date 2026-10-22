@@ -5,8 +5,8 @@ import { dirname, extname, join, resolve, sep } from 'node:path';
 import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { runClientSend } from '../client/send.ts';
-import { KEY_ISOLATION_LINE } from '../client/records.ts';
+import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
+import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
@@ -22,7 +22,7 @@ import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
 import { contextLine, hasJsonFlag, jsonError, pluralCount, renderTable, writeJson, writeJsonError, type PlanStep } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { PENDING_ID, clearPending, dropTaken, markPending, nativeNonceOf, readPending, restoreTaken, takePending, writePending, type PendingNative, type PendingNativeFallbackLeg } from '../send/pending.ts';
-import { readAgents, type Agent } from '../registry/agents.ts';
+import { getAgent, readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
@@ -52,7 +52,7 @@ import { markTaken } from '../send/taken.ts';
 import { isRegistrySpec, parseSpec, resolveTarget, type Target } from '../send/resolve.ts';
 import { quotaOutDetail, quotaOutOf } from '../send/quota-out.ts';
 import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/uds.ts';
-import { frameFor, frameReplyFor } from '../send/frame.ts';
+import { frameFor, frameReplyFor, type FrameReply } from '../send/frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, recordHeldSocket,
   socketEligible, socketHeldReason, socketSkipReason, type CrossSessionInbound, type InboundDeclaration,
@@ -246,7 +246,17 @@ CLI. \`team route <seat>\` answers the address such a delivery uses.
 --client sends as an external client principal named by an owner-signed grant, never
 as the owner or a seat: the request is signed with the client's own key and one
 signed drop is written to the entity's orchestrator — \`orchestrator@floor\` is the only
-address this build admits. The grant names the destination
+address this build admits. The same signed record is then carried through that
+seat's resolved delivery order — its own inbox channel, the cross-session socket
+when the seat's launch declares \`crossSessionInbound: accept\`, and the typed
+trigger, or the order the seat's files declare — so a seat in the middle of a turn
+can take the message. Only those three legs are walked: the drop the grant wrote is
+already the durable copy, and the native and headless-resume legs belong to the
+seat's own runtime. The walk never changes the invocation's outcome: a leg that is
+skipped, refused or held leaves the signed drop where the seat reads it, and a
+human's pane is never dialed or typed into. The frame names its sender
+\`Message from Grok Bot (owner)\`, and the record keeps the client's own principal:
+from client:grok-bot, no seat id, and the grant binding in from_client. The grant names the destination
 entity and the orchestrator role, expires within 7 days (or what the owner's
 client-grant-max-duration policy allows, up to no end date) and is refused once revoked.
 A request id is used once. The key file is mode 0600 in the client's own
@@ -680,11 +690,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (clientFlag) io.stderr(`${KEY_ISOLATION_LINE}\n`);
     return usage(io, args.error, report, clientFlag);
   }
-  // The client path comes before any caller placement: a TTY can never make this run the owner,
-  // and no leg but the signed drop is walked. `runClientSend` prints the declared limitation.
+  // The client path comes before any caller placement: a TTY can never make this run the owner.
+  // `runClientSend` writes the signed drop and prints the declared limitation; the walk handed
+  // to it then carries that same record through the coordinator seat's channel, socket and
+  // typed legs, so a seat that is mid-turn can take the message without waiting for a turn end.
   if (clientFlag) {
     if (args.values.brief !== undefined) return usage(io, '--brief is for a send to a seat, not a client request', report, true);
-    return runClientSend(args, io, host, json);
+    const deliver: ClientSendDelivery = (sent) => deliverClientRecord(io, host, sent);
+    return runClientSend(args, io, host, json, deliver);
   }
   if (args.values.key !== undefined || args.values['request-id'] !== undefined) {
     return usage(io, '--key and --request-id are only meaningful with --client', report);
@@ -3399,6 +3412,276 @@ export async function walkBriefDelivery(input: {
   return { via: null, walked: true, exit: 1, failures };
 }
 
+/** The frame's opening line for a client send: the person's client, named as the person. The
+ *  identity header a seat frame builds renders the record's address (`client:grok-bot@…`), which
+ *  a receiving seat would answer as a seat; a client grant's message names its sender in the same
+ *  one-line shape seat frames use, with the owner origin. */
+const CLIENT_FRAME_HEADER = `Message from ${CLIENT_SLICE_DISPLAY_NAME} (owner)`;
+
+/** The legs a client send walks. The drop its grant wrote is already the durable copy, so a
+ *  declared order's drop, native and headless-resume legs add nothing here: the walk is the
+ *  transport that reaches a live receiver — its own inbox channel, the cross-session socket and
+ *  the typed trigger — in the order the receiver's files name, or channel, then socket, then
+ *  typed. */
+const CLIENT_LEGS: readonly DeliveryLeg[] = ['mcp-inbox', 'socket', 'typed'];
+
+/**
+ * The client send's own walk, after the grant wrote its drop: the same signed record, carried
+ * through the coordinator seat's resolved delivery order. The order is the receiver's own — its
+ * files and signed settings, or the host's injected chain in a test — and a level that declares
+ * one is walked as written, restricted to the three legs a client grant understands. With no
+ * declared order the walk is the client default the owner asked for: the seat's own inbox
+ * channel, the cross-session socket when the receiver's launch declares `accept`, then the typed
+ * trigger. Every leg keeps its pane-safety checks: a human's pane is never dialed or typed into,
+ * a bare shell is never typed into, and a held frame keeps the socket out until the receiver's
+ * declaration is re-confirmed.
+ *
+ * The drop is already written and signed, so no leg stages a second record: each write accepts
+ * the record at the same id, and the socket leg's receipt keeps it from being served twice. The
+ * walk's own outcome lines are swallowed — the client invocation's two streams keep the contract
+ * they had before any walk existed — while the receiving team's log and history record what each
+ * leg did. A walk with no leg left writes one log and history line and returns: the drop is the
+ * message, and this function never fails the invocation.
+ */
+async function deliverClientRecord(
+  io: Io,
+  host: SendHost,
+  sent: { record: RecordPayload; target: ResolvedClientTarget },
+): Promise<void> {
+  const record = sent.record;
+  const target = sent.target;
+  const root = target.teamRoot;
+  const dir = join(root, '.agents');
+  const dropDir = target.dropDir;
+  const session = target.session;
+  const seatName = target.recipientSeat;
+  const from = record.from;
+  const startedAt = host.now().getTime();
+  // The legs write the receiving team's log and history as they always do; their own outcome
+  // and refusal lines go to a quiet stream, so the client's stdout keeps its one contract line
+  // and its stderr its key-isolation line.
+  const quiet: Io = {
+    ...io,
+    stdout: () => { /* the drop's confirmation is already printed */ },
+    stderr: () => { /* the walk's reason is in the receiving team's log */ },
+  };
+  const report: Report = { json: false, seat: seatName, sent: null, project: null, session };
+  const failures: string[] = [];
+  const markLeg = (leg: DeliveryLeg, state: LegState, reason?: string): void => {
+    const entry = report.delivery?.find((one) => one.leg === leg && one.state === 'not-reached');
+    if (entry === undefined) return;
+    entry.state = state;
+    if (reason !== undefined) entry.reason = reason;
+  };
+  // The receiving team's file names the seat, its CLI, its own declarations and its order. A
+  // file this run cannot read or that names no such seat leaves the drop as the delivery: no
+  // pane is read on a guess.
+  let team: TeamFile | null = null;
+  try {
+    const loaded = readTeamConfig(root, { home: host.home });
+    if (loaded.ok) team = loaded.team;
+  } catch {
+    team = null;
+  }
+  const seat = team === null ? undefined : team.seats.find((one) => one.name === seatName);
+  if (team === null || seat === undefined) {
+    logLine(dir, 'send', from, `${seatName}: the client drop was written; the receiving team file names no such seat, so no delivery leg was walked`, host.now());
+    return;
+  }
+  const project = team.project;
+  let overrides: SeatOverrides = {};
+  if (!host.delivery) {
+    const read = resolveSeatOverrides({ home: host.home, root, seat: seatName });
+    if (!read.ok) {
+      logLine(dir, 'send', from, `${seatName}: the client drop was written; its settings record cannot be read (${read.why}), so no delivery leg was walked`, host.now());
+      return;
+    }
+    overrides = read.overrides;
+  }
+  // A person reads the drop file; no frame is dialed and no line is typed into their pane.
+  const human = overrides.human ?? (seat.human === true);
+  if (human) {
+    logLine(dir, 'send', from, `${seatName}: the client drop was written to its folder; its pane is a human's, so no frame and no trigger were walked`, host.now());
+    appendHistory(project, root, host.home, {
+      ts: host.now().toISOString(),
+      from,
+      to: seatName,
+      body: record.body,
+      id: record.id,
+      thread: record.thread,
+      outcome: 'sent (unconfirmed)',
+      ms: host.now().getTime() - startedAt,
+      via: 'drop',
+    });
+    return;
+  }
+  const rawChain = host.delivery ?? deliveryChainOf({
+    root,
+    seat: seatName,
+    home: host.home,
+    file: team,
+    projectOfTeam: (id) => (host.projects ? host.projects.ofTeam(id) : projectRegistry.ofTeam(host.home, id)),
+    overrides,
+    now: host.now(),
+  });
+  const order = deliveryOrder(rawChain as Partial<Record<SettingLevel, readonly DeliveryLeg[] | undefined>>);
+  const declaredOrder = Object.values(rawChain).some((word) => word !== undefined && word.length > 0);
+  const inbound = declaredInboundOf({
+    dir,
+    root,
+    session,
+    seat: seatName,
+    ...(seat.launch !== undefined ? { launch: seat.launch } : {}),
+  });
+  const socketWord = seat.inbound;
+  const heldStanding = socketHeldReason(readHeldSocket(heldSocketPath(dir, session, seatName)), inbound);
+  const socketNow = SOCKET_SEND && socketEligible(socketWord, inbound) && heldStanding === null;
+  // The agent record the grant bound: its CLI and cross-session address when the registry still
+  // holds them, the receiving file's own seat otherwise.
+  const agentRecord = getAgent(host.home, target.recipientId);
+  const cli = agentRecord?.cli ?? seat.cli;
+  const defaultWalk: DeliveryLeg[] = ['mcp-inbox'];
+  if (socketNow) defaultWalk.push('socket');
+  defaultWalk.push('typed');
+  const walk: readonly DeliveryLeg[] = declaredOrder
+    ? order.filter((leg) => CLIENT_LEGS.includes(leg))
+    : defaultWalk;
+  // The implied socket default's omission is named when the walk does not carry it, the same
+  // way an ordinary send's report explains the socket it did not dial.
+  const impliedSocket = declaredOrder || socketNow ? null : socketIneligibleReason(cli, socketWord, inbound, heldStanding);
+  report.delivery = [
+    ...(impliedSocket === null ? [] : [{ leg: 'socket' as const, state: 'skipped' as const, reason: impliedSocket }]),
+    ...walk.map((leg) => ({ leg, state: 'not-reached' as const })),
+  ];
+  const aim: Aim = {
+    seat: seatName,
+    agentId: target.recipientId,
+    session,
+    cli,
+    address: agentRecord?.reach.address ?? null,
+    sentAs: null,
+    dir,
+    project,
+    root,
+    cross: false,
+  };
+  // A minimal host (the exit-code scenes hand one in) cannot read panes or write a socket; the
+  // legs that would need those capabilities are skipped rather than crashed through.
+  const canPane = typeof host.agents === 'function' && typeof host.processInfo === 'function';
+  const canSocket = canPane && typeof host.deliver === 'function' && host.native !== undefined;
+  const canType = canPane && host.native !== undefined;
+  for (const leg of walk) {
+    if (leg === 'mcp-inbox') {
+      // The seat's own server, not a pane: the leg takes the record only when a live listener
+      // beside the drop names this seat, session and root.
+      const live = inboxLive(dropDir, root, session, seatName, host.build?.());
+      if (!live.live) {
+        failures.push(`mcp-inbox: ${live.reason}`);
+        markLeg('mcp-inbox', 'skipped', live.reason);
+        continue;
+      }
+      markLeg('mcp-inbox', 'attempted');
+      await deliverInbox(quiet, dir, from, from, project, root, session, seatName, dropDir, record, host, report, startedAt, failures);
+      return;
+    }
+    if (leg === 'socket') {
+      // The socket dials only a receiving Claude session whose launch declares
+      // `crossSessionInbound: accept`; the checks are the ordinary walk's, in its order, plus the
+      // host capability a client send may lack.
+      const why = canSocket
+        ? socketIneligibleReason(cli, socketWord, inbound, heldStanding)
+        : 'the send host cannot read a pane or write a socket, so no frame was dialed';
+      if (why !== null) {
+        failures.push(`socket: ${why}`);
+        markLeg('socket', 'skipped', why);
+        continue;
+      }
+      const reply = frameReplyFor(host.home, root, 'owner', '');
+      if ('missing' in reply) {
+        failures.push(`socket: ${reply.missing}`);
+        markLeg('socket', 'skipped', reply.missing);
+        continue;
+      }
+      markLeg('socket', 'attempted');
+      const attempt = await deliverSocketFrame(dir, from, from, aim, record, failures, host, report, startedAt, false, inbound, root, CLIENT_FRAME_HEADER, false, reply);
+      if (attempt.kind === 'delivered') return;
+      if (attempt.kind === 'held') {
+        // The mark is written once: the next send keeps the socket out until the declaration
+        // this hold sat under is re-confirmed.
+        recordHeldSocket(heldSocketPath(dir, session, seatName), inbound, host.now());
+        failures.push(`socket: ${attempt.reason}`);
+        markLeg('socket', 'attempted', attempt.reason);
+        logLine(dir, 'send', from, `${seatName}: the socket held the client frame (${attempt.reason}); the remaining legs continue`, host.now());
+        continue;
+      }
+      failures.push(`socket: ${attempt.reason}`);
+      markLeg('socket', 'attempted', attempt.reason);
+      logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
+      continue;
+    }
+    // The typed leg: the drop is on disk, and the pane receives the one trigger that makes the
+    // seat read it — the same receipt-writing read its own turn-start hook runs.
+    const typedWhy = canType ? null : 'the send host cannot read a pane, so no trigger was typed';
+    if (typedWhy !== null) {
+      failures.push(`typed: ${typedWhy}`);
+      markLeg('typed', 'skipped', typedWhy);
+      continue;
+    }
+    const compose = profileFor(cli)?.compose ?? null;
+    const wakeTemplate = messageDisplayInForce({ home: host.home, root, team, now: host.now() });
+    const trigger = readTriggerLine(seatName, session, {
+      seat: from,
+      team: project,
+      template: wakeTemplate,
+      body: record.body,
+      ageMs: 0,
+      ...(record.subject === undefined ? {} : { subject: record.subject }),
+    });
+    if (trigger === null && compose === null) {
+      failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+      markLeg('typed', 'skipped', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+      continue;
+    }
+    const found = findAgent(host, session, seatName);
+    if (!found.ok) {
+      failures.push(`typed: ${found.reason}`);
+      markLeg('typed', 'skipped', found.reason);
+      continue;
+    }
+    if (isBareShellPane(dir, session, seatName, host.processInfo(session, found.pane))) {
+      failures.push('typed: the seat is back at its shell; nothing was typed');
+      markLeg('typed', 'skipped', 'the seat is back at its shell; nothing was typed');
+      continue;
+    }
+    markLeg('typed', 'attempted');
+    if (compose === null) {
+      if (trigger === null) {
+        failures.push(`typed: the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+        markLeg('typed', 'attempted', `the trigger would exceed ${String(TRIGGER_MAX)} characters`);
+        continue;
+      }
+      await deliverNative(quiet, dir, root, from, from, project, session, seatName, cli, found.pane, dropDir, record, trigger, host, report, startedAt, undefined, failures);
+      return;
+    }
+    // A compose seat's typed leg builds the body through its CLI's own screens.
+    await deliverComposeSeat(quiet, dir, root, from, from, project, session, seatName, cli, found.pane, dropDir, record, resolve(root, seat.cwd), host, report, startedAt, failures);
+    return;
+  }
+  const why = `no leg of its delivery order took the client drop${failures.length === 0 ? '' : ` (${failures.join('; ')})`}`;
+  logLine(dir, 'send', from, `${seatName}: ${why}`, host.now());
+  appendHistory(project, root, host.home, {
+    ts: host.now().toISOString(),
+    from,
+    to: seatName,
+    body: record.body,
+    id: record.id,
+    thread: record.thread,
+    outcome: 'unreachable',
+    ms: host.now().getTime() - startedAt,
+    ...(failures.length > 0 ? { failed: [...failures] } : {}),
+  });
+}
+
 /** The brief was typed into a compose seat's own box and the CLI never confirmed it. The
  *  message is on disk, and the one team.log line is the orchestrator's notice. Exit 1. */
 function typedBriefNotSubmitted(io: Io, dir: string, who: string, seat: string, reason: string, host: SendHost, report: Report): number {
@@ -3682,6 +3965,9 @@ async function deliverSocketFrame(
   header = '',
   /** True for a person-pane seat: no reply line and no read hint, a person answers in its client. */
   personPane = false,
+  /** The reply line for an origin that is not a seat of a sending run — a client grant's owner
+   *  origin. Given, the frame does not need a sending team and the line is used as built. */
+  replyOverride?: FrameReply,
 ): Promise<SocketAttempt> {
   const msgId = payload.id;
   const body = payload.body;
@@ -3691,14 +3977,20 @@ async function deliverSocketFrame(
   const failed = failures.length > 0 ? { failed: [...failures] } : {};
   // The reply line names the seat the signed record carries and the team this run stood in; a
   // team the run does not know is no address at all, and the frame is not dialed rather than
-  // answering somewhere guessed. A person-pane seat has no reply line at all.
-  const sendingTeam = report.from_team;
-  if (sendingTeam === undefined && !personPane) {
-    return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
+  // answering somewhere guessed. A person-pane seat has no reply line at all, and an injected
+  // line (an owner-origin client grant) already names its target and needs no sending team.
+  let reply: FrameReply | null;
+  if (replyOverride !== undefined) {
+    reply = replyOverride;
+  } else {
+    const sendingTeam = report.from_team;
+    if (sendingTeam === undefined && !personPane) {
+      return { kind: 'fallback', reason: 'the sending team is not known, so the frame carries no reply address' };
+    }
+    reply = personPane || sendingTeam === undefined
+      ? null
+      : frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
   }
-  const reply = personPane || sendingTeam === undefined
-    ? null
-    : frameReplyFor(host.home, callerRoot, payload.from, sendingTeam);
   if (reply !== null && 'missing' in reply) return { kind: 'fallback', reason: reply.missing };
   // The frame opens with the sender's display line, then the signed record's own body: the
   // header is display, and the body it precedes still carries the attribution line a reader
