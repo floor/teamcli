@@ -25,10 +25,11 @@ import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '
 import { watchCommand, watchWouldRead } from './up.ts';
 import { realHost, sendDirect } from './send.ts';
 import { notify } from '../watch/notify.ts';
-import { dropMessage, triggerLine } from '../send/native.ts';
-import { listUnacked } from './messages.ts';
+import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
+import { listUnacked, listUnackedMessages } from './messages.ts';
+import { wakeTrigger } from '../send/wake.ts';
 import { labelSweep } from '../watch/label-tick.ts';
-import { newMemory, NUDGE_TEXT, ownUnsent, pass, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { newMemory, NUDGE_TEXT, ownUnsent, pass, ringText, type MailboxWaiting, type Memory } from '../watch/pass.ts';
 import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
@@ -940,7 +941,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           readings: stored, foreground, processes,
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
-          mailbox: !foreign && sources.home ? mailboxWaiting(root, team, live, sources.home) : [],
+          mailbox: !foreign && sources.home ? mailboxWaiting(root, team, live, sources.home, new Date(now)) : [],
         });
         // The pass folds its figures where the state is held: two watches of the project fold one
         // after the other, not over each other. A watch on a foreign session still folds, for its
@@ -1331,23 +1332,31 @@ function spendOf(outcomes: readonly CheckOutcome[]): SpendReading[] {
 // prompt may have appeared since. An empty idle prompt is typed into; a box still holding the
 // line this same process typed itself and never sent is sent instead of typed into; anything
 // else — another person's or agent's text, or the same text found after a restart — stays.
-function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string): MailboxWaiting[] {
+function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string, now: Date): MailboxWaiting[] {
   // The owner's inbox is delivered by the Runtime, not a seat's message: a record there never
   // counts as mail waiting in a pane.
-  return listUnacked(root, team.session, home).filter((record) => record.to !== 'owner').map((record) => {
-    const named = live.agents.filter((agent) => agent.name === record.to);
-    const agent = named.length === 1 ? named[0] : undefined;
-    const seat = team.seats.find((item) => item.name === record.to);
-    return {
-      id: record.id,
-      to: record.to,
-      at: Date.parse(record.at),
-      pane: agent?.pane ?? null,
-      status: agent?.status ?? null,
-      cli: seat?.cli ?? '',
-      screen: agent ? live.screens[agent.pane] : undefined,
-    };
-  });
+  return listUnackedMessages(root, team.session, home)
+    .filter((record) => record.to !== 'owner')
+    .map((record) => {
+      const named = live.agents.filter((agent) => agent.name === record.to);
+      const agent = named.length === 1 ? named[0] : undefined;
+      const seat = team.seats.find((item) => item.name === record.to);
+      // The oldest waiting record's own line: its header, then the fixed read hint. A sender this
+      // home cannot name falls back to the shipped nameless ring rather than ringing nothing.
+      const sender = wakeTrigger(record, home, { root, session: team.session, team }, now);
+      const text = (sender === null ? null : readTriggerLine(record.to, team.session, sender))
+        ?? ringText(record.to, team.session);
+      return {
+        id: record.id,
+        to: record.to,
+        at: Date.parse(record.at),
+        pane: agent?.pane ?? null,
+        status: agent?.status ?? null,
+        cli: seat?.cli ?? '',
+        screen: agent ? live.screens[agent.pane] : undefined,
+        text,
+      };
+    });
 }
 
 async function deliver(

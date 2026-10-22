@@ -134,15 +134,15 @@ export type { Report } from './check.ts';
 // report does not concern.
 export const NUDGE_TEXT = 'Team watch: reports are waiting in .agents/team.log';
 
-/** The one line the watch types into a seat's pane when a message is waiting. Fixed, and not the
- *  body: the body is what the seat's own read prints after it verifies. The seat and session are
- *  the receiving record's own, so the line reads exactly that seat's unread folder — never a
- *  broad log of what every seat in the session has waiting. */
+/** The shipped nameless ring line, used only when a record's sender cannot be named: the seat
+ *  reads its own folder. A named record rings with the `message-display` line instead. */
 export function ringText(seat: string, session: string): string {
   return `Team: run team drops --read --seat ${seat} --session ${session}`;
 }
 
-/** One unacked message the watch has already verified, joined to the seat's pane when it has one. */
+/** One unacked message the watch has already verified, joined to the seat's pane when it has one.
+ *  `text` is the line the ring types: the message's `message-display` header and the fixed read
+ *  hint, built once for the oldest waiting record. */
 export type MailboxWaiting = {
   id: string;
   to: string;
@@ -151,6 +151,7 @@ export type MailboxWaiting = {
   status: string | null;
   cli: string;
   screen: string | undefined;
+  text: string;
 };
 
 export type PassResult = {
@@ -649,9 +650,9 @@ export function pass({
   const ordered = [...mailbox].sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
   for (const record of ordered) {
     const screen = record.pane ? read(record.cli, record.screen) : null;
-    // The receiver's own seat and the session the mailbox was read for: the line sends it to its
-    // own unread drops, never to a listing of the whole session's mail.
-    const text = ringText(record.to, team.session);
+    // The receiver's own line: its message's header and the fixed read hint, the same words the
+    // typed wake uses. The record stays: the receipt is what clears it.
+    const text = record.text;
     const mine = record.pane !== null && screen?.kind === 'unsent'
       && ownUnsent(memory, record.pane, text, record.cli, record.screen);
     // A held seat's record is not rung: a native turn, a person wait, a session end or an

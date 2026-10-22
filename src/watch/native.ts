@@ -31,8 +31,7 @@ import { deliverTrigger, TRIGGER_TAKEN_NOTE, type DeliverHost } from '../send/de
 import { appendHistory } from '../send/history.ts';
 import { readTriggerLine } from '../send/native.ts';
 import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
-import { wakeSender } from '../send/wake.ts';
-import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
+import { wakeTrigger } from '../send/wake.ts';
 import {
   dropTaken,
   listPendingNative,
@@ -320,12 +319,12 @@ async function expireOne(
           restoreTaken(taken.taken, scene.team.project, scene.root, home, record.id);
           return;
         }
-        // The wake names its sender from the record just written, resolved through this home's
-        // registries. A sender that cannot be pinned is not typed nameless: the record stays on
-        // disk and the message waits for the unread report's words.
-        const sender = wakeSender(record, home, { root: scene.root, session: record.session, team: scene.team });
-        const format = senderLineFormatInForce({ home, root: scene.root, team: scene.team, now: scene.now });
-        const line = sender === null ? null : readTriggerLine(record.to, record.session, { ...sender, format });
+        // The wake names its sender and opens with the message's `message-display` header, from
+        // the record just written and this home's registries. A sender that cannot be pinned is
+        // not typed nameless: the record stays on disk and the message waits for the unread
+        // report's words.
+        const sender = wakeTrigger({ ...record, at: record.ts }, home, { root: scene.root, session: record.session, team: scene.team }, scene.now);
+        const line = sender === null ? null : readTriggerLine(record.to, record.session, sender);
         if (pane !== undefined && line !== null) {
           const status = scene.sources.status(pane, record.session);
           const screen = scene.sources.screen(pane, record.session);
