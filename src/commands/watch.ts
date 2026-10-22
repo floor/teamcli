@@ -30,6 +30,7 @@ import { listUnacked, listUnackedMessages } from './messages.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import { labelSweep } from '../watch/label-tick.ts';
 import { newMemory, NUDGE_TEXT, ownUnsent, pass, ringText, type MailboxWaiting, type Memory } from '../watch/pass.ts';
+import { listUnread } from '../mcp/inbox.ts';
 import { modelRuleOfPass } from '../watch/rule-pass.ts';
 import { promoteInboxDrops, retryHeldDrops } from '../watch/retry.ts';
 import { expirePendingNative } from '../watch/native.ts';
@@ -941,7 +942,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           readings: stored, foreground, processes,
           // A record is bound to the file's session. A watch of another session neither rings
           // nor raises the owner line; the file's own watch still does both.
-          mailbox: !foreign && sources.home ? mailboxWaiting(root, team, live, sources.home, new Date(now)) : [],
+          mailbox: !foreign && sources.home ? mailboxWaiting(root, dir, team, live, sources.home, new Date(now)) : [],
         });
         // The pass folds its figures where the state is held: two watches of the project fold one
         // after the other, not over each other. A watch on a foreign session still folds, for its
@@ -1103,6 +1104,9 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           })
           : new Set<string>();
         const ring = result.ring;
+        // The record this pass's ring typed for: the unread wake below types the same line, so
+        // the same pass does not put it in front of the seat twice.
+        let rungId: string | null = null;
         if (ring && delivered.size === 0 && !suppressed.has(ring.to) && hosted === undefined && paceVerified && sources.home !== undefined) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${ring.text}`, false);
           // A read that landed since the pass read the mailbox is the seat's own word: the signed
@@ -1111,12 +1115,15 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           else if (promotedReads.has(`${ring.to}\n${ring.id}`)
             || !listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id && one.to === ring.to)) {
             say(`ring not typed: message ${ring.id} is already read`, false);
-          } else await deliver({
-            pane: ring.pane,
-            text: ring.text,
-            cli: ring.cli,
-            ring: { to: ring.to },
-          }, team, session, sources, memory, say, tell, told);
+          } else {
+            await deliver({
+              pane: ring.pane,
+              text: ring.text,
+              cli: ring.cli,
+              ring: { to: ring.to },
+            }, team, session, sources, memory, say, tell, told);
+            rungId = ring.id;
+          }
         }
         // An inbox send the seat's client has read since the last pass is promoted here: the
         // receipt is that client's own word, and the history records `delivered (read)` once. It
@@ -1148,7 +1155,11 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // `--no-nudge` leaves it out.
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
-            { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
+            {
+              unreadAfter: inForce.unreadAfter,
+              ...(rungId === null ? {} : { skip: new Set([rungId]) }),
+              ...(args.flags.has('no-nudge') || hosted !== undefined || !paceVerified ? { noNudge: true } : {}),
+            },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
@@ -1332,7 +1343,23 @@ function spendOf(outcomes: readonly CheckOutcome[]): SpendReading[] {
 // prompt may have appeared since. An empty idle prompt is typed into; a box still holding the
 // line this same process typed itself and never sent is sent instead of typed into; anything
 // else — another person's or agent's text, or the same text found after a restart — stays.
-function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string, now: Date): MailboxWaiting[] {
+function mailboxWaiting(root: string, dir: string, team: TeamFile, live: Live, home: string, now: Date): MailboxWaiting[] {
+  // The ring's line names the seat's own drop read, so a record is ringable only while that read
+  // would serve it. `listUnread` is the reader's own list — a message in the seat's drop folder
+  // with no verifying read receipt — so the ring and `team drops --read` can never disagree. A
+  // record in the older mailbox store (`.agents/messages/<seat>`) waits for `team messages`, a
+  // reader the ring never names; ringing it typed a command that served nothing and re-fired
+  // every pass. Such a record still raises the owner's waiting note when its box is not free.
+  const servedByDrops = new Map<string, Set<string>>();
+  const waitingIds = (seat: string): Set<string> => {
+    let ids = servedByDrops.get(seat);
+    if (ids === undefined) {
+      const dropDir = join(dir, 'send-drops', team.session, seat);
+      ids = new Set(listUnread(dropDir, { to: seat, root, session: team.session }, home).map((one) => one.id));
+      servedByDrops.set(seat, ids);
+    }
+    return ids;
+  };
   // The owner's inbox is delivered by the Runtime, not a seat's message: a record there never
   // counts as mail waiting in a pane.
   return listUnackedMessages(root, team.session, home)
@@ -1355,6 +1382,7 @@ function mailboxWaiting(root: string, team: TeamFile, live: Live, home: string, 
         cli: seat?.cli ?? '',
         screen: agent ? live.screens[agent.pane] : undefined,
         text,
+        served: waitingIds(record.to).has(record.id),
       };
     });
 }

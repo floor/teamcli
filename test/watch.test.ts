@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
 import { runStatus } from '../src/commands/status.ts';
-import { plantMessage, receiptFile, type MessagePayload } from '../src/commands/messages.ts';
-import { messageKeyOf, RECEIPT_DOMAIN, signDomain, type Json } from '../src/store/keys.ts';
+import { listUnacked, plantMessage, plantRecord, type MessagePayload } from '../src/commands/messages.ts';
+import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { findRoot } from '../src/file/load.ts';
@@ -28,9 +28,9 @@ import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './he
 import { assertJsonErrorShape } from './helpers/output.ts';
 
 // The ring line is the receiver's own: this fixture's team session is `acme-web`, each scene's
-// seat is the one its record names, and the waiting record's sender is the planted `harness`.
+// seat is the one its record names, and a waiting drop record's sender is the planted `lead`.
 const ringFor = (seat: string): string => readTriggerLine(seat, 'acme-web', {
-  seat: 'harness',
+  seat: 'lead',
   team: 'acme-web',
   body: 'the message body itself',
 }) as string;
@@ -1064,9 +1064,31 @@ describe('team watch', () => {
   }
 
   // A message waiting for a seat: the ring is the watch's one fixed typed line, so the delivery
-  // safety tests below type it, while every report beside it is only logged and notified.
+  // safety tests below type it, while every report beside it is only logged and notified. The
+  // record is a drop in the seat's own folder — what the ring's line, `team drops --read`, serves.
+  const WAITING_ID = '11111111-1111-4111-8111-111111111111';
+
+  /** A signed drop in a seat's own folder: the record the ring's line serves. */
+  function dropWaiting(seat: string, body: string, at: string, id = WAITING_ID): string {
+    const root = findRoot(dir);
+    if (!root) throw new Error('the watch fixture is not a git checkout');
+    return plantRecord(join(dir, 'home'), root, 'acme-web', seat, id, body, { at });
+  }
+
+  /** The signed read receipt the seat's own drop read writes, for a read that landed mid-pass. */
+  function readDrop(seat: string, id = WAITING_ID): void {
+    const root = findRoot(dir);
+    if (!root) throw new Error('the watch fixture is not a git checkout');
+    const home = join(dir, 'home');
+    const written = writeReceipt(join(root, '.agents', 'send-drops', 'acme-web', seat), signReceiptPayload({
+      kind: 'receipt', status: 'read', id, to: seat, root, session: 'acme-web',
+      at: '2026-10-03T13:59:30.000Z',
+    }, home), home);
+    if (!written.ok) throw new Error(written.reason);
+  }
+
   function waiting(seat = 'deepseek-acme', at = '2026-10-03T13:59:00.000Z'): Partial<WatchSources> {
-    planted(seat, 'the message body itself', at);
+    dropWaiting(seat, 'the message body itself', at);
     return { home: join(dir, 'home') };
   }
 
@@ -2036,33 +2058,21 @@ describe('team watch', () => {
     expect(Object.values(pointedBudgets).every((one) => 'was' in one)).toBe(true);
   });
 
-  function planted(seat: string, body: string, at: string): MessagePayload {
+  function planted(seat: string, body: string, at: string, id = 'm1'): MessagePayload {
     const root = findRoot(dir);
     if (!root) throw new Error('the watch fixture is not a git checkout');
     const payload: MessagePayload = {
-      kind: 'message', id: 'm1', to: seat, root, session: 'acme-web', at, body, from: 'harness',
+      kind: 'message', id, to: seat, root, session: 'acme-web', at, body, from: 'harness',
     };
     plantMessage(join(dir, 'home'), root, seat, payload.id, payload);
     return payload;
-  }
-
-  /** The receipt `team messages` writes for a message read from the older store: signed with the
-   *  message key over the receipt's own domain, so the watch's unread filter verifies it. */
-  function readMailbox(payload: MessagePayload): void {
-    const home = join(dir, 'home');
-    const receipt = {
-      kind: 'receipt', id: payload.id, to: payload.to, root: payload.root, session: payload.session,
-      at: '2026-10-03T13:59:30.000Z',
-    };
-    const signature = signDomain(RECEIPT_DOMAIN, receipt as Json, messageKeyOf(home));
-    writeFileSync(receiptFile(payload.root, payload.to, payload.id), `${JSON.stringify({ payload: receipt, signature }, null, 2)}\n`);
   }
 
   test('--no-nudge types no ring and presses no Enter; the record stays', async () => {
     // The older `--no-nudge` test already has a report waiting, so the nudge branch runs and the
     // ring branch does not. This pass has no report: the ring would be the only typed line.
     const body = 'the message body itself\nthis second line stays in the record';
-    planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    const at = dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file, '--no-nudge'], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
     expect(typed).toEqual([]);
@@ -2070,13 +2080,13 @@ describe('team watch', () => {
     // The logged line carries the body's first content line as its summary; the rest stays in
     // the record and is never printed.
     expect(io.out).not.toContain(body);
-    expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
-    expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
+    expect(existsSync(at)).toBe(true);
+    expect(existsSync(`${at}.read.json`)).toBe(false);
   });
 
   test('an unacked record rings the idle seat with the wake line and not the body', async () => {
     const body = 'the message body itself\nthis second line stays in the record';
-    planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    const at = dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
     // The line names the record's sender and carries the body's first content line; the rest of
@@ -2087,8 +2097,46 @@ describe('team watch', () => {
     ]);
     expect(typed.join('\n')).not.toContain(body);
     expect(io.out).toContain(`rang claude-operator-acme: ${ringFor('claude-operator-acme')}`);
-    expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
-    expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.read.json'))).toBe(false);
+    expect(existsSync(at)).toBe(true);
+    expect(existsSync(`${at}.read.json`)).toBe(false);
+  });
+
+  test('an unacked record the drop read would not serve is never rung, and types nothing', async () => {
+    // A record in the older mailbox store (`.agents/messages/<seat>`): `team messages` serves it,
+    // but the ring's line names `team drops --read`, which reads only the drop folder. Ringing it
+    // typed a command that printed nothing and left the record unread, so the wake re-fired every
+    // pass — the report Atlas reproduced after the runtime report drops had been moved out.
+    const body = 'the message body itself';
+    planted('deepseek-acme', body, '2026-10-03T13:00:00.000Z');
+    const io = testIo(dir, { kind: 'owner' });
+    await runWatch(['--file', file], io, sources(2, { home: join(dir, 'home') }));
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme');
+    // The record is untouched and still unread: nothing was typed over it, and nothing claimed it
+    // was handed over.
+    expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.json'))).toBe(true);
+    expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.read.json'))).toBe(false);
+  });
+
+  test('an older-store evt-work record is never rung, and types nothing', async () => {
+    // The RC3 observation: `team ack` refused every `evt-work-*` record as an earlier-build one
+    // and `team messages` listed none, yet the wake kept naming them. They wait in the older
+    // mailbox store, which the ring's line — the seat's `team drops --read` — does not read, so
+    // ringing one would type a command that serves nothing, pass after pass.
+    const id = 'evt-work-empty-lead-idle-20261021T000000Z';
+    planted('deepseek-acme', 'the message body itself', '2026-10-03T13:00:00.000Z', id);
+    // The watch's own unread source holds the record — the ring's line is the only thing that
+    // must not name it, because the read that line names would serve nothing.
+    const root = findRoot(dir);
+    if (!root) throw new Error('the watch fixture is not a git checkout');
+    expect(listUnacked(root, 'acme-web', join(dir, 'home')).map((one) => one.id)).toContain(id);
+    const io = testIo(dir, { kind: 'owner' });
+    await runWatch(['--file', file], io, sources(2, { home: join(dir, 'home') }));
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme');
+    const legacy = join(dir, '.agents', 'messages', 'deepseek-acme', `${id}.json`);
+    expect(existsSync(legacy)).toBe(true);
+    expect(existsSync(`${legacy}.read.json`)).toBe(false);
   });
 
   test('a message read after the pass read the mailbox is not rung', async () => {
@@ -2096,23 +2144,23 @@ describe('team watch', () => {
     // pass is still reporting it. The receipt is the seat's own word, so the ring would be a
     // duplicate reminder: the line is not typed, and the watch says the message is already read.
     const body = 'the message body itself';
-    const payload = planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     const code = await runWatch(['--file', file], io, sources(1, {
       home: join(dir, 'home'),
       notify: (text) => {
         notified.push(text);
-        if (text.includes('asked a question')) readMailbox(payload);
+        if (text.includes('asked a question')) readDrop('claude-operator-acme');
       },
     }));
     expect(code).toBe(0);
     expect(typed).toEqual([]);
-    expect(io.out).toContain('ring not typed: message m1 is already read');
+    expect(io.out).toContain(`ring not typed: message ${WAITING_ID} is already read`);
     expect(io.out).not.toContain('rang claude-operator-acme');
   });
 
   test('an idle report for another seat cannot keep a read drop alive by reusing its id', async () => {
-    const target = planted('deepseek-acme', 'target body', '2026-10-03T13:59:00.000Z');
+    dropWaiting('deepseek-acme', 'target body', '2026-10-03T13:59:00.000Z');
     const start = Date.parse('2026-10-03T14:00:00Z');
     const operatorIdle = live({
       'deepseek-acme': { status: 'working', screen: busy },
@@ -2133,10 +2181,10 @@ describe('team watch', () => {
       notify: (text) => {
         notified.push(text);
         if (text.includes('deepseek-acme-2 has been idle')) {
-          readMailbox(target);
-          // A different seat can have the same message id. Its unread record must not
+          readDrop('deepseek-acme');
+          // A different seat can have the same message id. Its unread drop must not
           // authorize ringing the target whose receipt just appeared.
-          planted('deepseek-acme-2', 'other body', '2026-10-03T14:05:00.000Z');
+          dropWaiting('deepseek-acme-2', 'other body', '2026-10-03T14:05:00.000Z');
         }
       },
     }));
@@ -2151,13 +2199,13 @@ describe('team watch', () => {
     // idle seat (the operator's own box) in the same pass. One line is typed, and it is the
     // ring's fixed wake line — never the report's words.
     const body = 'the message body itself';
-    planted('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
+    const at = dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home') }));
     expect(typed).toEqual([`w0:p1 ${ringFor('claude-operator-acme')}`, 'w0:p1 <enter>']);
     expect(io.out).toContain('deepseek-acme-2 asked a question');
     expect(io.out).not.toContain(`w3:p1 ${NUDGE_TEXT}`);
-    expect(existsSync(join(dir, '.agents', 'messages', 'claude-operator-acme', 'm1.json'))).toBe(true);
+    expect(existsSync(at)).toBe(true);
   });
 
   test('a cursor box holding unsent text is not typed into and the record stays', async () => {
@@ -2221,7 +2269,7 @@ describe('team watch', () => {
 
   test('a restarted watch does not send a box that already holds the wake line', async () => {
     const body = 'the message body itself';
-    planted('claude-operator-acme', body, '2026-10-03T13:59:00.000Z');
+    dropWaiting('claude-operator-acme', body, '2026-10-03T13:59:00.000Z');
     const held = claudeBox(ringFor('claude-operator-acme'));
     const sceneHeld = live({ 'claude-operator-acme': { status: 'idle', screen: held } });
     const io = testIo(dir, { kind: 'owner' });

@@ -152,6 +152,11 @@ export type MailboxWaiting = {
   cli: string;
   screen: string | undefined;
   text: string;
+  /** Whether the reader the ring names — the seat's own `team drops --read` — would serve this
+   *  record. A record waiting in the older mailbox store (`.agents/messages/<seat>`) waits for
+   *  `team messages`, not for the drop read, so it can raise the owner's waiting note but is
+   *  never rung: the line names a read that serves nothing, and it would fire every pass. */
+  served: boolean;
 };
 
 export type PassResult = {
@@ -660,7 +665,7 @@ export function pass({
     const held = nativeHeld?.has(record.to) === true;
     const free = !held && record.pane !== null && (record.status === 'idle' || record.status === 'done')
       && (screen?.kind === 'idle' || mine);
-    if (free && ring === null && record.pane !== null) {
+    if (free && record.served && ring === null && record.pane !== null) {
       ring = { pane: record.pane, text, cli: record.cli, to: record.to, id: record.id };
       continue;
     }

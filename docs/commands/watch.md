@@ -24,10 +24,14 @@ leaves one signed record per idle stretch that it found nothing queued, and none
 a seat still idle a minute after an accepted wake, with no live lease and no activity clock past
 the wake, is recorded once and not woken again in that episode.
 
-A message already waiting under
-`.agents/messages/<seat>/` is the ring: when that seat's box is an empty idle prompt, the watch
-types the message-display wake line — the rendered header and the fixed `Read it with: team
-drops --read.` hint — and not the body. A seat whose idle episode the dispatcher owns this pass is not rung: that episode
+A message waiting for a seat in its own drop folder — `.agents/send-drops/<session>/<seat>/`,
+the folder `team drops --read` serves — is the ring: when that seat's box is an empty idle
+prompt, the watch types the message-display wake line — the rendered header and the fixed
+`Read it with: team drops --read.` hint — and not the body. A record waiting in the older
+mailbox store `.agents/messages/<seat>/` is never rung: the read the line names does not serve
+it, so the line would print nothing and fire every pass; that record still raises the owner's
+waiting line when its box is not free. A seat whose idle episode the dispatcher owns this pass is
+not rung: that episode
 is delivered, or reported undelivered, by the dispatcher. Both texts are taken from the live
 file, so they do not wait for a record; a missing record does not stop the ring either. The
 watch types nothing into a screen it can't read as an empty idle prompt, so a
@@ -338,7 +342,13 @@ nothing queued (<names>)`, once per continuous idle stretch and not under a paus
 will not be woken again in this idle episode`, once, when a pass at least a minute after an
 accepted wake finds no live lease and no activity clock at or past the wake.
 
-A message already waiting under `.agents/messages/<seat>/` is not a report. When that seat's box is an empty idle prompt, the watch types the message-display wake line — the rendered header and the fixed `Read it with: team drops --read.` hint — and not the body. `--no-nudge` types neither line. A message whose signed read receipt lands after the pass read the mailbox is not rung: the receipt is read once more before the line is typed, and an already-read message is not reminded. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. A seat whose idle episode the dispatcher owns this pass is not rung either: that episode is delivered, or reported undelivered, by the dispatcher, and an unread record waiting is not a second typed wake. The episode stays the dispatcher's whether the route delivered or refused, so neither case types the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes a seat's record there; the owner's
+A message waiting in a seat's own drop folder is not a report: it is what the ring's own reader,
+`team drops --read`, serves. When that seat's box is an empty idle prompt, the watch types the
+message-display wake line — the rendered header and the fixed `Read it with: team drops --read.`
+hint — and not the body. A record waiting in the older mailbox store `.agents/messages/<seat>/`
+is not rung: that reader does not serve it, so the line would print nothing and fire every pass;
+the record still raises the owner's waiting line when its box is not free. `--no-nudge` types
+neither line. A message whose signed read receipt lands after the pass read the mailbox is not rung: the receipt is read once more before the line is typed, and an already-read message is not reminded. A watch of another session types nothing for a message and raises no owner line; the file's own watch still does both. The record stays. A seat whose idle episode the dispatcher owns this pass is not rung either: that episode is delivered, or reported undelivered, by the dispatcher, and an unread record waiting is not a second typed wake. The episode stays the dispatcher's whether the route delivered or refused, so neither case types the ring. A message older than `nudge_wait` whose box is not free raises one owner line naming the id and the recipient, types nothing, and leaves the record where it is. Nothing in this build writes a seat's record there; the owner's
 mailbox is the one the Runtime writes. A report is never typed. A seat the team file marks `human: true` is never typed into: a work drop or ring addressed there is not typed, and the report says whose pane was spared; a held send's retry is given up on with the reason, and its message waits in the drop file.
 
 A held send is not a report either. When `team send` found the box busy — a draft, a dialog, a trigger the seat did not take — it ended `held`, `not-submitted` or `unreachable` and left the drop and a record beside it. Each pass delivers one such drop per seat once that seat's box is free — an empty idle prompt, the same trigger still in it unsent, or text its owner left, which the pass copies beside the drop, clears with the profile's measured keys and pastes back exactly as `team send` does; a box it can neither claim nor copy faithfully is left alone — bounded at three typed tries and thirty minutes from the send, and a drop that runs out is named by its path so the message can be sent again. A message the delivery order's `mcp-inbox` leg left is not typed while the seat's own client may still read it: the watch promotes a receipt once — one `delivered (read)` history line, nothing typed — and a message still unread ten minutes after the send is handed to the same retry, whose history line records `failed: mcp-inbox: no receipt within 10m`. A message the delivery order's `drop` leg left is never typed, on that schedule or any other: its marker waits for the seat's own signed receipt, and thirty minutes after the send it is given up on with the drop file's path. A typed record always goes before an inbox one, so an inbox message never delays a held send's retry. `--no-nudge` types nothing, so it retries nothing; the promotion types nothing either way and runs in that watch too.
@@ -348,7 +358,9 @@ receipt `watch.unread_after` after it landed — ten minutes by default — gets
 `team drops --read` line a retry types, under the retry's rules (a readable idle prompt or that
 line itself unsent, status `idle` or `done`, the seat lock taken, never a human's pane, a draft
 copied and pasted back). One wake line serves every message due for that seat, and a message a
-held send's retry owns is not woken twice: the retry's marker is the claim. A wake is reserved on
+held send's retry owns is not woken twice: the retry's marker is the claim. A message the same
+pass's ring already typed is not woken again, so one pass puts the line in front of a seat once.
+A wake is reserved on
 disk before the line is typed, and the reservation is the attempt's whole claim: a wake a crash
 interrupted is never typed a second time, a wake the box held or did not submit gives its
 reservation back so a later pass may type it, and one whose delivery reached the pane but could

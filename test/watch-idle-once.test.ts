@@ -359,7 +359,7 @@ describe('watch idle reports (once per period by default, repeat on request)', (
     const live = liveScene({ 'deepseek-acme': { status: 'idle', screen: idleScreen } });
     const mailbox = [{
       id: 'msg-1', to: 'deepseek-acme', at: 0, pane: 'w3:p1', status: 'idle',
-      cli: 'claude-code', screen: idleScreen,
+      cli: 'claude-code', screen: idleScreen, served: true,
       text: `Team: run team drops --read --seat deepseek-acme --session ${file.session}`,
     }];
     const held = pass({

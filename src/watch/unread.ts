@@ -74,7 +74,12 @@ export type UnreadWindow = { unreadAfter: number };
 
 /** The wake is typing, so `--no-nudge` leaves it out; the report is a mailbox record and runs
  *  either way. */
-export type UnreadOptions = UnreadWindow & { noNudge?: boolean };
+export type UnreadOptions = UnreadWindow & {
+  noNudge?: boolean;
+  /** Messages this pass already typed a wake line for — the ring a seat's idle prompt took.
+   *  The unread wake types the same line, so one pass never puts it in front of a seat twice. */
+  skip?: ReadonlySet<string>;
+};
 
 /** Rewrites a reservation with what it was seen to become. This is a record update, never the
  *  reservation itself: the marker was linked into place before the effect, and a failed update
@@ -220,7 +225,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     if (scene.nativeHeld?.has(seat.name) === true) continue;
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
-    const due = listUnread(dropDir, context, home).filter((message) => dueForWake(dropDir, message, nowMs, options));
+    const due = listUnread(dropDir, context, home)
+      .filter((message) => !options.skip?.has(message.id) && dueForWake(dropDir, message, nowMs, options));
     if (due.length === 0) continue;
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
     const found = agents.length === 1 ? agents[0]?.pane : undefined;
@@ -378,8 +384,10 @@ function reportDropId(messageIds: readonly string[]): string {
 }
 
 /** A report addressed to this team's lead is a signed send-drop under an ordinary message id:
- *  `team drops --read` serves a lowercase UUID and writes its receipt, while a legacy mailbox
- *  record and an `unread-…` name are both invisible to that reader. One drop lists every message
+ *  `team drops --read` serves a lowercase UUID and writes its receipt. The `unread-<uuid>` name
+ *  a build before 0.5.3 gave this drop is served by the same reader too, so residual reports from
+ *  that build are handed over and receipted instead of being listed forever; a legacy mailbox
+ *  record lives in a different store and never reaches this folder. One drop lists every message
  *  due in the pass, and its id is fixed by that set. */
 function writeLeadReportDrop(
   target: ReportTarget,
