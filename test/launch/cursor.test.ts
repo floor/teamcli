@@ -153,6 +153,46 @@ describe('Cursor launch and captured screens', () => {
     expect(readScreen('cursor', dialog.join('\n') + '\n' + ready).kind).toBe('idle');
   });
 
+  test('a restarted seat showing its own unsent rules line is read and sent, never retyped', async () => {
+    // The reload frame: the captured 2026.10.19 ready box with the one line delivery types already
+    // in it, unsent from the restart. The line is built exactly as delivery builds it, and the box
+    // is the captured frame's own — the placeholder row replaced, the border and status rows left
+    // where the capture draws them. The Argon status row is what lets the composer read the box at
+    // all; this pins that the restarted seat is recognised, not refused as unknown.
+    const ready = readFileSync(new URL('../fixtures/cursor/2026.10.19/idle.txt', import.meta.url), 'utf8');
+    const line = rulesLine('/home/owner/.config/team/demo-3f9c2a8e1d7b/rules/builder-5.md', '5e1d0a9c4b2f');
+    const sitting = ready.replace('  → Plan, search, build anything', `  → ${line}`);
+    expect(readScreen('cursor', sitting).kind).toBe('unsent');
+    expect(runningModel('cursor', sitting)).toEqual({ model: 'Gemini Argon', version: '4' });
+    // The box reads back as the line, so the started run verifies and sends this one with Enter
+    // instead of typing a second line onto it.
+    expect(boxHoldsText('cursor', line, sitting)).toBe(true);
+    const d = delivery();
+    d.showText(sitting);
+    expect(await deliverRules('cursor', line, 1, d.io)).toBe(true);
+    expect(d.calls).toEqual(['Enter']);
+    // A store path long enough to wrap on the captured pane still reads back: the continuation
+    // rows are the line's own, at the text column the bordered captures draw them.
+    const long = rulesLine('/Users/owner/Library/Application Support/teamcli/projects/acme-3f9c2a8e1d7b/rules/builder-5.md', '5e1d0a9c4b2f');
+    const rows = wordWrap(long, 189 - 4);
+    expect(rows.length).toBeGreaterThan(1);
+    const wrapped = ready.replace(
+      '  → Plan, search, build anything',
+      [`  → ${rows[0]}`, ...rows.slice(1).map((row) => `    ${row}`)].join('\n'),
+    );
+    expect(readScreen('cursor', wrapped).kind).toBe('unsent');
+    expect(boxHoldsText('cursor', long, wrapped)).toBe(true);
+    // A box holding any other line is left alone: the restarted seat's own line is the only text
+    // this reading accepts, and a different line is refused without a keystroke.
+    const other = rulesLine('/home/owner/.config/team/demo-3f9c2a8e1d7b/rules/other-seat.md', '5e1d0a9c4b2f');
+    const otherSitting = ready.replace('  → Plan, search, build anything', `  → ${other}`);
+    expect(boxHoldsText('cursor', line, otherSitting)).toBe(false);
+    const second = delivery();
+    second.showText(otherSitting);
+    expect(await deliverRules('cursor', line, 1, second.io)).toBe(false);
+    expect(second.calls).toEqual([]);
+  });
+
   test.each([
     ['startup', 'idle'],
     ['idle', 'idle'],

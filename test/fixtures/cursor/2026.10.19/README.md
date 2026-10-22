@@ -32,3 +32,19 @@ The transformation from the raw screen, recorded here so the derivation can be c
 Only the ready frame was captured at this version. The trust, permission, question, working,
 unsent and exit shapes keep their `2026.10.16` captures and their readings; this folder makes no
 claim about those screens at `2026.10.19`.
+
+## Constructed: the restarted seat's own unsent rules line
+
+Not a capture. `test/launch/cursor.test.ts` builds the restart frame from `idle.txt` the way the
+other constructed delivery boxes are built: the placeholder row is replaced by `  → ` and the
+rules line `delivery` types — `Read <path> (sha256 <hash>): your standing rules for this session;
+reply ready and wait for your brief.` — and every border, status and workspace row stays where
+the capture draws it. A path long enough to wrap is drawn the way the bordered captures draw
+continuation rows: at the text column, four columns in.
+
+The frame stands for a seat restarted while its rules line sat unsent in the box. With the
+`Gemini 4 Argon High` status row recognised, the composer reads that box: the screen is `unsent`,
+its rows join back to exactly the line, and the launched delivery verifies the line and sends it
+with Enter instead of typing a second line onto it. A box holding any other line is refused
+without a keystroke. This is the expected shape, not an observed one; it makes no claim about
+what the restarted pane draws beyond the captured rows.
