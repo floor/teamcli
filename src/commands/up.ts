@@ -456,6 +456,20 @@ function unidentifiedHold(
   return `its screen runs ${running.model} ${running.version}; the file says ${declaredModel(seat)}; its process was never recorded (${repair})`;
 }
 
+/** The seat as this run launches it: the file's own role, vendor, CLI and capabilities, with the
+ *  bound record's model, version and base launch recipe substituted where the plan resolved one.
+ *  `planned` comes from the UpSeat this run already resolved, so it carries the bound policy when
+ *  the binding was valid and the declaration otherwise; no registry is read again here. */
+function effectiveSeatOf(seat: Seat, planned: UpSeat | undefined): Seat {
+  if (planned === undefined) return seat;
+  return {
+    ...seat,
+    launch: planned.launch,
+    model: planned.model ?? seat.model,
+    version: planned.version ?? seat.version,
+  };
+}
+
 function seatPlan(
   standing: Standing,
   team: TeamFile,
@@ -1549,6 +1563,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...(budget.kind === 'clear' ? {} : { budget }),
     });
   }
+  // The policy this run resolved per seat, cached before any writer runs: a later writer must
+  // use what the launch actually ran, never re-read a record an earlier writer may have changed.
+  const plannedByName = new Map(seats.map((planned) => [planned.name, planned]));
   let verifiedLobby: string | null = null;
   let lobbySeen: LobbySeen | null = null;
   let createLobby = false;
@@ -2098,13 +2115,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           if (current.retained_seats?.[name]) delete current.retained_seats[name];
           const id = prior.id ?? retained?.id ?? mintSeatId();
           const isSkipReady = current.seats[name]?.stage === 'ready' && patch.stage === 'ready';
-          const declared = isSkipReady ? undefined : team.seats.find((seat) => seat.name === name);
+          const declared = team.seats.find((seat) => seat.name === name);
+          // The policy this run kept or launched with: the bound record's model, version and
+          // base recipe where the plan resolved them, the declaration otherwise. A keep writes
+          // it back like a launch, so the next recognition compares against what is on the pane
+          // and never against a declaration this run did not use.
+          const effective = declared === undefined ? undefined : effectiveSeatOf(declared, plannedByName.get(name));
           // The CLI the seat was launched with: `down` needs it when the file no longer names the seat.
-          const cli = team.seats.find((seat) => seat.name === name)?.cli ?? prior.cli;
-          const model = declared?.model ?? prior.model;
-          const version = declared?.version ?? prior.version;
-          const effort = declared ? declared.effort : prior.effort;
-          const launch_line = declared?.launch ?? prior.launch_line;
+          const cli = declared?.cli ?? prior.cli;
+          const model = effective?.model ?? prior.model;
+          const version = effective?.version ?? prior.version;
+          const effort = isSkipReady ? prior.effort : (declared?.effort ?? prior.effort);
+          const launch_line = effective?.launch ?? prior.launch_line;
           const last_active = patch.stage === 'ready'
             ? now().toISOString()
             : (prior.last_active ?? retained?.last_active);
@@ -2155,8 +2177,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // The session registry records the launch itself, with the id TeamCLI set where the CLI
       // takes one; a registry that cannot be written is a note in the run's log, never a refusal.
       sessionStarted(name, started) {
-        const seat = team.seats.find((item) => item.name === name);
-        if (!seat) return;
+        const declared = team.seats.find((item) => item.name === name);
+        if (!declared) return;
+        // The session's model and version are the effective policy the line ran, as the seat
+        // record and the agent registry state it; the command and session history are the
+        // launch's own reading (`started`), never rewritten from the file.
+        const seat = effectiveSeatOf(declared, plannedByName.get(name));
         startedSeats.add(name);
         // The pane ran this seat's launch line: the settings file the install wrote is in a
         // process now, so its minted successor is the seat's from here on, whatever the run
@@ -2407,7 +2433,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         // here: only a real close calls `drop`.
         const ended = readyPane === null && partial === undefined && closedPanes.has(seat.name);
         return {
-          seat,
+          // The registry records the policy this run kept or launched with: the bound record's
+          // recipe where the plan resolved one, the declaration otherwise.
+          seat: effectiveSeatOf(seat, plannedByName.get(seat.name)),
           pane: readyPane,
           ...(held?.id ? { handle: held.id } : {}),
           // The same measured id the launch wrote into the seat's record: the registry keeps it
