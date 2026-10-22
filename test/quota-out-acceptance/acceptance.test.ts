@@ -18,8 +18,9 @@
 // Floor's 2026-10-22 addition supersedes the earlier status word: a recognised wall reads
 // `blocked: quota, resets <time>`, distinct from a bare `blocked`, a `done` or an `idle`. The
 // watch holds the same seat: it types no work nudge into a walled pane at idle_first, at
-// idle_repeat, or past the named reset while the wall is still on screen. Both are pinned below;
-// the send and check rows above are unchanged by the addition.
+// idle_repeat, or past the named reset while the wall is still on screen, and the idle-work
+// snapshot counts no walled seat even when a native turn-end projection says idle. Both are
+// pinned below; the send and check rows above are unchanged by the addition.
 //   check   the existing `stuck at a quota prompt` difference (exit 1), now for agy too, with
 //           the reset form it read; a quote in a working turn is not quota.
 //
@@ -33,6 +34,7 @@ import { verifiedOf } from '../../src/approve/approval.ts';
 import { runTeamCheck } from '../../src/check/team.ts';
 import { runSend } from '../../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../../src/commands/status.ts';
+import { presenceId, type PresenceReading } from '../../src/daemon/presence/contract.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import { rulesOf } from '../../src/launch/rules.ts';
@@ -41,7 +43,9 @@ import { emptySession, updateState, type SeatState } from '../../src/state.ts';
 import type { Standing } from '../../src/store/store.ts';
 import type { Live } from '../../src/status/compare.ts';
 import type { Machine } from '../../src/watch/machine.ts';
+import { idleWorkReport } from '../../src/watch/idle-work.ts';
 import { newMemory, pass } from '../../src/watch/pass.ts';
+import type { PresenceRead } from '../../src/watch/presence.ts';
 import { fake, owner, scripted, world, type World } from '../send-native-fixtures.ts';
 import { testIo } from '../helpers.ts';
 
@@ -554,5 +558,68 @@ describe('watch at a quota-out screen', () => {
   test('control: the same agy seat on a healthy idle frame is woken', () => {
     const { due } = wakePasses(AGY_IDLE);
     expect(due.work.map((one) => one.seat)).toContain('agy-acme');
+  });
+});
+
+// The watch has a second road to an idle seat: the idle-work snapshot (the one `status` prints
+// and the dispatcher reads), which believes a seat's native presence projection and reads the
+// screen only when that projection is absent. A projection that wrote idle at a turn end must
+// not enter that snapshot while the pane draws a wall — the screen stays the proof.
+const PRESENCE_BINDING = 'prs_0123456789ab';
+const PRESENCE_SEAT_ID = 'seat_0123456789ab';
+const PRESENCE_SINCE = '2026-10-03T13:50:00.000Z';
+const PRESENCE_OBSERVED = '2026-10-03T13:50:02.000Z';
+const PROVEN_PRESENCE_ID = presenceId(PRESENCE_SINCE, 'a1b2c3d4');
+if (PROVEN_PRESENCE_ID === null) throw new Error('the quota acceptance instant is not a presence instant');
+const PRESENCE_ID: string = PROVEN_PRESENCE_ID;
+
+function nativeIdle(): PresenceRead {
+  const reading: PresenceReading = {
+    v: 1,
+    seq: 3,
+    id: PRESENCE_ID,
+    state: 'idle',
+    source: 'runtime-hook',
+    event: 'turn-end',
+    binding: PRESENCE_BINDING,
+    since: PRESENCE_SINCE,
+    observedAt: PRESENCE_OBSERVED,
+  };
+  return { kind: 'native', reading };
+}
+
+/** The snapshot over the acceptance team, with agy-acme's own state record and a coherent
+ *  native turn-end projection; only the pane's frame changes between the scenes. */
+function idleSnapshot(agyScreen: string) {
+  const team = wakeTeam();
+  const state = emptySession();
+  state.seats['agy-acme'] = {
+    stage: 'ready',
+    pane: 'w7:p1',
+    last_active: PRESENCE_SINCE,
+    id: PRESENCE_SEAT_ID,
+    presence_binding: PRESENCE_BINDING,
+    presence_applied: { seat_id: PRESENCE_SEAT_ID, binding: PRESENCE_BINDING, seq: 3, applied_at: PRESENCE_OBSERVED },
+  };
+  return idleWorkReport({
+    root: dir,
+    team,
+    state,
+    live: wakeLive(agyScreen),
+    now: NOW,
+    presence: new Map([['agy-acme', nativeIdle()]]),
+    presenceChannelHealthy: (name) => name === 'agy-acme',
+  });
+}
+
+describe('the idle-work snapshot at a quota-out screen', () => {
+  test('a native idle projection behind a wall is not counted as an idle worker', () => {
+    const walled = idleSnapshot(AGY_QUOTA);
+    expect(walled.idle.map((one) => one.seat)).not.toContain('agy-acme');
+  });
+
+  test('control: the same projection on the retained healthy frame is counted', () => {
+    const healthy = idleSnapshot(AGY_IDLE);
+    expect(healthy.idle.map((one) => one.seat)).toContain('agy-acme');
   });
 });
