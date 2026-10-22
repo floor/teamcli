@@ -8,13 +8,17 @@
 #   3. register the owner seat (Secure Enclave key; Touch ID confirms it)
 #   4. set the entity's owner-signers and grant-emission policies
 #   5. team grant --client grok-bot … --request (the grant to orchestrator@<team>)
-#   6. the owner seat answers oui (Touch ID) and the script runs --execute
+#   6. the owner seat answers always (Touch ID) and the script runs --execute; a re-run renews
+#      the grant through that standing rule with no prompt
 #
 # Every step is skipped when already done, so the script can be re-run after a cancelled prompt.
 #
 #   scripts/morning-owner-setup.sh [--home DIR] [--owner-team floor] [--entity teamcli] [--team teamcli] [--seat orchestrator]
 #        [--client grok-bot] [--signer mac] [--identity SHA1 --team-id TEAMID [--profile FILE]]
-#        [--test-signer] [--dev-mode] [--replace-global] [--set-policies] [--dry-run]
+#        [--answer always|oui] [--test-signer] [--dev-mode] [--replace-global] [--set-policies] [--dry-run]
+#
+# --answer       the owner seat's answer to the grant request (default always: a standing, owner-signed
+#                rule, so the weekly renewal of this same grant needs no Touch ID; oui is single-use)
 #
 # --set-policies  when the owner seat already exists, (re)writes owner-signers and grant-emission
 #                 (one owner-device Touch ID each); a fresh setup folds them into its own Touch ID.
@@ -26,7 +30,7 @@
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 home=$HOME; owner_team=floor; entity=teamcli; team=teamcli; seat=orchestrator; client=grok-bot; signer=mac
-identity=""; team_id=""; profile=""; test_signer=0; dev_mode=0; replace_global=0; dry=0; set_policies=0
+identity=""; team_id=""; profile=""; test_signer=0; dev_mode=0; replace_global=0; dry=0; set_policies=0; answer=always
 while [ $# -gt 0 ]; do
   case "$1" in
     --home) home=$2; shift 2 ;;
@@ -44,6 +48,7 @@ while [ $# -gt 0 ]; do
     --replace-global) replace_global=1; shift ;;
     --dry-run) dry=1; shift ;;
     --set-policies) set_policies=1; shift ;;
+    --answer) answer=$2; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -68,7 +73,7 @@ if [ "$dry" = 1 ]; then
   say "3+4 owner seat '$signer' (owner@$owner_team) with entity $entity policies owner-signers=$signer, grant-emission=conversational"
   owner "Touch ID: 'Create the TeamCLI owner seat for $owner_team and set owner-signers=$signer, grant-emission=conversational for entities $entity, $owner_team'"
   say "5 grant request $client -> $seat@$team"
-  say "6 owner seat answers oui"; owner "Touch ID: 'TeamCLI: once for … ${client} …'"
+  say "6 owner seat answers $answer"; owner "Touch ID: 'TeamCLI: $answer for Grant for ${client} …' (always: later renewals inside this rule need no prompt)"
   say "7 grant --execute"
   exit 0
 fi
@@ -131,7 +136,7 @@ case "$id" in
 esac
 
 say "6 owner answer (Touch ID)"
-T grant --approve-as-owner-seat "$id" oui
+T grant --approve-as-owner-seat "$id" "$answer"
 
 say "7 execute"
 T grant --execute "$id"
