@@ -1,0 +1,27 @@
+❯ From orchestrator@teamcli: run team drops --read --seat builder-7 --session teamcli and do that.
+
+  Thought for 9s, ran 2 shell commands
+
+⏺ Write(/tmp/example/capture-notes.txt)
+  ⎿  Wrote 11 lines to /tmp/example/capture-notes.txt
+      1 A neutral tool result stands in for the captured rows; its wording is synthetic and
+        the wrapped continuation keeps the block's shape.
+      2
+        A second synthetic entry, wrapped at the content column as the capture draws it, so
+        the block keeps the row count the screen showed above the error, and
+        the shape the captured block drew above the error.
+      5 A synthetic middle entry for the same reason, with no private note or path in it.
+      6 1. A synthetic list line long enough to reach the wrap column of the captured row.
+      7 2. Another synthetic list line of about the same width as the one above it.
+      8 A last synthetic row where the capture showed its own.
+     … +11 lines
+
+⏺ API Error: Connection lost mid-response. The response above may be incomplete.
+
+✻ Cooked for 5m 51s · done 4:49 AM
+                                                                                                                                                   ✔ Update installed · Restart to update
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── builder-7 ─
+❯
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  no-git · …/lobbies/teamcli · deepseek-flash · S: $000.0 ⣿⣿⣿⣶⣀ 12% · L: 10% (0h00m) · W: 100% (-00.0%) (00h0m)
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
