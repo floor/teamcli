@@ -35,14 +35,27 @@ export const ownerSeat: Command = (argv, io) => runOwnerSeat(argv, io);
 export default ownerSeat;
 
 export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeatOptions = {}): Promise<number> {
+  const outcome = await ownerSeatOutcome(argv, rawIo, options);
+  if (outcome === 'invocation') {
+    return 2; // exit: owner-seat.invocation
+  }
+  if (outcome === 'refused') {
+    return 1; // exit: owner-seat.refused
+  }
+  return 0; // exit: owner-seat.done
+}
+
+type Outcome = 'done' | 'refused' | 'invocation';
+
+async function ownerSeatOutcome(argv: string[], rawIo: Io, options: OwnerSeatOptions): Promise<Outcome> {
   const io = cleanedIo(rawIo);
   const args = readArgs(argv, ['team', 'signer', 'entity', 'days', 'reason', 'port', 'owner-signers', 'grant-emission', 'policy-entity'], ['json']);
   const home = options.home ?? homedir();
   const store = options.store ?? systemOwnerSeatKeyStore();
   const now = options.now ?? (() => new Date());
   const sub = args.rest[0];
-  const refuse = (why: string, code = 1) => { io.stderr(`team owner-seat: ${why}\n`); return code; };
-  if (args.error !== undefined) return refuse(`${args.error}\n${USAGE}`, 2);
+  const refuse = (why: string, outcome: 'refused' | 'invocation' = 'refused'): Outcome => { io.stderr(`team owner-seat: ${why}\n`); return outcome; };
+  if (args.error !== undefined) return refuse(`${args.error}\n${USAGE}`, 'invocation');
 
   if (sub === undefined || sub === 'status') {
     const seat = readOwnerSeat(home);
@@ -52,11 +65,11 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
     } else {
       io.stdout(`${seat === null ? 'owner seat: none' : `owner seat: owner@${seat.team} (entity ${seat.entity}); signers: ${seat.signers.map((s) => `${s.name} (${s.type})`).join(', ')}`}\n${line}\n`);
     }
-    return 0;
+    return 'done';
   }
 
   if (sub === 'setup') {
-    if (args.values.team === undefined || args.values.signer === undefined) return refuse('setup needs --team <team> and --signer <name>', 2);
+    if (args.values.team === undefined || args.values.signer === undefined) return refuse('setup needs --team <team> and --signer <name>', 'invocation');
     const made = registerOwnerSeat(home, { team: args.values.team, signer: args.values.signer, ...(args.values.entity !== undefined ? { entity: args.values.entity } : {}) }, store, now());
     if (!made.ok) return refuse(made.why);
     // The owner's presence confirms the seat: one Touch ID (or login password) on this Mac. An
@@ -91,13 +104,13 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
       io.stdout(`policy: entity ${policyEntity} ${p.name} set\n`);
     }
     io.stdout(`owner seat: registered owner@${made.record.team}, confirmed by Touch ID\nsigner: ${signer.name} (Secure Enclave)\n`);
-    return 0;
+    return 'done';
   }
 
   if (sub === 'profile') {
     const word = args.rest[1];
     const name = word === 'strict' || word === 'relaxed' || word === 'dev' ? profileNameOf(word) : null;
-    if (name === null) return refuse('profile is strict, relaxed or dev', 2);
+    if (name === null) return refuse('profile is strict, relaxed or dev', 'invocation');
     const days = args.values.days === undefined ? 7 : Number(args.values.days.replace(/d$/, ''));
     const proposed = proposeSecurityProfile(home, { profile: name, days, reason: args.values.reason ?? `${name} profile`, ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}) }, now());
     if (!proposed.ok) return refuse(proposed.why);
@@ -105,12 +118,12 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
     const signer = seat.signers.find((s) => s.name === proposed.body.signer)!;
     if (signer.type === 'webauthn') {
       io.stdout(`security profile ${name} until ${proposed.body.expires} proposed for passkey "${signer.name}"\nthe owner signs it on the owner page (team owner-seat serve), challenge ${proposed.challenge}\n`);
-      return 0;
+      return 'done';
     }
     const signed = signSecurityProfile(home, store, undefined, now());
     if (!signed.ok) return refuse(`the profile was not signed (${signed.why})`);
     io.stdout(`${securityProfileLine(readSecurityProfile(home, store, now()))}\n`);
-    return 0;
+    return 'done';
   }
 
   if (sub === 'serve') {
@@ -120,7 +133,7 @@ export async function runOwnerSeat(argv: string[], rawIo: Io, options: OwnerSeat
     io.stdout(`owner page: ${page.url}\nopen it on this Mac; a passkey signature can use the iPhone through the browser's QR code. Ctrl-C stops it.\n`);
     if (options.serve === false) page.server.close();
     else await new Promise<void>((resolve) => page.server.on('close', () => resolve()));
-    return 0;
+    return 'done';
   }
-  return refuse(`unknown subcommand "${String(sub)}"\n${USAGE}`, 2);
+  return refuse(`unknown subcommand "${String(sub)}"\n${USAGE}`, 'invocation');
 }
