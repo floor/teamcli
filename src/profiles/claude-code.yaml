@@ -260,6 +260,10 @@ screen:
   # that goes on after it, is not the wall. A window whose composer cannot be read falls back
   # to the whole window, exactly as before the field: a wall that was held stays held.
   rate_limit:
+    # The retained rejected-line capture reads above the box. `at_composer` keeps a quoted
+    # sentence with later prose under it from becoming the wall; the reset time the TUI wraps
+    # onto its own row below the sentence (digits, no letters) is the one continuation allowed,
+    # and that wrapped value is not read as the reset (test/provider-error-gaps.test.ts).
     - all:
         - 'API Error: Request rejected \((?:429|403)\)'
         - 'Usage limit reached'

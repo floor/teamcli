@@ -31,12 +31,14 @@ export type Rule = {
   /** `any` and `all` are read only in the block directly above the composer's opening frame:
    *  the blank margin under it is skipped and blanks inside the block are allowed, but every
    *  non-blank row of the block must match one of the rule's patterns and the block must start
-   *  at the row adjacent to the frame. So a notice drawn above the box — one row, or a sentence
-   *  and its reset row — is the wall, while a quoted sentence with any later text between it
-   *  and the box is not. A window whose composer cannot be read falls back to the whole window,
-   *  exactly as a rule without this field reads it: adjacency is a narrowing, never a new way to
-   *  let a typed wall through. Never a default: a profile opts in from a capture or a reported
-   *  frame that shows where its CLI draws the notice. */
+   *  at the row adjacent to the frame. One printed value row directly above the frame — a reset
+   *  clock wrapped off the sentence's last row, at least one digit and no letter — continues the
+   *  block above it. So a notice drawn above the box — one row, a sentence and its reset row, or
+   *  a sentence whose value wrapped below it — is the wall, while a quoted sentence with any
+   *  later prose between it and the box is not. A window whose composer cannot be read falls
+   *  back to the whole window, exactly as a rule without this field reads it: adjacency is a
+   *  narrowing, never a new way to let a typed wall through. Never a default: a profile opts in
+   *  from a capture or a reported frame that shows where its CLI draws the notice. */
   atComposer?: true;
   noneAfter?: { anchor: LinePattern; patterns: LinePattern[] };
   /** Every non-blank row after the block's last anchor must match one of these: the block's
