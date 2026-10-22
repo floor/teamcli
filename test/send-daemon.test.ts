@@ -1548,7 +1548,9 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     const files = readdirSync(drops);
     expect(files.length).toBe(1);
     const dropFile = join(drops, files[0]!);
-    expect(host.typed[0]?.text ?? null).toBe(triggerLine(dropFile, { seat: 'owner', team: 'acme' }));
+    expect(host.typed[0]?.text ?? null).toBe(
+      triggerLine(dropFile, { seat: 'owner', team: 'acme', body: 'stored in state drops' }),
+    );
     expect(readFileSync(dropFile, 'utf8')).toBe(filed('stored in state drops'));
   });
 

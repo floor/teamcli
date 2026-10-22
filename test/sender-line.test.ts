@@ -1,8 +1,8 @@
-// The `sender-line` policy: every typed wake's first line names the message's sender,
-// `From <seat>@<team>:` ahead of the instruction. `on` is the shipped format; entity, project or
-// team may set its own one-line format naming both `{seat}` and `{team}`. The line is an enforced
-// floor — `off` is refused, so the format decides the words and never whether the name is there —
-// and a chain that cannot be read leaves the shipped format, never an unnamed wake.
+// The `sender-line` policy: a typed wake's first line names the message's sender. The line's
+// words now come from the `message-display` template (the shipped default names the seat and the
+// team), and a legacy `sender-line` format is read as that template. The policy stays enforced —
+// `off` is refused, so the format decides the words and never whether the name is there — and a
+// chain that cannot be read leaves the shipped template, never an unnamed wake.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { getPolicySpec, normalizePolicyName, resolvePolicy, writePolicySet } from '../src/policy/index.ts';
-import { readTriggerLine, triggerLine } from '../src/send/native.ts';
+import { readTriggerLine, TRIGGER_MAX, triggerLine } from '../src/send/native.ts';
+import { MESSAGE_LINE_MAX } from '../src/settings/message-display.ts';
 import {
   parseSenderLineValue,
   renderSenderLine,
@@ -185,23 +186,33 @@ describe('the format in force', () => {
 describe('the builders read the format', () => {
   test('a custom format replaces the shipped opening and keeps both signed names', () => {
     const sender = { seat: 'owner', team: 'acme', format: '{team} -> {seat}:' };
-    expect(triggerLine('/drops/x', sender)).toBe('acme -> owner: read /drops/x and do that.');
+    // A legacy `sender-line` format is read as a `message-display` template: the fixed read
+    // hint follows it, and the line is never a command of its own.
+    expect(triggerLine('/drops/x', sender)).toBe('acme -> owner: Read it at /drops/x.');
     expect(readTriggerLine('lead', 'acme', sender)).toBe(
-      'acme -> owner: run team drops --read --seat lead --session acme and do that.',
+      'acme -> owner: Read it with: team drops --read.',
     );
-    // No format is the shipped floor, as before the policy existed.
+    // No format is the shipped `message-display` template.
     expect(readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' })).toBe(
-      'From owner@acme: run team drops --read --seat lead --session acme and do that.',
+      'Message from owner (owner@acme): Read it with: team drops --read.',
     );
   });
 
-  test('a format that pushes the line past the pane bound types nothing, never a nameless line', () => {
+  test('a long format is cut to one line, never a nameless one', () => {
     const long = { seat: 'owner', team: 'acme', format: `${'x'.repeat(200)} {seat}@{team}:` };
-    expect(triggerLine('/drops/x', long)).toBeNull();
-    expect(readTriggerLine('lead', 'acme', long)).toBeNull();
-    // A format cannot smuggle a second line into the wake.
+    const staged = triggerLine('/drops/x', long) as string;
+    expect(staged.includes('\n')).toBe(false);
+    expect(staged.length).toBeLessThanOrEqual(TRIGGER_MAX);
+    expect(staged.startsWith('xxxx')).toBe(true);
+    expect(staged.endsWith('Read it at /drops/x.')).toBe(true);
+    const wake = readTriggerLine('lead', 'acme', long) as string;
+    expect(wake.includes('\n')).toBe(false);
+    expect(wake.length).toBeLessThanOrEqual(MESSAGE_LINE_MAX);
+    expect(wake.startsWith('xxxx')).toBe(true);
+    expect(wake.endsWith('Read it with: team drops --read.')).toBe(true);
+    // A format cannot smuggle a second line into the wake: line safety replaces the break.
     const broken = { seat: 'owner', team: 'acme', format: 'From {seat}@\r{team}:' };
-    expect(triggerLine('/drops/x', broken)).toBeNull();
-    expect(readTriggerLine('lead', 'acme', broken)).toBeNull();
+    expect((triggerLine('/drops/x', broken) as string).includes('\r')).toBe(false);
+    expect((readTriggerLine('lead', 'acme', broken) as string).includes('\r')).toBe(false);
   });
 });

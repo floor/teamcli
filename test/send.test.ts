@@ -215,11 +215,12 @@ describe('team send: the typed trigger', () => {
     expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
     expect(host.frames).toEqual([]);
     expect(pane.typed.length).toBe(1);
-    expect(pane.typed[0]).not.toContain('hello world');
+    // The body's first line is the summary the typed line carries; the body itself stays in the drop.
+    expect(pane.typed[0]).toContain('hello world');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello world');
-    expect(pane.typed[0]).toBe(readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string);
+    expect(pane.typed[0]).toBe(readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello world' }) as string);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('send [owner] lead: sent (unconfirmed)');
     expect(log).not.toContain('hello world');
@@ -238,7 +239,7 @@ describe('team send: the typed trigger', () => {
     expect(host.frames).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe('from the owner — admitted by: the owner\n\nline one\nline two\n');
-    expect(pane.typed[0]).not.toContain('line one');
+    expect(pane.typed[0]).toContain('line one');
   });
 
   test('the orchestrator from its recorded pane may send, and its id rides the record while the header names the seat', async () => {
@@ -953,7 +954,7 @@ describe('team send: native drop', () => {
     expect(statSync(sessionDir).mode & 0o777).toBe(0o700);
     expect(statSync(drops).mode & 0o777).toBe(0o700);
     expect(recordBody(path)).toBe(`from the owner — admitted by: the owner\n\n${body}`);
-    expect(trigger).toBe(readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' }) as string);
+    expect(trigger).toBe(readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme', body }) as string);
     const log = readFileSync(join(dir, LOG_FILE), 'utf8');
     expect(log).toContain('herdr status working');
     expect(log).not.toContain(body);
@@ -997,7 +998,7 @@ describe('team send: native drop', () => {
     // A read receipt is the one word a typed line earns: never merely `delivered`, and never
     // `sent` — the receipt is a signed proof, not the line having left the box.
     expect(io.out).toBe('team acme, session "acme"\nnative: delivered (read)\n');
-    expect(pane.typed).toEqual([readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+    expect(pane.typed).toEqual([readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
     expect(pane.enters).toBe(1);
     const name = readdirSync(dropDir).find((entry) => !entry.includes('.')) as string;
     expect(written.at).toBe(receiptPath(dropDir, name));
@@ -1111,7 +1112,7 @@ describe('team send: native drop', () => {
     release();
     expect(await first).toBe(0);
     expect(typed.length).toBe(1);
-    expect(typed[0]).not.toContain('one');
+    expect(typed[0]).toContain('one');
     expect(typed[0]).not.toContain('two');
   });
 
