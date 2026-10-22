@@ -66,7 +66,7 @@ if [ "$dry" = 1 ]; then
   else say "1 build helper (ad-hoc, no dialog)"; fi
   say "2 build branch, install $team_bin"; [ "$replace_global" = 1 ] && owner "none (but /opt/homebrew/bin/team is replaced: only with your prior OK)"
   say "3+4 owner seat '$signer' (owner@$owner_team) with entity $entity policies owner-signers=$signer, grant-emission=conversational"
-  owner "Touch ID: 'Create the TeamCLI owner seat for $owner_team and set owner-signers=$signer, grant-emission=conversational for entity $entity'"
+  owner "Touch ID: 'Create the TeamCLI owner seat for $owner_team and set owner-signers=$signer, grant-emission=conversational for entities $entity, $owner_team'"
   say "5 grant request $client -> $seat@$team"
   say "6 owner seat answers oui"; owner "Touch ID: 'TeamCLI: once for … ${client} …'"
   say "7 grant --execute"
@@ -117,7 +117,7 @@ if T owner-seat status | grep -q '^owner seat: owner@'; then
     T policy set entity grant-emission conversational --entity "$entity"
   fi
 else
-  T owner-seat setup --team "$owner_team" --signer "$signer" --policy-entity "$entity" --owner-signers "$signer" --grant-emission conversational
+  T owner-seat setup --team "$owner_team" --signer "$signer" --policy-entity "$entity,$owner_team" --owner-signers "$signer" --grant-emission conversational
 fi
 
 say "5 grant request"
