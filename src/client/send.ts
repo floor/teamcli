@@ -17,9 +17,8 @@ import type { SendHost } from '../commands/send.ts';
 import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
 import { claimClientRequest } from './replay.ts';
 import {
-  CLIENT_SLICE_ADDRESS,
-  CLIENT_SLICE_CLIENT_ID,
-  CLIENT_SLICE_ENTITY,
+  clientAddressOf,
+  clientAdmission,
   KEY_ISOLATION_LINE,
   activeClientGrant,
   readClientGrantFile,
@@ -29,7 +28,8 @@ import {
 } from './records.ts';
 import { verifyClientRequest, type ClientRequest } from './verify.ts';
 
-/** The only seat a client grant addresses. */
+/** The seat a client grant addresses when the team file's `clients:` names none: the grant's
+ *  signed seat is the one it addresses, checked against that list at every use. */
 export const CLIENT_DESTINATION_SEAT = 'orchestrator';
 
 /** The rule line every client drop carries: one sentence, the same on every record. */
@@ -63,13 +63,13 @@ export function resolveClientTarget(
   address: string,
   grant: ClientGrantRecord,
 ): { ok: true; target: ResolvedClientTarget } | { ok: false; why: string } {
-  if (address.trim().toLowerCase() !== CLIENT_SLICE_ADDRESS) {
-    return { ok: false, why: `a client grant addresses only ${CLIENT_SLICE_ADDRESS}, not "${address}"` };
+  const admitted = clientAddressOf(grant);
+  if (address.trim().toLowerCase() !== admitted) {
+    return { ok: false, why: `a client grant addresses only ${admitted}, not "${address}"` };
   }
-  if (grant.clientId !== CLIENT_SLICE_CLIENT_ID || grant.entity !== CLIENT_SLICE_ENTITY) {
-    return { ok: false, why: `the grant ${grant.grantId} is not the ${CLIENT_SLICE_CLIENT_ID}@${CLIENT_SLICE_ENTITY} grant` };
-  }
-  const resolved = resolveEntityCoordinator(home, grant.entity);
+  const admission = clientAdmission(home, grant.clientId, grant.entity);
+  if (!admission.ok) return { ok: false, why: `the grant ${grant.grantId} is not admitted: ${admission.why}` };
+  const resolved = resolveEntityCoordinator(home, grant.entity, { seat: grant.recipientSeat, clientId: grant.clientId, ...(grant.team !== undefined ? { team: grant.team } : {}) });
   if (!resolved.ok) return resolved;
   const coordinator = resolved.coordinator;
   if (
@@ -219,7 +219,7 @@ export async function runClientSend(args: Args, io: Io, host: SendHost, json: bo
         if (!verified.ok) return { ok: false as const, why: verified.why };
         const active = activeClientGrant(host.home, presented, now);
         if (!active.ok) return { ok: false as const, why: active.why };
-        const rebound = resolveClientTarget(host.home, CLIENT_SLICE_ADDRESS, active.grant);
+        const rebound = resolveClientTarget(host.home, clientAddressOf(active.grant), active.grant);
         if (!rebound.ok) return { ok: false as const, why: rebound.why };
         const request = verified.request;
         // The signed request names the grant and the coordinator it was signed for; the target

@@ -19,9 +19,11 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { chmodSync, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { declaredRoots } from '../entities.ts';
+import { declaredEntityClients, declaredRoots } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
+import { SEAT_NAME } from '../file/sections/seats.ts';
+import { approvalDifferences } from '../approve/approval.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
@@ -41,8 +43,21 @@ export const CLIENT_INBOX_VOCABULARY_VERSION = 2;
 /** The ops a vocabulary-2 grant carries, exactly, in this order. */
 export const CLIENT_INBOX_ALLOWED_OPS = ['send', 'messages'] as const;
 
+/** The master vocabulary: a grant that also carries `grant`, the right to have TeamCLI issue
+ *  sub-grants inside its signed `grant_scope`. Written only by the owner (`--allow-grant`). Its op
+ *  list is exactly `send, grant` or `send, messages, grant`; an older build refuses it whole. */
+export const CLIENT_MASTER_VOCABULARY_VERSION = 3;
+
 /** One operation a client grant can admit. */
-export type ClientOp = 'send' | 'messages';
+export type ClientOp = 'send' | 'messages' | 'grant';
+
+/** Where a master grant may issue sub-grants. An entity admits every team of that entity; a team
+ *  (by name) or a project (by project ID) admits only within the master grant's own entity. All
+ *  three empty grants nothing. */
+export type ClientGrantScope = { entities: string[]; projects: string[]; teams: string[] };
+
+/** The ops a sub-grant may ever carry: never `grant`, so a sub-grant is never a master. */
+export const CLIENT_SUB_GRANT_OPS: readonly ClientOp[] = ['send', 'messages'];
 
 /** The owner-directed runtime line. It states the limit; it is not a claim of isolation. */
 export const KEY_ISOLATION_LINE = 'key isolation: not enforced (pane guard pending)';
@@ -53,6 +68,47 @@ export const CLIENT_SLICE_CLIENT_ID = 'grok-bot';
 export const CLIENT_SLICE_ENTITY = 'floor';
 export const CLIENT_SLICE_SEAT = 'orchestrator';
 export const CLIENT_SLICE_ADDRESS = `${CLIENT_SLICE_SEAT}@${CLIENT_SLICE_ENTITY}`;
+
+/** The seats a client reaches when the coordinator team's file names none for it under
+ *  `clients:` — the orchestrator alone, so a file without the section behaves as before. */
+export const CLIENT_DEFAULT_SEATS: readonly string[] = [CLIENT_SLICE_SEAT];
+
+/**
+ * Whether `clientId` may hold a grant on `entity`, and the seats the entity lets it address, from
+ * the owner's entities file (`<entity>: clients: <client-id>: seats: [...]`). An entity that writes
+ * no `clients:` admits only the default pair — `grok-bot` on `floor`, to the orchestrator — so a
+ * machine with no such word behaves as before. An entity that writes one admits exactly the
+ * clients it lists; a map that does not read refuses. Checked at issuance, decode and send.
+ */
+export function clientAdmission(
+  home: string,
+  clientId: string,
+  entity: string,
+): { ok: true; seats: readonly string[] } | { ok: false; why: string } {
+  if (!CLIENT_WORD_PATTERN.test(clientId)) return refusal(`"${clientId}" is not a client id: one lowercase word, digits and hyphens`);
+  if (!CLIENT_WORD_PATTERN.test(entity)) return refusal(`"${entity}" is not an entity name: one lowercase word, digits and hyphens`);
+  let declared;
+  try {
+    declared = declaredEntityClients(home).get(entity);
+  } catch {
+    return refusal('the entities file cannot be read');
+  }
+  if (declared === undefined) {
+    if (clientId !== CLIENT_SLICE_CLIENT_ID || entity !== CLIENT_SLICE_ENTITY) {
+      return refusal(`entity "${entity}" declares no client "${clientId}"; with no \`clients:\` word only ${CLIENT_SLICE_CLIENT_ID} on ${CLIENT_SLICE_ENTITY} is admitted`);
+    }
+    return { ok: true, seats: CLIENT_DEFAULT_SEATS };
+  }
+  if (!declared.ok) return refusal(declared.why);
+  const seats = declared.clients[clientId];
+  if (seats === undefined) return refusal(`entity "${entity}" declares no client "${clientId}"`);
+  return { ok: true, seats };
+}
+
+/** The one address a grant admits: its signed seat at its entity. */
+export function clientAddressOf(grant: { recipientSeat: string; entity: string; team?: string }): string {
+  return `${grant.recipientSeat}@${grant.team ?? grant.entity}`.toLowerCase();
+}
 
 /** The entity coordinator's immutable binding, signed into every grant. */
 export const CLIENT_TEAM_ID_PATTERN = /^[0-9a-f]{12}$/;
@@ -118,12 +174,22 @@ export type ClientGrantRecord = {
   teamId: string;
   recipientId: string;
   recipientSeat: string;
-  /** `['send']` on vocabulary 1, `['send','messages']` on vocabulary 2. */
+  /** The target team's name, when the owner named one with `--team`; absent means the entity's
+   *  coordinator team (the team named like the entity), so a grant written before it reads as
+   *  before. The address the grant admits is `<recipientSeat>@<team>`. */
+  team?: string;
+  /** `['send']` on vocabulary 1, `['send','messages']` on vocabulary 2, and on vocabulary 3 one
+   *  of those followed by `grant`. */
   allowedOps: ClientOp[];
   allowedRoles: ['orchestrator'];
   issued: string;
   expires: string;
-  vocabulary: 1 | 2;
+  vocabulary: 1 | 2 | 3;
+  /** Vocabulary 3 only: where this master grant may issue sub-grants. */
+  grantScope?: ClientGrantScope;
+  /** Set on a sub-grant: the master grant id it was issued under. Signed, so a sub-grant always
+   *  names its master, and revoking the master stops the sub-grant at its next use. */
+  issuedBy?: string;
 };
 
 /** One verified appended revocation. */
@@ -141,9 +207,20 @@ export type ClientGrantRequest = {
   keyDir: string;
   /** Absent means the 7-day default; anything past the 7-day cap is refused. */
   expires?: string;
+  /** The seat the grant addresses; absent means the orchestrator. It must be one the coordinator
+   *  team's approved `clients:` section lists for this client (or the default, orchestrator). */
+  seat?: string;
+  /** The target team by name; absent (or the entity's own name) means the entity's coordinator
+   *  team, and the grant then carries no `team` field, byte-shape unchanged. */
+  team?: string;
   /** When true, the grant is vocabulary 2 and carries `send` and `messages`; omitted or false
    *  writes the shipped vocabulary 1, send only, byte-shape unchanged. */
   inbox?: boolean;
+  /** When present, the grant is a master grant (vocabulary 3) carrying `grant` and this scope.
+   *  Owner path only. */
+  grantScope?: ClientGrantScope;
+  /** When present, the grant is a sub-grant issued under this master id. Never with grantScope. */
+  issuedBy?: string;
 };
 
 export type ClientGrantOptions = { now?: Date; key?: KeyObject };
@@ -527,12 +604,42 @@ function onDiskGrant(grant: ClientGrantRecord): Record<string, Json> {
     team_id: grant.teamId,
     recipient_id: grant.recipientId,
     recipient_seat: grant.recipientSeat,
+    ...(grant.team !== undefined ? { team: grant.team } : {}),
     allowed_ops: [...grant.allowedOps],
     allowed_roles: [...grant.allowedRoles],
     issued: grant.issued,
     expires: grant.expires,
     vocabulary: grant.vocabulary,
+    ...(grant.grantScope !== undefined
+      ? { grant_scope: { entities: [...grant.grantScope.entities], projects: [...grant.grantScope.projects], teams: [...grant.grantScope.teams] } }
+      : {}),
+    ...(grant.issuedBy !== undefined ? { issued_by: grant.issuedBy } : {}),
   };
+}
+
+/** The problem with a scope's words, or null: lowercase words, none repeated in one list. */
+export function clientGrantScopeProblem(scope: ClientGrantScope): string | null {
+  for (const field of ['entities', 'projects', 'teams'] as const) {
+    const list = scope[field];
+    if (!Array.isArray(list)) return `grant scope ${field} is not a list`;
+    for (const word of list) {
+      if (typeof word !== 'string' || !CLIENT_WORD_PATTERN.test(word)) return `"${String(word)}" is not a ${field} scope word: one lowercase word, digits and hyphens`;
+    }
+    if (new Set(list).size !== list.length) return `grant scope ${field} names a word twice`;
+  }
+  return null;
+}
+
+/** Whether a master scope admits a target: entity anywhere; team or project inside its own entity. */
+export function clientGrantScopeAdmits(
+  master: { entity: string; grantScope?: ClientGrantScope },
+  target: { entity: string; team: string; project: string },
+): boolean {
+  const scope = master.grantScope;
+  if (scope === undefined) return false;
+  if (scope.entities.includes(target.entity)) return true;
+  if (target.entity !== master.entity) return false;
+  return scope.teams.includes(target.team) || scope.projects.includes(target.project);
 }
 
 export type EntityCoordinator = {
@@ -550,38 +657,62 @@ export type EntityCoordinator = {
  * role and registered agent id. Nothing here reads the current folder, a running pane or a bare
  * seat name. A declared entity root, when the entities file names one, must hold the team root.
  */
-export function resolveEntityCoordinator(home: string, entity: string): { ok: true; coordinator: EntityCoordinator } | { ok: false; why: string } {
+export function resolveEntityCoordinator(
+  home: string,
+  entity: string,
+  target: { seat?: string; clientId?: string; team?: string } = {},
+): { ok: true; coordinator: EntityCoordinator } | { ok: false; why: string } {
+  const wanted = target.seat ?? CLIENT_SLICE_SEAT;
   let teams: Record<string, TeamRecord>;
   try {
     teams = readTeams(home);
   } catch {
     return refusal('the team registry cannot be read');
   }
-  const coordinators = Object.values(teams).filter((team) => team.entity === entity && team.project === entity);
+  const teamName = target.team ?? entity;
+  if (!CLIENT_WORD_PATTERN.test(teamName)) return refusal(`"${teamName}" is not a team name: one lowercase word, digits and hyphens`);
+  const coordinators = Object.values(teams).filter((team) => team.entity === entity && team.project === teamName);
   if (coordinators.length !== 1) {
+    const what = teamName === entity ? 'coordinator team' : `team "${teamName}"`;
     return refusal(
       coordinators.length === 0
-        ? `no coordinator team of entity "${entity}" is registered`
-        : `entity "${entity}" has ${String(coordinators.length)} coordinator teams; a client grant needs exactly one`,
+        ? `no ${what} of entity "${entity}" is registered`
+        : `entity "${entity}" has ${String(coordinators.length)} records for ${what}; a client grant needs exactly one`,
     );
   }
   const team = coordinators[0] as TeamRecord;
   if (team.lifecycle === 'archived') return refusal(`team "${team.project}" is archived`);
   const teamId = team.id ?? '';
   if (!CLIENT_TEAM_ID_PATTERN.test(teamId)) return refusal(`team "${team.project}" has no registry id`);
-  const leads = team.roster.filter((entry) => entry.leads === true);
-  if (leads.length !== 1) {
-    return refusal(
-      leads.length === 0
-        ? `team "${team.project}" marks no lead seat; a client grant needs one`
-        : `team "${team.project}" marks ${String(leads.length)} lead seats; a client grant needs exactly one`,
-    );
-  }
-  const lead = leads[0] as TeamRecord['roster'][number];
-  if (lead.seat.toLowerCase() !== CLIENT_SLICE_SEAT || lead.role.toLowerCase() !== CLIENT_SLICE_SEAT) {
-    return refusal(`team "${team.project}" leads with "${lead.seat}" (${lead.role}), not ${CLIENT_SLICE_SEAT}`);
-  }
   if (!isAbsolute(team.root)) return refusal(`team "${team.project}" has no absolute root`);
+  const admitted = clientAdmission(home, target.clientId ?? CLIENT_SLICE_CLIENT_ID, entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  const allowed = clientSeatsAt(team.root, home, target.clientId ?? CLIENT_SLICE_CLIENT_ID, admitted.seats);
+  if (!allowed.ok) return refusal(allowed.why);
+  if (allowed.seats.length === 0) return refusal(`team "${team.project}" lists no seat a client may address`);
+  if (!allowed.seats.includes(wanted)) {
+    return refusal(`team "${team.project}" does not list "${wanted}" among the seats a client may address (${allowed.seats.join(', ')})`);
+  }
+  let lead: TeamRecord['roster'][number];
+  if (wanted === CLIENT_SLICE_SEAT) {
+    const leads = team.roster.filter((entry) => entry.leads === true);
+    if (leads.length !== 1) {
+      return refusal(
+        leads.length === 0
+          ? `team "${team.project}" marks no lead seat; a client grant needs one`
+          : `team "${team.project}" marks ${String(leads.length)} lead seats; a client grant needs exactly one`,
+      );
+    }
+    lead = leads[0] as TeamRecord['roster'][number];
+    if (lead.seat.toLowerCase() !== CLIENT_SLICE_SEAT || lead.role.toLowerCase() !== CLIENT_SLICE_SEAT) {
+      return refusal(`team "${team.project}" leads with "${lead.seat}" (${lead.role}), not ${CLIENT_SLICE_SEAT}`);
+    }
+  } else {
+    const held = team.roster.filter((entry) => entry.seat === wanted);
+    if (held.length !== 1) return refusal(`team "${team.project}" has no single roster seat "${wanted}"`);
+    lead = held[0] as TeamRecord['roster'][number];
+    if (allowed.refused.includes(wanted)) return refusal(`"${wanted}" is the operator or a human seat; a client never addresses it`);
+  }
   const roots = declaredRoots(home).get(entity);
   if (roots !== undefined && !roots.some((allowed) => sameFolder(allowed, team.root))) {
     return refusal(`team "${team.project}" sits outside the roots entity "${entity}" declares`);
@@ -619,13 +750,21 @@ export function planClientGrant(home: string, request: ClientGrantRequest, optio
   const nowMs = now.getTime();
   const inbox = request.inbox === true;
   if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
-  if (request.clientId !== CLIENT_SLICE_CLIENT_ID) {
-    return refusal(`this build admits one client principal, "${CLIENT_SLICE_CLIENT_ID}", not "${request.clientId}"`);
+  const master = request.grantScope !== undefined;
+  if (master && request.issuedBy !== undefined) return refusal('a sub-grant never carries grant: master grants do not chain');
+  if (master) {
+    const problem = clientGrantScopeProblem(request.grantScope!);
+    if (problem !== null) return refusal(problem);
   }
-  if (request.entity !== CLIENT_SLICE_ENTITY) {
-    return refusal(`this build admits one entity, "${CLIENT_SLICE_ENTITY}", not "${request.entity}"`);
-  }
-  const coordinator = resolveEntityCoordinator(home, request.entity);
+  if (request.issuedBy !== undefined && !CLIENT_GRANT_ID_PATTERN.test(request.issuedBy)) return refusal(`"${request.issuedBy}" is not a client grant id`);
+  const admitted = clientAdmission(home, request.clientId, request.entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  const team = request.team === undefined || request.team === request.entity ? undefined : request.team;
+  const coordinator = resolveEntityCoordinator(home, request.entity, {
+    clientId: request.clientId,
+    ...(team !== undefined ? { team } : {}),
+    ...(request.seat !== undefined ? { seat: request.seat } : {}),
+  });
   if (!coordinator.ok) return refusal(coordinator.why);
   if (!CLIENT_WORD_PATTERN.test(request.clientId)) {
     return refusal(`"${request.clientId}" is not a client id: one lowercase word, digits and hyphens`);
@@ -660,11 +799,14 @@ export function planClientGrant(home: string, request: ClientGrantRequest, optio
       teamId: coordinator.coordinator.teamId,
       recipientId: coordinator.coordinator.recipientId,
       recipientSeat: coordinator.coordinator.recipientSeat,
-      allowedOps: inbox ? [...CLIENT_INBOX_ALLOWED_OPS] : [...CLIENT_ALLOWED_OPS],
+      ...(team !== undefined ? { team } : {}),
+      allowedOps: [...(inbox ? CLIENT_INBOX_ALLOWED_OPS : CLIENT_ALLOWED_OPS), ...(master ? (['grant'] as const) : [])],
       allowedRoles: [...CLIENT_ALLOWED_ROLES],
       issued: now.toISOString(),
       expires,
-      vocabulary: inbox ? CLIENT_INBOX_VOCABULARY_VERSION : CLIENT_GRANT_VOCABULARY_VERSION,
+      vocabulary: master ? CLIENT_MASTER_VOCABULARY_VERSION : inbox ? CLIENT_INBOX_VOCABULARY_VERSION : CLIENT_GRANT_VOCABULARY_VERSION,
+      ...(master ? { grantScope: { entities: [...request.grantScope!.entities], projects: [...request.grantScope!.projects], teams: [...request.grantScope!.teams] } } : {}),
+      ...(request.issuedBy !== undefined ? { issuedBy: request.issuedBy } : {}),
     },
   };
 }
@@ -722,6 +864,8 @@ export function readClientGrantFile(home: string, path: string): ClientGrantRead
   }
   const record = clientGrantFrom(parsed, state.key);
   if (record === null) return refusal(`the grant file "${path}" is not a verified owner-signed client grant`);
+  const admitted = clientAdmission(home, record.grant.clientId, record.grant.entity);
+  if (!admitted.ok) return refusal(admitted.why);
   return { ok: true, grant: record.grant, signature: record.signature };
 }
 
@@ -739,7 +883,7 @@ export function readClientGrant(home: string, grantId: string): ClientGrantRead 
 export function canonicalClientGrant(home: string, presented: { grant: ClientGrantRecord; signature: string }): ClientGrantRead {
   const canonical = readClientGrant(home, presented.grant.grantId);
   if (!canonical.ok) return canonical;
-  const fields: (keyof ClientGrantRecord)[] = ['grantId', 'clientId', 'entity', 'publicKey', 'keyId', 'keyDir', 'teamId', 'recipientId', 'recipientSeat', 'issued', 'expires', 'vocabulary'];
+  const fields: (keyof ClientGrantRecord)[] = ['grantId', 'clientId', 'entity', 'publicKey', 'keyId', 'keyDir', 'teamId', 'recipientId', 'recipientSeat', 'team', 'issued', 'expires', 'vocabulary', 'issuedBy'];
   for (const field of fields) {
     if (canonical.grant[field] !== presented.grant[field]) {
       return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (${field} differs)`);
@@ -751,6 +895,9 @@ export function canonicalClientGrant(home: string, presented: { grant: ClientGra
     if (canonical.grant[field].join(',') !== presented.grant[field].join(',')) {
       return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (${field} differs)`);
     }
+  }
+  if (JSON.stringify(canonical.grant.grantScope ?? null) !== JSON.stringify(presented.grant.grantScope ?? null)) {
+    return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (grantScope differs)`);
   }
   if (canonical.signature !== presented.signature) {
     return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (signature differs)`);
@@ -778,7 +925,57 @@ export function activeClientGrant(
   if (revocation.records[0] !== undefined) {
     return refusal(`the grant ${grant.grantId} was revoked at ${revocation.records[0].at}`);
   }
+  const master = clientMasterRevocation(home, grant);
+  if (master !== null) return refusal(master);
   return { ok: true, grant };
+}
+
+/** For a sub-grant, the reason its master no longer stands behind it (revoked, or its revocations
+ *  unreadable), or null. A grant with no `issued_by` always answers null. */
+export function clientMasterRevocation(home: string, grant: ClientGrantRecord): string | null {
+  if (grant.issuedBy === undefined) return null;
+  const revocation = clientRevocations(home, grant.issuedBy);
+  if (!revocation.ok) return revocation.why;
+  if (revocation.records[0] !== undefined) {
+    return `the master grant ${grant.issuedBy} that issued ${grant.grantId} was revoked at ${revocation.records[0].at}`;
+  }
+  return null;
+}
+
+/** The audit folder for sub-grants issued under a master grant: kept apart from the grants folder,
+ *  whose standing-grant reader owns every file name there. */
+export function clientGrantAuditFolder(home: string = homedir()): string {
+  return join(home, '.config', 'team', 'client-grant-audit');
+}
+
+/**
+ * Appends one owner-signed audit record for a sub-grant: which master issued it, under which signed
+ * client request. Created with O_EXCL under the sub-grant's own fresh id, never overwritten.
+ */
+export function writeClientGrantAudit(
+  home: string,
+  record: { subGrantId: string; masterGrantId: string; clientId: string; requestId: string; requestSignature: string; at: string },
+  key: KeyObject = keyOf(home),
+): { ok: true; path: string } | { ok: false; why: string } {
+  const folder = clientGrantAuditFolder(home);
+  try {
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+  } catch {
+    return refusal(`the audit folder "${folder}" cannot be created`);
+  }
+  const body: Json = {
+    sub_grant_id: record.subGrantId,
+    master_grant_id: record.masterGrantId,
+    client_id: record.clientId,
+    request_id: record.requestId,
+    request_signature: record.requestSignature,
+    at: record.at,
+  };
+  const signature = signDomain(CLIENT_GRANT_DOMAIN, { name: record.subGrantId, client_grant_audit: body }, key);
+  const name = `${record.subGrantId}.json`;
+  const published = publishExclusive(folder, name, `${JSON.stringify({ client_grant_audit: body, signature }, null, 2)}\n`);
+  if (published !== 'written') return refusal(`the audit record for ${record.subGrantId} could not be published in "${folder}"`);
+  return { ok: true, path: join(folder, name) };
 }
 
 // ---- appended revocations ------------------------------------------------------------------
@@ -1007,6 +1204,41 @@ function publishExclusive(folder: string, name: string, content: string): 'writt
   return 'written';
 }
 
+/**
+ * The seats one client may address on the team at `root`, from its file's `clients:` section.
+ * A file with no section for the client yields the default (the orchestrator), so a team that
+ * writes nothing behaves as before. A section that names the client is honoured only while the
+ * owner's approval of it is in force: an unapproved or changed `clients:` is refused, never read
+ * as the default. `refused` names the operator and human seats, which no list admits.
+ */
+export function clientSeatsAt(
+  root: string,
+  home: string,
+  clientId: string,
+  base: readonly string[] = CLIENT_DEFAULT_SEATS,
+): { ok: true; seats: readonly string[]; refused: string[] } | { ok: false; why: string } {
+  const declared = readDeclarations(root, home);
+  if (declared.kind !== 'read') return { ok: true, seats: base, refused: [] };
+  const team = declared.team;
+  // The operator is refused unless it is the lead itself (a file whose operator is its
+  // orchestrator keeps the default reach it always had); a `human: true` seat always is.
+  const operator = team.operator === team.orchestrator ? [] : [team.operator];
+  const refused = [...operator, ...team.seats.filter((seat) => seat.human === true).map((seat) => seat.name)];
+  if (team.clients === null || team.clients === undefined) return { ok: true, seats: base.filter((seat) => !refused.includes(seat)), refused };
+  let differences: string[] | null;
+  try {
+    differences = approvalDifferences(team, root, home);
+  } catch {
+    differences = null;
+  }
+  if (differences === null || differences.includes('`clients` changed')) {
+    return { ok: false, why: 'the team file\'s `clients:` section is not the one the owner approved' };
+  }
+  const listed = team.clients[clientId];
+  if (listed === undefined) return { ok: true, seats: base.filter((seat) => !refused.includes(seat)), refused };
+  return { ok: true, seats: listed.seats.filter((seat) => !refused.includes(seat)), refused };
+}
+
 // ---- shared helpers ------------------------------------------------------------------------
 
 function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantRecord; signature: string } | null {
@@ -1017,17 +1249,24 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
   const raw = envelope.client_grant;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const fields = raw as Record<string, unknown>;
-  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'team_id', 'recipient_id', 'recipient_seat', 'allowed_ops', 'allowed_roles', 'issued', 'expires', 'vocabulary'];
+  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'team_id', 'recipient_id', 'recipient_seat', 'team', 'allowed_ops', 'allowed_roles', 'issued', 'expires', 'vocabulary', 'grant_scope', 'issued_by'];
   if (Object.keys(fields).some((key) => !known.includes(key))) return null;
   if (typeof fields.grant_id !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.grant_id)) return null;
-  if (fields.client_id !== CLIENT_SLICE_CLIENT_ID) return null;
-  if (fields.entity !== CLIENT_SLICE_ENTITY) return null;
+  // Which clients and entities are admitted is the entities file's word, checked by the reader
+  // (`clientAdmission`) once the signature holds; here only the shape is held.
+  if (typeof fields.client_id !== 'string' || !CLIENT_WORD_PATTERN.test(fields.client_id)) return null;
+  if (typeof fields.entity !== 'string' || !CLIENT_WORD_PATTERN.test(fields.entity)) return null;
   if (typeof fields.public_key !== 'string' || !CLIENT_PUBLIC_KEY_PATTERN.test(fields.public_key)) return null;
   if (typeof fields.key_id !== 'string' || fields.key_id !== keyIdOf(fields.public_key)) return null;
   if (typeof fields.key_dir !== 'string' || !isAbsolute(fields.key_dir)) return null;
   if (typeof fields.team_id !== 'string' || !CLIENT_TEAM_ID_PATTERN.test(fields.team_id)) return null;
   if (typeof fields.recipient_id !== 'string' || !CLIENT_AGENT_ID_PATTERN.test(fields.recipient_id)) return null;
-  if (fields.recipient_seat !== CLIENT_SLICE_SEAT) return null;
+  // The seat is signed; which seats a client may address is the team file's `clients:` word,
+  // checked again by the resolver at every use. Here only its shape is held.
+  if (typeof fields.recipient_seat !== 'string' || !SEAT_NAME.test(fields.recipient_seat) || fields.recipient_seat.length > 64) return null;
+  // `team` is optional and, when written, names another team of the entity; written equal to the
+  // entity it would be a second spelling of the absent field, so it is refused.
+  if (fields.team !== undefined && (typeof fields.team !== 'string' || !CLIENT_WORD_PATTERN.test(fields.team) || fields.team === fields.entity)) return null;
   if (!Array.isArray(fields.allowed_ops)) return null;
   const ops = fields.allowed_ops as unknown[];
   if (!Array.isArray(fields.allowed_roles) || fields.allowed_roles.length !== 1 || fields.allowed_roles[0] !== 'orchestrator') return null;
@@ -1045,7 +1284,27 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
   } else if (fields.vocabulary === CLIENT_INBOX_VOCABULARY_VERSION) {
     if (ops.length !== 2 || ops[0] !== 'send' || ops[1] !== 'messages') return null;
     allowedOps = ['send', 'messages'];
+  } else if (fields.vocabulary === CLIENT_MASTER_VOCABULARY_VERSION) {
+    // A master grant: exactly `send, grant` or `send, messages, grant`, with a whole scope.
+    const two = ops.length === 2 && ops[0] === 'send' && ops[1] === 'grant';
+    const three = ops.length === 3 && ops[0] === 'send' && ops[1] === 'messages' && ops[2] === 'grant';
+    if (!two && !three) return null;
+    allowedOps = two ? ['send', 'grant'] : ['send', 'messages', 'grant'];
   } else return null;
+  // The scope is present on a master grant and nowhere else; `issued_by` never on a master, so a
+  // sub-grant can never itself carry `grant`.
+  let grantScope: ClientGrantScope | undefined;
+  if (fields.vocabulary === CLIENT_MASTER_VOCABULARY_VERSION) {
+    const scope = fields.grant_scope;
+    if (scope === null || typeof scope !== 'object' || Array.isArray(scope)) return null;
+    const scopeKeys = Object.keys(scope).sort();
+    if (scopeKeys.join(',') !== 'entities,projects,teams') return null;
+    const candidate = scope as ClientGrantScope;
+    if (clientGrantScopeProblem(candidate) !== null) return null;
+    grantScope = { entities: [...candidate.entities], projects: [...candidate.projects], teams: [...candidate.teams] };
+    if (fields.issued_by !== undefined) return null;
+  } else if (fields.grant_scope !== undefined) return null;
+  if (fields.issued_by !== undefined && (typeof fields.issued_by !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.issued_by) || fields.issued_by === fields.grant_id)) return null;
   if (typeof envelope.signature !== 'string') return null;
   if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw as Json), envelope.signature, key)) return null;
   return {
@@ -1059,11 +1318,14 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
       teamId: fields.team_id,
       recipientId: fields.recipient_id,
       recipientSeat: fields.recipient_seat,
+      ...(typeof fields.team === 'string' ? { team: fields.team } : {}),
       allowedOps,
       allowedRoles: ['orchestrator'],
       issued: fields.issued,
       expires: fields.expires,
-      vocabulary: fields.vocabulary as 1 | 2,
+      vocabulary: fields.vocabulary as 1 | 2 | 3,
+      ...(grantScope !== undefined ? { grantScope } : {}),
+      ...(typeof fields.issued_by === 'string' ? { issuedBy: fields.issued_by } : {}),
     },
     signature: envelope.signature,
   };
