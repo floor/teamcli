@@ -1,5 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { ownerSeatHelperPath, readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { ownerDeviceConsent } from '../security/profile.ts';
 import { readArgs } from '../args.ts';
 import { describeCaller, fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
@@ -52,6 +54,8 @@ Exits 0 when policies are listed, updated, or planned, 1 when refused, 2 when th
 export type PolicyCommandOptions = {
   home?: string;
   now?: Date | (() => Date);
+  /** Test seam: the owner-seat credential store used for --owner-device consent. */
+  ownerSeatStore?: OwnerSeatKeyStore;
 };
 
 function resolveNow(now: Date | (() => Date) | undefined): Date {
@@ -74,7 +78,7 @@ export async function runPolicy(
   const args = readArgs(
     argv,
     ['until', 'kind', 'entity', 'project', 'seat', 'file'],
-    ['dry-run', 'json'],
+    ['dry-run', 'json', 'owner-device'],
   );
   let outcome: PolicyOutcome;
   if (args.error !== undefined) {
@@ -593,13 +597,18 @@ function executePolicySet(
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
     const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });
-    if (lift === null || !lift.lifted) {
+    // Without the owner terminal, the owner's device: once an owner seat exists, one Touch ID from it.
+    const consent = (lift === null || !lift.lifted) && (flags.has('owner-device') || readOwnerSeat(options.home ?? homedir()) !== null)
+      ? ownerDeviceConsent(options.home ?? homedir(), options.ownerSeatStore ?? systemOwnerSeatKeyStore(ownerSeatHelperPath(options.home ?? homedir())), { act: 'policy set', args: rest }, `TeamCLI: policy set ${rest.join(' ')}`)
+      : null;
+    if ((lift === null || !lift.lifted) && consent?.ok !== true) {
+      if (consent !== null && !consent.ok) io.stderr(`team policy: owner-device consent: ${plainText(consent.why)}\n`);
       if (json) {
         writeJsonError(
           rawIo,
           'policy.refused',
           plainText(msg),
-          'the owner runs `team policy set` from a terminal outside herdr',
+          'the owner runs `team policy set` from a terminal outside herdr, or approves it with Touch ID (--owner-device)',
           1,
           'owner-only',
         );
@@ -608,7 +617,7 @@ function executePolicySet(
       }
       return 'refused';
     }
-    io.stderr(`${lift.warning}\n`);
+    io.stderr(consent?.ok === true ? `team policy: approved on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
   }
 
   const [rawLevel, rawName, rawValue] = rest as [string, string, string];
@@ -821,13 +830,18 @@ function executePolicyUnset(
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
     const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });
-    if (lift === null || !lift.lifted) {
+    // Without the owner terminal, the owner's device: once an owner seat exists, one Touch ID from it.
+    const consent = (lift === null || !lift.lifted) && (flags.has('owner-device') || readOwnerSeat(options.home ?? homedir()) !== null)
+      ? ownerDeviceConsent(options.home ?? homedir(), options.ownerSeatStore ?? systemOwnerSeatKeyStore(ownerSeatHelperPath(options.home ?? homedir())), { act: 'policy unset', args: rest }, `TeamCLI: policy unset ${rest.join(' ')}`)
+      : null;
+    if ((lift === null || !lift.lifted) && consent?.ok !== true) {
+      if (consent !== null && !consent.ok) io.stderr(`team policy: owner-device consent: ${plainText(consent.why)}\n`);
       if (json) {
         writeJsonError(
           rawIo,
           'policy.refused',
           plainText(msg),
-          'the owner runs `team policy unset` from a terminal outside herdr',
+          'the owner runs `team policy unset` from a terminal outside herdr, or approves it with Touch ID (--owner-device)',
           1,
           'owner-only',
         );
@@ -836,7 +850,7 @@ function executePolicyUnset(
       }
       return 'refused';
     }
-    io.stderr(`${lift.warning}\n`);
+    io.stderr(consent?.ok === true ? `team policy: approved on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
   }
 
   const [rawLevel, rawName] = rest as [string, string];

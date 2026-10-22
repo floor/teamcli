@@ -264,3 +264,30 @@ export function signSecurityProfile(
   audit(home, 'set', { profile: record.profile, relaxed: record.relaxed, expires: record.expires, signer: record.signer, generation: record.generation }, now);
   return { ok: true, record };
 }
+
+export const OWNER_DEVICE_CONSENT_DOMAIN = 'team-owner-device-consent-v1\n';
+
+/**
+ * The owner-device replacement for "run it from an owner terminal": the owner seat's Secure
+ * Enclave signer signs exactly `statement` (one Touch ID or login-password prompt showing
+ * `reason`), the signature is verified under the key the credential store confirms, and the act
+ * is audited. Owner-signed writes (policy store, security profile) always take this path when the
+ * caller is not the owner terminal; no profile relaxes it.
+ */
+export function ownerDeviceConsent(home: string, store: OwnerSeatKeyStore, statement: Record<string, unknown>, reason: string, now: Date = new Date()): { ok: true; signer: string } | { ok: false; why: string } {
+  const seat = readOwnerSeat(home);
+  if (seat === null) return { ok: false, why: 'no owner seat is registered to consent from the owner device' };
+  const signer = seat.signers.find((s) => s.type === 'mac-keystore');
+  if (signer === undefined) return { ok: false, why: 'the owner seat has no Secure Enclave signer' };
+  if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available` };
+  const confirmed = confirmedSignerKey(signer, store);
+  if (!confirmed.ok) return confirmed;
+  const bytes = Buffer.from(OWNER_DEVICE_CONSENT_DOMAIN + JSON.stringify({ ...statement, team: seat.team, at: now.toISOString() }), 'utf8');
+  const signed = store.sign(signer.label, bytes, reason);
+  if (!signed.ok || !ecdsaOk(confirmed.publicKey, bytes, signed.signature)) {
+    audit(home, 'owner-device-refused', { statement, why: signed.ok ? 'signature did not verify' : signed.why }, now);
+    return { ok: false, why: signed.ok ? 'the owner-device signature did not verify' : signed.why };
+  }
+  audit(home, 'owner-device-consent', { statement, signer: signer.name, signature: signed.signature }, now);
+  return { ok: true, signer: signer.name };
+}
