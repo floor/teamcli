@@ -321,6 +321,32 @@ difference: lead/m1 does not verify: the record is not a message
     expect(existsSync(receiptFile(found, 'lead', 'm1'))).toBe(false);
   });
 
+  test('the unread watch\'s own wake and report markers are not message differences', async () => {
+    project();
+    messageKeyOf(home);
+    const found = findRoot(root);
+    if (!found) throw new Error('not a checkout');
+    const dropDir = recordDir(found, 'acme', 'lead');
+    mkdirSync(dropDir, { recursive: true });
+    // The unread watch reserves `<id>.wake` beside a message whose wake line it typed and
+    // `<id>.reported` beside one whose sender and lead it told. Both are its own JSON markers,
+    // not records: the scan must leave them alone rather than offer to remove them.
+    const id = '11111111-1111-4111-8111-111111111111';
+    for (const suffix of ['.wake', '.reported']) {
+      writeFileSync(
+        join(dropDir, `${id}${suffix}`),
+        `${JSON.stringify({ id, at: NOW.toISOString(), state: 'reserved' })}\n`,
+      );
+    }
+    const result = await run();
+    expect(result).toEqual({
+      code: 0,
+      out: 'team acme, session "acme"\n  ID  FROM  TO  SENT  STATUS\n\nnote: nothing is waiting\n\n0 messages\n',
+      err: '',
+    });
+    for (const suffix of ['.wake', '.reported']) expect(existsSync(join(dropDir, `${id}${suffix}`))).toBe(true);
+  });
+
   test('seats print in seat order: builder-2, builder-9, builder-10, builder-100', async () => {
     project();
     // Planted in a deliberately wrong order: the filesystem's string order would print
