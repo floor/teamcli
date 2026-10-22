@@ -10,6 +10,9 @@ import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive } from '../dev_mode.ts';
+import { existsSync } from 'node:fs';
+import { ownerSeatHelperPath, systemOwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { readSecurityProfile, securityProfileLine, securityProfilePath } from '../security/profile.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
@@ -455,6 +458,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const machineMode = sources.home !== undefined ? readDevelopmentMode(sources.home) : null;
   const machineNote = machineMode === null ? null : developmentModeNote(machineMode);
   if (machineNote !== null) comparison.notes.push(machineNote);
+  // The owner-signed security profile: a relaxed one is said loudly on every status; a record that
+  // does not verify is said too (strict then applies). No record, no line: strict is the default.
+  if (sources.home !== undefined && existsSync(securityProfilePath(sources.home))) {
+    comparison.notes.push(securityProfileLine(readSecurityProfile(sources.home, systemOwnerSeatKeyStore(ownerSeatHelperPath(sources.home)), now)));
+  }
   // Idle with work and ready-but-uninstalled slices: one read each, notes only, no exit change.
   // The snapshot always exists once the watch provides one (the default local queue counts as a
   // source); the green read keeps a corrupt journal a named refusal rather than an empty list.
