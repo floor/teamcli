@@ -550,8 +550,10 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     return { ok: false, fail: { code: 'start-mismatch', record: open.seq, why: startFault } };
   }
 
+  // Occurrences grow with the replay: a step's decision may only see the start and the steps
+  // before it. Its own planned exit hook is not an occurrence from an earlier attempt.
   const occurrences = new Map<string, OccurrenceRecord>();
-  for (const effect of [...open.start.effects, ...liveSteps(parsed.records).flatMap((step) => step.effects)]) {
+  for (const effect of open.start.effects) {
     occurrences.set(effect.occurrence, {
       id: effect.occurrence,
       effect: effect.name,
@@ -702,6 +704,15 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     }
 
     requests.set(record.requestId, { payloadDigest: record.requestDigest, step: stepIndex });
+    for (const effect of record.effects) {
+      occurrences.set(effect.occurrence, {
+        id: effect.occurrence,
+        effect: effect.name,
+        state: effect.state,
+        activation: effect.activation,
+        payloadDigest: effect.payloadDigest,
+      });
+    }
     run = {
       ...run,
       state: decision.next.state,
