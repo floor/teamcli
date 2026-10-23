@@ -18,9 +18,10 @@ import {
   type WorkflowResolvers,
 } from '../../src/workflow/index.ts';
 
-// The roles the team file would supply at the tag, plus the round's own terms. `builder` is a
-// team role here; `operator` is deliberately not, so an unknown name stays unknown.
-const ROLES = provisionalResolvers(['builder']);
+// The roles the team file would supply at the tag, plus the round's own terms. `archivist` is a
+// team role here (a name no base role carries); `operator` is deliberately not, so an unknown
+// name stays unknown.
+const ROLES = provisionalResolvers(['builder', 'archivist']);
 
 function checked(text: string, resolvers: WorkflowResolvers = ROLES): CheckResult {
   const parsed = parseWorkflow(text);
@@ -73,7 +74,7 @@ initial: draft
 states:
   draft: {}
 transitions:
-  - { from: draft, to: draft, on: gate-passed, role: builder }
+  - { from: draft, to: draft, on: gate-passed, role: archivist }
 `;
 
 const ALL_ROLES = `workflow: coverage-check
