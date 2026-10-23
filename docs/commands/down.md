@@ -92,6 +92,12 @@ The `down.detached` refusal of a run with no terminal is unchanged for every cal
 present a grant; `--client` is the only way a caller with no terminal passes it. The grant is for
 one team: a client that launched several teams needs a grant for each of them today.
 
+
+A bundle grant that carries `down` (`--bundle operator`, see
+[Client grant bundles](../concepts/client-grant-bundles.md)) runs the same `team down --client`:
+the folder, registry id and project name are checked, the team file is not, and the audit line is
+`client-down-authorized`. An `observer` bundle does not carry `down` and is refused.
+
 ## Output and exit codes
 
 | Outcome | What is printed | Exit |

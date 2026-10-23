@@ -15,6 +15,8 @@ identity, an agent id for a seat or a team id for `@team`.
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> --request [--seat <seats>] [--expires <ISO>] [--json]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
 `--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,
@@ -108,6 +110,28 @@ terminal, at any time; the client's next `team up --client` or `team down --clie
 An up-only record is exactly what the first build of the up grant wrote, byte for byte (its binding
 is stored under `up`). A record that carries `down` stores the same binding under `team`, so a
 build that knows only `up` refuses it whole instead of reading half of it.
+
+## A bundle grant
+
+`--bundle observer` or `--bundle operator` writes a **bundle grant**: one owner-signed record that
+carries a named, fixed list of commands for one team at one folder, so one signature covers them
+all. `observer` is read-only (`status`, `list`, `check`, `feed`, `messages`); `operator` is the
+observer plus `send` to the granted seats (`--seat`, a comma-separated list), `up` and `down`.
+
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
+      --team docs --bundle operator --seat orchestrator --request
+
+The bundle is expanded at signing time into the explicit op list stored in `allowed_ops`; the
+bundle's name is a label and decides nothing, so a command added to a bundle later never widens a
+grant already signed. The owner's signature prompt reads, for example: "Grok Bot may, for team docs
+until 2027-01-21 09:00 UTC: see status, send to orchestrator, start (file 3f9a1c0b2d4e), stop. It
+cannot change permissions, add or remove seats, or create teams." Commands that change who may do
+what (`grant`, `revoke`, `init`, `policy`, `add`, `remove`, `daemon`, and the rest of the list in
+[Client grant bundles](../concepts/client-grant-bundles.md)) can never be in a bundle. `--bundle`
+refuses `--up`, `--down`, `--inbox`, `--allow-grant` and `--client-request`. As for `--up`, only `up`
+reads the team file's fingerprints; `always` is refused; `--expires` is capped by the `client-bundles`
+policy (ninety days at most, and by default); and [`team revoke`](revoke.md) `<grant-id>` ends the
+whole bundle. The per-command grants above are unchanged: this complements them.
 
 ## Who may run it
 

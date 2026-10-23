@@ -95,6 +95,7 @@ difference, never in a total, never an exit.
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+    team status --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ## Flags
 
@@ -104,8 +105,29 @@ difference, never in a total, never an exit.
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
 | `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading; anyone may aim it, from any folder |
 | `--all` | — | render the expanded seat registry columns (`SEAT`, `NICKNAME`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); those expanded columns print in the table under `--all` alone, while every `--json` row carries the seat's own reading as `seat_state` and `seat_state_source` either way |
+| `--client` | `<grant-file>` | the client form: an owner-signed bundle grant that carries `status`, see [A client's status](#a-clients-status) |
+| `--key` | `<client-key>` | the client's private key file; required with `--client`, refused without it |
+| `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--json` | — | the same reading as one JSON document instead of the table, the notes and the repairs |
 | `--help`, `-h` | — | the usage, and exit 0 |
+
+## A client's status
+
+A client with no terminal that the owner signed a bundle grant for (`team grant --client <id>
+--team <team> --bundle observer` or `operator`, see
+[Client grant bundles](../concepts/client-grant-bundles.md)) reads one team's status with
+
+    team status --client ~/.config/team/grants/cg_<24 hex>.json --key ~/.config/team-client/<id>/client.key
+
+The grant must carry `status` in its signed `allowed_ops`; one that does not is refused, and so is
+any other team or folder than the one signed. The run is never the owner's whatever terminal it
+stands in: `--file`, `--session`, `--project` and `--all` are refused with `--client`, and the one
+write of an owner's run (the `last_valid` copy) is not made. The team file is not compared with
+the one the owner signed: a file edit does not end a grant's status. Each run writes
+`client-status-authorized: grant <cg_id> client <client-id> team <project> root <root> request
+<rid>` to `<root>/.agents/team.log`, or `client-status-refused: …` after the key proved who the
+client is. A refusal is `status.client-refused` (exit 1). The exit is otherwise the status's own:
+0 when the session agrees with the file, 1 when it differs.
 
 ## Who may run it
 

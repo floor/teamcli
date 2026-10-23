@@ -126,6 +126,14 @@ run ends it before the first step.
 The `up.detached` refusal of a run with no terminal is unchanged for every caller that does not
 present a grant; `--client` is the only way a caller with no terminal passes it.
 
+
+A bundle grant that carries `up` (`--bundle operator`, see
+[Client grant bundles](../concepts/client-grant-bundles.md)) runs the same `team up --client`, with
+the same checks and the same `up` rule about the team file: an `operator` bundle's `up` is refused
+after a seat or an owner section changed, until the owner re-signs. The audit line is the same
+(`client-up-authorized`). An `observer` bundle does not carry `up` and is refused with the request
+for an operator bundle.
+
 ## Output and exit codes
 
 Each pass ends with one restore summary, written even when all three counts are zero: `N seats
