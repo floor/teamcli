@@ -19,6 +19,7 @@ import { signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import {
   CLIENT_WORD_PATTERN,
   activeClientUpGrant,
+  canonicalTeamOps,
   teamGrantLabel,
   type ClientTeamOp,
   publicKeyObject,
@@ -154,7 +155,7 @@ export type ClientUpVerification =
 
 /** The command that renews one grant, spelled for its own client key, team and ops. */
 function renew(grant: ClientUpGrantRecord, ops: readonly string[] = grant.ops): string {
-  return upRequestCommand({ clientId: grant.clientId, entity: grant.entity, keyDir: grant.keyDir, project: grant.up.project, ops });
+  return upRequestCommand({ clientId: grant.clientId, entity: grant.entity, keyDir: grant.keyDir, project: grant.up.project, ops: canonicalTeamOps(ops) ?? ops });
 }
 
 /**
@@ -241,7 +242,9 @@ export function verifyClientUp(input: {
         return refuse(`the ${label} ${grant.grantId} is for ${signed}; this folder is also a team "${here.team.project}", at ${real(here.root)}, which the owner did not sign. Run it in ${grant.up.root}`);
       }
     }
-  } else if (input.team === undefined) {
+  } else if (input.team === undefined && !(op === 'down' && real(input.cwd) === grant.up.root)) {
+    // (A `down` run in the signed folder itself is that folder even when its team file no longer
+    // loads: stopping the team must stay possible, and the run's own file read says what is wrong.)
     return refuse(`the ${label} ${grant.grantId} is for ${signed}; this folder is not its team folder. ${nameIt}`);
   }
   const problem = upBindingProblem(input.home, grant.entity, grant.up, op);
