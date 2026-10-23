@@ -1,7 +1,11 @@
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
-import { dirname, join } from 'node:path';
-import { readArgs } from '../args.ts';
+import { dirname, join, resolve } from 'node:path';
+import { readArgs, type Args } from '../args.ts';
+import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
+import { verifyClientUp } from '../client/up-grant.ts';
+import { plainText } from '../launch/plain.ts';
 import { processNameMatches } from '../clis.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeLevelNote, devModeOwnerLiftAtCwd, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { anotherPaneRefusal, callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -177,10 +181,24 @@ export const realSources: DownSources = {
 /** How long `--wait` gives a working seat, in seconds. */
 export const WAIT_SECONDS = 120;
 
-export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
+export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
 
 export const down: Command = (argv, io) => runDown(argv, io, realSources);
 export default down;
+
+/** The invocation problems the client form owns, or null: it takes its grant and its key together,
+ *  never the owner's `--file`, `--session` or `--abandon`, and `--team` only names the team the
+ *  grant is for. */
+function clientInvocationProblem(args: Args): string | null {
+  const client = args.values.client !== undefined;
+  if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
+  if (!client && args.values.key !== undefined) return '--key belongs to the --client form: team down --client <grant-file> --key <client-key-file>';
+  if (!client && args.values.team !== undefined) return '--team belongs to the --client form: team down --client <grant-file> --key <client-key-file> --team <team>';
+  if (client && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon'))) {
+    return '--client stops the one team its grant names: --file, --session and --abandon are the owner\'s and take no --client';
+  }
+  return null;
+}
 
 // Free only when herdr says idle or done and the screen is an empty idle prompt. A permission
 // prompt is idle to herdr, and typing `/exit` there would answer it.
@@ -463,7 +481,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'wait', 'abandon', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['dry-run', 'wait', 'abandon', 'json']);
   // The lines plain output writes while it works ride on the document as notes under `--json`.
   const jsonNotes: string[] = [];
   const collect = (text: string): void => {
@@ -473,21 +491,58 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (json) collect(text);
     else io.stdout(`${text}\n`);
   };
-  if (args.error || args.rest.length) {
+  const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
+  if (args.error || args.rest.length || clientProblem !== null) {
     refuse(io, json, 'down', {
       id: 'down.invocation',
-      message: args.error ?? `unexpected "${args.rest[0]}"`,
+      message: args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!),
       repair: null,
       usage: USAGE,
     });
     // exit: down.invocation
     return 2;
   }
+  // The client form: a down grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key. It is verified whole here, before anything else is read, and then the run is the grant's
+  // folder alone — the owner's own stop of the whole team, with no terminal and no prompt. It is never
+  // wider than its grant: another team, another folder, a seat's `--abandon` and every flag that aims
+  // elsewhere are refused above or by the verification. Every other caller goes through the ordinary
+  // gates below, unchanged.
+  let clientDown: { grant: ClientUpGrantRecord; signature: string; requestId: string } | null = null;
+  // The one refusal of the client form, at every site: a refusal for a client the key identified goes
+  // on the team's own log, where the owner reads what ran (never on a dry run, which decides nothing);
+  // a grant that did not verify identifies no one and writes nothing.
+  const clientRefusedFor = (why: string, named: ClientUpGrantRecord | null, at: Date): number => {
+    if (!args.flags.has('dry-run') && named !== null && existsSync(join(named.up.root, '.agents'))) {
+      logLine(join(named.up.root, '.agents'), 'down', `client:${named.clientId}`, `client-down-refused: grant ${named.grantId}: ${why}`, at);
+    }
+    refuse(io, json, 'down', { id: 'down.client-refused', message: plainText(why), repair: null });
+    // exit: down.client-refused
+    return 1;
+  };
+  if (args.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const clientNow = sources.now();
+    const verified = verifyClientUp({
+      home: sources.home ?? homedir(),
+      grantFile: resolve(io.cwd, args.values.client),
+      keyFile: resolve(io.cwd, args.values.key!),
+      cwd: io.cwd,
+      ...(args.values.team !== undefined ? { team: args.values.team } : {}),
+      now: clientNow,
+      op: 'down',
+    });
+    if (!verified.ok) return clientRefusedFor(verified.why, verified.identified, clientNow);
+    clientDown = { grant: verified.grant, signature: verified.signature, requestId: verified.requestId };
+    // The folder is the grant's, whatever the caller's: from here every read is of that team.
+    io = { ...io, cwd: verified.root };
+    if (!json) io.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, until ${verified.grant.expires}\n`);
+  }
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `init` asks it; the route names who may run it, so the sentence does not send every
   // reader to the owner.
-  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
+  const detached = clientDown !== null ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
     // exit: down.detached
@@ -603,7 +658,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
   // Both flags are dropped once the branch has decided the run: the gate has refused them, and a
   // delegated run judges the file's own session, as any delegated `down` does.
-  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  const launched = args.values.file || clientDown !== null ? undefined : launchedTeamFile(io, sources.home);
   const file = branching() ? undefined : (args.values.file ?? launched);
   const sessionFlag = branching() ? undefined : args.values.session;
 
@@ -693,9 +748,11 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // where the ordinary rule has just refused — the record is a second door, never a second gate —
   // and only when one exists, so an owner's run reads no clock for it. A granted run stops the
   // whole team, exactly as the owner's own `down` does: no seat of it is the caller.
-  const createGranted = !branching() && rule.kind !== 'ok'
+  // A client's own down grant is the same kind of second door, and the verification above already
+  // judged it whole: it admits whatever the caller is, for the grant's folder alone.
+  const createGranted = clientDown !== null || (!branching() && rule.kind !== 'ok'
     && readEntityCreateGrants(sources.home ?? homedir()).length > 0
-    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
 
   // The load above wrote nothing. A refused caller, a dry run, and a run that finds the
   // session lock held leave the state file as it was. An allowed run that is not a dry run
@@ -770,6 +827,29 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     }
   };
 
+  // The client's grant is read once more under the grant lock, immediately before the run's first
+  // effect: a revocation appended since the check at the top stops this run here, and a run that
+  // passes writes its audit line while it still holds the lock, so one of the two is always first.
+  // Returns the reason the grant no longer stands, or null.
+  const authorizeClientDown = (logDir: string): string | null => {
+    const held = clientDown;
+    if (held === null) return null;
+    const at = sources.now();
+    let standing: string | null;
+    try {
+      standing = withClientGrantLock(sources.home ?? homedir(), () => {
+        const still = activeClientUpGrant(sources.home ?? homedir(), { grant: held.grant, signature: held.signature }, at);
+        if (!still.ok) return still.why;
+        logLine(logDir, 'down', `client:${held.grant.clientId}`, `client-down-authorized: grant ${held.grant.grantId} client ${held.grant.clientId} team ${held.grant.up.project} root ${held.grant.up.root} request ${held.requestId}`, at);
+        return null;
+      });
+    } catch {
+      standing = 'the client grant lock could not be taken';
+    }
+    return standing;
+  };
+  const clientRefusedAt = (why: string): number => clientRefusedFor(why, clientDown?.grant ?? null, sources.now());
+
   const running = sources.sessionRunning(session);
   if (running === null) {
     refuse(io, json, 'down', {
@@ -782,6 +862,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     return 2;
   }
   if (!running && grantRefusal === undefined) {
+    // The grant is read under its lock and the run is logged: this idle run still writes the
+    // registry's `stopped`, so it is as much the client's as a stop that closes panes.
+    if (clientDown !== null && !dry) {
+      const stood = authorizeClientDown(dir);
+      if (stood !== null) return clientRefusedAt(stood);
+    }
     remember();
     noteStopped();
     noteSessionEmpty();
@@ -1078,7 +1164,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
-    keep: !branchRun && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
+    keep: !branchRun && clientDown === null && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
     abandon: abandon && (callerOwns(caller) || abandonLifted),
     // A free seat is still asked. When that ask cannot be typed or confirmed, the owner's
     // `--abandon` closes it in this same run; every other run names that close and leaves it.
@@ -1177,6 +1263,11 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     if (granted !== undefined) (sources.audit ?? logDelegated)(dir, granted, 'down', sources.now());
     // The granted seat's line, at the same moment, before the first close.
     if (grantSeat !== undefined) (sources.grantAudit ?? logGranted)(dir, grantSeat, 'down', sources.now());
+    // The client's grant, re-read under its lock, then its audit line, before the first close.
+    if (clientDown !== null) {
+      const stood = authorizeClientDown(dir);
+      if (stood !== null) return clientRefusedAt(stood);
+    }
 
     const now = () => sources.now();
     // The lines the plan's own steps print as they run: the last one is the run's outcome.

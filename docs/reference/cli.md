@@ -717,6 +717,7 @@ Hidden: no
 Usage:
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
+    team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]
 
 ### Who may run it
 
@@ -727,11 +728,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--abandon` | no | no | no |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -809,8 +813,10 @@ Usage:
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--expires <ISO>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
     team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
     team grant --execute <request-id> [--json]
     team grant --answer <request-id> <oui|always|non> [--json]
@@ -846,6 +852,7 @@ Usage:
 | `--code` | yes | no | no |
 | `--credential-id` | yes | no | no |
 | `--deny` | yes | no | no |
+| `--down` | no | no | no |
 | `--dry-run` | no | no | no |
 | `--entity` | yes | no | no |
 | `--execute` | yes | no | no |

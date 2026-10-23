@@ -1499,6 +1499,7 @@ scene('down.caller', async (place) => {
   write(place, TEAM);
   return show(await down(place, [], other, downSources({ sessionRunning: () => true, agents: () => [] })), 'only the owner or `leads` stops the team');
 });
+scene('down.client-refused', async (place) => show(await down(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller, downSources()), 'no client grant can verify'));
 scene('down.file-owner', async (place) => {
   write(place, TWO);
   return show(await down(place, ['--file', '.agents/team.yaml'], other, downSources()), "--file is the owner's");

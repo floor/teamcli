@@ -205,6 +205,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.abandon` | `down` | 1 | only the owner abandons a team | `team down --abandon` |
 | `down.another-pane` | `down` | 1 | the state records another pane for the caller's seat | `team down` |
 | `down.caller` | `down` | 1 | the caller may not change the team | `team down` |
+| `down.client-refused` | `down` | 1 | the owner-signed down grant, or the client run it admits, did not verify | `team down --client grant.json --key client.key` |
 | `down.delegate` | `down` | 1 | the caller is not the approved delegate of any entry | `team down, from a pane no delegate entry names` |
 | `down.delegate-approval` | `down` | 1 | delegation needs a verified approval | `team down, with no approval in force` |
 | `down.delegate-command` | `down` | 1 | the approved delegate may not run `down` | `team down, from the approved delegate whose commands leave it out` |

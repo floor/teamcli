@@ -1397,6 +1397,13 @@
     {
       "code": 1,
       "command": "down",
+      "id": "down.client-refused",
+      "meaning": "the owner-signed down grant, or the client run it admits, did not verify",
+      "trigger": "team down --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "down",
       "id": "down.delegate",
       "meaning": "the caller is not the approved delegate of any entry",
       "trigger": "team down, from a pane no delegate entry names"
