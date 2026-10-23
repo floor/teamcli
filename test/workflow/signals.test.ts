@@ -3,7 +3,7 @@ import { isSignalName, SIGNAL_RECORD_TYPES, SIGNALS } from '../../src/workflow/s
 import { isEventKind } from '../../src/bus/kinds.ts';
 
 describe('the transition-signal set', () => {
-  test('is exactly the twelve, in the pinned order', () => {
+  test('is exactly the twenty-three, in the pinned order', () => {
     expect(SIGNALS).toEqual([
       'pr-opened',
       'pr-merged',
@@ -17,6 +17,17 @@ describe('the transition-signal set', () => {
       'goals-set',
       'diverged',
       'accepted',
+      'task-ready',
+      'acknowledged',
+      'step-done',
+      'step-blocked',
+      'seat-down',
+      'merge-observed',
+      'install-recorded',
+      'redispatch',
+      'lead-word',
+      'step-failed',
+      'lead-stop',
     ]);
   });
 
@@ -48,6 +59,20 @@ describe('the signal → record table', () => {
     });
     expect(SIGNAL_RECORD_TYPES['deploy-outcome']).toEqual({ type: 'outcome', operation: 'site-deploy', result: 'done' });
     expect(SIGNAL_RECORD_TYPES['goals-set']).toEqual({ type: 'outcome', operation: 'goals-session', result: 'done' });
+    expect(SIGNAL_RECORD_TYPES['merge-observed']).toEqual({ type: 'outcome', operation: 'merge', result: 'done' });
+    expect(SIGNAL_RECORD_TYPES['install-recorded']).toEqual({ type: 'outcome', operation: 'install', result: 'done' });
+  });
+
+  test('the workflow MVP selectors are the seam table rows', () => {
+    expect(SIGNAL_RECORD_TYPES['task-ready']).toEqual({ type: 'task' });
+    expect(SIGNAL_RECORD_TYPES.acknowledged).toEqual({ type: 'message' });
+    expect(SIGNAL_RECORD_TYPES['step-done']).toEqual({ type: 'step' });
+    expect(SIGNAL_RECORD_TYPES['step-blocked']).toEqual({ type: 'step' });
+    expect(SIGNAL_RECORD_TYPES['seat-down']).toEqual({ type: 'seat-state' });
+    expect(SIGNAL_RECORD_TYPES.redispatch).toEqual({ type: 'dispatch' });
+    expect(SIGNAL_RECORD_TYPES['lead-word']).toEqual({ type: 'message' });
+    expect(SIGNAL_RECORD_TYPES['step-failed']).toEqual({ type: 'refusal' });
+    expect(SIGNAL_RECORD_TYPES['lead-stop']).toEqual({ type: 'message' });
   });
 
   test('approved names the approval record provisionally, with no signature claim', () => {

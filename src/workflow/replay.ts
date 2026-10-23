@@ -710,7 +710,7 @@ function stringMapProblem(value: unknown, where: string): string | undefined {
 }
 
 function signalProblem(value: unknown, where: string): string | undefined {
-  return isSignalName(value) ? undefined : `${where} must be one of the twelve transition signals`;
+  return isSignalName(value) ? undefined : `${where} must be one of the transition signals`;
 }
 
 function nonEmptyStringProblem(value: unknown, where: string): string | undefined {
