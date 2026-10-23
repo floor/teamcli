@@ -61,6 +61,18 @@ export function releaseBarrier(go: string): void {
   writeFileSync(go, 'go\n');
 }
 
+/** A driver's side of the barrier: say ready, then wait for the parent's go. */
+export function waitAtBarrier(go: string, ready: string): void {
+  writeFileSync(ready, 'ready\n');
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  while (!existsSync(go)) Atomics.wait(cell, 0, 0, 5);
+}
+
+/** A driver's one answer line, exactly the shape `parseAnswer` reads. */
+export function reply<T>(answer: DriverAnswer<T>): void {
+  console.log(JSON.stringify(answer));
+}
+
 function waitForFile(path: string, timeoutMs: number): void {
   const deadline = Date.now() + timeoutMs;
   const cell = new Int32Array(new SharedArrayBuffer(4));
