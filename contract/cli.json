@@ -1555,6 +1555,12 @@
         },
         {
           "hidden": false,
+          "name": "--up",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--via",
           "repeatable": false,
           "takesValue": true
@@ -1591,6 +1597,8 @@
         "team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]",
         "team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]",
         "team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]",
+        "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--expires <ISO>] [--json]",
+        "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up --request [--expires <ISO>] [--json]",
         "team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]",
         "team grant --execute <request-id> [--json]",
         "team grant --answer <request-id> <oui|always|non> [--json]",
@@ -4945,6 +4953,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--client",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -4969,6 +4983,12 @@
         },
         {
           "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--serial",
           "repeatable": false,
           "takesValue": false
@@ -4976,6 +4996,12 @@
         {
           "hidden": false,
           "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--team",
           "repeatable": false,
           "takesValue": true
         },
@@ -4991,7 +5017,8 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]"
+        "team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]",
+        "team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]"
       ],
       "who": {
         "gate": "owner-or-leads",

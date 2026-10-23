@@ -809,6 +809,8 @@ Usage:
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up --request [--expires <ISO>] [--json]
     team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
     team grant --execute <request-id> [--json]
     team grant --answer <request-id> <oui|always|non> [--json]
@@ -867,6 +869,7 @@ Usage:
 | `--signer-public-key` | yes | no | no |
 | `--team` | yes | no | no |
 | `--type` | yes | no | no |
+| `--up` | no | no | no |
 | `--via` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2766,6 +2769,7 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
+    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]
 
 ### Who may run it
 
@@ -2775,12 +2779,15 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

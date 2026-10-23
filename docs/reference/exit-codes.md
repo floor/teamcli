@@ -665,6 +665,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.ready` | `up` | 0 | the launch finished | `team up` |
 | `up.agents` | `up` | 1 | the agents can't be read | `team up` |
 | `up.clear` | `up` | 1 | a stopped session this team records did not clear | `team up` |
+| `up.client-refused` | `up` | 1 | the owner-signed up grant, or the client run it admits, did not verify | `team up --client grant.json --key client.key` |
 | `up.delegate` | `up` | 1 | only the owner or the approved delegate runs up | `team up` |
 | `up.delegate-approval` | `up` | 1 | the delegate gate needs a verified approval | `team up` |
 | `up.delegate-command` | `up` | 1 | the approved delegate may not run up | `team up` |

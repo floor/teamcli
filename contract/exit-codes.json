@@ -4617,6 +4617,13 @@
     {
       "code": 1,
       "command": "up",
+      "id": "up.client-refused",
+      "meaning": "the owner-signed up grant, or the client run it admits, did not verify",
+      "trigger": "team up --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "up",
       "id": "up.delegate",
       "meaning": "only the owner or the approved delegate runs up",
       "trigger": "team up"

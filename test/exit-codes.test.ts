@@ -2386,6 +2386,7 @@ scene('up.file-invalid', async (place) => {
   invalid(place);
   return show(await up(place, ['--file', 'team.yaml'], owner, upSources(place)), 'line');
 });
+scene('up.client-refused', async (place) => show(await up(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller, upSources(place)), 'no client grant can verify'));
 scene('up.dry-run', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--dry-run', '--file', place.file], owner, upSources(place)), 'dry run: nothing was run');

@@ -1,10 +1,12 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
+import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
+import { verifyClientUp } from '../client/up-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
-import { readArgs } from '../args.ts';
+import { readArgs, type Args } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
 import { delegateGate, delegateNamedFor, logDelegated } from '../delegate.ts';
@@ -295,10 +297,30 @@ export const realSources: UpSources = {
   launch: realLaunch,
 };
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
+
+/** The invocation problems the client form owns, or null: it takes its grant and its key together,
+ *  never the owner's `--file` or `--session`, and `--team` only names the team the grant is for. */
+function clientInvocationProblem(args: Args): string | null {
+  const client = args.values.client !== undefined;
+  if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
+  if (!client && args.values.key !== undefined) return '--key belongs to the --client form: team up --client <grant-file> --key <client-key-file>';
+  if (!client && args.values.team !== undefined) return '--team belongs to the --client form: team up --client <grant-file> --key <client-key-file> --team <team>';
+  if (client && (args.values.file !== undefined || args.values.session !== undefined)) {
+    return '--client runs the one team its grant names: --file and --session are the owner\'s and take no --client';
+  }
+  return null;
+}
+
+/** A client-form refusal: the sentence, then the exit. The grant verified or it did not; nothing ran. */
+function clientRefused(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'up', { id: 'up.client-refused', message: plainText(message), repair: null });
+  // exit: up.client-refused
+  return 1;
+}
 
 /** One refusal this run carries to its single exit site: its contract row, the sentence, and
  *  the repair when one is known. */
@@ -963,7 +985,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file'], ['dry-run', 'serial', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['dry-run', 'serial', 'json']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -974,10 +996,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     if (json) collect(text);
     else out.stderr(text);
   };
-  if (args.error || args.rest.length) {
+  const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
+  if (args.error || args.rest.length || clientProblem !== null) {
     refuse(io, json, 'up', {
       id: 'up.invocation',
-      message: plainText(args.error ?? `unexpected "${args.rest[0]}"`),
+      message: plainText(args.error ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem!)),
       repair: null,
       usage: USAGE,
     });
@@ -985,6 +1008,36 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     return 2;
   }
   const dry = args.flags.has('dry-run');
+  // The client form: a grant the owner signed for ONE team at ONE folder, proven by the client's own
+  // key. It is verified whole here, before anything else is read, and then the run is the grant's
+  // folder alone — a no-terminal owner launch that never prompts, whose seats are the signed team
+  // file's and no others. Every other caller goes through the ordinary gates below, unchanged.
+  let clientUp: { grant: ClientUpGrantRecord; signature: string; requestId: string } | null = null;
+  if (args.values.client !== undefined) {
+    stderrLine(`${KEY_ISOLATION_LINE}\n`);
+    const clientNow = sources.now?.() ?? new Date();
+    const verified = verifyClientUp({
+      home: sources.home,
+      grantFile: resolve(io.cwd, args.values.client),
+      keyFile: resolve(io.cwd, args.values.key!),
+      cwd: io.cwd,
+      ...(args.values.team !== undefined ? { team: args.values.team } : {}),
+      now: clientNow,
+    });
+    if (!verified.ok) {
+      // A refusal for a client the key identified goes on the team's own log, where the owner reads
+      // what ran; a grant that did not verify identifies no one and writes nothing.
+      const named = verified.identified;
+      if (!dry && named !== null && existsSync(join(named.up.root, '.agents'))) {
+        logLine(join(named.up.root, '.agents'), 'up', `client:${named.clientId}`, `client-up-refused: grant ${named.grantId}: ${verified.why}`, clientNow);
+      }
+      return clientRefused(io, json, verified.why);
+    }
+    clientUp = { grant: verified.grant, signature: verified.signature, requestId: verified.requestId };
+    // The folder is the grant's, whatever the caller's: from here every read is of that team.
+    io = { ...io, cwd: verified.root };
+    stderrLine(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, until ${verified.grant.expires}\n`);
+  }
   // §RFC0007: a caller the ordinary rule refuses is judged by the delegate gate against the
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is
   // honoured. Both are the owner's alone: the gate refuses them for a delegated run, and a
@@ -1000,7 +1053,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   const walked = internal?.caller ?? walkCaller(io);
   // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
   // or the token. The refusal is one sentence, on the dry run and the real run.
-  const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
+  const detached = clientUp !== null ? undefined : detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
   // Dev mode, as the default live file's chain states it: this folder's own file is the caller's
   // place, never a file the caller names. The aimed branch below decides before that file is
@@ -1148,8 +1201,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // The two fallbacks are used only where the map refused. A gate refusal replaces the ordinary
   // caller refusal; a passed one makes the run the gate's, and its audit line is written where
   // the run has effects — never beside the map's own admission.
-  const delegateTeam = !ordinaryAdmitted && delegatesFile !== null ? delegatesFile : null;
-  const gates = ordinaryAdmitted ? null : judgeGates();
+  const delegateTeam = !ordinaryAdmitted && clientUp === null && delegatesFile !== null ? delegatesFile : null;
+  const gates = ordinaryAdmitted || clientUp !== null ? null : judgeGates();
   const verdict = gates?.verdict ?? null;
   const delegated = gates?.delegated ?? null;
   const grantedSeat = gates?.grantedSeat ?? null;
@@ -1230,6 +1283,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     standing.kind === 'verified' ? upFingerprint(standing.record.approval.fingerprints, standing.generation) : undefined;
   const ownerToken =
     detached === undefined &&
+    clientUp === null &&
     !ordinaryAdmitted &&
     verdict === null &&
     grantedSeat === null &&
@@ -1248,7 +1302,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     grantedSeat !== null ||
     delegated !== null ||
     delegateNamedFor(team, 'up', io) ||
-    createGranted;
+    createGranted ||
+    clientUp !== null;
 
   // What would make `up` refuse. A dry run prints the plan anyway; a real run stops first.
   const refusals: UpRefusal[] = [];
@@ -1305,7 +1360,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (ordinaryAdmitted || delegated !== null || grantedSeat !== null || createGranted || ownerToken)) {
+      if (!dry && (ordinaryAdmitted || delegated !== null || grantedSeat !== null || createGranted || ownerToken || clientUp !== null)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push({ id: 'up.machine', message: problem });
@@ -1827,6 +1882,28 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // Provenance for an owner-token launch: the caller that ran it, and that the owner authorized
     // it out of band for this approved record.
     if (ownerToken) logLine(dir, 'up', callerLabel(caller), 'owner-token-authorized', sources.now?.() ?? new Date());
+    // The client's grant is read once more under the grant lock, immediately before the first
+    // effect: a revocation appended since the check at the top stops this run here, and a run that
+    // passes writes its audit line while it still holds the lock, so one of the two is always first.
+    if (clientUp !== null) {
+      const at = sources.now?.() ?? new Date();
+      const held = clientUp;
+      let standing: string | null;
+      try {
+        standing = withClientGrantLock(sources.home, () => {
+          const still = activeClientUpGrant(sources.home, { grant: held.grant, signature: held.signature }, at);
+          if (!still.ok) return still.why;
+          logLine(dir, 'up', `client:${held.grant.clientId}`, `client-up-authorized: grant ${held.grant.grantId} client ${held.grant.clientId} team ${held.grant.up.project} root ${held.grant.up.root} request ${held.requestId}`, at);
+          return null;
+        });
+      } catch {
+        standing = 'the client grant lock could not be taken';
+      }
+      if (standing !== null) {
+        logLine(dir, 'up', `client:${held.grant.clientId}`, `client-up-refused: grant ${held.grant.grantId}: ${standing}`, at);
+        return clientRefused(io, json, standing);
+      }
+    }
 
     if (createLobby) {
       // The run's first write, under the lock: the lobby the read-only pass above found absent.
@@ -2277,7 +2354,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           ? { mode: 'keep' }
           : delegated !== null
             ? { mode: 'close-no-terminal', timeoutIsDialog: true }
-            : caller.kind === 'owner'
+            : caller.kind === 'owner' && clientUp === null
               ? { mode: 'prompt', run: (input: PauseInput) => runPause(input, pauseHostFor(input)) }
               : { mode: 'close-no-terminal' },
       clearWaiting(name) {
