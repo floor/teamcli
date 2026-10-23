@@ -416,51 +416,142 @@ export interface PrivateCorpus {
   where: string[];
 }
 
+/** One C-quoted diff path, decoded to the bytes git encoded, or null on an unknown escape. */
+function unquoteDiffPath(text: string): string | null {
+  const parts: Buffer[] = [];
+  let run = '';
+  const flush = (): void => {
+    if (run !== '') {
+      parts.push(Buffer.from(run, 'utf8'));
+      run = '';
+    }
+  };
+  const simple: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '\\': 92, '"': 34 };
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (character !== '\\') {
+      run += character;
+      continue;
+    }
+    const escape = text[index + 1];
+    if (escape === undefined) return null;
+    index += 1;
+    if (simple[escape] !== undefined) {
+      flush();
+      parts.push(Buffer.from([simple[escape]!]));
+      continue;
+    }
+    if (escape < '0' || escape > '7') return null;
+    let digits = escape;
+    while (digits.length < 3) {
+      const next = text[index + 1];
+      if (next === undefined || next < '0' || next > '7') break;
+      index += 1;
+      digits += next;
+    }
+    flush();
+    parts.push(Buffer.from([Number.parseInt(digits, 8) & 0xff]));
+  }
+  flush();
+  return Buffer.concat(parts).toString('utf8');
+}
+
+/**
+ * The new-side path of one `+++ ` header. Git appends one tab to an unquoted path that contains
+ * a space, and C-quotes a path with a control or non-UTF-8 byte; both forms are read back to the
+ * tracked path here.
+ */
+function newPathFromHeader(payload: string): { path: string | null } | { problem: string } {
+  if (payload === '/dev/null') return { path: null };
+  let text: string;
+  if (payload.startsWith('"')) {
+    if (payload.length < 2 || !payload.endsWith('"')) return { problem: 'cannot parse a diff path' };
+    const decoded = unquoteDiffPath(payload.slice(1, -1));
+    if (decoded === null) return { problem: 'cannot parse a diff path' };
+    text = decoded;
+  } else {
+    text = payload.endsWith('\t') ? payload.slice(0, -1) : payload;
+  }
+  if (!text.startsWith('b/')) return { problem: 'cannot parse a diff path' };
+  const path = text.slice(2);
+  if (path === '') return { problem: 'cannot parse a diff path' };
+  return { path };
+}
+
+/** A location label stays on one line: a newline or carriage return in a path is escaped. */
+function labelPath(path: string): string {
+  return path.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+}
+
 /**
  * Builds the pre-push corpus: every added line of the diff against `base`, then every line of
  * every commit message on `base..HEAD`. Removed lines are not read; a line that stays unchanged
  * is not added. No matched text is retained beyond the corpus itself, which lives in a scratch
  * folder owned by the caller.
+ *
+ * The diff is read as hunks, not as loose lines: a hunk header declares how many old and new
+ * lines follow, and exactly those lines are consumed, so added content can never be mistaken for
+ * a file header and a path is never derived from anything but a `+++ ` header. Renames are turned
+ * into a deletion and an addition (`--no-renames`) so the new side always carries a full path.
  */
 export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus } | { problem: string } {
   const diff = spawnSync(
     'git',
-    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', base, '--'],
+    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', base, '--'],
     { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
   );
   if (diff.error !== undefined || diff.status !== 0) return { problem: `cannot read the diff against ${base}` };
   const lines: string[] = [];
   const where: string[] = [];
-  let file: string | null = null;
-  let line = 0;
+  // undefined until this file's +++ header, null when its new side is /dev/null.
+  let path: string | null | undefined;
+  let oldLeft = 0;
+  let newLeft = 0;
+  let newLine = 0;
+  let inHunk = false;
   for (const raw of diff.stdout.split('\n')) {
+    if (inHunk) {
+      if (raw === '\\ No newline at end of file') continue;
+      if (oldLeft > 0 && raw.startsWith('-')) {
+        oldLeft -= 1;
+      } else if (newLeft > 0 && raw.startsWith('+')) {
+        if (path !== null && path !== undefined) {
+          lines.push(raw.slice(1));
+          where.push(`${labelPath(path)}:${String(newLine)}`);
+        }
+        newLeft -= 1;
+        newLine += 1;
+      } else if (oldLeft > 0 && newLeft > 0 && raw.startsWith(' ')) {
+        oldLeft -= 1;
+        newLeft -= 1;
+        newLine += 1;
+      } else {
+        return { problem: 'cannot parse a diff hunk' };
+      }
+      inHunk = oldLeft > 0 || newLeft > 0;
+      continue;
+    }
     if (raw.startsWith('diff --git ')) {
-      file = null;
+      path = undefined;
       continue;
     }
-    if (raw.startsWith('+++ /dev/null')) {
-      file = null;
+    if (raw.startsWith('+++ ')) {
+      const header = newPathFromHeader(raw.slice(4));
+      if ('problem' in header) return header;
+      path = header.path;
       continue;
     }
-    if (raw.startsWith('+++ b/')) {
-      file = raw.slice(6);
-      line = 0;
-      continue;
-    }
-    const hunk = raw.match(/^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@/);
+    const hunk = raw.match(/^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@/);
     if (hunk !== null) {
-      line = Number(hunk[1]);
+      if (path === undefined) return { problem: 'cannot parse a diff hunk' };
+      oldLeft = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      newLeft = hunk[4] === undefined ? 1 : Number(hunk[4]);
+      newLine = Number(hunk[3]);
+      inHunk = oldLeft > 0 || newLeft > 0;
       continue;
     }
-    if (file === null || raw.startsWith('\\')) continue;
-    if (raw.startsWith('+')) {
-      lines.push(raw.slice(1));
-      where.push(`${file}:${String(line)}`);
-      line += 1;
-      continue;
-    }
-    if (raw.startsWith(' ')) line += 1;
   }
+  if (inHunk) return { problem: 'cannot parse a diff hunk' };
 
   const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${base}..HEAD`], {
     encoding: 'utf8',
