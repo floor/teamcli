@@ -7,6 +7,7 @@
 // is the one the owner signed. Every refusal ends with the owner's exact next step.
 
 import { createPrivateKey } from 'node:crypto';
+import type { BundleOp } from './bundle-ops.ts';
 import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
@@ -20,8 +21,8 @@ import {
   CLIENT_WORD_PATTERN,
   activeClientUpGrant,
   canonicalTeamOps,
-  teamGrantLabel,
-  type ClientTeamOp,
+  bundleForOp,
+  grantLabelOf,
   publicKeyObject,
   readClientPrivateKey,
   readClientUpGrantFile,
@@ -130,7 +131,7 @@ export function upBindingProblem(
   binding: ClientUpBinding,
   /** `down`: a team file that changed, or that no longer loads, does not stop the owner's stop.
    *  Identity (name, registry id, folder, entity) is still checked whenever the file loads. */
-  op: ClientTeamOp = 'up',
+  op: BundleOp = 'up',
 ): { kind: 'drift' | 'team'; why: string; changes: string[] } | null {
   const team = (why: string) => ({ kind: 'team' as const, why, changes: [] as string[] });
   const loaded = loadTeamFile(binding.root, { home });
@@ -143,7 +144,8 @@ export function upBindingProblem(
   if (teamIdOf(binding.root) !== binding.teamId) return team(`the folder ${binding.root} is not the team the grant signs (registry id differs)`);
   const problem = entityProblem(home, entity, loaded.team, binding.teamId, binding.root);
   if (problem !== null) return team(problem);
-  if (op === 'down') return null;
+  // Only `up` is the owner's signature on THIS file: every other op names the team, not its file.
+  if (op !== 'up') return null;
   const changes = upDrift(binding, loaded.team);
   if (changes.length > 0) return { kind: 'drift', why: 'the team file changed', changes };
   return null;
@@ -155,7 +157,10 @@ export type ClientUpVerification =
 
 /** The command that renews one grant, spelled for its own client key, team and ops. */
 function renew(grant: ClientUpGrantRecord, ops: readonly string[] = grant.ops): string {
-  return upRequestCommand({ clientId: grant.clientId, entity: grant.entity, keyDir: grant.keyDir, project: grant.up.project, ops: canonicalTeamOps(ops) ?? ops });
+  const base = { clientId: grant.clientId, entity: grant.entity, keyDir: grant.keyDir, project: grant.up.project };
+  // A bundle grant is renewed as a bundle: the one that carries every op it carried, and the new one if it is wider.
+  if (grant.bundle !== undefined) return upRequestCommand({ ...base, bundle: ops.some((op) => bundleForOp(op) === 'operator') || grant.bundle === 'operator' ? 'operator' : 'observer' });
+  return upRequestCommand({ ...base, ops: canonicalTeamOps(ops) ?? ops });
 }
 
 /**
@@ -174,9 +179,9 @@ export function verifyClientUp(input: {
   team?: string;
   now: Date;
   /** The op this invocation runs; the grant must carry it. Default `up`. */
-  op?: ClientTeamOp;
+  op?: BundleOp;
 }): ClientUpVerification {
-  const op: ClientTeamOp = input.op ?? 'up';
+  const op: BundleOp = input.op ?? 'up';
   const fail = (why: string, identified: ClientUpGrantRecord | null = null): ClientUpVerification => ({ ok: false, why, identified });
   const presented = readClientUpGrantFile(input.home, input.grantFile, op);
   if (!presented.ok) return fail(presented.why);
@@ -218,7 +223,7 @@ export function verifyClientUp(input: {
     return refuse(active.kind === 'other' ? active.why : `${active.why}; the owner issues a new one with ${renew(grant)}`);
   }
   const signed = `team "${grant.up.project}" at ${grant.up.root}`;
-  const label = teamGrantLabel(grant.ops);
+  const label = grantLabelOf(grant);
   // A grant carries exactly the ops the owner signed: one for `up` is no leave to stop, and the
   // other way round. The refusal names the request that would add the op, and never adds it.
   if (!grant.ops.includes(op)) {
@@ -232,8 +237,11 @@ export function verifyClientUp(input: {
   // team's folder: refused unless the team is named — and a team of the same name in another
   // folder is refused even then, since it is not clear which of the two was meant.
   const nameIt = `Run it in ${grant.up.root}, or name the team: team ${op} --client <grant> --key <key> --team ${grant.up.project}`;
-  const here = loadTeamFile(input.cwd, { home: input.home, checkOnly: true });
-  if (here.ok) {
+  // `send` names its target in the address, so where the caller stands is no part of it.
+  const here = op === 'send' ? null : loadTeamFile(input.cwd, { home: input.home, checkOnly: true });
+  if (here === null) {
+    // (nothing to compare: see above)
+  } else if (here.ok) {
     if (real(here.root) !== grant.up.root) {
       if (input.team === undefined) {
         return refuse(`the ${label} ${grant.grantId} is for ${signed}; this folder is team "${here.team.project}" at ${real(here.root)}, which the owner did not sign. ${nameIt}`);

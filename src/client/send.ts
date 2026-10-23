@@ -102,12 +102,14 @@ export function resolveClientTarget(
  */
 export function writeClientDrop(input: {
   home: string;
-  grant: ClientGrantRecord;
-  request: ClientRequest;
+  grant: { clientId: string; grantId: string };
+  request?: ClientRequest;
   target: ResolvedClientTarget;
   body: string;
   now: Date;
   id?: string;
+  /** The rule line the record carries; the one-seat client send's own when absent. */
+  rule?: string;
 }): { ok: true; path: string; id: string; recipientId: string } | { ok: false; why: string } {
   const id = input.id ?? randomUUID();
   const payload: RecordPayload = {
@@ -121,7 +123,7 @@ export function writeClientDrop(input: {
     body: input.body,
     from: `client:${input.grant.clientId}`,
     from_id: null,
-    rule: CLIENT_RULE,
+    rule: input.rule ?? CLIENT_RULE,
     thread: id,
     from_client: { client_id: input.grant.clientId, grant_id: input.grant.grantId },
   };

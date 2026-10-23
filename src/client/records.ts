@@ -30,6 +30,7 @@ import { getAgent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
+import { BUNDLE_ELIGIBLE_OPS, BUNDLE_HARD_MAX_DAYS, canonicalBundleOps, isBundleName, isForbiddenBundleCommand, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
 
 /** The domain tag client-grant and client-revocation signatures carry. */
 export const CLIENT_GRANT_DOMAIN = 'team-client-grant-v1\n';
@@ -865,6 +866,9 @@ export function readClientGrantFile(home: string, path: string): ClientGrantRead
   }
   // An up grant is a different record: it admits `team up --client` for one team and never a send,
   // a read or a sub-grant. Said plainly here, so a send that is handed one knows what it holds.
+  if (claimsBundleVocabulary(parsed)) {
+    return refusal(`the grant file "${path}" is a bundle grant (${claimedBundleOps(parsed).join(', ')}): it admits those commands for one team through their own --client forms, and this route does not read it`);
+  }
   if (claimsUpVocabulary(parsed)) {
     const claimed = claimedTeamOps(parsed);
     const admits = claimed.map((op) => `\`team ${op} --client ${path} --key <client.key>\``).join(' and ');
@@ -1285,6 +1289,12 @@ export function teamGrantLabel(ops: readonly string[]): string {
   return `${ops.join(' and ')} grant`;
 }
 
+/** What one verified team grant is called in a sentence: `up grant`, `down grant`, `up and down
+ *  grant` for the one-op forms, `operator bundle grant` for a bundle. */
+export function grantLabelOf(grant: { ops: readonly string[]; bundle?: string }): string {
+  return grant.bundle !== undefined ? `${grant.bundle} bundle grant` : teamGrantLabel(grant.ops);
+}
+
 /** The label with its article: `an up grant`, `a down grant`, `an up and down grant`. */
 export function teamGrantLabelWithArticle(ops: readonly string[]): string {
   return `${ops[0] === 'up' ? 'an' : 'a'} ${teamGrantLabel(ops)}`;
@@ -1318,9 +1328,15 @@ export type ClientUpGrantRecord = {
   keyDir: string;
   issued: string;
   expires: string;
-  vocabulary: 4;
-  /** What the grant admits: `up`, `down`, or both, in canonical order. */
-  ops: ClientTeamOp[];
+  /** 4: the one-op grants (`up`, `down`, both). 5: a bundle grant (see `CLIENT_BUNDLE_VOCABULARY_VERSION`). */
+  vocabulary: 4 | 5;
+  /** What the grant admits, explicitly: `up`, `down`, or both on vocabulary 4; on vocabulary 5 the
+   *  bundle's expansion as the owner signed it. These decide; `bundle` never does. */
+  ops: BundleOp[];
+  /** Vocabulary 5 only: the bundle's name, for display. Never read as authority. */
+  bundle?: BundleName;
+  /** Vocabulary 5 only: the seats `send` may reach, as signed (empty when `send` is not an op). */
+  seats?: string[];
   /** The one team and folder every op binds. The name is the first build's: it binds `down` too. */
   up: ClientUpBinding;
 };
@@ -1344,8 +1360,9 @@ export type ClientUpGrantRead =
 
 /** The command that asks for an up grant, spelled for one client key and team: what every
  *  refusal of an up grant ends with, so the owner's next step is always one line. */
-export function upRequestCommand(input: { clientId: string; entity: string; keyDir: string; project: string; ops?: readonly string[] } | null): string {
+export function upRequestCommand(input: { clientId: string; entity: string; keyDir: string; project: string; ops?: readonly string[]; bundle?: string } | null): string {
   if (input === null) return 'team grant --client <client-id> --entity <entity> --public-key <client.pub> --team <team> --up --request';
+  if (input.bundle !== undefined) return `team grant --client ${input.clientId} --entity ${input.entity} --public-key ${join(input.keyDir, CLIENT_PUB_FILE)} --team ${input.project} --bundle ${input.bundle} --request`;
   return `team grant --client ${input.clientId} --entity ${input.entity} --public-key ${join(input.keyDir, CLIENT_PUB_FILE)} --team ${input.project} ${teamOpFlags(input.ops ?? ['up'])} --request`;
 }
 
@@ -1356,6 +1373,7 @@ function bindingKeyOf(ops: readonly string[]): 'up' | 'team' {
 }
 
 function onDiskUpGrant(grant: ClientUpGrantRecord): Record<string, Json> {
+  if (grant.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION) return onDiskBundleGrant(grant);
   return {
     grant_id: grant.grantId,
     client_id: grant.clientId,
@@ -1448,6 +1466,11 @@ export function writeClientUpGrant(
 ): { ok: true; grant: ClientUpGrantRecord; path: string } | { ok: false; why: string } {
   const plan = planClientUpGrant(home, request, options);
   if (!plan.ok) return plan;
+  return publishTeamGrant(home, plan.grant, options);
+}
+
+/** Signs and publishes one planned team grant (vocabulary 4 or 5) under a fresh random id. */
+function publishTeamGrant(home: string, plan: ClientUpGrantRecord, options: ClientGrantOptions): { ok: true; grant: ClientUpGrantRecord; path: string } | { ok: false; why: string } {
   const folder = clientGrantsFolder(home);
   try {
     mkdirSync(folder, { recursive: true, mode: 0o700 });
@@ -1456,14 +1479,14 @@ export function writeClientUpGrant(
   }
   const key = options.key ?? keyOf(home);
   for (let attempt = 0; attempt < 3; attempt++) {
-    const grant: ClientUpGrantRecord = { ...plan.grant, grantId: clientGrantId() };
+    const grant: ClientUpGrantRecord = { ...plan, grantId: clientGrantId() };
     const disk = onDiskUpGrant(grant);
     const signature = signDomain(CLIENT_GRANT_DOMAIN, grantPayload(grant.grantId, disk), key);
     const path = clientGrantPath(home, grant.grantId);
     const published = publishExclusive(folder, `${grant.grantId}.json`, `${JSON.stringify({ client_grant: disk, signature }, null, 2)}\n`);
     if (published === 'written') return { ok: true, grant, path };
     if (published === 'exists') continue;
-    return refusal(`the up grant could not be published in "${folder}"`);
+    return refusal(`the ${plan.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION ? 'bundle' : 'up'} grant could not be published in "${folder}"`);
   }
   return refusal('a fresh grant id could not be found; nothing was written');
 }
@@ -1476,6 +1499,7 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
   const raw = envelope.client_grant;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const fields = raw as Record<string, unknown>;
+  if (fields.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION) return bundleGrantFrom(envelope, fields, key);
   if (fields.vocabulary !== CLIENT_UP_VOCABULARY_VERSION) return null;
   // The ops are exactly what a request writes: known, once each, in canonical order. Anything else
   // is not a record this build wrote, and the binding's key follows from them.
@@ -1540,7 +1564,21 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
 function claimsUpVocabulary(parsed: unknown): boolean {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
   const grant = (parsed as { client_grant?: unknown }).client_grant;
-  return grant !== null && typeof grant === 'object' && !Array.isArray(grant) && (grant as { vocabulary?: unknown }).vocabulary === CLIENT_UP_VOCABULARY_VERSION;
+  if (grant === null || typeof grant !== 'object' || Array.isArray(grant)) return false;
+  return (grant as { vocabulary?: unknown }).vocabulary === CLIENT_UP_VOCABULARY_VERSION;
+}
+
+/** Whether a parsed record is of the bundle vocabulary (for the wording of a refusal only). */
+function claimsBundleVocabulary(parsed: unknown): boolean {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const grant = (parsed as { client_grant?: unknown }).client_grant;
+  return grant !== null && typeof grant === 'object' && !Array.isArray(grant) && (grant as { vocabulary?: unknown }).vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION;
+}
+
+/** The ops a vocabulary-5 file names, for the wording of a refusal only. */
+function claimedBundleOps(parsed: unknown): string[] {
+  const grant = (parsed as { client_grant?: { allowed_ops?: unknown } }).client_grant;
+  return Array.isArray(grant?.allowed_ops) ? (grant.allowed_ops as unknown[]).filter((op): op is string => typeof op === 'string') : [];
 }
 
 /** The ops a vocabulary-4 file names, for the wording of a refusal only. */
@@ -1550,9 +1588,26 @@ function claimedTeamOps(parsed: unknown): ClientTeamOp[] {
   return canonicalTeamOps(named) ?? ['up'];
 }
 
+/** The bundle that would carry an op: `operator` for the ones that act, `observer` for the ones that read. */
+export function bundleForOp(op: string): BundleName {
+  return op === 'send' || op === 'up' || op === 'down' ? 'operator' : 'observer';
+}
+
+function opGrantNoun(op: BundleOp, article: boolean): string {
+  if (op === 'up' || op === 'down') return article ? teamGrantLabelWithArticle([op]) : teamGrantLabel([op]);
+  return `${article ? 'a ' : ''}grant that carries ${op}`;
+}
+
+/** The request that asks for a grant carrying `op`: the one-op form for up and down, a bundle for the rest. */
+function opRequestCommand(op: BundleOp, input: { clientId: string; entity: string; keyDir: string; project: string } | null): string {
+  if (op === 'up' || op === 'down') return input === null ? upRequestCommand(null).replace('--up', teamOpFlags([op])) : upRequestCommand({ ...input, ops: [op] });
+  const bundle = bundleForOp(op);
+  return input === null ? `team grant --client <client-id> --entity <entity> --public-key <client.pub> --team <team> --bundle ${bundle} --request` : upRequestCommand({ ...input, bundle });
+}
+
 /** One verified owner-signed up grant from a file, or the reason it is not one. A send, messages
  *  or master grant is named for what it is, with the command that asks for an up grant. */
-export function readClientUpGrantFile(home: string, path: string, op: ClientTeamOp = 'up'): ClientUpGrantRead {
+export function readClientUpGrantFile(home: string, path: string, op: BundleOp = 'up'): ClientUpGrantRead {
   const state = keyState(home);
   if (state.kind !== 'key') return refusal('the owner signing key is absent or unreadable: no client grant can verify');
   let text: string;
@@ -1575,9 +1630,9 @@ export function readClientUpGrantFile(home: string, path: string, op: ClientTeam
   if (up === null) {
     const other = clientGrantFrom(parsed, state.key);
     if (other !== null) {
-      return refusal(`the grant file "${path}" is not ${teamGrantLabelWithArticle([op])} (it admits ${other.grant.allowedOps.join(', ')}); the owner requests one with ${upRequestCommand({ clientId: other.grant.clientId, entity: other.grant.entity, keyDir: other.grant.keyDir, project: '<team>', ops: [op] })}`);
+      return refusal(`the grant file "${path}" is not ${opGrantNoun(op, true)} (it admits ${other.grant.allowedOps.join(', ')}); the owner requests one with ${opRequestCommand(op, { clientId: other.grant.clientId, entity: other.grant.entity, keyDir: other.grant.keyDir, project: '<team>' })}`);
     }
-    return refusal(`the grant file "${path}" is not a verified owner-signed ${teamGrantLabel([op])}; the owner requests one with ${upRequestCommand(null).replace('--up', teamOpFlags([op]))}`);
+    return refusal(`the grant file "${path}" is not a verified owner-signed ${opGrantNoun(op, false)}; the owner requests one with ${opRequestCommand(op, null)}`);
   }
   const admitted = clientAdmission(home, up.grant.clientId, up.grant.entity);
   if (!admitted.ok) return refusal(admitted.why);
@@ -1607,11 +1662,250 @@ export function activeClientUpGrant(
   const grant = canonicalRead.grant;
   const expiresMs = Date.parse(grant.expires);
   if (!Number.isFinite(expiresMs)) return other(`the grant ${grant.grantId} has no readable expiry`);
-  if (expiresMs <= now.getTime()) return { ok: false, why: `the ${teamGrantLabel(grant.ops)} ${grant.grantId} expired at ${grant.expires}`, kind: 'expired' };
+  if (expiresMs <= now.getTime()) return { ok: false, why: `the ${grantLabelOf(grant)} ${grant.grantId} expired at ${grant.expires}`, kind: 'expired' };
   const revocation = clientRevocations(home, grant.grantId);
   if (!revocation.ok) return other(revocation.why);
-  if (revocation.records[0] !== undefined) return { ok: false, why: `the ${teamGrantLabel(grant.ops)} ${grant.grantId} was revoked at ${revocation.records[0].at}`, kind: 'revoked' };
+  if (revocation.records[0] !== undefined) return { ok: false, why: `the ${grantLabelOf(grant)} ${grant.grantId} was revoked at ${revocation.records[0].at}`, kind: 'revoked' };
   return { ok: true, grant };
+}
+
+// ---- bundle grants -------------------------------------------------------------------------
+//
+// A bundle grant (vocabulary 5) is a named, fixed list of commands grouped in one owner-signed
+// grant for ONE team at ONE folder: `observer` (read-only) or `operator` (observer, plus `send` to
+// the granted seats, `up` and `down`). One Touch ID covers the whole list. It complements the
+// per-command grants above, which stay valid, readable and unchanged; a grant is never widened in
+// place, and an older build refuses vocabulary 5 whole (it reads only 1 to 4).
+//
+// The record carries the EXPLICIT op list the owner signed (`allowed_ops`) and the bundle's name as
+// a display label (`bundle`). Only the list decides, so a command added to a bundle in a later
+// build never widens a grant signed before. The commands that change who may do what (grant,
+// revoke, init, policy, add, remove, …) are structurally ineligible (`bundle-ops.ts`): the decoder
+// refuses a record that lists one, even one carrying a valid owner signature.
+//
+// The binding is one team (name, registry id from its real root, the real root), the entity whose
+// policy governs the grant, the client's key, and the expiry. The fingerprints of the team file
+// are signed only when `up` is an op, and only `up` checks them: a file edit does not end a
+// grant's status, send or down.
+
+/** The vocabulary of a bundle grant. */
+export const CLIENT_BUNDLE_VOCABULARY_VERSION = 5;
+
+export type ClientBundleGrantRequest = {
+  clientId: string;
+  entity: string;
+  publicKey: string;
+  keyId: string;
+  keyDir: string;
+  bundle: BundleName;
+  /** The bundle as expanded at the request: the explicit ops the owner signs. */
+  ops: readonly string[];
+  /** The seats `send` may reach; required with `send`, refused without it. */
+  seats?: readonly string[];
+  /** Absent means the bundle's default days; past its cap is refused. */
+  expires?: string;
+  /** The binding. `fingerprints` is read only when `up` is an op. */
+  up: ClientUpBinding;
+  /** The policy-resolved specs in force; the release defaults when absent. The ops must sit inside
+   *  the bundle's, and the expiry inside its days. */
+  specs?: BundleSpecs;
+};
+
+const EMPTY_FINGERPRINTS: Fingerprints = { sections: {}, seats: {} };
+
+/** The problem with a bundle binding's shape, or null. The fingerprints are checked only for `up`. */
+export function clientBundleBindingProblem(binding: ClientUpBinding, ops: readonly string[]): string | null {
+  if (ops.includes('up')) return clientUpBindingProblem(binding);
+  return clientUpBindingProblem({ ...binding, fingerprints: { sections: {}, seats: { '-': '0'.repeat(64) } } });
+}
+
+function onDiskBundleGrant(grant: ClientUpGrantRecord): Record<string, Json> {
+  const team: Record<string, Json> = { project: grant.up.project, team_id: grant.up.teamId, root: grant.up.root };
+  if (grant.ops.includes('up')) team.fingerprints = { sections: { ...grant.up.fingerprints.sections }, seats: { ...grant.up.fingerprints.seats } };
+  return {
+    grant_id: grant.grantId,
+    client_id: grant.clientId,
+    entity: grant.entity,
+    public_key: grant.publicKey,
+    key_id: grant.keyId,
+    key_dir: grant.keyDir,
+    bundle: grant.bundle ?? 'operator',
+    allowed_ops: [...grant.ops],
+    seats: [...(grant.seats ?? [])],
+    issued: grant.issued,
+    expires: grant.expires,
+    vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+    team,
+  };
+}
+
+/** The seats a bundle's `send` may be signed for: the seats the entity admits this client, the team
+ *  file's own `clients:` list (when the owner approved it) and never the operator or a human seat. */
+export function bundleSeatsAdmitted(home: string, root: string, clientId: string, entity: string): { ok: true; seats: readonly string[] } | { ok: false; why: string } {
+  const admitted = clientAdmission(home, clientId, entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  const allowed = clientSeatsAt(root, home, clientId, admitted.seats);
+  if (!allowed.ok) return refusal(allowed.why);
+  return { ok: true, seats: allowed.seats };
+}
+
+/** Validates one bundle request and builds the record a write signs: the id is minted by the write. */
+export function planClientBundleGrant(home: string, request: ClientBundleGrantRequest, options: ClientGrantOptions = {}): { ok: true; grant: ClientUpGrantRecord } | { ok: false; why: string } {
+  const now = options.now ?? new Date();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
+  if (!isBundleName(request.bundle)) return refusal(`"${String(request.bundle)}" is not a bundle: observer or operator`);
+  for (const op of request.ops) {
+    if (isForbiddenBundleCommand(op)) return refusal(`"${op}" can never be in a bundle: it changes who may do what, and only the owner does that`);
+  }
+  const ops = canonicalBundleOps(request.ops);
+  if (ops === null) return refusal(`a bundle carries only ${BUNDLE_ELIGIBLE_OPS.join(', ')}, not "${request.ops.join(', ')}"`);
+  if (new Set(request.ops).size !== request.ops.length) return refusal('a bundle names an op twice');
+  const spec = request.specs?.[request.bundle];
+  if (spec !== undefined) {
+    const outside = ops.filter((op) => !spec.ops.includes(op));
+    if (outside.length > 0) return refusal(`the policy in force no longer lets the ${request.bundle} bundle carry ${outside.join(', ')}; ask again for the bundle as it is now`);
+  }
+  const admitted = clientAdmission(home, request.clientId, request.entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  if (!CLIENT_PUBLIC_KEY_PATTERN.test(request.publicKey)) return refusal(`"${request.publicKey}" is not an Ed25519 public key: 64 lowercase hex`);
+  if (request.keyId !== keyIdOf(request.publicKey)) return refusal(`the key id "${request.keyId}" is not the public key's own (${keyIdOf(request.publicKey)})`);
+  const placement = clientKeyPlacementProblem(home, request.keyDir);
+  if (placement !== null) return refusal(placement);
+  const bound = clientBundleBindingProblem(request.up, ops);
+  if (bound !== null) return refusal(bound);
+  // The seats `send` reaches: signed explicitly, each one still admitted now.
+  const seats = [...(request.seats ?? [])];
+  if (ops.includes('send')) {
+    if (seats.length === 0) return refusal('a bundle with send names the seats it may send to: --seat <seat>[,<seat>]');
+    if (new Set(seats).size !== seats.length) return refusal('a bundle names a seat twice');
+    const allowed = bundleSeatsAdmitted(home, request.up.root, request.clientId, request.entity);
+    if (!allowed.ok) return refusal(allowed.why);
+    let roster: string[];
+    try {
+      const record = readTeams(home)[request.up.teamId];
+      if (record === undefined) return refusal(`team "${request.up.project}" is not in the registry: a bundle with send reaches seats the registry names`);
+      roster = record.roster.map((entry) => entry.seat);
+    } catch {
+      return refusal('the team registry cannot be read');
+    }
+    for (const name of seats) {
+      if (!SEAT_NAME.test(name)) return refusal(`"${name}" is not a seat name`);
+      if (!allowed.seats.includes(name)) return refusal(`the team does not let client ${request.clientId} address "${name}" (it may address ${allowed.seats.join(', ') || 'none'})`);
+      if (!roster.includes(name)) return refusal(`team "${request.up.project}" has no seat "${name}" on its roster`);
+    }
+  } else if (seats.length > 0) {
+    return refusal(`seats name where send goes, and this ${request.bundle} bundle does not carry send`);
+  }
+  const days = Math.min(spec?.expiryDays ?? BUNDLE_HARD_MAX_DAYS, BUNDLE_HARD_MAX_DAYS);
+  const capMs = days * 24 * 60 * 60 * 1000;
+  const expires = request.expires ?? new Date(nowMs + capMs).toISOString();
+  const expiresMs = Date.parse(expires);
+  if (!Number.isFinite(expiresMs)) return refusal(`"${expires}" is not a readable expiry timestamp`);
+  if (expiresMs <= nowMs) return refusal(`the expiry ${expires} is not in the future: a client grant always expires`);
+  if (expiresMs > nowMs + capMs) return refusal(`the expiry ${expires} is more than ${String(days)} days away: a ${request.bundle} bundle lasts at most ${String(days)} days here`);
+  return {
+    ok: true,
+    grant: {
+      grantId: '',
+      clientId: request.clientId,
+      entity: request.entity,
+      publicKey: request.publicKey,
+      keyId: request.keyId,
+      keyDir: canonical(request.keyDir),
+      issued: now.toISOString(),
+      expires,
+      vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+      bundle: request.bundle,
+      ops,
+      seats,
+      up: {
+        project: request.up.project,
+        teamId: request.up.teamId,
+        root: request.up.root,
+        fingerprints: ops.includes('up') ? { sections: { ...request.up.fingerprints.sections }, seats: { ...request.up.fingerprints.seats } } : { sections: {}, seats: {} },
+      },
+    },
+  };
+}
+
+/** Writes one owner-signed bundle grant under a fresh random id, created with O_EXCL. */
+export function writeClientBundleGrant(
+  home: string,
+  request: ClientBundleGrantRequest,
+  options: ClientGrantOptions = {},
+): { ok: true; grant: ClientUpGrantRecord; path: string } | { ok: false; why: string } {
+  const plan = planClientBundleGrant(home, request, options);
+  if (!plan.ok) return plan;
+  return publishTeamGrant(home, plan.grant, options);
+}
+
+/** Decodes a vocabulary-5 record. A record that is not exactly what a build writes is not a grant,
+ *  and an op that can never be in a bundle makes the whole record nothing, signed or not. */
+function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<string, unknown>, key: KeyObject): { grant: ClientUpGrantRecord; signature: string } | null {
+  const raw = envelope.client_grant as Json;
+  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'bundle', 'allowed_ops', 'seats', 'issued', 'expires', 'vocabulary', 'team'];
+  if (Object.keys(fields).length !== known.length || Object.keys(fields).some((name) => !known.includes(name))) return null;
+  if (typeof fields.grant_id !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.grant_id)) return null;
+  if (typeof fields.client_id !== 'string' || !CLIENT_WORD_PATTERN.test(fields.client_id)) return null;
+  if (typeof fields.entity !== 'string' || !CLIENT_WORD_PATTERN.test(fields.entity)) return null;
+  if (typeof fields.public_key !== 'string' || !CLIENT_PUBLIC_KEY_PATTERN.test(fields.public_key)) return null;
+  if (typeof fields.key_id !== 'string' || fields.key_id !== keyIdOf(fields.public_key)) return null;
+  if (typeof fields.key_dir !== 'string' || !isAbsolute(fields.key_dir)) return null;
+  if (!isBundleName(fields.bundle)) return null;
+  // The explicit ops decide: known, none forbidden, each once, in canonical order.
+  if (!Array.isArray(fields.allowed_ops) || fields.allowed_ops.some((op) => typeof op !== 'string')) return null;
+  const listed = fields.allowed_ops as string[];
+  if (listed.some((op) => isForbiddenBundleCommand(op))) return null;
+  const ops = canonicalBundleOps(listed);
+  if (ops === null || ops.join(',') !== listed.join(',')) return null;
+  if (!Array.isArray(fields.seats) || fields.seats.some((name) => typeof name !== 'string' || !SEAT_NAME.test(name))) return null;
+  const seats = fields.seats as string[];
+  if (new Set(seats).size !== seats.length) return null;
+  if (ops.includes('send') ? seats.length === 0 : seats.length > 0) return null;
+  if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
+  if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
+  if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
+  if (Date.parse(fields.expires) > Date.parse(fields.issued) + BUNDLE_HARD_MAX_DAYS * 24 * 60 * 60 * 1000) return null;
+  const team = fields.team;
+  if (team === null || typeof team !== 'object' || Array.isArray(team)) return null;
+  const teamFields = team as Record<string, unknown>;
+  const withPrints = ops.includes('up');
+  if (Object.keys(teamFields).sort().join(',') !== (withPrints ? 'fingerprints,project,root,team_id' : 'project,root,team_id')) return null;
+  let fingerprints: Fingerprints = { sections: {}, seats: {} };
+  if (withPrints) {
+    const prints = teamFields.fingerprints;
+    if (prints === null || typeof prints !== 'object' || Array.isArray(prints)) return null;
+    if (Object.keys(prints).sort().join(',') !== 'seats,sections') return null;
+    fingerprints = prints as Fingerprints;
+  }
+  const binding: ClientUpBinding = { project: teamFields.project as string, teamId: teamFields.team_id as string, root: teamFields.root as string, fingerprints };
+  if (clientBundleBindingProblem(binding, ops) !== null) return null;
+  if (typeof envelope.signature !== 'string') return null;
+  if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw), envelope.signature, key)) return null;
+  return {
+    grant: {
+      grantId: fields.grant_id,
+      clientId: fields.client_id,
+      entity: fields.entity,
+      publicKey: fields.public_key,
+      keyId: fields.key_id,
+      keyDir: fields.key_dir,
+      issued: fields.issued,
+      expires: fields.expires,
+      vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+      bundle: fields.bundle,
+      ops,
+      seats,
+      up: {
+        project: binding.project,
+        teamId: binding.teamId,
+        root: binding.root,
+        fingerprints: withPrints ? { sections: { ...fingerprints.sections }, seats: { ...fingerprints.seats } } : { sections: {}, seats: {} },
+      },
+    },
+    signature: envelope.signature,
+  };
 }
 
 // ---- shared helpers ------------------------------------------------------------------------
