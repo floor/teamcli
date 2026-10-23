@@ -20,9 +20,11 @@ import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import type { Fingerprints } from '../approve/fingerprint.ts';
-import { CLIENT_EXPIRY_MAX_MS, CLIENT_UP_EXPIRY_MAX_MS, canonicalTeamOps, teamGrantLabel, planClientGrant, planClientUpGrant, planClientBundleGrant, writeClientBundleGrant, writeClientGrant, writeClientUpGrant, type ClientBundleGrantRequest, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope, type ClientTeamOp, type ClientUpGrantRecord, type ClientUpGrantRequest } from './records.ts';
+import { CLIENT_EXPIRY_MAX_MS, canonicalTeamOps, resolveEntityCoordinator, teamGrantLabel, planClientGrant, planClientUpGrant, planClientBundleGrant, writeClientBundleGrant, writeClientGrant, writeClientUpGrant, type ClientBundleGrantRequest, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope, type ClientTeamOp, type ClientUpGrantRecord, type ClientUpGrantRequest } from './records.ts';
 import { upBindingProblem } from './up-grant.ts';
-import { BUNDLE_HARD_MAX_DAYS, type BundleName, type BundleOp } from './bundle-ops.ts';
+import { BUNDLE_DEFAULT_DAYS, type BundleName, type BundleOp } from './bundle-ops.ts';
+import { GRANT_DURATION_DEFAULT_DAYS, expiryPhrase, type GrantDurationKind } from './duration-policy.ts';
+import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
 import { bundleCard, bundleSpecsInForce, projectIdOfTeam } from './bundles.ts';
 
 export type GrantEmission = 'owner-terminal' | 'conversational';
@@ -59,6 +61,10 @@ export type PendingGrantParams = {
   team: string | null;
   seat: string | null;
   expires: string | null;
+  /** `--expires never`: the request asks for a grant with no end date. Written only when true, so
+   *  every other request hashes as it did; part of the hashed parameters, so the owner's answer
+   *  approves exactly "no end date" and a request for a dated grant can never be executed as one. */
+  expires_never?: boolean;
   inbox: boolean;
   allow_grant: boolean;
   grant_scope: ClientGrantScope | null;
@@ -103,6 +109,7 @@ function upRequestOf(p: PendingGrantParams): ClientUpGrantRequest | null {
     keyId: p.key_id,
     keyDir: p.key_dir,
     ...(p.expires !== null ? { expires: p.expires } : {}),
+    ...(p.expires_never === true ? { neverExpires: true } : {}),
     up: { project: p.up.project, teamId: p.up.team_id, root: p.up.root, fingerprints: p.up.fingerprints },
     ...(p.team_ops !== undefined ? { ops: p.team_ops } : {}),
   };
@@ -131,6 +138,7 @@ function bundleRequestOf(p: PendingGrantParams, specs?: ClientBundleGrantRequest
     ops: p.bundle_ops ?? [],
     seats: p.bundle_seats ?? [],
     ...(p.expires !== null ? { expires: p.expires } : {}),
+    ...(p.expires_never === true ? { neverExpires: true } : {}),
     up: { project: p.up.project, teamId: p.up.team_id, root: p.up.root, fingerprints: p.up.fingerprints },
     ...(specs !== undefined ? { specs } : {}),
   };
@@ -146,6 +154,7 @@ function canonicalParams(p: PendingGrantParams): Json {
     team: p.team,
     seat: p.seat,
     expires: p.expires,
+    ...(p.expires_never === true ? { expires_never: true } : {}),
     inbox: p.inbox,
     allow_grant: p.allow_grant,
     grant_scope: p.grant_scope === null ? null : { entities: [...p.grant_scope.entities], projects: [...p.grant_scope.projects], teams: [...p.grant_scope.teams] },
@@ -250,8 +259,8 @@ export function answerChoiceOf(word: string): 'once' | 'always' | 'deny' | null 
 }
 
 /** The confirmation line the owner reads for a request. */
-export function confirmationLine(requestId: string, p: PendingGrantParams, now: Date): string {
-  return `Grant request ${requestId}: ${pendingSummary(p, now).text} Authorized? reply oui/approved, always, or non/deny (team grant --answer ${requestId} <oui|always|non>)`;
+export function confirmationLine(requestId: string, p: PendingGrantParams, now: Date, home?: string): string {
+  return `Grant request ${requestId}: ${pendingSummary(p, now, home).text} Authorized? reply oui/approved, always, or non/deny (team grant --answer ${requestId} <oui|always|non>)`;
 }
 
 /**
@@ -270,19 +279,23 @@ export function answerPendingGrant(home: string, requestId: string, word: string
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
   if (choice === 'always' && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always; answer oui to approve it once' };
   if (choice === 'always' && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
+  if (choice === 'always' && record.params.expires_never === true) return { ok: false, why: NO_END_NEVER_ALWAYS };
   const body = { request_id: requestId, params_sha256: record.params_sha256, choice, by: 'owner', at: now.toISOString() };
   const signature = signDomain(GRANT_ANSWER_DOMAIN, { name: requestId, grant_answer: body }, key);
   const written = writeExclusive(join(grantRequestsFolder(home), `${requestId}.answer.json`), `${JSON.stringify({ grant_answer: body, signature }, null, 2)}\n`);
   if (written === 'exists') return { ok: false, why: `request ${requestId} was already answered` };
   if (written === 'failed') return { ok: false, why: `the answer to ${requestId} could not be written` };
   if (choice === 'deny') writeExclusive(join(grantRequestsFolder(home), `${requestId}.used`), `denied ${now.toISOString()}\n`);
-  return { ok: true, choice, summary: pendingSummary(record.params, now).text };
+  return { ok: true, choice, summary: pendingSummary(record.params, now, home).text };
 }
 
 /** A team grant is bound to one team (an up grant, to one file by fingerprint), so a standing rule that
  *  renewed it unasked would bless whatever the team became. Each is answered once; the grant itself
  *  lasts up to ninety days. */
 const UP_NEVER_ALWAYS = 'an up or down grant is never approved always: a standing rule would renew it unasked for a team the owner never looked at again; answer oui, the grant lasts up to 90 days';
+
+/** A grant with no end date is the largest thing one answer can sign, so a standing rule never covers it. */
+const NO_END_NEVER_ALWAYS = 'a grant with no end date is never approved always: answer oui to approve this one grant once; it stays valid until the owner revokes it with team revoke';
 
 const ownerSeatAdapter: GrantApprovalAdapter = { name: 'owner-seat', available: () => true, issue: () => ({ ok: true, seal: '' }), verify: () => true };
 
@@ -311,8 +324,9 @@ export function approveAsOwnerSeat(
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
   if (choice === 'always' && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always; answer oui to approve it once' };
   if (choice === 'always' && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
+  if (choice === 'always' && record.params.expires_never === true) return { ok: false, why: NO_END_NEVER_ALWAYS };
   const answer: OwnerSeatAnswer = { kind: 'grant', request_id: requestId, params_sha256: record.params_sha256, choice, team: seat.team, seat: 'owner', at: via.at ?? now.toISOString() };
-  const summary = pendingSummary(record.params, now).text;
+  const summary = pendingSummary(record.params, now, home).text;
   const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} for ${summary}`, via.assertion);
   if (!signed.ok) return signed;
   const path = join(grantRequestsFolder(home), `${requestId}.seat-answer.json`);
@@ -420,10 +434,11 @@ function ownerKey(home: string): KeyObject | null {
 }
 
 function summaryOf(p: PendingGrantParams): string {
-  if (p.bundle !== undefined && p.up !== undefined && p.up !== null) return `${p.bundle} bundle for ${p.client_id} to team ${p.up.project} at ${p.up.root}: ${(p.bundle_ops ?? []).join(', ')}`;
-  if (p.up !== undefined && p.up !== null) return `${teamGrantLabel(teamOpsOf(p))} for ${p.client_id} to team ${p.up.project} at ${p.up.root} (file ${fileFingerprintOf(p.up)})`;
+  const noEnd = p.expires_never === true ? ' with NO END DATE' : '';
+  if (p.bundle !== undefined && p.up !== undefined && p.up !== null) return `${p.bundle} bundle for ${p.client_id} to team ${p.up.project} at ${p.up.root}: ${(p.bundle_ops ?? []).join(', ')}${noEnd}`;
+  if (p.up !== undefined && p.up !== null) return `${teamGrantLabel(teamOpsOf(p))} for ${p.client_id} to team ${p.up.project} at ${p.up.root} (file ${fileFingerprintOf(p.up)})${noEnd}`;
   const where = `${p.seat ?? 'orchestrator'}@${p.team ?? p.entity}`;
-  return `client grant for ${p.client_id} to ${where}${p.inbox ? ' with inbox' : ''}${p.allow_grant ? ' as a MASTER grant' : ''}`;
+  return `client grant for ${p.client_id} to ${where}${p.inbox ? ' with inbox' : ''}${p.allow_grant ? ' as a MASTER grant' : ''}${p.expires_never === true ? ' with NO END DATE' : ''}`;
 }
 
 /** Records one pending request under `conversational`; the approval adapter delivers its secret. */
@@ -549,6 +564,7 @@ export function executePendingGrant(
   const always = input.approve === 'always';
   if (always && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always: each one needs its own approval' };
   if (always && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
+  if (always && record.params.expires_never === true) return { ok: false, why: NO_END_NEVER_ALWAYS };
   // The grant is validated (team registered, seat listed, key placement, expiry) before the
   // request is spent: a grant that cannot be written leaves the request and its approval intact.
   const planned = planPending(home, record.params, now);
@@ -635,6 +651,7 @@ function grantRequestOf(p: PendingGrantParams): ClientGrantRequest {
     keyId: p.key_id,
     keyDir: p.key_dir,
     ...(p.expires !== null ? { expires: p.expires } : {}),
+    ...(p.expires_never === true ? { neverExpires: true } : {}),
     ...(p.inbox ? { inbox: true } : {}),
     ...(p.seat !== null ? { seat: p.seat } : {}),
     ...(p.team !== null ? { team: p.team } : {}),
@@ -659,30 +676,66 @@ export function pendingOps(p: PendingGrantParams): string[] {
   return [...(p.inbox ? ['send', 'messages'] : ['send']), ...(p.allow_grant ? ['grant'] : [])];
 }
 
-/** The human summary a requester shows or speaks, and the three choices it offers. */
-export function pendingSummary(p: PendingGrantParams, now: Date): { client: string; entity: string; team: string; seat: string; ops: string[]; expires: string; master: boolean; text: string; up?: { project: string; team_id: string; root: string; seats: string[]; file_fingerprint: string } } {
+/** The sentence added to a card whose grant has no end date, so the owner reads it where they sign. */
+export const NO_END_DATE_NOTICE = 'NO END DATE: it stays valid until you end it with team revoke.';
+
+/**
+ * The end the grant would be signed with, for the card: `null` for no end date, the named date, or
+ * the default length under the policy in force (the shorter of the kind's default and the cap). The
+ * card says what the policy allows; the signing re-checks it, and a request that no longer fits is
+ * refused there, so this is never what authorizes anything.
+ */
+function cardExpiry(p: PendingGrantParams, now: Date, home: string | undefined, kind: GrantDurationKind): string | null {
+  if (p.expires_never === true) return null;
+  if (p.expires !== null) return p.expires;
+  let days = kind === 'bundle' ? BUNDLE_DEFAULT_DAYS : GRANT_DURATION_DEFAULT_DAYS[kind];
+  let narrow: number | null = null;
+  let projectId: string | null = null;
+  if (home !== undefined) {
+    if (p.up !== undefined && p.up !== null) projectId = projectIdOfTeamId(home, p.up.team_id);
+    else {
+      const resolved = resolveEntityCoordinator(home, p.entity, { clientId: p.client_id, ...(p.seat !== null ? { seat: p.seat } : {}), ...(p.team !== null && p.team !== p.entity ? { team: p.team } : {}) });
+      if (resolved.ok) projectId = projectIdOfTeamId(home, resolved.coordinator.teamId);
+    }
+    if (kind === 'bundle') {
+      const specs = bundleSpecsInForce(home, p.entity, projectId, now);
+      const spec = specs.ok && p.bundle !== undefined ? specs.specs[p.bundle] : undefined;
+      if (spec !== undefined) {
+        days = spec.expiryDays;
+        narrow = spec.expiryExplicit === true ? spec.expiryDays : null;
+      }
+    }
+    const chosen = chooseGrantExpiry({ home, kind, entity: p.entity, projectId, now, defaultDays: days, narrowDays: narrow });
+    if (chosen.ok && chosen.expires !== null) return chosen.expires;
+  }
+  return new Date(now.getTime() + days * 86_400_000).toISOString();
+}
+
+/** The human summary a requester shows or speaks, and the three choices it offers. `home`, when
+ *  given, lets the card show the default length under the owner's `client-grant-max-duration`. */
+export function pendingSummary(p: PendingGrantParams, now: Date, home?: string): { client: string; entity: string; team: string; seat: string; ops: string[]; expires: string | null; master: boolean; text: string; up?: { project: string; team_id: string; root: string; seats: string[]; file_fingerprint: string } } {
   if (p.bundle !== undefined && p.up !== undefined && p.up !== null) {
     const ops = grantOpsOf(p);
     const seats = Object.keys(p.up.fingerprints.seats);
-    const expires = p.expires ?? new Date(now.getTime() + BUNDLE_HARD_MAX_DAYS * 86_400_000).toISOString();
+    const expires = cardExpiry(p, now, home, 'bundle');
     const file = fileFingerprintOf(p.up);
     const card = bundleCard({ clientId: p.client_id, project: p.up.project, ops, seats: p.bundle_seats ?? [], expires, fileFingerprint: file });
-    return { client: p.client_id, entity: p.entity, team: p.up.project, seat: (p.bundle_seats ?? []).join(',') || 'none', ops, expires, master: false, text: card, up: { project: p.up.project, team_id: p.up.team_id, root: p.up.root, seats, file_fingerprint: file } };
+    return { client: p.client_id, entity: p.entity, team: p.up.project, seat: (p.bundle_seats ?? []).join(',') || 'none', ops, expires, master: false, text: expires === null ? `${card} ${NO_END_DATE_NOTICE}` : card, up: { project: p.up.project, team_id: p.up.team_id, root: p.up.root, seats, file_fingerprint: file } };
   }
   if (p.up !== undefined && p.up !== null) {
-    const expires = p.expires ?? new Date(now.getTime() + CLIENT_UP_EXPIRY_MAX_MS).toISOString();
+    const expires = cardExpiry(p, now, home, 'up');
     const seats = Object.keys(p.up.fingerprints.seats);
     const ops = teamOpsOf(p);
     const label = teamGrantLabel(ops);
     const runs = ops.map((op) => `team ${op}`).join(' and ');
-    const text = `${label.charAt(0).toUpperCase()}${label.slice(1)} for ${p.client_id}: run ${runs} for team ${p.up.project} at ${p.up.root} (entity ${p.entity}; file ${fileFingerprintOf(p.up)}; seats ${seats.join(', ')}) until ${expires}.`;
+    const text = `${label.charAt(0).toUpperCase()}${label.slice(1)} for ${p.client_id}: run ${runs} for team ${p.up.project} at ${p.up.root} (entity ${p.entity}; file ${fileFingerprintOf(p.up)}; seats ${seats.join(', ')}) ${expiryPhrase(expires)}.${expires === null ? ` ${NO_END_DATE_NOTICE}` : ''}`;
     return { client: p.client_id, entity: p.entity, team: p.up.project, seat: 'none', ops, expires, master: false, text, up: { project: p.up.project, team_id: p.up.team_id, root: p.up.root, seats, file_fingerprint: fileFingerprintOf(p.up) } };
   }
-  const expires = p.expires ?? new Date(now.getTime() + CLIENT_EXPIRY_MAX_MS).toISOString();
+  const expires = cardExpiry(p, now, home, 'send');
   const team = p.team ?? p.entity;
   const seat = p.seat ?? 'orchestrator';
   const ops = pendingOps(p);
-  const text = `${p.allow_grant ? 'MASTER grant' : 'Grant'} for ${p.client_id}: ${ops.join(' + ')} to ${seat}@${team} (entity ${p.entity}) until ${expires}.`;
+  const text = `${p.allow_grant ? 'MASTER grant' : 'Grant'} for ${p.client_id}: ${ops.join(' + ')} to ${seat}@${team} (entity ${p.entity}) ${expiryPhrase(expires)}.${expires === null ? ` ${NO_END_DATE_NOTICE}` : ''}`;
   return { client: p.client_id, entity: p.entity, team, seat, ops, expires, master: p.allow_grant, text };
 }
 
@@ -755,7 +808,13 @@ function ruleJson(r: ApprovalRule): Json {
   return { rule_id: r.rule_id, created: r.created, approved_by: r.approved_by, client_id: r.client_id, entity: r.entity, teams: [...r.teams], seats: [...r.seats], ops: [...r.ops], max_duration_seconds: r.max_duration_seconds };
 }
 
+/** The longest a standing rule covers: seven days, the release default of a send grant. A rule is the
+ *  owner's standing 'always', set by this constant and never by `client-grant-max-duration`, so a
+ *  raised cap never makes a rule approve a longer grant than the owner saw when answering. */
+const APPROVAL_RULE_MAX_SECONDS = (GRANT_DURATION_DEFAULT_DAYS.send * 24 * 60 * 60);
+
 function durationSeconds(p: PendingGrantParams, now: Date): number {
+  if (p.expires_never === true) return Number.POSITIVE_INFINITY;
   if (p.expires === null) return CLIENT_EXPIRY_MAX_MS / 1000;
   return Math.ceil((Date.parse(p.expires) - now.getTime()) / 1000);
 }
@@ -764,6 +823,7 @@ function durationSeconds(p: PendingGrantParams, now: Date): number {
 function writeApprovalRule(home: string, p: PendingGrantParams, adapter: string, now: Date, key: KeyObject): { ok: true; rule: ApprovalRule } | { ok: false; why: string } {
   if (p.allow_grant) return { ok: false, why: 'a master grant is never approved always' };
   if (p.up) return { ok: false, why: UP_NEVER_ALWAYS };
+  if (p.expires_never === true) return { ok: false, why: NO_END_NEVER_ALWAYS };
   const rule: ApprovalRule = {
     rule_id: `ar_${randomBytes(12).toString('hex')}`,
     created: now.toISOString(),
@@ -773,7 +833,7 @@ function writeApprovalRule(home: string, p: PendingGrantParams, adapter: string,
     teams: [p.team ?? p.entity],
     seats: [p.seat ?? 'orchestrator'],
     ops: pendingOps(p),
-    max_duration_seconds: Math.min(durationSeconds(p, now), CLIENT_EXPIRY_MAX_MS / 1000),
+    max_duration_seconds: Math.min(durationSeconds(p, now), APPROVAL_RULE_MAX_SECONDS),
   };
   const body = ruleJson(rule);
   const signature = signDomain(GRANT_RULE_DOMAIN, { name: rule.rule_id, approval_rule: body }, key);

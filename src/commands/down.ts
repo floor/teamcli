@@ -53,6 +53,7 @@ import { emptySession, readState, updateState, type SeatState } from '../state.t
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
+import { expiryPhrase } from '../client/duration-policy.ts';
 
 // What `down` reads from outside the file, so tests can stand in for it.
 export type DownSources = {
@@ -536,7 +537,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     clientDown = { grant: verified.grant, signature: verified.signature, requestId: verified.requestId };
     // The folder is the grant's, whatever the caller's: from here every read is of that team.
     io = { ...io, cwd: verified.root };
-    if (!json) io.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, until ${verified.grant.expires}\n`);
+    if (!json) io.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is

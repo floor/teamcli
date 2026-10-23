@@ -30,7 +30,9 @@ import { getAgent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { BUNDLE_ELIGIBLE_OPS, BUNDLE_HARD_MAX_DAYS, canonicalBundleOps, isBundleName, isForbiddenBundleCommand, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
+import { DAY_MS, GRANT_DURATION_DEFAULT_DAYS, endsAtMs } from './duration-policy.ts';
+import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
+import { BUNDLE_DEFAULT_DAYS, BUNDLE_ELIGIBLE_OPS, canonicalBundleOps, isBundleName, isForbiddenBundleCommand, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
 
 /** The domain tag client-grant and client-revocation signatures carry. */
 export const CLIENT_GRANT_DOMAIN = 'team-client-grant-v1\n';
@@ -128,8 +130,11 @@ export const CLIENT_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/;
 /** A client id and an entity name: one lowercase word, hyphens allowed. */
 export const CLIENT_WORD_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** The owner's 7-day cap, both the default and the hard ceiling. */
-export const CLIENT_EXPIRY_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+/** The release default for a send grant: seven days, both how long a grant lasts when `--expires`
+ *  is absent and the cap when no `client-grant-max-duration` policy says otherwise. It is a
+ *  default, not a ceiling: the owner's policy raises (or lowers) the cap, and `none` allows a grant
+ *  with no end date (see `grant-duration.ts`). */
+export const CLIENT_EXPIRY_MAX_MS = GRANT_DURATION_DEFAULT_DAYS.send * DAY_MS;
 
 /** The one operation and the one destination role this slice admits. */
 export const CLIENT_ALLOWED_OPS = ['send'] as const;
@@ -185,7 +190,11 @@ export type ClientGrantRecord = {
   allowedOps: ClientOp[];
   allowedRoles: ['orchestrator'];
   issued: string;
-  expires: string;
+  /** The end of the grant as signed, or `null`: no end date. A null expiry is written only when the
+   *  owner's `client-grant-max-duration` policy said `none`; the grant then lasts until revoked.
+   *  It is the JSON `null` on disk, never an absent field, so an older build (which reads a string
+   *  here) refuses the whole record. */
+  expires: string | null;
   vocabulary: 1 | 2 | 3;
   /** Vocabulary 3 only: where this master grant may issue sub-grants. */
   grantScope?: ClientGrantScope;
@@ -207,8 +216,12 @@ export type ClientGrantRequest = {
   publicKey: string;
   keyId: string;
   keyDir: string;
-  /** Absent means the 7-day default; anything past the 7-day cap is refused. */
+  /** Absent means the default length (7 days, or the cap when that is shorter); anything past the
+   *  `client-grant-max-duration` cap in force is refused. */
   expires?: string;
+  /** No end date (`--expires never`): written only when the policy in force says `none`, and never
+   *  with `expires`, `grantScope` or `issuedBy`. */
+  neverExpires?: boolean;
   /** The seat the grant addresses; absent means the orchestrator. It must be one the coordinator
    *  team's approved `clients:` section lists for this client (or the default, orchestrator). */
   seat?: string;
@@ -782,13 +795,21 @@ export function planClientGrant(home: string, request: ClientGrantRequest, optio
   }
   const placement = clientKeyPlacementProblem(home, request.keyDir);
   if (placement !== null) return refusal(placement);
-  const expires = request.expires ?? new Date(nowMs + CLIENT_EXPIRY_MAX_MS).toISOString();
-  const expiresMs = Date.parse(expires);
-  if (!Number.isFinite(expiresMs)) return refusal(`"${expires}" is not a readable expiry timestamp`);
-  if (expiresMs <= nowMs) return refusal(`the expiry ${expires} is not in the future: a client grant always expires`);
-  if (expiresMs > nowMs + CLIENT_EXPIRY_MAX_MS) {
-    return refusal(`the expiry ${expires} is more than 7 days away: a client grant is finite and at most 7 days`);
-  }
+  // How long it lasts is the `client-grant-max-duration` policy's word (7 days by default); an
+  // unreadable chain refuses. A master grant and a sub-grant always carry an end date.
+  const chosen = chooseGrantExpiry({
+    home,
+    kind: 'send',
+    entity: request.entity,
+    projectId: projectIdOfTeamId(home, coordinator.coordinator.teamId),
+    now,
+    expires: request.expires,
+    never: request.neverExpires,
+    allowNever: !master && request.issuedBy === undefined,
+    noun: master ? 'master grant' : request.issuedBy !== undefined ? 'sub-grant' : 'client grant',
+  });
+  if (!chosen.ok) return refusal(chosen.why);
+  const expires = chosen.expires;
   return {
     ok: true,
     grant: {
@@ -929,9 +950,11 @@ export function activeClientGrant(
   const canonical = canonicalClientGrant(home, presented);
   if (!canonical.ok) return canonical;
   const grant = canonical.grant;
-  const expiresMs = Date.parse(grant.expires);
-  if (!Number.isFinite(expiresMs)) return refusal(`the grant ${grant.grantId} has no readable expiry`);
-  if (expiresMs <= now.getTime()) return refusal(`the grant ${grant.grantId} expired at ${grant.expires}`);
+  // A record with no end date (`expires: null`) is not expired, ever; `team revoke` still ends it.
+  if (grant.expires !== null) {
+    if (!Number.isFinite(Date.parse(grant.expires))) return refusal(`the grant ${grant.grantId} has no readable expiry`);
+    if (clientGrantExpired(grant.expires, now)) return refusal(`the grant ${grant.grantId} expired at ${grant.expires}`);
+  }
   const revocation = clientRevocations(home, grant.grantId);
   if (!revocation.ok) return revocation;
   if (revocation.records[0] !== undefined) {
@@ -1305,10 +1328,11 @@ export function teamOpFlags(ops: readonly string[]): string {
   return ops.map((op) => `--${op}`).join(' ');
 }
 
-/** A team grant (up, down or both) is durable: ninety days is both the default and the ceiling.
- *  `--expires` shortens it; the owner revokes it at any time with `team revoke`. This is a constant
- *  like the seven-day send ceiling above it: no policy sets it today. */
-export const CLIENT_UP_EXPIRY_MAX_MS = 90 * 24 * 60 * 60 * 1000;
+/** A team grant (up, down or both) is durable: ninety days is the release default, both its length
+ *  when `--expires` is absent and its cap when no `client-grant-max-duration` policy says otherwise.
+ *  `--expires` shortens it; the owner revokes it at any time with `team revoke`. It is a default,
+ *  not a ceiling: the policy raises or lowers the cap, and `none` allows no end date. */
+export const CLIENT_UP_EXPIRY_MAX_MS = GRANT_DURATION_DEFAULT_DAYS.up * DAY_MS;
 
 /** Where one up grant binds: one team by name and registry id, its real root, and its file. */
 export type ClientUpBinding = {
@@ -1327,7 +1351,8 @@ export type ClientUpGrantRecord = {
   keyId: string;
   keyDir: string;
   issued: string;
-  expires: string;
+  /** The end as signed, or `null`: no end date (the policy said `none`); see {@link ClientGrantRecord.expires}. */
+  expires: string | null;
   /** 4: the one-op grants (`up`, `down`, both). 5: a bundle grant (see `CLIENT_BUNDLE_VOCABULARY_VERSION`). */
   vocabulary: 4 | 5;
   /** What the grant admits, explicitly: `up`, `down`, or both on vocabulary 4; on vocabulary 5 the
@@ -1347,8 +1372,11 @@ export type ClientUpGrantRequest = {
   publicKey: string;
   keyId: string;
   keyDir: string;
-  /** Absent means the 90-day default; anything past 90 days is refused. */
+  /** Absent means the default length (90 days, or the cap when shorter); anything past the
+   *  `client-grant-max-duration` cap in force is refused. */
   expires?: string;
+  /** No end date (`--expires never`): only when the policy in force says `none` for up/down grants. */
+  neverExpires?: boolean;
   /** Absent means `up`, as before; `['down']` and `['up', 'down']` add the stop. */
   ops?: readonly string[];
   up: ClientUpBinding;
@@ -1430,11 +1458,18 @@ export function planClientUpGrant(home: string, request: ClientUpGrantRequest, o
   if (bound !== null) return refusal(bound);
   const ops = canonicalTeamOps(request.ops);
   if (ops === null) return refusal(`a team grant carries up, down or both, not "${(request.ops ?? []).join(', ')}"`);
-  const expires = request.expires ?? new Date(nowMs + CLIENT_UP_EXPIRY_MAX_MS).toISOString();
-  const expiresMs = Date.parse(expires);
-  if (!Number.isFinite(expiresMs)) return refusal(`"${expires}" is not a readable expiry timestamp`);
-  if (expiresMs <= nowMs) return refusal(`the expiry ${expires} is not in the future: a client grant always expires`);
-  if (expiresMs > nowMs + CLIENT_UP_EXPIRY_MAX_MS) return refusal(`the expiry ${expires} is more than 90 days away: a ${teamGrantLabel(ops)} is durable but finite, at most 90 days`);
+  const chosen = chooseGrantExpiry({
+    home,
+    kind: 'up',
+    entity: request.entity,
+    projectId: projectIdOfTeamId(home, request.up.teamId),
+    now,
+    expires: request.expires,
+    never: request.neverExpires,
+    noun: teamGrantLabel(ops),
+  });
+  if (!chosen.ok) return refusal(chosen.why);
+  const expires = chosen.expires;
   return {
     ok: true,
     grant: {
@@ -1517,9 +1552,8 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
   if (typeof fields.key_id !== 'string' || fields.key_id !== keyIdOf(fields.public_key)) return null;
   if (typeof fields.key_dir !== 'string' || !isAbsolute(fields.key_dir)) return null;
   if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
-  if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
-  if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
-  if (Date.parse(fields.expires) > Date.parse(fields.issued) + CLIENT_UP_EXPIRY_MAX_MS) return null;
+  const expiry = decodedExpiry(fields);
+  if (expiry === null) return null;
   const up = fields[bindingKey];
   if (up === null || typeof up !== 'object' || Array.isArray(up)) return null;
   const upFields = up as Record<string, unknown>;
@@ -1545,7 +1579,7 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
       keyId: fields.key_id,
       keyDir: fields.key_dir,
       issued: fields.issued,
-      expires: fields.expires,
+      expires: expiry.expires,
       vocabulary: CLIENT_UP_VOCABULARY_VERSION,
       ops,
       up: {
@@ -1672,9 +1706,10 @@ export function activeClientUpGrant(
     return other(`the presented grant is not the canonical record for ${presented.grant.grantId} (signature differs)`);
   }
   const grant = canonicalRead.grant;
-  const expiresMs = Date.parse(grant.expires);
-  if (!Number.isFinite(expiresMs)) return other(`the grant ${grant.grantId} has no readable expiry`);
-  if (expiresMs <= now.getTime()) return { ok: false, why: `the ${grantLabelOf(grant)} ${grant.grantId} expired at ${grant.expires}`, kind: 'expired' };
+  if (grant.expires !== null) {
+    if (!Number.isFinite(Date.parse(grant.expires))) return other(`the grant ${grant.grantId} has no readable expiry`);
+    if (clientGrantExpired(grant.expires, now)) return { ok: false, why: `the ${grantLabelOf(grant)} ${grant.grantId} expired at ${grant.expires}`, kind: 'expired' };
+  }
   const revocation = clientRevocations(home, grant.grantId);
   if (!revocation.ok) return other(revocation.why);
   if (revocation.records[0] !== undefined) return { ok: false, why: `the ${grantLabelOf(grant)} ${grant.grantId} was revoked at ${revocation.records[0].at}`, kind: 'revoked' };
@@ -1714,8 +1749,11 @@ export type ClientBundleGrantRequest = {
   ops: readonly string[];
   /** The seats `send` may reach; required with `send`, refused without it. */
   seats?: readonly string[];
-  /** Absent means the bundle's default days; past its cap is refused. */
+  /** Absent means the bundle's default days (or the cap when shorter); past its cap is refused. */
   expires?: string;
+  /** No end date (`--expires never`): only when the policy in force says `none` for bundles and
+   *  the `client-bundles` policy wrote no `@<days>d` for this bundle. */
+  neverExpires?: boolean;
   /** The binding. `fingerprints` is read only when `up` is an op. */
   up: ClientUpBinding;
   /** The policy-resolved specs in force; the release defaults when absent. The ops must sit inside
@@ -1809,13 +1847,22 @@ export function planClientBundleGrant(home: string, request: ClientBundleGrantRe
   } else if (seats.length > 0) {
     return refusal(`seats name where send goes, and this ${request.bundle} bundle does not carry send`);
   }
-  const days = Math.min(spec?.expiryDays ?? BUNDLE_HARD_MAX_DAYS, BUNDLE_HARD_MAX_DAYS);
-  const capMs = days * 24 * 60 * 60 * 1000;
-  const expires = request.expires ?? new Date(nowMs + capMs).toISOString();
-  const expiresMs = Date.parse(expires);
-  if (!Number.isFinite(expiresMs)) return refusal(`"${expires}" is not a readable expiry timestamp`);
-  if (expiresMs <= nowMs) return refusal(`the expiry ${expires} is not in the future: a client grant always expires`);
-  if (expiresMs > nowMs + capMs) return refusal(`the expiry ${expires} is more than ${String(days)} days away: a ${request.bundle} bundle lasts at most ${String(days)} days here`);
+  // The `client-bundles` days are the default length, and a bound too when the policy wrote them;
+  // `client-grant-max-duration` (bundle kind) is the cap, 90 days by default.
+  const chosen = chooseGrantExpiry({
+    home,
+    kind: 'bundle',
+    entity: request.entity,
+    projectId: projectIdOfTeamId(home, request.up.teamId),
+    now,
+    expires: request.expires,
+    never: request.neverExpires,
+    defaultDays: spec?.expiryDays ?? BUNDLE_DEFAULT_DAYS,
+    narrowDays: spec?.expiryExplicit === true ? spec.expiryDays : null,
+    noun: `${request.bundle} bundle`,
+  });
+  if (!chosen.ok) return refusal(chosen.why);
+  const expires = chosen.expires;
   return {
     ok: true,
     grant: {
@@ -1852,6 +1899,30 @@ export function writeClientBundleGrant(
   return publishTeamGrant(home, plan.grant, options);
 }
 
+/**
+ * The expiry of a decoded record: an ISO time after the issue time, or the JSON `null` that means
+ * no end date. Anything else (a number, an absent field, a time not after the issue) is not a
+ * record this build wrote. There is deliberately no ceiling here: how long a grant may last is the
+ * policy's word at issuance, and a grant already signed keeps the end it was signed with. An older
+ * build reads only a string here and refuses a record with `null` (or a longer date than its own
+ * constant) whole.
+ */
+function decodedExpiry(fields: Record<string, unknown>): { expires: string | null } | null {
+  const issued = typeof fields.issued === 'string' ? Date.parse(fields.issued) : Number.NaN;
+  if (!Number.isFinite(issued)) return null;
+  if (fields.expires === null) return { expires: null };
+  if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
+  if (Date.parse(fields.expires) <= issued) return null;
+  return { expires: fields.expires };
+}
+
+/** Whether a record's end is at or before `now`; a record with no end date is never expired. */
+export function clientGrantExpired(expires: string | null, now: Date): boolean {
+  if (expires === null) return false;
+  const ends = endsAtMs(expires);
+  return !Number.isFinite(ends) || ends <= now.getTime();
+}
+
 /** Decodes a vocabulary-5 record. A record that is not exactly what a build writes is not a grant,
  *  and an op that can never be in a bundle makes the whole record nothing, signed or not. */
 function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<string, unknown>, key: KeyObject): { grant: ClientUpGrantRecord; signature: string } | null {
@@ -1876,9 +1947,8 @@ function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<strin
   if (new Set(seats).size !== seats.length) return null;
   if (ops.includes('send') ? seats.length === 0 : seats.length > 0) return null;
   if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
-  if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
-  if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
-  if (Date.parse(fields.expires) > Date.parse(fields.issued) + BUNDLE_HARD_MAX_DAYS * 24 * 60 * 60 * 1000) return null;
+  const expiry = decodedExpiry(fields);
+  if (expiry === null) return null;
   const team = fields.team;
   if (team === null || typeof team !== 'object' || Array.isArray(team)) return null;
   const teamFields = team as Record<string, unknown>;
@@ -1904,7 +1974,7 @@ function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<strin
       keyId: fields.key_id,
       keyDir: fields.key_dir,
       issued: fields.issued,
-      expires: fields.expires,
+      expires: expiry.expires,
       vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
       bundle: fields.bundle,
       ops,
@@ -1952,9 +2022,8 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
   const ops = fields.allowed_ops as unknown[];
   if (!Array.isArray(fields.allowed_roles) || fields.allowed_roles.length !== 1 || fields.allowed_roles[0] !== 'orchestrator') return null;
   if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
-  if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
-  if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
-  if (Date.parse(fields.expires) > Date.parse(fields.issued) + CLIENT_EXPIRY_MAX_MS) return null;
+  const expiry = decodedExpiry(fields);
+  if (expiry === null) return null;
   // The vocabulary is exact: 1 is send only, 2 is send and messages. Any other value, and any
   // op list that is not exactly its own shape, is not a grant this build honors — so a crafted
   // v2 record missing `messages` is refused, and an old build refuses a v2 record whole.
@@ -1986,6 +2055,9 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
     if (fields.issued_by !== undefined) return null;
   } else if (fields.grant_scope !== undefined) return null;
   if (fields.issued_by !== undefined && (typeof fields.issued_by !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.issued_by) || fields.issued_by === fields.grant_id)) return null;
+  // A master grant and a sub-grant always carry an end date: `null` is the plain send and inbox
+  // grants' word alone.
+  if (expiry.expires === null && (fields.vocabulary === CLIENT_MASTER_VOCABULARY_VERSION || fields.issued_by !== undefined)) return null;
   if (typeof envelope.signature !== 'string') return null;
   if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw as Json), envelope.signature, key)) return null;
   return {
@@ -2003,7 +2075,7 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
       allowedOps,
       allowedRoles: ['orchestrator'],
       issued: fields.issued,
-      expires: fields.expires,
+      expires: expiry.expires,
       vocabulary: fields.vocabulary as 1 | 2 | 3,
       ...(grantScope !== undefined ? { grantScope } : {}),
       ...(typeof fields.issued_by === 'string' ? { issuedBy: fields.issued_by } : {}),

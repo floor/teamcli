@@ -13,7 +13,8 @@ still read the key, and the command says so rather than implying otherwise:
 
 A key pair alone admits nothing. The owner issues a grant for it with
 [`team grant`](grant.md) `--client`, bound to the client id, the entity and the key's directory,
-expiring in at most seven days; the owner withdraws it by grant id with
+expiring in at most seven days unless the owner's `client-grant-max-duration` policy says otherwise
+(up to no end date, see [How long a client grant lasts](../concepts/client-grant-duration.md)); the owner withdraws it by grant id with
 [`team revoke`](revoke.md). The client then sends with `team send --client`, signing each request
 with `client.key`. `team client` itself never signs a grant, a request or a drop.
 
