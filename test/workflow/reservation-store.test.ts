@@ -24,6 +24,8 @@ import {
   expire,
   releaseReservation,
   reserve,
+  type AckIgnored,
+  type AckInput,
   type ItemIdentity,
   type ReservationStore,
 } from '../../src/workflow/reservation/index.ts';
@@ -169,6 +171,39 @@ describe('the deadline instant', () => {
     const claim = claimNext(reservationStore, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: T, expiresAt: T + 60_000 });
     expect(claim.kind).toBe('claimed');
     expect(entryOf(store, ITEM)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:lead:w1:p1' });
+  });
+});
+
+describe('a reply that is not the reservation\'s', () => {
+  test('each mismatch is ignored and the stored hold is unchanged, and only the valid reply converts', () => {
+    const { store } = scene();
+    const reservationStore: ReservationStore = store;
+    expect(reserveFor(reservationStore, ITEM, 'run-1').kind).toBe('reserved');
+    const before = entryOf(store, ITEM)?.hold;
+    expect(before).toMatchObject({ owner: 'run-1/1', phase: 'pending' });
+
+    const base: AckInput = {
+      item: ITEM, runId: 'run-1', attempt: 1, thread: 'th-run-1',
+      seat: 'work', pane: 'w2:p1', messageId: 'msg-1', at: T - 1000,
+    };
+    const mismatches: Array<[Partial<AckInput>, AckIgnored]> = [
+      [{ runId: 'run-2' }, 'wrong-run'],
+      [{ attempt: 2 }, 'stale-attempt'],
+      [{ thread: 'th-2' }, 'wrong-thread'],
+      [{ seat: 'other' }, 'wrong-receiver'],
+      [{ pane: 'w2:p2' }, 'wrong-receiver'],
+      [{ item: { ...ITEM, id: 'm2' } }, 'no-reservation'],
+      [{ at: T }, 'expired'],
+    ];
+    for (const [patch, why] of mismatches) {
+      expect(acknowledge(reservationStore, { ...base, ...patch })).toMatchObject({ kind: 'ignored', why });
+      expect(entryOf(store, ITEM)?.hold).toEqual(before);
+    }
+    expect(store.transact((tx) => tx.holds().length)).toBe(1);
+
+    const converted = acknowledge(reservationStore, base);
+    expect(converted.kind).toBe('acknowledged');
+    expect(entryOf(store, ITEM)?.hold).toMatchObject({ phase: 'holder', owner: 'run-1/1', messageId: 'msg-1' });
   });
 });
 
