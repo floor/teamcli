@@ -177,8 +177,12 @@ export function expire(store: ReservationStore, now: number): Expired[] {
       .sort((left, right) => orderKey(left, left.hold).localeCompare(orderKey(right, right.hold)));
     const cleared: Expired[] = [];
     for (const entry of due) {
-      if (!tx.releaseHold({ item: entry.item, owner: entry.hold.owner, at: iso(now) }).ok) continue;
-      cleared.push(describeExpired(entry.item, entry.hold));
+      // The store's `items()` may hand back the live index slot, and release clears its hold in
+      // place; keep the record before releasing so the report describes what was cleared.
+      const hold = entry.hold;
+      if (hold === undefined) continue;
+      if (!tx.releaseHold({ item: entry.item, owner: hold.owner, at: iso(now) }).ok) continue;
+      cleared.push(describeExpired(entry.item, hold));
     }
     return cleared;
   });
