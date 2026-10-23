@@ -817,6 +817,8 @@ Usage:
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> --request [--seat <seats>] [--expires <ISO>] [--json]
     team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
     team grant --execute <request-id> [--json]
     team grant --answer <request-id> <oui|always|non> [--json]
@@ -846,6 +848,7 @@ Usage:
 | `--approve-as-owner-seat` | yes | no | no |
 | `--assertion` | yes | no | no |
 | `--at` | yes | no | no |
+| `--bundle` | yes | no | no |
 | `--capabilities` | yes | no | no |
 | `--client` | yes | no | no |
 | `--client-request` | no | no | no |
@@ -2580,6 +2583,7 @@ Hidden: no
 Usage:
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+    team status --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ### Who may run it
 
@@ -2590,11 +2594,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
+| `--client` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--project` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

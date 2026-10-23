@@ -609,6 +609,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `settings.write` | `settings` | 2 | the seat's record can't be replaced | `team settings set lead nickname=Ada` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
+| `status.client-refused` | `status` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team status --client grant.json --key client.key` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |
 | `status.file-owner` | `status` | 1 | --file is the owner's | `team status --file .agents/team.yaml` |
 | `status.project-unknown` | `status` | 1 | no project is named that | `team status --project nope` |

@@ -4225,6 +4225,13 @@
     {
       "code": 1,
       "command": "status",
+      "id": "status.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team status --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "status",
       "id": "status.difference",
       "meaning": "there is a difference",
       "trigger": "team status"

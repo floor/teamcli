@@ -247,6 +247,8 @@ async function issued(w: World, bundle: string, extra: string[] = []) {
 }
 
 
+type UpRun = { code: number; out: string; err: string; workspaces: { label: string; cwd: string }[]; log: string };
+
 /** A fake launch whose every effect is recorded: no herdr, no pane, no process. */
 function sourcesOf(w: World, now: () => Date): { sources: UpSources; workspaces: { label: string; cwd: string }[] } {
   const workspaces: { label: string; cwd: string }[] = [];
