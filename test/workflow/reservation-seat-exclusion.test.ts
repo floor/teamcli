@@ -16,6 +16,8 @@ import {
   acknowledge,
   claimNext,
   expire,
+  releaseNextClaim,
+  releaseReservation,
   renewNextClaim,
   reserve,
   type ItemIdentity,
@@ -105,6 +107,28 @@ describe('a seat holding one item', () => {
 });
 
 describe('the boundaries of the seat scan', () => {
+  test('one seat holds one item: a live next-claim also refuses another item of the same seat', () => {
+    const { store } = scene();
+    const reservationStore: ReservationStore = store;
+    expect(claimFor(reservationStore, X).kind).toBe('claimed');
+
+    expect(claimFor(reservationStore, Y)).toMatchObject({ kind: 'refused', reason: 'receiver-busy' });
+    expect(entryOf(store, Y)?.hold).toBeUndefined();
+    expect(entryOf(store, X)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:work:w2:p1' });
+  });
+
+  test('releasing the source hold lifts the exclusion at once, for both kinds', () => {
+    const reservations = scene();
+    expect(reserveFor(reservations.store, X, 'run-1').kind).toBe('reserved');
+    expect(releaseReservation(reservations.store, { item: X, runId: 'run-1', attempt: 1, at: AT })).toBe(true);
+    expect(claimFor(reservations.store, Y).kind).toBe('claimed');
+
+    const claims = scene();
+    expect(claimFor(claims.store, X).kind).toBe('claimed');
+    expect(releaseNextClaim(claims.store, { item: X, seat: 'work', pane: 'w2:p1', at: AT })).toBe(true);
+    expect(claimFor(claims.store, Y).kind).toBe('claimed');
+  });
+
   test('the same item for another owner is hold-live, not receiver-busy', () => {
     const { store } = scene();
     const reservationStore: ReservationStore = store;
