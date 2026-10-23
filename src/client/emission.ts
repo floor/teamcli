@@ -19,7 +19,9 @@ import { join } from 'node:path';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
-import { CLIENT_EXPIRY_MAX_MS, planClientGrant, writeClientGrant, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope } from './records.ts';
+import type { Fingerprints } from '../approve/fingerprint.ts';
+import { CLIENT_EXPIRY_MAX_MS, CLIENT_UP_EXPIRY_MAX_MS, planClientGrant, planClientUpGrant, writeClientGrant, writeClientUpGrant, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope, type ClientUpGrantRecord, type ClientUpGrantRequest } from './records.ts';
+import { upBindingProblem } from './up-grant.ts';
 
 export type GrantEmission = 'owner-terminal' | 'conversational';
 
@@ -58,7 +60,39 @@ export type PendingGrantParams = {
   inbox: boolean;
   allow_grant: boolean;
   grant_scope: ClientGrantScope | null;
+  /** An up grant's binding — the one team, its registry id, its real root and the fingerprints of
+   *  its file — or absent. Part of the hashed parameters, so the owner's answer approves exactly
+   *  this team and this file; written only when set, so every other request hashes as it did. */
+  up?: PendingUpBinding | null;
 };
+
+/** The binding as a pending request stores it: plain JSON, snake_case. */
+export type PendingUpBinding = { project: string; team_id: string; root: string; fingerprints: Fingerprints };
+
+/** Every key of a record in order, so equal records give equal bytes whatever order they were read in. */
+function sorted<T>(map: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(map).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+function canonicalUp(up: PendingUpBinding): Json {
+  return { project: up.project, team_id: up.team_id, root: up.root, fingerprints: { sections: sorted(up.fingerprints.sections), seats: sorted(up.fingerprints.seats) } };
+}
+
+/** Any client grant this module writes: a send-family grant, or an up grant. */
+export type IssuedClientGrant = ClientGrantRecord | ClientUpGrantRecord;
+
+function upRequestOf(p: PendingGrantParams): ClientUpGrantRequest | null {
+  if (p.up === undefined || p.up === null) return null;
+  return {
+    clientId: p.client_id,
+    entity: p.entity,
+    publicKey: p.public_key,
+    keyId: p.key_id,
+    keyDir: p.key_dir,
+    ...(p.expires !== null ? { expires: p.expires } : {}),
+    up: { project: p.up.project, teamId: p.up.team_id, root: p.up.root, fingerprints: p.up.fingerprints },
+  };
+}
 
 function canonicalParams(p: PendingGrantParams): Json {
   return {
@@ -73,6 +107,7 @@ function canonicalParams(p: PendingGrantParams): Json {
     inbox: p.inbox,
     allow_grant: p.allow_grant,
     grant_scope: p.grant_scope === null ? null : { entities: [...p.grant_scope.entities], projects: [...p.grant_scope.projects], teams: [...p.grant_scope.teams] },
+    ...(p.up !== undefined && p.up !== null ? { up: canonicalUp(p.up) } : {}),
   };
 }
 
@@ -190,6 +225,7 @@ export function answerPendingGrant(home: string, requestId: string, word: string
   if (typeof record === 'string') return { ok: false, why: record };
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
   if (choice === 'always' && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always; answer oui to approve it once' };
+  if (choice === 'always' && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
   const body = { request_id: requestId, params_sha256: record.params_sha256, choice, by: 'owner', at: now.toISOString() };
   const signature = signDomain(GRANT_ANSWER_DOMAIN, { name: requestId, grant_answer: body }, key);
   const written = writeExclusive(join(grantRequestsFolder(home), `${requestId}.answer.json`), `${JSON.stringify({ grant_answer: body, signature }, null, 2)}\n`);
@@ -198,6 +234,10 @@ export function answerPendingGrant(home: string, requestId: string, word: string
   if (choice === 'deny') writeExclusive(join(grantRequestsFolder(home), `${requestId}.used`), `denied ${now.toISOString()}\n`);
   return { ok: true, choice, summary: pendingSummary(record.params, now).text };
 }
+
+/** An up grant is bound to one file by fingerprint, so a standing rule that renewed it unasked would
+ *  bless whatever the file became. Each is answered once; the grant itself lasts up to ninety days. */
+const UP_NEVER_ALWAYS = 'an up grant is never approved always: a standing rule would renew it for a file the owner never saw; answer oui, the grant lasts up to 90 days';
 
 const ownerSeatAdapter: GrantApprovalAdapter = { name: 'owner-seat', available: () => true, issue: () => ({ ok: true, seal: '' }), verify: () => true };
 
@@ -225,6 +265,7 @@ export function approveAsOwnerSeat(
   if (typeof record === 'string') return { ok: false, why: record };
   if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${requestId} expired at ${record.expires_at}` };
   if (choice === 'always' && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always; answer oui to approve it once' };
+  if (choice === 'always' && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
   const answer: OwnerSeatAnswer = { kind: 'grant', request_id: requestId, params_sha256: record.params_sha256, choice, team: seat.team, seat: 'owner', at: via.at ?? now.toISOString() };
   const summary = pendingSummary(record.params, now).text;
   const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} for ${summary}`, via.assertion);
@@ -334,6 +375,7 @@ function ownerKey(home: string): KeyObject | null {
 }
 
 function summaryOf(p: PendingGrantParams): string {
+  if (p.up !== undefined && p.up !== null) return `up grant for ${p.client_id} to team ${p.up.project} at ${p.up.root} (file ${fileFingerprintOf(p.up)})`;
   const where = `${p.seat ?? 'orchestrator'}@${p.team ?? p.entity}`;
   return `client grant for ${p.client_id} to ${where}${p.inbox ? ' with inbox' : ''}${p.allow_grant ? ' as a MASTER grant' : ''}`;
 }
@@ -352,7 +394,7 @@ export function createPendingGrant(
   const key = ownerKey(home);
   if (key === null) return { ok: false, why: 'the owner signing key is absent or unreadable: no request can be recorded' };
   // A request for a grant that could not be written (an unregistered team, an unlisted seat…) is refused now.
-  const planned = planClientGrant(home, grantRequestOf(params), { now });
+  const planned = planPending(home, params, now);
   if (!planned.ok) return { ok: false, why: planned.why };
   const adapter = options.adapter ?? oneTimeCodeAdapter();
   if (!adapter.available()) return { ok: false, why: `the ${adapter.name} approval adapter is not available` };
@@ -420,7 +462,7 @@ export function executePendingGrant(
   home: string,
   input: { requestId: string; code?: string; params?: PendingGrantParams; approve?: 'once' | 'always' },
   options: { now?: Date; adapters?: GrantApprovalAdapter[]; ownerSeatStore?: OwnerSeatKeyStore } = {},
-): { ok: true; grant: ClientGrantRecord; path: string; adapter: string; audit: string; ruleId?: string } | { ok: false; why: string } {
+): { ok: true; grant: IssuedClientGrant; path: string; adapter: string; audit: string; ruleId?: string } | { ok: false; why: string } {
   const now = options.now ?? new Date();
   if (!GRANT_REQUEST_ID_PATTERN.test(input.requestId)) return { ok: false, why: `"${input.requestId}" is not a grant request id` };
   const key = ownerKey(home);
@@ -460,9 +502,10 @@ export function executePendingGrant(
   if (adapter === undefined || !adapter.available()) return { ok: false, why: `the ${record.adapter} approval adapter is not available; the owner answers with team grant --answer ${input.requestId} oui` };
   const always = input.approve === 'always';
   if (always && record.params.allow_grant) return { ok: false, why: 'a master grant is never approved always: each one needs its own approval' };
+  if (always && record.params.up) return { ok: false, why: UP_NEVER_ALWAYS };
   // The grant is validated (team registered, seat listed, key placement, expiry) before the
   // request is spent: a grant that cannot be written leaves the request and its approval intact.
-  const planned = planClientGrant(home, grantRequestOf(record.params), { now });
+  const planned = planPending(home, record.params, now);
   if (!planned.ok) return { ok: false, why: `${planned.why}; request ${input.requestId} is not spent` };
   const used = writeExclusive(join(grantRequestsFolder(home), `${input.requestId}.used`), `${now.toISOString()}\n`);
   if (used === 'exists') return { ok: false, why: `request ${input.requestId} was already used: an approval is single-use` };
@@ -480,13 +523,36 @@ export function executePendingGrant(
   }
   const written = issueFromParams(home, p, now, key);
   if (!written.ok) return written;
-  const audited = writeEmissionAudit(home, { request_id: record.request_id, params_sha256: record.params_sha256, grant_id: written.grant.grantId, adapter: adapter.name, choice: always ? 'always' : 'once', ...(ruleId !== undefined ? { rule_id: ruleId } : {}), at: now.toISOString() }, record.request_id, key);
+  const audited = writeEmissionAudit(home, { request_id: record.request_id, params_sha256: record.params_sha256, grant_id: written.grant.grantId, adapter: adapter.name, choice: always ? 'always' : 'once', ...(ruleId !== undefined ? { rule_id: ruleId } : {}), ...(p.up ? { op: 'up', up_project: p.up.project, up_root: p.up.root, up_file: fileFingerprintOf(p.up) } : {}), at: now.toISOString() }, record.request_id, key);
   if (!audited.ok) return { ok: false, why: `the grant ${written.grant.grantId} was written but its audit entry could not be; the owner revokes it with team revoke` };
   return { ok: true, grant: written.grant, path: written.path, adapter: adapter.name, audit: audited.path, ...(ruleId !== undefined ? { ruleId } : {}) };
 }
 
-function issueFromParams(home: string, p: PendingGrantParams, now: Date, key: KeyObject) {
-  return writeClientGrant(home, grantRequestOf(p), { now, key });
+function issueFromParams(home: string, p: PendingGrantParams, now: Date, key: KeyObject): { ok: true; grant: IssuedClientGrant; path: string } | { ok: false; why: string } {
+  const up = upRequestOf(p);
+  return up !== null ? writeClientUpGrant(home, up, { now, key }) : writeClientGrant(home, grantRequestOf(p), { now, key });
+}
+
+/** Validates one request's parameters as the grant it would write, without writing it. An up
+ *  grant is also checked against the live team: the answer is for the file in front of the owner
+ *  now, so a file that changed since the request refuses here and the request is not spent. */
+function planPending(home: string, p: PendingGrantParams, now: Date): { ok: true } | { ok: false; why: string } {
+  const up = upRequestOf(p);
+  if (up === null) {
+    const planned = planClientGrant(home, grantRequestOf(p), { now });
+    return planned.ok ? { ok: true } : planned;
+  }
+  const planned = planClientUpGrant(home, up, { now });
+  if (!planned.ok) return planned;
+  const live = upBindingProblem(home, p.entity, up.up);
+  if (live === null) return { ok: true };
+  if (live.kind === 'drift') return { ok: false, why: `the team file of ${up.up.project} changed since the request (${live.changes.join('; ')}); ask again so the owner answers for the file as it is now` };
+  return { ok: false, why: live.why };
+}
+
+/** Twelve hex of the digest of the file fingerprints: the short name an owner reads on screen. */
+export function fileFingerprintOf(up: PendingUpBinding): string {
+  return createHash('sha256').update(JSON.stringify(canonicalUp(up)), 'utf8').digest('hex').slice(0, 12);
 }
 
 /** The client-grant request a pending request's parameters stand for. */
@@ -518,11 +584,18 @@ function writeEmissionAudit(home: string, audit: Record<string, string>, name: s
 
 /** The ops a pending request asks for: never `grant` outside a master. */
 export function pendingOps(p: PendingGrantParams): string[] {
+  if (p.up !== undefined && p.up !== null) return ['up'];
   return [...(p.inbox ? ['send', 'messages'] : ['send']), ...(p.allow_grant ? ['grant'] : [])];
 }
 
 /** The human summary a requester shows or speaks, and the three choices it offers. */
-export function pendingSummary(p: PendingGrantParams, now: Date): { client: string; entity: string; team: string; seat: string; ops: string[]; expires: string; master: boolean; text: string } {
+export function pendingSummary(p: PendingGrantParams, now: Date): { client: string; entity: string; team: string; seat: string; ops: string[]; expires: string; master: boolean; text: string; up?: { project: string; team_id: string; root: string; seats: string[]; file_fingerprint: string } } {
+  if (p.up !== undefined && p.up !== null) {
+    const expires = p.expires ?? new Date(now.getTime() + CLIENT_UP_EXPIRY_MAX_MS).toISOString();
+    const seats = Object.keys(p.up.fingerprints.seats);
+    const text = `Up grant for ${p.client_id}: run team up for team ${p.up.project} at ${p.up.root} (entity ${p.entity}; file ${fileFingerprintOf(p.up)}; seats ${seats.join(', ')}) until ${expires}.`;
+    return { client: p.client_id, entity: p.entity, team: p.up.project, seat: 'none', ops: ['up'], expires, master: false, text, up: { project: p.up.project, team_id: p.up.team_id, root: p.up.root, seats, file_fingerprint: fileFingerprintOf(p.up) } };
+  }
   const expires = p.expires ?? new Date(now.getTime() + CLIENT_EXPIRY_MAX_MS).toISOString();
   const team = p.team ?? p.entity;
   const seat = p.seat ?? 'orchestrator';
@@ -608,6 +681,7 @@ function durationSeconds(p: PendingGrantParams, now: Date): number {
 /** Writes one owner-signed rule; only reached after an adapter verified the owner's approval. */
 function writeApprovalRule(home: string, p: PendingGrantParams, adapter: string, now: Date, key: KeyObject): { ok: true; rule: ApprovalRule } | { ok: false; why: string } {
   if (p.allow_grant) return { ok: false, why: 'a master grant is never approved always' };
+  if (p.up) return { ok: false, why: UP_NEVER_ALWAYS };
   const rule: ApprovalRule = {
     rule_id: `ar_${randomBytes(12).toString('hex')}`,
     created: now.toISOString(),
@@ -667,7 +741,7 @@ export function listApprovalRules(home: string): { rules: ApprovalRule[]; ignore
 /** The rule a request sits fully inside, or null: same client and entity, team and seat listed,
  *  ops a subset, duration within the rule's, and never a master grant or the `grant` op. */
 export function matchingApprovalRule(home: string, p: PendingGrantParams, now: Date): ApprovalRule | null {
-  if (p.allow_grant || p.grant_scope !== null) return null;
+  if (p.allow_grant || p.grant_scope !== null || (p.up !== undefined && p.up !== null)) return null;
   const ops = pendingOps(p);
   if (ops.includes('grant')) return null;
   const duration = durationSeconds(p, now);
@@ -688,7 +762,7 @@ export function autoApprovePendingGrant(
   p: PendingGrantParams,
   rule: ApprovalRule,
   now: Date = new Date(),
-): { ok: true; grant: ClientGrantRecord; path: string; audit: string } | { ok: false; why: string } {
+): { ok: true; grant: IssuedClientGrant; path: string; audit: string } | { ok: false; why: string } {
   const key = ownerKey(home);
   if (key === null) return { ok: false, why: 'the owner signing key is absent or unreadable' };
   const written = issueFromParams(home, p, now, key);
