@@ -15,6 +15,8 @@ import { openRunStore, type ItemRecord, type RunStore } from '../../src/workflow
 import {
   acknowledge,
   claimNext,
+  expire,
+  renewNextClaim,
   reserve,
   type ItemIdentity,
   type ReservationStore,
@@ -32,12 +34,15 @@ afterEach(() => {
   if (base) rmSync(base, { recursive: true, force: true });
 });
 
-function scene(): { store: RunStore } {
+type Scene = { store: RunStore; clock: { at: number } };
+
+function scene(at = AT): Scene {
   if (base) rmSync(base, { recursive: true, force: true });
   base = mkdtempSync(join(tmpdir(), 'reservation-seat-'));
   const root = join(base, 'runs');
-  const store = openRunStore({ root, now: () => AT });
-  return { store };
+  const clock = { at };
+  const store = openRunStore({ root, now: () => clock.at });
+  return { store, clock };
 }
 
 function entryOf(store: RunStore, item: ItemIdentity): ItemRecord | null {
@@ -96,5 +101,67 @@ describe('a seat holding one item', () => {
     expect(reserveFor(reservationStore, Y, 'run-2')).toMatchObject({ kind: 'refused', reason: 'receiver-busy' });
     expect(entryOf(store, Y)?.hold).toBeUndefined();
     expect(entryOf(store, X)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:work:w2:p1', seat: 'work' });
+  });
+});
+
+describe('the boundaries of the seat scan', () => {
+  test('the same item for another owner is hold-live, not receiver-busy', () => {
+    const { store } = scene();
+    const reservationStore: ReservationStore = store;
+    expect(reserveFor(reservationStore, X, 'run-1').kind).toBe('reserved');
+
+    expect(claimNext(reservationStore, { item: X, seat: 'lead', pane: 'w1:p1', now: AT, expiresAt: T })).toMatchObject({
+      kind: 'refused',
+      reason: 'hold-live',
+    });
+  });
+
+  test("an expired hold does not block another item of the same seat", () => {
+    const { store, clock } = scene();
+    const reservationStore: ReservationStore = store;
+    expect(claimFor(reservationStore, X).kind).toBe('claimed');
+
+    clock.at = T;
+    expect(claimNext(reservationStore, { item: Y, seat: 'work', pane: 'w2:p1', now: T, expiresAt: T + 60_000 }).kind).toBe(
+      'claimed',
+    );
+  });
+
+  test('a same-owner retry on the same item returns its own live hold, for both kinds', () => {
+    const reservations = scene();
+    const first = reserveFor(reservations.store, X, 'run-1');
+    const again = reserveFor(reservations.store, X, 'run-1');
+    expect(first.kind).toBe('reserved');
+    expect(again.kind).toBe('reserved');
+    if (first.kind === 'reserved' && again.kind === 'reserved') expect(again.hold).toEqual(first.hold);
+    expect(reservations.store.transact((tx) => tx.holds().length)).toBe(1);
+
+    const claims = scene();
+    const claimed = claimFor(claims.store, Y);
+    const claimedAgain = claimFor(claims.store, Y);
+    expect(claimed.kind).toBe('claimed');
+    expect(claimedAgain.kind).toBe('claimed');
+    if (claimed.kind === 'claimed' && claimedAgain.kind === 'claimed') expect(claimedAgain.hold).toEqual(claimed.hold);
+    expect(claims.store.transact((tx) => tx.holds().length)).toBe(1);
+  });
+
+  test('renewal moves only the deadline: the renewed claim is not swept at the old one', () => {
+    const { store, clock } = scene();
+    const reservationStore: ReservationStore = store;
+    expect(claimFor(reservationStore, X).kind).toBe('claimed');
+    const before = entryOf(store, X)?.hold;
+    expect(before?.expiresAt).toBe(new Date(T).toISOString());
+
+    clock.at = AT + 1000;
+    expect(
+      renewNextClaim(reservationStore, { item: X, seat: 'work', pane: 'w2:p1', now: AT + 1000, expiresAt: T + 120_000 }),
+    ).toBe(true);
+    const renewed = entryOf(store, X)?.hold;
+    expect(renewed).toMatchObject({ owner: 'next:work:w2:p1', kind: 'next-claim', phase: 'pending', expiresAt: new Date(T + 120_000).toISOString() });
+
+    expect(expire(reservationStore, T)).toEqual([]);
+    expect(claimNext(reservationStore, { item: Y, seat: 'other', pane: 'w3:p1', now: T, expiresAt: T + 60_000 }).kind).toBe(
+      'claimed',
+    );
   });
 });
