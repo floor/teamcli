@@ -14,7 +14,7 @@ import {
 } from '../canonical.ts';
 import type { OccurrenceRecord, RunState } from '../core-state.ts';
 import { decide } from '../core.ts';
-import type { CoreDecision } from '../core.ts';
+import type { CoreDecision, StepDecision } from '../core.ts';
 import { provisionalResolvers } from '../registry.ts';
 import type { EvidenceSource, SettingSource } from '../registry.ts';
 import type { SignalName } from '../signals.ts';
@@ -702,6 +702,17 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
         },
       };
     }
+    const planned = plannedEffects(decision, record.transition, run.activation);
+    if (canonicalJson(planned) !== canonicalJson(record.effects)) {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: `the recorded effects are not the decision's plan (${record.effects.length} recorded, ${planned.length} planned)`,
+        },
+      };
+    }
 
     requests.set(record.requestId, { payloadDigest: record.requestDigest, step: stepIndex });
     for (const effect of record.effects) {
@@ -760,6 +771,28 @@ function evidenceOf(record: Extract<LiveRecord, { record: 'step' }>): EvidenceSo
 
 function sameDefinition(left: DefinitionId, right: DefinitionId): boolean {
   return left.workflow === right.workflow && left.schemaVersion === right.schemaVersion && left.digest === right.digest;
+}
+
+/** The effect list a step decision plans: exit hooks at the old activation, entry hooks at the new one. */
+function plannedEffects(
+  decision: StepDecision,
+  transition: StepDecision['transition'],
+  previousActivation: number,
+): DryEffectRecord[] {
+  return decision.plan.flatMap((item) =>
+    item.kind === 'effect'
+      ? [
+          {
+            name: item.effect,
+            state: item.phase === 'exit' ? transition.from : decision.next.state,
+            activation: item.phase === 'exit' ? previousActivation : decision.next.activation,
+            occurrence: item.occurrence,
+            payloadDigest: item.digest,
+            dispatched: false as const,
+          },
+        ]
+      : [],
+  );
 }
 
 function compareEffects(got: readonly DryEffectRecord[], want: readonly DryEffectRecord[]): string | undefined {
