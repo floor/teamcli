@@ -87,7 +87,7 @@ decides instead. The record's shape, with one example: [team init](init.md).
 ## A client's up grant
 
 A client with no terminal that the owner signed an up grant for (`team grant --client <id> --team
-<team> --up`, see [team grant](grant.md)) brings up that one team with:
+<team> --up`, see [team grant](grant.md#an-up-or-down-grant)) brings up that one team with:
 
     team up --client ~/.config/team/grants/cg_<24 hex>.json --key ~/.config/team-client/<id>/client.key
 
