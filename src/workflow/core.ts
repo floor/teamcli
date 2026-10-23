@@ -598,13 +598,15 @@ export function decide(input: CoreInput): CoreDecision {
     };
   }
 
-  for (const hook of state.onLeave) {
-    const effect = effectOf(definition, hook.name);
-    const occurrence = occurrenceId(run.runId, run.activation, hook.name);
-    if (run.occurrences.has(occurrence)) continue;
-    const planned = planEffect('exit', hook.name, effect, occurrence);
-    if ('conflict' in planned) return planned.conflict;
-    plan.push(planned.item);
+  if (errorPath === undefined) {
+    for (const hook of state.onLeave) {
+      const effect = effectOf(definition, hook.name);
+      const occurrence = occurrenceId(run.runId, run.activation, hook.name);
+      if (run.occurrences.has(occurrence)) continue;
+      const planned = planEffect('exit', hook.name, effect, occurrence);
+      if ('conflict' in planned) return planned.conflict;
+      plan.push(planned.item);
+    }
   }
 
   // The error path is the engine's own rule, not a graph transition: the entry item names the
