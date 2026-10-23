@@ -107,7 +107,12 @@ export type ReserveInput = {
   attempt: number;
   thread: string;
   receiver: { seat: string; pane?: string };
-  /** Absolute deadline of the acknowledgement timer, in milliseconds. */
+  /**
+   * Absolute release deadline in milliseconds: the acknowledgement timer's second expiry. The
+   * first expiry resends with the same delivery identity and leaves this hold, the delivery, the
+   * attempt and the activation unchanged, so it writes nothing here; only the second expiry
+   * releases the reservation (`expire`). Activation is the dispatcher's record, not the hold's.
+   */
   expiresAt: number;
   at: number;
 };
