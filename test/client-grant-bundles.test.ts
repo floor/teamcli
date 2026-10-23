@@ -204,7 +204,11 @@ function capture(w: World, caller?: Caller): { io: Io; out: () => string; err: (
   return { io, out: () => out, err: () => err };
 }
 
+const seatedWorlds = new WeakSet<object>();
+
 async function seated(w: World): Promise<void> {
+  if (seatedWorlds.has(w)) return;
+  seatedWorlds.add(w);
   const code = await runGrant(['--add-owner-seat', '--team', 'floor', '--signer', 'mac'], capture(w, { kind: 'owner' }).io, { home: w.home, ownerSeatStore: w.store });
   expect(code).toBe(0);
 }
@@ -369,6 +373,9 @@ async function clientSend(w: World, grantPath: string, keyPath: string, address:
   const logPath = join(w.docs, '.agents', LOG_FILE);
   return { code, out: io.out, err: io.err, log: existsSync(logPath) ? readFileSync(logPath, 'utf8') : '' };
 }
+
+/** A status run that read the team: the report is printed, whatever the team's own differences exit with. */
+const statusRead = (run: StatusRun): boolean => run.out.includes('team docs, session "docs"') && !run.err.includes('team status:');
 
 const dropsOf = (w: World, seatName: string): string[] => {
   const folder = join(w.docs, '.agents', 'send-drops', 'docs', seatName);
@@ -646,5 +653,290 @@ describe('policy: the bundles, their ops and their expiry caps are values, not c
     expect(run.code).toBe(1);
     expect(run.err).toContain('no longer lets the operator bundle carry');
     expect(run.err).toContain('is not spent');
+  });
+});
+
+describe('the operator runs status, send, up and down from one grant, and the observer runs none of the last three', () => {
+  test('operator: status, send to the granted seat, up and down, each with its own audit line and no prompt', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+
+    const status = await clientStatus(w, g.path, w.grok.keyPath);
+    expect(statusRead(status), status.err + status.out).toBe(true);
+    expect(status.err).toContain('key isolation: not enforced');
+    expect(status.log).toContain(`client-status-authorized: grant ${g.grantId} client grok-bot team docs`);
+
+    const sent = await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'hello from the client');
+    expect(sent.code, sent.err + sent.out).toBe(0);
+    expect(sent.out).toContain('sent: orchestrator@docs');
+    expect(dropsOf(w, 'orchestrator')).toHaveLength(1);
+    const drop = JSON.parse(readFileSync(join(w.docs, '.agents', 'send-drops', 'docs', 'orchestrator', dropsOf(w, 'orchestrator')[0]!), 'utf8'));
+    expect(JSON.stringify(drop)).toContain('client:grok-bot');
+    expect(JSON.stringify(drop)).toContain(g.grantId);
+    expect(sent.log).toContain(`client-send-authorized: grant ${g.grantId} client grok-bot team docs seat orchestrator`);
+
+    const up = await clientUp(w, g.path, w.grok.keyPath);
+    expect(up.code, up.err + up.out).toBe(0);
+    expect(up.workspaces.map((one) => one.label)).toContain('lead');
+    expect(up.log).toContain(`client-up-authorized: grant ${g.grantId} client grok-bot team docs`);
+    expect(up.out).not.toContain('press');
+
+    teamRunning(w);
+    const down = await clientDown(w, g.path, w.grok.keyPath);
+    expect(down.code, down.err + down.out).toBe(0);
+    expect(down.log).toContain(`client-down-authorized: grant ${g.grantId} client grok-bot team docs`);
+    // One owner signature covered all four.
+    expect(w.store.prompts).toHaveLength(1);
+  });
+
+  test('observer: status runs; up, down and send are refused, named, logged, and change nothing', async () => {
+    const w = world();
+    const g = await issued(w, 'observer');
+    const status = await clientStatus(w, g.path, w.grok.keyPath);
+    expect(statusRead(status), status.err + status.out).toBe(true);
+
+    const up = await clientUp(w, g.path, w.grok.keyPath);
+    expect(up.code).toBe(1);
+    expect(up.err).toContain('observer bundle grant');
+    expect(up.err).toContain('not up');
+    expect(up.err).toContain('--bundle operator --request');
+    expect(up.workspaces).toEqual([]);
+    expect(up.log).toContain('client-up-refused');
+
+    teamRunning(w);
+    const down = await clientDown(w, g.path, w.grok.keyPath);
+    expect(down.code).toBe(1);
+    expect(down.closed).toEqual([]);
+    expect(down.stopped).toEqual([]);
+    expect(down.log).toContain('client-down-refused');
+
+    const sent = await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'hi');
+    expect(sent.code).toBe(1);
+    expect(sent.err).toContain('not send');
+    expect(dropsOf(w, 'orchestrator')).toEqual([]);
+    expect(sent.log).toContain('client-send-refused');
+  });
+
+  test('the explicit ops decide, not the label: an operator-labelled record with fewer ops runs no more than it lists', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    // The owner's policy narrows the next issuance; the label stays `operator`, the list is what decides.
+    expect(writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'client-bundles', value: 'operator=status,down' }, { now: new Date() }).ok).toBe(true);
+    const narrow = await issued(w, 'operator');
+    expect(recordOf(narrow.path)).toMatchObject({ bundle: 'operator', allowed_ops: ['status', 'down'] });
+    expect((await clientUp(w, narrow.path, w.grok.keyPath)).code).toBe(1);
+    expect((await clientSend(w, narrow.path, w.grok.keyPath, 'orchestrator@docs', 'x')).code).toBe(1);
+    expect(statusRead(await clientStatus(w, narrow.path, w.grok.keyPath))).toBe(true);
+    // The wider grant signed before is untouched by the policy change: nothing widens or narrows in place.
+    expect(recordOf(g.path).allowed_ops).toEqual([...OPERATOR_DEFAULT_OPS]);
+    expect(statusRead(await clientStatus(w, g.path, w.grok.keyPath))).toBe(true);
+    // The label decides nothing the other way either: an observer-labelled record listing `down` can stop.
+    const hand = writeClientBundleGrant(w.home, {
+      clientId: 'grok-bot', entity: 'floor', publicKey: w.grok.pair.publicKey, keyId: w.grok.pair.keyId, keyDir: w.grok.dir,
+      bundle: 'observer', ops: ['status', 'down'], up: { project: 'docs', teamId: w.docsId, root: w.docs, fingerprints: { sections: {}, seats: {} } },
+    }, { key: keyOf(w.home) });
+    expect(hand.ok, hand.ok ? '' : hand.why).toBe(true);
+    if (hand.ok) {
+      teamRunning(w);
+      expect((await clientDown(w, hand.path, w.grok.keyPath)).code).toBe(0);
+      expect((await clientUp(w, hand.path, w.grok.keyPath)).code).toBe(1);
+    }
+  });
+
+  test('send reaches only the seats the owner signed, and only while the team still admits them', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    for (const target of ['worker@docs', 'lead@docs', 'ghost@docs']) {
+      const run = await clientSend(w, g.path, w.grok.keyPath, target, 'x');
+      expect(run.code, target).toBe(1);
+      expect(run.err, target).toContain('may send to orchestrator');
+    }
+    const otherTeam = await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@other', 'x');
+    expect(otherTeam.code).toBe(1);
+    expect(otherTeam.err).toContain('is for team docs');
+    const bare = await clientSend(w, g.path, w.grok.keyPath, 'orchestrator', 'x');
+    expect(bare.code).toBe(1);
+    expect(bare.err).toContain('<seat>@<team>');
+    expect(dropsOf(w, 'orchestrator')).toEqual([]);
+    expect(dropsOf(w, 'worker')).toEqual([]);
+    // A request id is used once.
+    expect((await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'one', { extra: ['--request-id', 'r-1'] })).code).toBe(0);
+    const again = await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'two', { extra: ['--request-id', 'r-1'] });
+    expect(again.code).toBe(1);
+    expect(again.err).toContain('already used');
+    expect(dropsOf(w, 'orchestrator')).toHaveLength(1);
+  });
+
+  test('a send grant of the old kind still sends to the orchestrator of its entity, unchanged', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    // The old route refuses a bundle on its own terms, naming it; the bundle route is the one that reads it.
+    const direct = readClientGrantFile(w.home, g.path);
+    expect(direct.ok).toBe(false);
+    if (!direct.ok) expect(direct.why).toContain('bundle grant');
+  });
+});
+
+describe('the grant is for one team, one folder, one key, until one date', () => {
+  test('another team, another folder, another key: refused for every op, each with the next step', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    const elsewhere = await clientStatus(w, g.path, w.grok.keyPath, [], { cwd: w.other });
+    expect(elsewhere.code).toBe(1);
+    expect(elsewhere.err).toContain(`for team "docs" at ${w.docs}`);
+    const named = await clientStatus(w, g.path, w.grok.keyPath, ['--team', 'other'], { cwd: w.other });
+    expect(named.code).toBe(1);
+    expect(named.err).toContain('"other"');
+    const fromAnywhere = await clientStatus(w, g.path, w.grok.keyPath, ['--team', 'docs'], { cwd: w.base });
+    expect(statusRead(fromAnywhere), fromAnywhere.err).toBe(true);
+    for (const run of [await clientStatus(w, g.path, w.stranger.keyPath), await clientUp(w, g.path, w.stranger.keyPath)]) {
+      expect(run.code).toBe(1);
+      expect(run.err).toContain('not the app key the grant');
+    }
+    expect((await clientSend(w, g.path, w.stranger.keyPath, 'orchestrator@docs', 'x')).code).toBe(1);
+    expect(dropsOf(w, 'orchestrator')).toEqual([]);
+  });
+
+  test('the team renamed, moved or re-registered is another team: the registry id and the real root bind it', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    const record = readClientUpGrant(w.home, g.grantId);
+    expect(record.ok && record.grant.up.teamId).toBe(teamIdOf(w.docs));
+    writeFileSync(join(w.docs, '.agents', 'team.yaml'), w.docsText().replace('project: docs', 'project: docs2'));
+    const status = await clientStatus(w, g.path, w.grok.keyPath);
+    expect(status.code).toBe(1);
+    expect(status.err).toContain('names team "docs2", not "docs"');
+    expect((await clientDown(w, g.path, w.grok.keyPath)).code).toBe(1);
+  });
+
+  test('expired and revoked: every op is refused at once, and revocation is one command', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    const late = new Date(Date.now() + 91 * DAY);
+    for (const run of [await clientStatus(w, g.path, w.grok.keyPath, [], { now: late }), await clientUp(w, g.path, w.grok.keyPath, ['--dry-run'], { now: late })]) {
+      expect(run.code).toBe(1);
+      expect(run.err).toContain('expired');
+      expect(run.err).toContain('--bundle operator --request');
+    }
+    expect((await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'x', { now: late })).code).toBe(1);
+
+    const revoke = capture(w, { kind: 'owner' });
+    expect(await runRevoke([g.grantId], revoke.io, { home: w.home } as never)).toBe(0);
+    for (const run of [await clientStatus(w, g.path, w.grok.keyPath), await clientUp(w, g.path, w.grok.keyPath)]) {
+      expect(run.code).toBe(1);
+      expect(run.err).toContain('was revoked');
+    }
+    expect((await clientDown(w, g.path, w.grok.keyPath)).code).toBe(1);
+    const afterSend = await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'x');
+    expect(afterSend.code).toBe(1);
+    expect(afterSend.err).toContain('was revoked');
+    expect(afterSend.log).toContain('client-send-refused');
+    expect(dropsOf(w, 'orchestrator')).toEqual([]);
+  });
+
+  test('a grant file edited after signing, or its vocabulary edited down to an older one, verifies as nothing', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    const doc = JSON.parse(readFileSync(g.path, 'utf8'));
+    const edit = (change: (grant: Record<string, unknown>) => void, name: string) => {
+      const copy = JSON.parse(JSON.stringify(doc));
+      change(copy.client_grant);
+      const path = join(w.base, `${name}.json`);
+      writeFileSync(path, JSON.stringify(copy));
+      return path;
+    };
+    const widened = edit((grant) => { grant.allowed_ops = [...(grant.allowed_ops as string[]), 'daemon']; }, 'widened');
+    const downgraded = edit((grant) => { grant.vocabulary = 4; }, 'downgraded');
+    const reseated = edit((grant) => { grant.seats = ['orchestrator', 'worker']; }, 'reseated');
+    for (const path of [widened, downgraded, reseated]) {
+      const run = await clientStatus(w, path, w.grok.keyPath);
+      expect(run.code, path).toBe(1);
+      expect(run.err).toContain('not a verified owner-signed');
+    }
+    expect((await clientSend(w, reseated, w.grok.keyPath, 'worker@docs', 'x')).code).toBe(1);
+    expect(dropsOf(w, 'worker')).toEqual([]);
+  });
+});
+
+describe('only `up` reads the team file as the owner signed it', () => {
+  test('a file edit ends neither status, send nor down; it stops up until the owner re-signs', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    writeFileSync(join(w.docs, '.agents', 'team.yaml'), `# edited later\n${w.docsText()}\n# and again`);
+    writeFileSync(join(w.docs, '.agents', 'team.yaml'), w.docsText().replace('model: Claude Opus', 'model: Claude Opus 5'));
+    expect(statusRead(await clientStatus(w, g.path, w.grok.keyPath))).toBe(true);
+    expect((await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'still works')).code).toBe(0);
+    teamRunning(w);
+    expect((await clientDown(w, g.path, w.grok.keyPath)).code).toBe(0);
+    const up = await clientUp(w, g.path, w.grok.keyPath);
+    expect(up.code).toBe(1);
+    expect(up.err).toContain('changed since the owner signed the operator bundle grant');
+    expect(up.err).toContain('--bundle operator --request');
+    expect(up.workspaces).toEqual([]);
+  });
+});
+
+describe('the older grants are unchanged, and an older build refuses a bundle whole', () => {
+  test('vocabularies 1 to 4 are still written, read and honoured as before', async () => {
+    const w = world();
+    const floor = repo(w.base, 'floor', () => `format: 1\nproject: floor\nentity: floor\ncoordinator: orchestrator\noperator: orchestrator\nsession: acme\nworkspace:\n  mode: shared\nseats:\n${seat('orchestrator', 'coordinator', ['    leads: true'])}\n`);
+    const floorId = teamIdOf(floor);
+    const orch = registerAgent(w.home, {
+      name: 'orchestrator', signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' }, lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
+      reach: { team: floorId, seat: 'orchestrator', session: 'acme', pane: 'w1:p1', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
+    });
+    upsertTeam(w.home, floorId, { project: 'floor', entity: 'floor', session: 'acme', root: floor, lobby: join(w.base, 'lobby'), roster: [{ agent: orch.id, seat: 'orchestrator', role: 'orchestrator', leads: true }], lifecycle: 'running' });
+    const key = { key: keyOf(w.home) };
+    const asKey = { clientId: 'grok-bot', entity: 'floor', publicKey: w.grok.pair.publicKey, keyId: w.grok.pair.keyId, keyDir: w.grok.dir };
+    const v1 = writeClientGrant(w.home, asKey, key);
+    const v2 = writeClientGrant(w.home, { ...asKey, inbox: true }, key);
+    const v3 = writeClientGrant(w.home, { ...asKey, grantScope: { entities: ['floor'], projects: [], teams: [] } }, key);
+    const fingerprints = readClientUpGrant;
+    expect(fingerprints).toBeDefined();
+    for (const [made, vocabulary, ops] of [[v1, 1, ['send']], [v2, 2, ['send', 'messages']], [v3, 3, ['send', 'grant']]] as const) {
+      expect(made.ok).toBe(true);
+      if (!made.ok) continue;
+      const read = readClientGrant(w.home, made.grant.grantId);
+      expect(read.ok && read.grant.vocabulary, String(vocabulary)).toBe(vocabulary);
+      expect(read.ok && read.grant.allowedOps).toEqual(ops as never);
+    }
+    // The shipped send route sends with a vocabulary-1 grant exactly as before.
+    if (v1.ok) {
+      const io = testIo(floor, { kind: 'owner' });
+      const host = { home: w.home, now: () => new Date(), sendId: () => '00000001-1111-4111-8111-111111111111' } as unknown as SendHost;
+      expect(await runSend(['--client', v1.path, '--key', w.grok.keyPath, 'orchestrator@floor', 'hello'], io, host)).toBe(0);
+    }
+    // The one-op up and down grants keep their own record: vocabulary 4, binding under `up` or `team`, no bundle field.
+    await seated(w);
+    for (const [flags, ops, bindingKey] of [[['--up'], ['up'], 'up'], [['--up', '--down'], ['up', 'down'], 'team']] as const) {
+      const c = capture(w, { kind: 'owner' });
+      expect(await runGrant(['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--team', 'docs', ...flags], c.io, { home: w.home })).toBe(0);
+      const id = /client grant: (cg_[0-9a-f]{24})/.exec(c.out())![1]!;
+      const record = recordOf(clientGrantPath(w.home, id));
+      expect(record.vocabulary).toBe(4);
+      expect(record.allowed_ops).toEqual(ops as never);
+      expect(record[bindingKey]).toBeDefined();
+      expect(record.bundle).toBeUndefined();
+      expect(record.seats).toBeUndefined();
+      expect((await clientUp(w, clientGrantPath(w.home, id), w.grok.keyPath, ['--dry-run'])).code).toBe(0);
+    }
+  });
+
+  test('a bundle is refused whole by the readers of vocabularies 1 to 3 and by the up/down reader of a one-op grant', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    // The readers an older build has refuse vocabulary 5 whole; the only reader that admits it is the bundle one.
+    expect(readClientGrantFile(w.home, g.path).ok).toBe(false);
+    const doc = JSON.parse(readFileSync(g.path, 'utf8'));
+    expect(doc.client_grant.vocabulary).toBe(5);
+    // No vocabulary-1-to-4 decoder reads it under another number: signed bytes make the edit nothing.
+    for (const vocabulary of [1, 2, 3, 4]) {
+      const copy = JSON.parse(JSON.stringify(doc));
+      copy.client_grant.vocabulary = vocabulary;
+      const path = join(w.base, `as-v${vocabulary}.json`);
+      writeFileSync(path, JSON.stringify(copy));
+      expect(readClientGrantFile(w.home, path).ok, String(vocabulary)).toBe(false);
+      expect(readClientUpGrant(w.home, g.grantId).ok).toBe(true);
+    }
   });
 });
