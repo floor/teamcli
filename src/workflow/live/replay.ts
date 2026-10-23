@@ -497,6 +497,29 @@ export function stepFault(input: {
   return undefined;
 }
 
+/**
+ * The fold keeps one document per evidence ref: a step may record a ref an earlier step recorded
+ * only with the same bytes. The writer asks this before it appends, so a refusal never leaves a
+ * journal the fold cannot read.
+ */
+export function evidenceConflict(records: readonly LiveRecord[], document: EvidenceDocument | undefined): string | undefined {
+  if (document === undefined) return undefined;
+  const earlier = new Map<string, string>();
+  for (const record of records) {
+    if (record.record !== 'step' || record.evidenceRecords === undefined) continue;
+    for (const [ref, entry] of Object.entries(record.evidenceRecords)) {
+      if (!earlier.has(ref)) earlier.set(ref, canonicalJson(entry));
+    }
+  }
+  for (const [ref, entry] of Object.entries(document)) {
+    const previous = earlier.get(ref);
+    if (previous !== undefined && previous !== canonicalJson(entry)) {
+      return `the step records evidence "${ref}" with different bytes than an earlier record`;
+    }
+  }
+  return undefined;
+}
+
 export type ReplayLiveFailure = {
   code: 'journal-invalid' | 'definition-mismatch' | 'start-mismatch' | 'step-mismatch' | 'entry-outcome-mismatch';
   record?: number;

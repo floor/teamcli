@@ -53,7 +53,7 @@ import {
   type ResultOutcome,
   type RunIndex,
 } from './records.ts';
-import { foldLive, startEffectsOf, stepFault, type StepInput } from './replay.ts';
+import { evidenceConflict, foldLive, startEffectsOf, stepFault, type StepInput } from './replay.ts';
 
 export type LiveStoreErrorCode =
   | 'workflow.store.index-corrupt'
@@ -884,6 +884,8 @@ class Transaction implements StoreTx {
         }
       }
     }
+    const evidenceFault = evidenceConflict(run.records, step.evidenceRecords);
+    if (evidenceFault !== undefined) throw new LiveStoreError('workflow.store.record-invalid', evidenceFault, run.path);
     const record: LiveStepRecord = {
       format: 1,
       kind: 'workflow-run-live',
@@ -1340,7 +1342,7 @@ class Transaction implements StoreTx {
 
   // ---- internals ---------------------------------------------------------------------------
 
-  private runForAppend(runId: RunId): { path: string; live: LiveState; open: LiveRunOpenRecord } {
+  private runForAppend(runId: RunId): { path: string; live: LiveState; open: LiveRunOpenRecord; records: LiveRecord[] } {
     const path = journalPath(this.root, runId);
     if (!existsSync(path)) {
       throw new LiveStoreError('workflow.store.journal-missing', 'the run journal is missing', path);
@@ -1353,7 +1355,7 @@ class Transaction implements StoreTx {
     if (open === undefined || open.record !== 'run-open') {
       throw new LiveStoreError('workflow.store.journal-corrupt', 'the journal has no run-open record', path);
     }
-    return { path, live: folded.live, open };
+    return { path, live: folded.live, open, records: parsed.records };
   }
 
   private definitionOf(open: LiveRunOpenRecord): Workflow {
