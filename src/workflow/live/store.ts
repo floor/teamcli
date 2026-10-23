@@ -938,6 +938,7 @@ class Transaction implements StoreTx {
         run.path,
       );
     }
+    const occurrence = occurrenceId(runId, run.live.activation, input.effect);
     const record: LiveEntryOutcomeRecord = {
       format: 1,
       kind: 'workflow-run-live',
@@ -949,10 +950,25 @@ class Transaction implements StoreTx {
       state,
       activation: run.live.activation,
       effect: input.effect,
-      occurrence: occurrenceId(runId, run.live.activation, input.effect),
+      occurrence,
       ...(input.why !== undefined ? { why: input.why } : {}),
       ...(input.by !== undefined ? { by: input.by } : {}),
     };
+    // The fold admits one entry outcome per occurrence, so a second line would leave the journal
+    // unfoldable while this producer had already reported success. A retry that asks for the same
+    // outcome gets the recorded one back with its first seq and timestamp; a retry that would say
+    // something else is refused, and nothing is written.
+    const existing = run.live.entryOutcomes.find((seen) => seen.occurrence === occurrence);
+    if (existing !== undefined) {
+      if (entryOutcomeBytes(existing) !== entryOutcomeBytes(record)) {
+        throw new LiveStoreError(
+          'workflow.store.conflict',
+          `the entry outcome "${occurrence}" is already recorded with different bytes`,
+          run.path,
+        );
+      }
+      return existing;
+    }
     appendJournal(run.path, record);
     return record;
   }
@@ -1399,6 +1415,19 @@ function resultBytes(record: LiveResultRecord): string {
     messageId: record.messageId,
     why: record.why,
     found: record.found,
+  });
+}
+
+/** What an entry outcome says, without its seq or timestamp: the event, not the delivery. */
+function entryOutcomeBytes(record: LiveEntryOutcomeRecord): string {
+  return canonicalJson({
+    result: record.result,
+    state: record.state,
+    activation: record.activation,
+    effect: record.effect,
+    occurrence: record.occurrence,
+    why: record.why,
+    by: record.by,
   });
 }
 
