@@ -1,5 +1,5 @@
 // The workflow MVP's one built-in definition: `work-item`, the published YAML of the WF0 schema
-// (workflow-mvp-spec-draft-4 §2.1, docs b0f48b3). Seventeen states, fifty-nine transitions,
+// (workflow-mvp-spec-draft-4 §2.1, docs dbdec48). Seventeen states, sixty-three transitions,
 // fifteen `lead-stop`; the deadlines are the daemon's timer records, never state waits. The text
 // is the spec's verbatim, so `team workflow check` reads the same bytes the two check measurements
 // ran on. Nothing here writes, dispatches or activates a run.
@@ -9,7 +9,7 @@ import type { DefinitionId, Workflow } from '../types.ts';
 
 export const WORK_ITEM_NAME = 'work-item';
 
-/** The published definition, verbatim; SHA-256 5fda48d6fe00a690a335135911511db102f5690cbf9f419218b78bd56c004aa9. */
+/** The published definition, verbatim; SHA-256 648bb634c552a5b72384c6c827bd6ddd4b92700534459cb44148a59cd240b844. */
 export const WORK_ITEM_YAML = `workflow: work-item
 version: 1
 initial: ready
@@ -63,6 +63,10 @@ transitions:
     on: acknowledged
     role: builder
   - from: dispatching
+    to: dispatching
+    on: redispatch
+    role: daemon
+  - from: dispatching
     to: failed
     on: step-failed
     role: daemon
@@ -103,6 +107,10 @@ transitions:
     on: acknowledged
     role: builder
   - from: building-pending
+    to: building-pending
+    on: redispatch
+    role: daemon
+  - from: building-pending
     to: failed
     on: step-failed
     role: daemon
@@ -118,6 +126,10 @@ transitions:
     to: testing
     on: acknowledged
     role: tester
+  - from: testing-pending
+    to: testing-pending
+    on: redispatch
+    role: daemon
   - from: testing-pending
     to: failed
     on: step-failed
@@ -180,6 +192,10 @@ transitions:
     to: installing
     on: acknowledged
     role: integrator
+  - from: installing-pending
+    to: installing-pending
+    on: redispatch
+    role: daemon
   - from: installing-pending
     to: failed
     on: step-failed
