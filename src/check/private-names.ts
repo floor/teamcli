@@ -409,6 +409,79 @@ export function scanPrivateTree(root: string, sources: readonly PrivateSource[])
   }
 }
 
+/** The text a pre-push scan reads, with one location label per line for a redacted hit. */
+export interface PrivateCorpus {
+  lines: string[];
+  /** `path:line` for an added diff line, `commit:<sha>:<line>` for a commit-message line. */
+  where: string[];
+}
+
+/**
+ * Builds the pre-push corpus: every added line of the diff against `base`, then every line of
+ * every commit message on `base..HEAD`. Removed lines are not read; a line that stays unchanged
+ * is not added. No matched text is retained beyond the corpus itself, which lives in a scratch
+ * folder owned by the caller.
+ */
+export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus } | { problem: string } {
+  const diff = spawnSync(
+    'git',
+    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', base, '--'],
+    { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
+  );
+  if (diff.error !== undefined || diff.status !== 0) return { problem: `cannot read the diff against ${base}` };
+  const lines: string[] = [];
+  const where: string[] = [];
+  let file: string | null = null;
+  let line = 0;
+  for (const raw of diff.stdout.split('\n')) {
+    if (raw.startsWith('diff --git ')) {
+      file = null;
+      continue;
+    }
+    if (raw.startsWith('+++ /dev/null')) {
+      file = null;
+      continue;
+    }
+    if (raw.startsWith('+++ b/')) {
+      file = raw.slice(6);
+      line = 0;
+      continue;
+    }
+    const hunk = raw.match(/^@@ -[0-9]+(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@/);
+    if (hunk !== null) {
+      line = Number(hunk[1]);
+      continue;
+    }
+    if (file === null || raw.startsWith('\\')) continue;
+    if (raw.startsWith('+')) {
+      lines.push(raw.slice(1));
+      where.push(`${file}:${String(line)}`);
+      line += 1;
+      continue;
+    }
+    if (raw.startsWith(' ')) line += 1;
+  }
+
+  const commits = spawnSync('git', ['-C', root, 'log', '--format=%H', `${base}..HEAD`], {
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (commits.error !== undefined || commits.status !== 0) return { problem: `cannot read the commits since ${base}` };
+  for (const sha of commits.stdout.split('\n').filter(Boolean)) {
+    const body = spawnSync('git', ['-C', root, 'log', '-1', '--format=%B', sha], {
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (body.error !== undefined || body.status !== 0) return { problem: `cannot read a commit message since ${base}` };
+    const message = body.stdout.replace(/\n$/, '');
+    for (const [index, text] of message.split('\n').entries()) {
+      lines.push(text);
+      where.push(`commit:${sha}:${String(index + 1)}`);
+    }
+  }
+  return { corpus: { lines, where } };
+}
+
 /**
  * Scans supplied pre-push text (added lines, commit messages, pull-request bodies) with the diff
  * scope. Used by the pre-push gate; the same validation and no-argv rule apply.
