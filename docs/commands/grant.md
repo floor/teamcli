@@ -11,6 +11,8 @@ identity, an agent id for a seat or a team id for `@team`.
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> [--inbox] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up --request [--expires <ISO>] [--json]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
 `--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,
@@ -44,6 +46,50 @@ owner, seat or terminal authority. `--inbox` widens the vocabulary to `send` and
 same grant then admits the client's own read of its replies (`team messages --client`, see
 [`team messages`](messages.md)) as well as its sends. Without `--inbox` the grant is exactly the
 send-only grant earlier builds wrote, byte for byte, and a read presented under it is refused.
+
+## An up grant
+
+`--up` makes the third form a TeamCLI **up grant**: a durable, owner-signed record that lets one client
+with no terminal run [`team up`](up.md) for one team, at one folder, and nothing else. It is for a
+client that is not a seat and cannot take the owner's place at a terminal, such as a bot that
+brings its team's folder up on request.
+
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
+      --team docs --up --expires 2027-01-20T00:00:00Z --request
+
+`--team` is required and names the one team. The grant binds, in the owner's signature:
+
+- the team's project name, its registry id (the digest of its real root) and that real root, so a
+  copy of the team in another folder, or another team under the same name, is not the team signed;
+- the fingerprints of the team file the owner saw: every owner-only section and every seat's
+  entry. A comment or a prompt edit changes none of them; a new seat, a changed seat or a changed
+  owner section does.
+
+The `--entity` is the policy and signer domain the grant is issued under, not the team's binding.
+A team that names no entity, or the same entity, may be bound; a team of another entity, an
+archived team, or a team whose root lies outside the roots its entity declares is refused.
+
+An up grant carries `up` and nothing else. It never carries `send`, `messages` or `grant`, so
+`--seat`, `--inbox`, `--allow-grant` and `--client-request` are refused with it, a sub-grant can
+never carry `up`, and an up grant presented to `team send` or `team messages` is refused as the
+wrong kind of grant (as a send grant is refused by `team up --client`).
+
+`--request` is the conversational form, and it works as for any client grant: the entity's
+`grant-emission` policy must be `conversational`, the request is written as a pending `gr_…`
+record, and the owner seat answers it with `team grant --approve-as-owner-seat <request-id> oui`
+(a Touch ID or passkey signature, never a terminal prompt of the client) and the owner then runs
+`team grant --execute <request-id>`. The approval prompt names the client, the team and the
+folder. `always` is refused for an up grant: a standing rule would renew the grant without the
+owner seeing the team file it signs. A request is bound to the team file it was made against: when
+the file changed between the request and `--execute`, execute refuses, the request is not spent,
+and the message says to ask again.
+
+Without `--request` the owner at a terminal signs the same grant directly.
+
+`--expires` is an ISO timestamp. An up grant is meant to last: without `--expires` it expires
+ninety days after it is written, and ninety days is also the ceiling; it never carries an unlimited
+expiry. Ending it earlier is [`team revoke`](revoke.md) `<grant-id>`, from the owner's terminal, at
+any time; the client's next `team up --client` is refused.
 
 ## Who may run it
 
