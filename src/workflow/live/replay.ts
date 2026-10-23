@@ -1,8 +1,10 @@
 // The live fold and the live replay. `foldLive` is the structural fold every read and append uses:
 // sequence, state continuity, revisions, activations and occurrence ids, with no definition in
 // hand. `replayLive` rechecks the same journal against the pinned definition's bytes: the
-// transition set, the exact effect plan, request digests and the run-open pin. Neither writes
-// anything, calls `decide`, verifies a signature, dispatches or claims the Kernel ledger.
+// transition set, the request digests, the run-open pin, and the decision itself — it re-derives
+// the engine's answer for every step with the pinned settings, the recorded evidence and the real
+// guard catalogue, then compares the next state, the error move and the effect plan. Neither
+// writes anything, verifies a signature, dispatches or claims the Kernel ledger.
 
 import {
   canonicalEffectPayload,
