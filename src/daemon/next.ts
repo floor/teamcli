@@ -22,9 +22,18 @@ import { pauseText, readState, type State } from '../state.ts';
 import { queuedSwap, swapLine } from '../swap/queue.ts';
 import type { TaskAdapter, TaskRead, TaskRecord } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
-import { claimLocal, releaseLocal } from '../tasks/lease.ts';
+import { claimLocal, LEASE_MS, releaseLocal } from '../tasks/lease.ts';
 import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
 import { order, takeable } from '../tasks/select.ts';
+import {
+  claimNext,
+  openCandidates,
+  releaseHoldFor,
+  releaseNextClaim,
+  takeUnderHolds,
+  type NextHoldBase,
+  type ReservationStore,
+} from '../workflow/reservation/index.ts';
 import type { HostedRoute } from './routes.ts';
 
 /** The caller's claim, exactly what a request carries. It is checked against the route's state
@@ -77,6 +86,10 @@ export type NextHandlerDeps = {
   askBroker?: (root: string, request: BrokerRequest, options?: { deadlineMs?: number }) => Promise<BrokerOutcome>;
   /** Injected for a test that must not wait out the client's own deadline. */
   deadlineMs?: number;
+  /** The run store's reservation boundary. Absent, this handler claims exactly as before:
+   *  no store write and no shared exclusion; present, the hold precedes the lease or the
+   *  tracker claim and follows its release. */
+  reservations?: ReservationStore;
 };
 
 /**
@@ -131,11 +144,15 @@ export async function handleNext(input: NextHandlerInput, deps: NextHandlerDeps 
   const registry = deps.registry ?? fileRegistry;
   const adapter = registry[tasks.source];
   if (!adapter) return refuse('next.file', 'tasks.source must be file');
+  const identity: NextHoldBase = { source: tasks.source, project: team.project, team: team.session };
   if (input.action === 'release') {
     const result = adapter.release
       ? adapter.release({ root: route.root, seat: caller.seat, pane: caller.pane, now })
       : releaseLocal(route.root, caller.seat, caller.pane, now);
-    if (result.kind === 'released') return { ok: true, kind: 'released', id: result.id };
+    if (result.kind === 'released') {
+      releaseHoldFor(deps.reservations, identity, result.id, caller.seat, caller.pane, now);
+      return { ok: true, kind: 'released', id: result.id };
+    }
     return { ok: true, kind: 'none', why: 'nothing-held' };
   }
   const source = fileSourceOf(team);
@@ -150,7 +167,7 @@ export async function handleNext(input: NextHandlerInput, deps: NextHandlerDeps 
     ? undefined
     : (record: TaskRecord) =>
         claimFn({ root: route.root, path: tasks.path, record, seat: caller.seat, pane: caller.pane, now }).kind === 'held';
-  return take(input, tasks, read, claim);
+  return take(input, tasks, read, claim, deps.reservations, identity);
 }
 
 /**
@@ -164,10 +181,14 @@ async function nextFromBroker(
   deps: NextHandlerDeps,
 ): Promise<NextAnswer> {
   const { route, caller, now } = input;
+  const identity: NextHoldBase = { source: tasks.source, project: input.team.project, team: input.team.session };
   if (input.action === 'release') {
     // The tracker holds no claim: the lease is local, and releasing it never reaches the broker.
     const result = releaseLocal(route.root, caller.seat, caller.pane, now);
-    if (result.kind === 'released') return { ok: true, kind: 'released', id: result.id };
+    if (result.kind === 'released') {
+      releaseHoldFor(deps.reservations, identity, result.id, caller.seat, caller.pane, now);
+      return { ok: true, kind: 'released', id: result.id };
+    }
     return { ok: true, kind: 'none', why: 'nothing-held' };
   }
   const ask = deps.askBroker;
@@ -186,7 +207,7 @@ async function nextFromBroker(
   // This build's broker answers records for a tracker source; any other read kind is an answer
   // the caller fails safe on, exactly like an unparseable line.
   if (outcome.read.kind !== 'records') return refuse('next.broker', WRONG_ANSWER);
-  const answer = take(input, tasks, outcome.read, undefined);
+  const answer = take(input, tasks, outcome.read, undefined, deps.reservations, identity);
   return outcome.notice === undefined ? answer : { ...answer, notice: outcome.notice };
 }
 
@@ -195,26 +216,47 @@ async function nextFromBroker(
  * claim one — through the adapter when it carries a tracker-side claim, through the local lease
  * otherwise — and answer. A refused record set that held nothing is the shape refusal, the same
  * way the command prints it.
+ *
+ * When the run store's reservation boundary is injected, every candidate is filtered by its
+ * exclusion and the store's hold is taken before the lease (or before the adapter's claim), so a
+ * `next` claim and a dispatch reservation exclude each other in both directions. A hold the
+ * store refuses skips the candidate; nothing is leased or claimed from it.
  */
 function take(
   input: NextHandlerInput,
   tasks: NonNullable<TeamFile['tasks']>,
   read: Extract<TaskRead, { kind: 'records' }>,
   claim: ((record: TaskRecord) => boolean) | undefined,
+  reservations: ReservationStore | undefined,
+  identity: NextHoldBase,
 ): NextAnswer {
   const { route, caller, now } = input;
   const known = new Map(read.records.map((record) => [record.id, record]));
   const candidates = order(takeable(read.records, caller.seat, tasks.pull ?? 'self', input.mine), tasks.fallback ?? 'file');
+  const open = reservations === undefined ? candidates : openCandidates(reservations, identity, candidates, now);
   let outcome: { kind: 'held'; record: TaskRecord } | { kind: 'none' } | { kind: 'kept' };
   if (claim) {
     let held: TaskRecord | undefined;
-    for (const record of candidates) {
+    for (const record of open) {
+      if (reservations !== undefined) {
+        const item = { ...identity, id: record.id };
+        const claimed = claimNext(reservations, { item, seat: caller.seat, pane: caller.pane, now, expiresAt: now + LEASE_MS });
+        if (claimed.kind === 'refused') continue;
+        if (claim(record)) {
+          held = record;
+          break;
+        }
+        if (claimed.kind === 'claimed') releaseNextClaim(reservations, { item, seat: caller.seat, pane: caller.pane, at: now });
+        continue;
+      }
       if (claim(record)) {
         held = record;
         break;
       }
     }
     outcome = held ? { kind: 'held', record: held } : { kind: 'none' };
+  } else if (reservations !== undefined) {
+    outcome = takeUnderHolds(route.root, known, open, { store: reservations, base: identity, seat: caller.seat, pane: caller.pane, now });
   } else {
     outcome = claimLocal(route.root, { now, seat: caller.seat, pane: caller.pane, known, candidates });
   }

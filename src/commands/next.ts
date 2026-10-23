@@ -29,11 +29,20 @@ import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/i
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
 import { fileRegistry } from '../tasks/file.ts';
 import { formatRecords } from '../tasks/format.ts';
-import { claimLocal, releaseLocal } from '../tasks/lease.ts';
+import { claimLocal, LEASE_MS, releaseLocal } from '../tasks/lease.ts';
 import { order, takeable } from '../tasks/select.ts';
 import { fileSourceOf, LOCAL_TASKS, readFileSource } from '../tasks/queue.ts';
 import { pauseText, readState, type State } from '../state.ts';
 import { queuedSwap, swapLine } from '../swap/queue.ts';
+import {
+  claimNext,
+  openCandidates,
+  releaseHoldFor,
+  releaseNextClaim,
+  takeUnderHolds,
+  type NextHoldBase,
+  type ReservationStore,
+} from '../workflow/reservation/index.ts';
 import { waitOrStop } from '../wait.ts';
 
 export const USAGE = `Usage: team next [--mine | --release] [--wait] [--json]
@@ -50,6 +59,10 @@ export type NextSources = {
   home?: string;
   /** Injected the way a watch's sources are. The shipped registry is the file adapter alone. */
   registry?: Record<string, TaskAdapter>;
+  /** The run store's reservation boundary, injected by the daemon at the fold. Absent, a claim
+   *  reads and leases exactly as before: no store write and no shared exclusion. Present, the
+   *  hold is taken before the local lease and follows its renew and release. */
+  reservations?: ReservationStore;
   now?: () => number;
   /** The broker client's deadline, injected the way the release check injects its timeout: a
    *  test shortens it instead of hanging. Production leaves it at the client's own. */
@@ -231,11 +244,15 @@ async function pass(
   if (!adapter) return file(io, 'tasks.source must be file', emit.json);
   const now = sources.now ?? Date.now;
   const at = now();
+  const identity: NextHoldBase = { source: tasks.source, project: loaded.team.project, team: loaded.team.session };
   if (release) {
     const result = adapter.release
       ? adapter.release({ root: loaded.root, seat: placed.seat, pane: placed.pane, now: at })
       : releaseLocal(loaded.root, placed.seat, placed.pane, at);
-    if (result.kind === 'released') return released(io, result.id, emit);
+    if (result.kind === 'released') {
+      releaseHoldFor(sources.reservations, identity, result.id, placed.seat, placed.pane, at);
+      return released(io, result.id, emit);
+    }
     return none(io, 'nothing is held', speak, emit);
   }
   const source = fileSourceOf(loaded.team);
@@ -254,7 +271,7 @@ async function pass(
     ? (record: TaskRecord) =>
         claimFn({ root: loaded.root, path: tasks.path, record, seat: placed.seat, pane: placed.pane, now: at }).kind === 'held'
     : undefined;
-  return take(io, loaded.root, read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, claim, speak, emit, hold);
+  return take(io, loaded.root, read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, claim, speak, emit, hold, sources.reservations, identity);
 }
 
 /**
@@ -277,11 +294,15 @@ async function nextFromBroker(
 ): Promise<number> {
   const now = sources.now ?? Date.now;
   const at = now();
+  const identity: NextHoldBase = { source: tasks.source, project: loaded.team.project, team: loaded.team.session };
   if (release) {
     // The tracker holds no claim: the lease is local, and `--release` unlinks it without
     // reaching the broker at all.
     const result = releaseLocal(loaded.root, placed.seat, placed.pane, at);
-    if (result.kind === 'released') return released(io, result.id, emit);
+    if (result.kind === 'released') {
+      releaseHoldFor(sources.reservations, identity, result.id, placed.seat, placed.pane, at);
+      return released(io, result.id, emit);
+    }
     return none(io, 'nothing is held', speak, emit);
   }
   const request: BrokerRequest = { op: 'read', seat: placed.seat, pane: placed.pane };
@@ -300,7 +321,7 @@ async function nextFromBroker(
   // A notice about the read is for a person reading the table; a `--json` run's stderr stays
   // empty, the document on stdout being the whole answer.
   if (outcome.notice !== undefined && !emit.json) io.stderr(`team next: ${outcome.notice}\n`);
-  return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, emit, hold);
+  return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, emit, hold, sources.reservations, identity);
 }
 
 /** The daemon proxy's transport failures. The source being unavailable keeps the command's
@@ -395,6 +416,11 @@ function swapAnswer(io: Io, message: string, hint: string | null, json: boolean)
  * otherwise — and report. A notice about the read has already gone to stderr; a refusal in the
  * read is named and the exit is the shape's. The two empty answers leave through `blank`, which
  * is also where `--wait` starts and where a wait's silent re-pass continues.
+ *
+ * When the run store's reservation boundary is injected, every candidate is filtered by its
+ * exclusion and the claim takes the store's hold before the lease (or before the adapter's
+ * claim). A hold the store refuses skips the candidate; nothing is leased or dispatched from it.
+ * A wait's re-pass runs this whole take again, so an item released between passes can be taken.
  */
 async function take(
   io: Io,
@@ -409,19 +435,35 @@ async function take(
   speak: boolean,
   emit: Emit,
   hold: Hold | undefined,
+  reservations: ReservationStore | undefined,
+  identity: NextHoldBase,
 ): Promise<number> {
   const known = new Map(read.records.map((record) => [record.id, record]));
   const candidates = order(takeable(read.records, placed.seat, pull, mine), fallback);
+  const open = reservations === undefined ? candidates : openCandidates(reservations, identity, candidates, at);
   let outcome: { kind: 'held'; record: TaskRecord } | { kind: 'none' } | { kind: 'kept' };
   if (claim) {
     let held: TaskRecord | undefined;
-    for (const record of candidates) {
+    for (const record of open) {
+      if (reservations !== undefined) {
+        const item = { ...identity, id: record.id };
+        const claimed = claimNext(reservations, { item, seat: placed.seat, pane: placed.pane, now: at, expiresAt: at + LEASE_MS });
+        if (claimed.kind === 'refused') continue;
+        if (claim(record)) {
+          held = record;
+          break;
+        }
+        if (claimed.kind === 'claimed') releaseNextClaim(reservations, { item, seat: placed.seat, pane: placed.pane, at });
+        continue;
+      }
       if (claim(record)) {
         held = record;
         break;
       }
     }
     outcome = held ? { kind: 'held', record: held } : { kind: 'none' };
+  } else if (reservations !== undefined) {
+    outcome = takeUnderHolds(root, known, open, { store: reservations, base: identity, seat: placed.seat, pane: placed.pane, now: at });
   } else {
     outcome = claimLocal(root, { now: at, seat: placed.seat, pane: placed.pane, known, candidates });
   }
