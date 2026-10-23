@@ -1,6 +1,8 @@
-// The client up grant's two halves that read the world: binding a request to one live team (its
+// The client team grant's two halves that read the world: binding a request to one live team (its
 // name, registry id, real root and the fingerprints of its file), and verifying a client's own
-// `team up --client <grant> --key <key>` against that binding. The record, its signature and its
+// `team up --client <grant> --key <key>` or `team down --client <grant> --key <key>` against that
+// binding. The two ops share one binding and one verification; they differ in the op the grant must
+// carry and in one rule: `down` does not need the team file to be the one the owner signed (below). The record, its signature and its
 // revocation live in `records.ts`; this module decides only whether THIS invocation, here, now,
 // is the one the owner signed. Every refusal ends with the owner's exact next step.
 
@@ -17,6 +19,8 @@ import { signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import {
   CLIENT_WORD_PATTERN,
   activeClientUpGrant,
+  teamGrantLabel,
+  type ClientTeamOp,
   publicKeyObject,
   readClientPrivateKey,
   readClientUpGrantFile,
@@ -57,7 +61,7 @@ function entityProblem(home: string, entity: string, team: TeamFile, teamId: str
   if (record !== undefined && record.lifecycle === 'archived') return `team "${team.project}" is archived`;
   for (const named of [team.entity, record?.entity ?? null]) {
     if (named !== null && named !== entity) {
-      return `team "${team.project}" belongs to entity "${named}"; an up grant under entity "${entity}" binds a team with no entity or entity "${entity}"`;
+      return `team "${team.project}" belongs to entity "${named}"; a client grant under entity "${entity}" binds a team with no entity or entity "${entity}"`;
     }
   }
   const roots = declaredRoots(home).get(entity);
@@ -119,15 +123,26 @@ export function upDrift(binding: ClientUpBinding, team: TeamFile): string[] {
  * registry id, still sits under the entity, and its file is the one the binding fingerprints.
  * Used at the request, at execute (the owner's answer is for this file) and at every client run.
  */
-export function upBindingProblem(home: string, entity: string, binding: ClientUpBinding): { kind: 'drift' | 'team'; why: string; changes: string[] } | null {
+export function upBindingProblem(
+  home: string,
+  entity: string,
+  binding: ClientUpBinding,
+  /** `down`: a team file that changed, or that no longer loads, does not stop the owner's stop.
+   *  Identity (name, registry id, folder, entity) is still checked whenever the file loads. */
+  op: ClientTeamOp = 'up',
+): { kind: 'drift' | 'team'; why: string; changes: string[] } | null {
   const team = (why: string) => ({ kind: 'team' as const, why, changes: [] as string[] });
   const loaded = loadTeamFile(binding.root, { home });
-  if (!loaded.ok) return team(`the team file at ${binding.root} does not load: ${loaded.errors[0]?.message ?? 'unreadable'}`);
+  if (!loaded.ok) {
+    if (op === 'down' && teamIdOf(binding.root) === binding.teamId) return null;
+    return team(`the team file at ${binding.root} does not load: ${loaded.errors[0]?.message ?? 'unreadable'}`);
+  }
   if (real(loaded.root) !== binding.root) return team(`the folder ${binding.root} is not a team root any more`);
   if (loaded.team.project !== binding.project) return team(`the team file at ${binding.root} names team "${loaded.team.project}", not "${binding.project}"`);
   if (teamIdOf(binding.root) !== binding.teamId) return team(`the folder ${binding.root} is not the team the grant signs (registry id differs)`);
   const problem = entityProblem(home, entity, loaded.team, binding.teamId, binding.root);
   if (problem !== null) return team(problem);
+  if (op === 'down') return null;
   const changes = upDrift(binding, loaded.team);
   if (changes.length > 0) return { kind: 'drift', why: 'the team file changed', changes };
   return null;
@@ -137,13 +152,13 @@ export type ClientUpVerification =
   | { ok: true; grant: ClientUpGrantRecord; root: string; requestId: string; /** The owner's signature on the grant, for the re-read under the lock. */ signature: string }
   | { ok: false; why: string; /** Set once the key proved the client's identity: the refusal is then written to the team's log. */ identified: ClientUpGrantRecord | null };
 
-/** The command that renews one grant, spelled for its own client key and team. */
-function renew(grant: ClientUpGrantRecord): string {
-  return upRequestCommand({ clientId: grant.clientId, entity: grant.entity, keyDir: grant.keyDir, project: grant.up.project });
+/** The command that renews one grant, spelled for its own client key, team and ops. */
+function renew(grant: ClientUpGrantRecord, ops: readonly string[] = grant.ops): string {
+  return upRequestCommand({ clientId: grant.clientId, entity: grant.entity, keyDir: grant.keyDir, project: grant.up.project, ops });
 }
 
 /**
- * Verifies one `team up --client` invocation end to end, in the order that reads least first: the
+ * Verifies one `team up --client` (or, with `op: 'down'`, `team down --client`) invocation end to end, in the order that reads least first: the
  * grant file verifies under the owner key and is an up grant; the key file passes its hygiene
  * rules and is the grant's own app key, and a request built from this invocation signs and
  * verifies with it; the grant is canonical, unexpired and unrevoked; this folder, or the team
@@ -157,9 +172,12 @@ export function verifyClientUp(input: {
   cwd: string;
   team?: string;
   now: Date;
+  /** The op this invocation runs; the grant must carry it. Default `up`. */
+  op?: ClientTeamOp;
 }): ClientUpVerification {
+  const op: ClientTeamOp = input.op ?? 'up';
   const fail = (why: string, identified: ClientUpGrantRecord | null = null): ClientUpVerification => ({ ok: false, why, identified });
-  const presented = readClientUpGrantFile(input.home, input.grantFile);
+  const presented = readClientUpGrantFile(input.home, input.grantFile, op);
   if (!presented.ok) return fail(presented.why);
   const grant = presented.grant;
   const key = readClientPrivateKey(input.home, input.keyFile);
@@ -167,10 +185,10 @@ export function verifyClientUp(input: {
   if (key.publicKey !== grant.publicKey || key.keyId !== grant.keyId) {
     return fail(`the key file is not the app key the grant ${grant.grantId} names; use ${join(grant.keyDir, 'client.key')}`);
   }
-  const requestId = `up_${randomBytes(12).toString('hex')}`;
+  const requestId = `${op}_${randomBytes(12).toString('hex')}`;
   const body: Json = {
     v: 3,
-    op: 'up',
+    op,
     grant_id: grant.grantId,
     client_id: grant.clientId,
     key_id: grant.keyId,
@@ -199,31 +217,37 @@ export function verifyClientUp(input: {
     return refuse(active.kind === 'other' ? active.why : `${active.why}; the owner issues a new one with ${renew(grant)}`);
   }
   const signed = `team "${grant.up.project}" at ${grant.up.root}`;
+  const label = teamGrantLabel(grant.ops);
+  // A grant carries exactly the ops the owner signed: one for `up` is no leave to stop, and the
+  // other way round. The refusal names the request that would add the op, and never adds it.
+  if (!grant.ops.includes(op)) {
+    return refuse(`the ${label} ${grant.grantId} admits ${grant.ops.join(' and ')} only, not ${op}; the owner requests one that carries ${op} with ${renew(grant, [...grant.ops, op])}`);
+  }
   if (input.team !== undefined && input.team !== grant.up.project) {
-    return refuse(`the up grant ${grant.grantId} is for ${signed}, not team "${input.team}"`);
+    return refuse(`the ${label} ${grant.grantId} is for ${signed}, not team "${input.team}"`);
   }
   // Where the caller stands. The grant names its one folder, so the run is that folder whatever the
   // caller's; the check is only against a mix-up. Inside the signed folder: fine. Inside another
   // team's folder: refused unless the team is named — and a team of the same name in another
   // folder is refused even then, since it is not clear which of the two was meant.
-  const nameIt = `Run it in ${grant.up.root}, or name the team: team up --client <grant> --key <key> --team ${grant.up.project}`;
+  const nameIt = `Run it in ${grant.up.root}, or name the team: team ${op} --client <grant> --key <key> --team ${grant.up.project}`;
   const here = loadTeamFile(input.cwd, { home: input.home, checkOnly: true });
   if (here.ok) {
     if (real(here.root) !== grant.up.root) {
       if (input.team === undefined) {
-        return refuse(`the up grant ${grant.grantId} is for ${signed}; this folder is team "${here.team.project}" at ${real(here.root)}, which the owner did not sign. ${nameIt}`);
+        return refuse(`the ${label} ${grant.grantId} is for ${signed}; this folder is team "${here.team.project}" at ${real(here.root)}, which the owner did not sign. ${nameIt}`);
       }
       if (here.team.project === grant.up.project) {
-        return refuse(`the up grant ${grant.grantId} is for ${signed}; this folder is also a team "${here.team.project}", at ${real(here.root)}, which the owner did not sign. Run it in ${grant.up.root}`);
+        return refuse(`the ${label} ${grant.grantId} is for ${signed}; this folder is also a team "${here.team.project}", at ${real(here.root)}, which the owner did not sign. Run it in ${grant.up.root}`);
       }
     }
   } else if (input.team === undefined) {
-    return refuse(`the up grant ${grant.grantId} is for ${signed}; this folder is not its team folder. ${nameIt}`);
+    return refuse(`the ${label} ${grant.grantId} is for ${signed}; this folder is not its team folder. ${nameIt}`);
   }
-  const problem = upBindingProblem(input.home, grant.entity, grant.up);
+  const problem = upBindingProblem(input.home, grant.entity, grant.up, op);
   if (problem !== null) {
-    if (problem.kind === 'team') return refuse(`${problem.why}; the owner issues a new up grant with ${renew(grant)}`);
-    return refuse(`the team file of ${grant.up.project} changed since the owner signed the up grant ${grant.grantId}: ${problem.changes.join('; ')}. The owner re-signs with ${renew(grant)}, answers on the owner seat, then runs team grant --execute <request-id>`);
+    if (problem.kind === 'team') return refuse(`${problem.why}; the owner issues a new ${label} with ${renew(grant)}`);
+    return refuse(`the team file of ${grant.up.project} changed since the owner signed the ${label} ${grant.grantId}: ${problem.changes.join('; ')}. The owner re-signs with ${renew(grant)}, answers on the owner seat, then runs team grant --execute <request-id>`);
   }
   // The grant is re-read under the grant lock immediately before the run's first effect.
   return { ok: true, grant, root: grant.up.root, requestId, signature: presented.signature };

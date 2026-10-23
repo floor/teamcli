@@ -17,11 +17,14 @@ import {
   appendClientRevocation,
   keyIdOf,
   publicRawOf,
+  teamGrantLabel,
+  teamOpFlags,
   withClientGrantLock,
   writeClientGrant,
   writeClientGrantAudit,
   writeClientUpGrant,
   type ClientGrantScope,
+  type ClientTeamOp,
 } from './client/records.ts';
 import { resolveClientUpTarget } from './client/up-grant.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
@@ -99,6 +102,12 @@ export function clientOwnerAllows(command: 'grant' | 'revoke', rawIo: Io, io: Io
   return false;
 }
 
+/** The ops `--up` and `--down` ask for, in canonical order, or null when neither flag is given. */
+export function teamOpsOfArgs(args: Args): ClientTeamOp[] | null {
+  const asked = (['up', 'down'] as const).filter((op) => args.flags.has(op));
+  return asked.length === 0 ? null : asked;
+}
+
 /** The problems the `--client` form of `team grant` owns, or null when the arguments are whole. */
 export function clientGrantProblem(args: Args): string | null {
   if (args.error !== undefined) return args.error;
@@ -115,14 +124,18 @@ export function clientGrantProblem(args: Args): string | null {
   }
   if (args.flags.has('approvals')) return '--approvals takes no other arguments';
   if (args.flags.has('request') && args.flags.has('client-request')) return '--request and --client-request are two different forms';
-  if (args.flags.has('up')) {
-    // An up grant is the owner's form alone: it never rides a master grant, so a sub-grant can
-    // never carry `up`, and it carries nothing but `up` for the one team it names.
-    if (args.flags.has('client-request')) return '--up belongs to the owner form: a sub-grant never carries up';
-    if (args.values.team === undefined) return '--up needs --team <team>: an up grant binds one team and its folder';
-    if (args.values.seat !== undefined) return '--up takes no --seat: an up grant runs team up for one team and addresses no seat';
-    if (args.flags.has('inbox')) return '--up takes no --inbox: an up grant carries up and nothing else';
-    if (args.flags.has('allow-grant') || MASTER_SCOPE_FLAGS.some((flag) => args.values[flag] !== undefined)) return '--up takes no --allow-grant: an up grant never carries grant';
+  const teamOps = teamOpsOfArgs(args);
+  if (teamOps !== null) {
+    // An up or down grant is the owner's form alone: it never rides a master grant, so a sub-grant
+    // can never carry `up` or `down`, and it carries nothing but those for the one team it names.
+    // `--up`, `--down` or both choose what the one record admits.
+    const asked = teamOpFlags(teamOps);
+    const label = teamGrantLabel(teamOps);
+    if (args.flags.has('client-request')) return `${asked} belongs to the owner form: a sub-grant never carries ${teamOps.join(' or ')}`;
+    if (args.values.team === undefined) return `${asked} needs --team <team>: a ${label} binds one team and its folder`;
+    if (args.values.seat !== undefined) return `${asked} takes no --seat: a ${label} runs ${teamOps.map((op) => `team ${op}`).join(' and ')} for one team and addresses no seat`;
+    if (args.flags.has('inbox')) return `${asked} takes no --inbox: a ${label} carries ${teamOps.join(' and ')} and nothing else`;
+    if (args.flags.has('allow-grant') || MASTER_SCOPE_FLAGS.some((flag) => args.values[flag] !== undefined)) return `${asked} takes no --allow-grant: a ${label} never carries grant`;
     if (args.values.via !== undefined || args.values.key !== undefined) return '--via and --key belong to the --client-request form';
   }
   if (args.flags.has('client-request')) {
@@ -172,7 +185,7 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean,
     else io.stderr(`team grant: ${key.why}\n`);
     return 'refused';
   }
-  if (args.flags.has('up')) return runDirectUpGrantMode(rawIo, io, args, key.key, json, home);
+  if (teamOpsOfArgs(args) !== null) return runDirectUpGrantMode(rawIo, io, args, key.key, json, home);
   const result = writeClientGrant(home, {
     clientId: args.values.client!,
     entity: args.values.entity!,
@@ -206,7 +219,7 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean,
   return 'ok';
 }
 
-/** `team grant --client … --team <team> --up`, at the owner's terminal: binds one live team and writes the up grant. */
+/** `team grant --client … --team <team> --up --down`, at the owner's terminal: binds one live team and writes the team grant. */
 function runDirectUpGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicInput, json: boolean, home: string): 'ok' | 'refused' {
   const refuse = (why: string): 'refused' => {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(why), null);
@@ -222,13 +235,14 @@ function runDirectUpGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicIn
     keyId: key.keyId,
     keyDir: key.keyDir,
     ...(args.values.expires !== undefined ? { expires: args.values.expires } : {}),
+    ops: teamOpsOfArgs(args) ?? ['up'],
     up: target.binding,
   });
   if (!result.ok) return refuse(result.why);
   if (json) {
     writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: updated', project: null, session: null, target: result.grant.grantId });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nup: team ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${result.grant.expires}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\n${result.grant.ops.join(' and ')}: team ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${result.grant.expires}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }
@@ -343,7 +357,8 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
   if (!key.ok) return refuse(key.why);
   const allow = args.flags.has('allow-grant');
   let up: PendingUpBinding | null = null;
-  if (args.flags.has('up')) {
+  const teamOps = teamOpsOfArgs(args);
+  if (teamOps !== null) {
     const target = resolveClientUpTarget(home, args.values.entity!, args.values.team!, io.cwd);
     if (!target.ok) return refuse(target.why);
     up = { project: target.binding.project, team_id: target.binding.teamId, root: target.binding.root, fingerprints: target.binding.fingerprints };
@@ -361,6 +376,8 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
     allow_grant: allow,
     grant_scope: allow ? masterScopeOf(args) : null,
     ...(up !== null ? { up } : {}),
+    // Written only when it adds `down`: a request for an up grant is the request it always was.
+    ...(up !== null && teamOps !== null && teamOps.join(',') !== 'up' ? { team_ops: teamOps } : {}),
   };
   const now = approval.now ?? new Date();
   const summary = pendingSummary(params, now);
@@ -441,10 +458,15 @@ export function runExecuteGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
       allow_grant: allow,
       grant_scope: allow ? masterScopeOf(args) : null,
     };
-    if (args.flags.has('up')) {
+    const teamOps = teamOpsOfArgs(args);
+    if (teamOps !== null) {
       const target = resolveClientUpTarget(home, params.entity, params.team ?? '', io.cwd);
       if (!target.ok) return refuse(target.why);
-      params = { ...params, up: { project: target.binding.project, team_id: target.binding.teamId, root: target.binding.root, fingerprints: target.binding.fingerprints } };
+      params = {
+        ...params,
+        up: { project: target.binding.project, team_id: target.binding.teamId, root: target.binding.root, fingerprints: target.binding.fingerprints },
+        ...(teamOps.join(',') !== 'up' ? { team_ops: teamOps } : {}),
+      };
     }
   }
   const choice = args.values.approve ?? 'once';

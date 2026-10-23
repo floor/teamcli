@@ -866,7 +866,9 @@ export function readClientGrantFile(home: string, path: string): ClientGrantRead
   // An up grant is a different record: it admits `team up --client` for one team and never a send,
   // a read or a sub-grant. Said plainly here, so a send that is handed one knows what it holds.
   if (claimsUpVocabulary(parsed)) {
-    return refusal(`the grant file "${path}" is an up grant: it admits \`team up --client ${path} --key <client.key>\` for one team and nothing else, never send, messages or grant`);
+    const claimed = claimedTeamOps(parsed);
+    const admits = claimed.map((op) => `\`team ${op} --client ${path} --key <client.key>\``).join(' and ');
+    return refusal(`the grant file "${path}" is ${teamGrantLabelWithArticle(claimed)}: it admits ${admits} for one team and nothing else, never send, messages or grant`);
   }
   const record = clientGrantFrom(parsed, state.key);
   if (record === null) return refusal(`the grant file "${path}" is not a verified owner-signed client grant`);
@@ -1245,12 +1247,15 @@ export function clientSeatsAt(
   return { ok: true, seats: listed.seats.filter((seat) => !refused.includes(seat)), refused };
 }
 
-// ---- up grants -----------------------------------------------------------------------------
+// ---- up and down grants --------------------------------------------------------------------
 //
-// A client up grant admits one client's `team up --client <grant> --key <key>` for ONE team at ONE
-// folder, and nothing else: its op list is exactly `up`, so it is never read as a send, messages
-// or grant record (the send-side decoder refuses vocabulary 4 whole, and an older build refuses it
-// as an unknown vocabulary). The team is bound by what the registry and the file say, signed:
+// A client team grant admits one client's `team up --client <grant> --key <key>` and/or
+// `team down --client <grant> --key <key>` for ONE team at ONE folder, and nothing else: its op
+// list is `up`, `down`, or both, so it is never read as a send, messages or grant record (the
+// send-side decoder refuses vocabulary 4 whole, and an older build refuses it as an unknown
+// vocabulary). The `up` form is byte-for-byte the record the first build wrote (binding under the
+// key `up`); a record that carries `down` keeps the same binding under the key `team`, so a build
+// that knows only `up` refuses it whole instead of reading half of it. The team is bound by what the registry and the file say, signed:
 // its project name, its registry id (twelve hex, derived from the real root), its absolute root,
 // and the fingerprints of the team file as the owner approved it (owner sections and every seat,
 // the same digests `team approve` records). A later edit of one of those needs a new signature.
@@ -1260,11 +1265,39 @@ export function clientSeatsAt(
 /** The vocabulary of an up grant: `up` alone. */
 export const CLIENT_UP_VOCABULARY_VERSION = 4;
 
-/** The one op an up grant carries. */
+/** The one op an up-only grant carries. */
 export const CLIENT_UP_ALLOWED_OPS = ['up'] as const;
 
-/** An up grant is durable: ninety days is both the default and the ceiling. `--expires` shortens
- *  it; the owner revokes it at any time with `team revoke`. */
+/** Every op a team grant can carry, in the one canonical order a record lists them. */
+export const CLIENT_TEAM_OPS = ['up', 'down'] as const;
+export type ClientTeamOp = (typeof CLIENT_TEAM_OPS)[number];
+
+/** The ops as a record writes them: known, each once, in canonical order; an empty request is `up`
+ *  (what `--up` alone has always meant). */
+export function canonicalTeamOps(ops: readonly string[] | undefined): ClientTeamOp[] | null {
+  const asked = ops === undefined || ops.length === 0 ? ['up'] : ops;
+  if (asked.some((op) => !(CLIENT_TEAM_OPS as readonly string[]).includes(op))) return null;
+  return CLIENT_TEAM_OPS.filter((op) => asked.includes(op));
+}
+
+/** What a grant is called in a sentence: `up grant`, `down grant`, or `up and down grant`. */
+export function teamGrantLabel(ops: readonly string[]): string {
+  return `${ops.join(' and ')} grant`;
+}
+
+/** The label with its article: `an up grant`, `a down grant`, `an up and down grant`. */
+export function teamGrantLabelWithArticle(ops: readonly string[]): string {
+  return `${ops[0] === 'up' ? 'an' : 'a'} ${teamGrantLabel(ops)}`;
+}
+
+/** The flags that ask for those ops: `--up`, `--down`, or `--up --down`. */
+export function teamOpFlags(ops: readonly string[]): string {
+  return ops.map((op) => `--${op}`).join(' ');
+}
+
+/** A team grant (up, down or both) is durable: ninety days is both the default and the ceiling.
+ *  `--expires` shortens it; the owner revokes it at any time with `team revoke`. This is a constant
+ *  like the seven-day send ceiling above it: no policy sets it today. */
 export const CLIENT_UP_EXPIRY_MAX_MS = 90 * 24 * 60 * 60 * 1000;
 
 /** Where one up grant binds: one team by name and registry id, its real root, and its file. */
@@ -1286,6 +1319,9 @@ export type ClientUpGrantRecord = {
   issued: string;
   expires: string;
   vocabulary: 4;
+  /** What the grant admits: `up`, `down`, or both, in canonical order. */
+  ops: ClientTeamOp[];
+  /** The one team and folder every op binds. The name is the first build's: it binds `down` too. */
   up: ClientUpBinding;
 };
 
@@ -1297,6 +1333,8 @@ export type ClientUpGrantRequest = {
   keyDir: string;
   /** Absent means the 90-day default; anything past 90 days is refused. */
   expires?: string;
+  /** Absent means `up`, as before; `['down']` and `['up', 'down']` add the stop. */
+  ops?: readonly string[];
   up: ClientUpBinding;
 };
 
@@ -1306,9 +1344,15 @@ export type ClientUpGrantRead =
 
 /** The command that asks for an up grant, spelled for one client key and team: what every
  *  refusal of an up grant ends with, so the owner's next step is always one line. */
-export function upRequestCommand(input: { clientId: string; entity: string; keyDir: string; project: string } | null): string {
+export function upRequestCommand(input: { clientId: string; entity: string; keyDir: string; project: string; ops?: readonly string[] } | null): string {
   if (input === null) return 'team grant --client <client-id> --entity <entity> --public-key <client.pub> --team <team> --up --request';
-  return `team grant --client ${input.clientId} --entity ${input.entity} --public-key ${join(input.keyDir, CLIENT_PUB_FILE)} --team ${input.project} --up --request`;
+  return `team grant --client ${input.clientId} --entity ${input.entity} --public-key ${join(input.keyDir, CLIENT_PUB_FILE)} --team ${input.project} ${teamOpFlags(input.ops ?? ['up'])} --request`;
+}
+
+/** Where a record keeps its binding: `up` for the up-only form the first build wrote, `team` for any
+ *  record that carries `down`. */
+function bindingKeyOf(ops: readonly string[]): 'up' | 'team' {
+  return ops.length === 1 && ops[0] === 'up' ? 'up' : 'team';
 }
 
 function onDiskUpGrant(grant: ClientUpGrantRecord): Record<string, Json> {
@@ -1319,11 +1363,11 @@ function onDiskUpGrant(grant: ClientUpGrantRecord): Record<string, Json> {
     public_key: grant.publicKey,
     key_id: grant.keyId,
     key_dir: grant.keyDir,
-    allowed_ops: [...CLIENT_UP_ALLOWED_OPS],
+    allowed_ops: [...grant.ops],
     issued: grant.issued,
     expires: grant.expires,
     vocabulary: CLIENT_UP_VOCABULARY_VERSION,
-    up: {
+    [bindingKeyOf(grant.ops)]: {
       project: grant.up.project,
       team_id: grant.up.teamId,
       root: grant.up.root,
@@ -1366,11 +1410,13 @@ export function planClientUpGrant(home: string, request: ClientUpGrantRequest, o
   if (placement !== null) return refusal(placement);
   const bound = clientUpBindingProblem(request.up);
   if (bound !== null) return refusal(bound);
+  const ops = canonicalTeamOps(request.ops);
+  if (ops === null) return refusal(`a team grant carries up, down or both, not "${(request.ops ?? []).join(', ')}"`);
   const expires = request.expires ?? new Date(nowMs + CLIENT_UP_EXPIRY_MAX_MS).toISOString();
   const expiresMs = Date.parse(expires);
   if (!Number.isFinite(expiresMs)) return refusal(`"${expires}" is not a readable expiry timestamp`);
   if (expiresMs <= nowMs) return refusal(`the expiry ${expires} is not in the future: a client grant always expires`);
-  if (expiresMs > nowMs + CLIENT_UP_EXPIRY_MAX_MS) return refusal(`the expiry ${expires} is more than 90 days away: an up grant is durable but finite, at most 90 days`);
+  if (expiresMs > nowMs + CLIENT_UP_EXPIRY_MAX_MS) return refusal(`the expiry ${expires} is more than 90 days away: a ${teamGrantLabel(ops)} is durable but finite, at most 90 days`);
   return {
     ok: true,
     grant: {
@@ -1383,6 +1429,7 @@ export function planClientUpGrant(home: string, request: ClientUpGrantRequest, o
       issued: now.toISOString(),
       expires,
       vocabulary: CLIENT_UP_VOCABULARY_VERSION,
+      ops,
       up: {
         project: request.up.project,
         teamId: request.up.teamId,
@@ -1429,10 +1476,16 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
   const raw = envelope.client_grant;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const fields = raw as Record<string, unknown>;
-  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'allowed_ops', 'issued', 'expires', 'vocabulary', 'up'];
-  if (Object.keys(fields).length !== known.length || Object.keys(fields).some((name) => !known.includes(name))) return null;
   if (fields.vocabulary !== CLIENT_UP_VOCABULARY_VERSION) return null;
-  if (!Array.isArray(fields.allowed_ops) || fields.allowed_ops.length !== 1 || fields.allowed_ops[0] !== 'up') return null;
+  // The ops are exactly what a request writes: known, once each, in canonical order. Anything else
+  // is not a record this build wrote, and the binding's key follows from them.
+  if (!Array.isArray(fields.allowed_ops) || fields.allowed_ops.some((op) => typeof op !== 'string')) return null;
+  const listed = fields.allowed_ops as string[];
+  const ops = canonicalTeamOps(listed);
+  if (ops === null || listed.length === 0 || ops.join(',') !== listed.join(',')) return null;
+  const bindingKey = bindingKeyOf(ops);
+  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'allowed_ops', 'issued', 'expires', 'vocabulary', bindingKey];
+  if (Object.keys(fields).length !== known.length || Object.keys(fields).some((name) => !known.includes(name))) return null;
   if (typeof fields.grant_id !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.grant_id)) return null;
   if (typeof fields.client_id !== 'string' || !CLIENT_WORD_PATTERN.test(fields.client_id)) return null;
   if (typeof fields.entity !== 'string' || !CLIENT_WORD_PATTERN.test(fields.entity)) return null;
@@ -1443,7 +1496,7 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
   if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
   if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
   if (Date.parse(fields.expires) > Date.parse(fields.issued) + CLIENT_UP_EXPIRY_MAX_MS) return null;
-  const up = fields.up;
+  const up = fields[bindingKey];
   if (up === null || typeof up !== 'object' || Array.isArray(up)) return null;
   const upFields = up as Record<string, unknown>;
   if (Object.keys(upFields).sort().join(',') !== 'fingerprints,project,root,team_id') return null;
@@ -1470,6 +1523,7 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
       issued: fields.issued,
       expires: fields.expires,
       vocabulary: CLIENT_UP_VOCABULARY_VERSION,
+      ops,
       up: {
         project: binding.project,
         teamId: binding.teamId,
@@ -1489,9 +1543,16 @@ function claimsUpVocabulary(parsed: unknown): boolean {
   return grant !== null && typeof grant === 'object' && !Array.isArray(grant) && (grant as { vocabulary?: unknown }).vocabulary === CLIENT_UP_VOCABULARY_VERSION;
 }
 
+/** The ops a vocabulary-4 file names, for the wording of a refusal only. */
+function claimedTeamOps(parsed: unknown): ClientTeamOp[] {
+  const grant = (parsed as { client_grant?: { allowed_ops?: unknown } }).client_grant;
+  const named = Array.isArray(grant?.allowed_ops) ? (grant.allowed_ops as unknown[]).filter((op): op is string => typeof op === 'string') : [];
+  return canonicalTeamOps(named) ?? ['up'];
+}
+
 /** One verified owner-signed up grant from a file, or the reason it is not one. A send, messages
  *  or master grant is named for what it is, with the command that asks for an up grant. */
-export function readClientUpGrantFile(home: string, path: string): ClientUpGrantRead {
+export function readClientUpGrantFile(home: string, path: string, op: ClientTeamOp = 'up'): ClientUpGrantRead {
   const state = keyState(home);
   if (state.kind !== 'key') return refusal('the owner signing key is absent or unreadable: no client grant can verify');
   let text: string;
@@ -1514,9 +1575,9 @@ export function readClientUpGrantFile(home: string, path: string): ClientUpGrant
   if (up === null) {
     const other = clientGrantFrom(parsed, state.key);
     if (other !== null) {
-      return refusal(`the grant file "${path}" is not an up grant (it admits ${other.grant.allowedOps.join(', ')}); the owner requests one with ${upRequestCommand({ clientId: other.grant.clientId, entity: other.grant.entity, keyDir: other.grant.keyDir, project: '<team>' })}`);
+      return refusal(`the grant file "${path}" is not ${teamGrantLabelWithArticle([op])} (it admits ${other.grant.allowedOps.join(', ')}); the owner requests one with ${upRequestCommand({ clientId: other.grant.clientId, entity: other.grant.entity, keyDir: other.grant.keyDir, project: '<team>', ops: [op] })}`);
     }
-    return refusal(`the grant file "${path}" is not a verified owner-signed up grant; the owner requests one with ${upRequestCommand(null)}`);
+    return refusal(`the grant file "${path}" is not a verified owner-signed ${teamGrantLabel([op])}; the owner requests one with ${upRequestCommand(null).replace('--up', teamOpFlags([op]))}`);
   }
   const admitted = clientAdmission(home, up.grant.clientId, up.grant.entity);
   if (!admitted.ok) return refusal(admitted.why);
@@ -1546,10 +1607,10 @@ export function activeClientUpGrant(
   const grant = canonicalRead.grant;
   const expiresMs = Date.parse(grant.expires);
   if (!Number.isFinite(expiresMs)) return other(`the grant ${grant.grantId} has no readable expiry`);
-  if (expiresMs <= now.getTime()) return { ok: false, why: `the up grant ${grant.grantId} expired at ${grant.expires}`, kind: 'expired' };
+  if (expiresMs <= now.getTime()) return { ok: false, why: `the ${teamGrantLabel(grant.ops)} ${grant.grantId} expired at ${grant.expires}`, kind: 'expired' };
   const revocation = clientRevocations(home, grant.grantId);
   if (!revocation.ok) return other(revocation.why);
-  if (revocation.records[0] !== undefined) return { ok: false, why: `the up grant ${grant.grantId} was revoked at ${revocation.records[0].at}`, kind: 'revoked' };
+  if (revocation.records[0] !== undefined) return { ok: false, why: `the ${teamGrantLabel(grant.ops)} ${grant.grantId} was revoked at ${revocation.records[0].at}`, kind: 'revoked' };
   return { ok: true, grant };
 }
 
