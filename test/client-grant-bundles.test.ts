@@ -486,3 +486,165 @@ describe('the commands that change who may do what are ineligible by constructio
 function readClientUpGrantOf(w: World, path: string) {
   return readClientUpGrant(w.home, /cg_[0-9a-f]{24}/.exec(path)![0]);
 }
+
+describe('request, owner-seat answer (one Touch ID), execute: the operator bundle', () => {
+  test('one signature covers the whole operator list for one team; the record says exactly what was signed', async () => {
+    const w = world();
+    const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
+    // ONE owner signature, whose text is the card.
+    expect(w.store.prompts).toHaveLength(1);
+    expect(w.store.prompts[0]).toContain('Grok Bot may, for team docs until');
+    expect(w.store.prompts[0]).toContain('see status');
+    expect(w.store.prompts[0]).toContain('send to orchestrator');
+    expect(w.store.prompts[0]).toMatch(/start \(file [0-9a-f]{12}\)/);
+    expect(w.store.prompts[0]).toContain('stop');
+    expect(w.store.prompts[0]).toContain('It cannot change permissions, add or remove seats, or create teams.');
+    const record = recordOf(g.path);
+    expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', bundle: 'operator', vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION, seats: ['orchestrator'] });
+    expect(record.allowed_ops).toEqual([...OPERATOR_DEFAULT_OPS]);
+    // The binding: one team by name, registry id (sha256 of the real root, twelve hex) and real root.
+    expect(record.team).toMatchObject({ project: 'docs', team_id: teamIdOf(w.docs), root: w.docs });
+    expect(record.team_id).toBeUndefined();
+    expect(Object.keys(record.team.fingerprints.seats).sort()).toEqual(['lead', 'orchestrator', 'worker']);
+    expect(record.key_id).toBe(w.grok.pair.keyId);
+    expect(Date.parse(record.expires) - Date.parse(record.issued)).toBe(BUNDLE_HARD_MAX_DAYS * DAY);
+    expect(JSON.stringify(record)).not.toContain('PRIVATE');
+    // Read back through the one reader: explicit ops decide.
+    const read = readClientUpGrant(w.home, g.grantId);
+    expect(read.ok && read.grant.ops).toEqual([...OPERATOR_DEFAULT_OPS]);
+    expect(read.ok && read.grant.bundle).toBe('operator');
+  });
+
+  test('the observer bundle signs no file fingerprints (it never starts the team) and no seats', async () => {
+    const w = world();
+    const g = await issued(w, 'observer');
+    const record = recordOf(g.path);
+    expect(record.bundle).toBe('observer');
+    expect(record.allowed_ops).toEqual([...OBSERVER_DEFAULT_OPS]);
+    expect(record.seats).toEqual([]);
+    expect(Object.keys(record.team).sort()).toEqual(['project', 'root', 'team_id']);
+    expect(w.store.prompts[0]).not.toContain('start');
+    expect(w.store.prompts[0]).not.toContain('send to');
+  });
+
+  test('the request defaults the seats to those the team admits and its roster holds; none open refuses with the next step', async () => {
+    const w = world();
+    await seated(w);
+    // The default reach is the orchestrator, which the docs team's roster holds.
+    const ok = await request(w, 'operator');
+    expect(ok.code, ok.out + ok.err).toBe(0);
+    expect(ok.json.summary.text).toContain('send to orchestrator');
+    expect(ok.json.summary.ops).toEqual([...OPERATOR_DEFAULT_OPS]);
+    // A seat the team does not admit, the operator seat, and a seat that does not exist: refused.
+    for (const seatName of ['worker', 'lead', 'ghost']) {
+      const refused = await request(w, 'operator', ['--seat', seatName]);
+      expect(refused.code, seatName).toBe(1);
+      expect(refused.json.error.message, seatName).toContain(seatName);
+    }
+    const mixed = await request(w, 'observer', ['--seat', 'orchestrator']);
+    expect(mixed.code).toBe(1);
+    expect(mixed.json.error.message).toContain('does not carry send');
+  });
+
+  test('a bundle is never approved always, and only the owner answers; the requester cannot', async () => {
+    const w = world();
+    await seated(w);
+    const asked = await request(w, 'operator');
+    expect(asked.code, asked.out + asked.err).toBe(0);
+    expect(asked.json.choices.map((choice: { id: string }) => choice.id)).toEqual(['once', 'deny']);
+    const id = asked.json.target as string;
+    const always = await answer(w, id, 'always');
+    expect(always.code).toBe(1);
+    expect(always.err).toContain('never approved always');
+    // The requester's own seat: no terminal, no owner. `--answer` and the unattended execute both refuse.
+    const noOwner = capture(w);
+    expect(await runGrant(['--answer', id, 'oui'], noOwner.io, { home: w.home })).toBe(1);
+    expect(noOwner.err()).toContain('only the owner runs this');
+    const unanswered = await execute(w, id);
+    expect(unanswered.code).toBe(1);
+    expect(readdirSync(clientGrantsFolder(w.home)).filter((name) => name.startsWith('cg_'))).toEqual([]);
+  });
+
+  test('the bundle flag excludes the one-op flags, a sub-grant, and the master flags', async () => {
+    const w = world();
+    for (const [extra, fragment] of [
+      [['--up'], 'two forms'],
+      [['--down'], 'two forms'],
+      [['--inbox'], 'takes no --inbox'],
+      [['--allow-grant'], 'never carries grant'],
+      [['--client-request', '--via', 'x', '--key', w.grok.keyPath], 'sub-grant'],
+    ] as const) {
+      const c = capture(w, { kind: 'owner' });
+      expect(await runGrant(bundleFlags(w, 'operator', [...extra]), c.io, { home: w.home }), extra.join(' ')).toBe(2);
+      expect(c.err(), extra.join(' ')).toContain(fragment);
+    }
+    const unknown = capture(w, { kind: 'owner' });
+    expect(await runGrant(bundleFlags(w, 'admin'), unknown.io, { home: w.home })).toBe(2);
+    expect(unknown.err()).toContain('observer or operator');
+    const bare = capture(w, { kind: 'owner' });
+    expect(await runGrant(['team-less', '--bundle', 'operator', '--scope', 'x'], bare.io, { home: w.home })).toBe(2);
+    expect(bare.err()).toContain('--bundle belongs to the --client form');
+  });
+
+  test('the owner at a terminal can still issue a bundle directly, and no one else can', async () => {
+    const w = world();
+    const owner = capture(w, { kind: 'owner' });
+    expect(await runGrant(bundleFlags(w, 'operator', ['--seat', 'orchestrator']), owner.io, { home: w.home })).toBe(0);
+    expect(owner.out()).toContain('bundle: operator');
+    expect(owner.out()).toContain('card: Grok Bot may, for team docs');
+    const refused = capture(w);
+    expect(await runGrant(bundleFlags(w, 'operator'), refused.io, { home: w.home })).toBe(1);
+    expect(refused.err()).toContain('only the owner runs this');
+  });
+});
+
+describe('policy: the bundles, their ops and their expiry caps are values, not constants', () => {
+  test('an entity policy narrows what the operator bundle expands to and how long it lasts', async () => {
+    const w = world();
+    const set = writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'client-bundles', value: 'operator=status,down@30d;observer=status@7d' }, { now: new Date() });
+    expect(set.ok, set.ok ? '' : set.why).toBe(true);
+    const expanded = expandBundle(w.home, 'operator', 'floor', null);
+    expect(expanded.ok && expanded.ops).toEqual(['status', 'down']);
+    expect(expanded.ok && expanded.expiryDays).toBe(30);
+    const g = await issued(w, 'operator');
+    const record = recordOf(g.path);
+    expect(record.allowed_ops).toEqual(['status', 'down']);
+    expect(record.seats).toEqual([]);
+    expect(Date.parse(record.expires) - Date.parse(record.issued)).toBe(30 * DAY);
+    // Past the cap is refused; shorter is fine.
+    const tooLong = await request(w, 'operator', ['--expires', new Date(Date.now() + 31 * DAY).toISOString()]);
+    expect(tooLong.code).toBe(1);
+    expect(tooLong.json.error.message).toContain('30 days');
+    const shorter = await request(w, 'operator', ['--expires', new Date(Date.now() + 5 * DAY).toISOString()]);
+    expect(shorter.code, shorter.out).toBe(0);
+  });
+
+  test('the policy never lifts the structural limits: no forbidden op, no more than ninety days, and a bad word fails closed', async () => {
+    const w = world();
+    expect(writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'client-bundles', value: 'operator=status,grant' }, { now: new Date() }).ok).toBe(false);
+    expect(writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'client-bundles', value: 'operator=status@120d' }, { now: new Date() }).ok).toBe(false);
+    expect(writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'client-bundles', value: 'operator=status@90d' }, { now: new Date() }).ok).toBe(true);
+    // A lower level can only narrow.
+    expect(bundlePolicyWithin('operator=status', 'operator=status,down')).toBe(true);
+    expect(bundlePolicyWithin('operator=status,up', 'operator=status,down')).toBe(false);
+    expect(bundlePolicyWithin('operator=status@60d', 'operator=status@30d')).toBe(false);
+    expect(bundlePolicyWithin('', '')).toBe(true);
+    // No entity, no project: the release defaults, with no policy read.
+    expect(bundleSpecsInForce(w.home, null).ok).toBe(true);
+  });
+
+  test('a policy narrowed between the request and the execute refuses the request, which is then not spent', async () => {
+    const w = world();
+    await seated(w);
+    const asked = await request(w, 'operator');
+    expect(asked.code).toBe(0);
+    const id = asked.json.target as string;
+    expect((await answer(w, id, 'oui')).code).toBe(0);
+    // Narrowed after the answer: the request still means the ops it hashed, so it cannot be issued as it is.
+    expect(writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'client-bundles', value: 'operator=status,down' }, { now: new Date() }).ok).toBe(true);
+    const run = await execute(w, id);
+    expect(run.code).toBe(1);
+    expect(run.err).toContain('no longer lets the operator bundle carry');
+    expect(run.err).toContain('is not spent');
+  });
+});
