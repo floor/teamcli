@@ -102,6 +102,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.client-refused",
+      "meaning": "the owner-signed manager grant, or the client add it admits, did not verify, or the seat is a lead seat",
+      "trigger": "team add Desk --like worker --client grant.json --key client.key --team docs"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.default-session",
       "meaning": "the session can't be \"default\"",
       "trigger": "team add worker --session default"
@@ -1698,6 +1705,13 @@
     {
       "code": 1,
       "command": "hold",
+      "id": "hold.client-refused",
+      "meaning": "the owner-signed developer grant did not verify for this run",
+      "trigger": "team hold \"freeze deploys\" --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "hold",
       "id": "hold.detached",
       "meaning": "a run with no terminal",
       "trigger": "team hold \"freeze deploys\""
@@ -2275,6 +2289,13 @@
       "id": "pause.caller",
       "meaning": "not the owner or the orchestrator",
       "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.client-refused",
+      "meaning": "the owner-signed developer grant did not verify for this run",
+      "trigger": "team pause --client grant.json --key client.key"
     },
     {
       "code": 1,
@@ -3007,6 +3028,13 @@
     {
       "code": 1,
       "command": "reload",
+      "id": "reload.client-refused",
+      "meaning": "the owner-signed manager grant, or the client reload it admits, did not verify",
+      "trigger": "team reload worker --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "reload",
       "id": "reload.grant-another-pane",
       "meaning": "the state records another pane for the granted seat",
       "trigger": "team reload worker"
@@ -3206,6 +3234,13 @@
       "id": "remove.caller",
       "meaning": "the caller may not change the team",
       "trigger": "team remove worker"
+    },
+    {
+      "code": 1,
+      "command": "remove",
+      "id": "remove.client-refused",
+      "meaning": "the owner-signed manager grant, or the client removal it admits, did not verify, or the seat is a lead seat or a human's pane",
+      "trigger": "team remove spare --client grant.json --key client.key --team docs"
     },
     {
       "code": 1,
@@ -3518,6 +3553,13 @@
     {
       "code": 1,
       "command": "restart",
+      "id": "restart.client-refused",
+      "meaning": "the owner-signed manager grant, or the client restart it admits, did not verify",
+      "trigger": "team restart worker --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "restart",
       "id": "restart.detached",
       "meaning": "a run with no terminal",
       "trigger": "team restart worker"
@@ -3619,6 +3661,13 @@
       "id": "resume.caller",
       "meaning": "not the owner or the orchestrator",
       "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.client-refused",
+      "meaning": "the owner-signed developer grant did not verify for this run",
+      "trigger": "team resume --client grant.json --key client.key"
     },
     {
       "code": 1,
@@ -3749,6 +3798,13 @@
     {
       "code": 1,
       "command": "seat",
+      "id": "seat.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team seat worker --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "seat",
       "id": "seat.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team seat lead --file .agents/team.yaml"
@@ -3829,6 +3885,13 @@
       "id": "seats.shown",
       "meaning": "the seats table was printed",
       "trigger": "team seats"
+    },
+    {
+      "code": 1,
+      "command": "seats",
+      "id": "seats.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team seats --client grant.json --key client.key"
     },
     {
       "code": 1,
@@ -4060,6 +4123,13 @@
       "id": "sessions.shown",
       "meaning": "the session records were listed",
       "trigger": "team sessions"
+    },
+    {
+      "code": 1,
+      "command": "sessions",
+      "id": "sessions.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team sessions --client grant.json --key client.key"
     },
     {
       "code": 1,

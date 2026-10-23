@@ -32,6 +32,7 @@ the restart goes on; [`team check`](check.md) names the seat.
 ## Synopsis
 
     team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ## Flags
 
@@ -41,8 +42,21 @@ the restart goes on; [`team check`](check.md) names the seat.
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--client` | `<grant-file>` | the client form: an owner-signed manager bundle grant that carries `restart`, see [A client's restart](#a-clients-restart) |
+| `--key` | `<client-key>` | the client's private key file; required with `--client`, refused without it |
+| `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--json` | — | one `team.restart` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
+
+## A client's restart
+
+A client with no terminal that the owner signed a **manager** bundle grant for (see [Client grant bundles](../concepts/client-grant-bundles.md#the-manager-bundle)) restarts a seat of that
+one team with `team restart <seat> --client <grant-file> --key <client-key>`. The grant is verified whole before
+any gate, and again under the grant lock before the first effect; it must carry `restart` and name exactly this
+team. The run is the second door past the placement and who-may-run-it gates, never the owner's: `--abandon`,
+`--file` and `--session` are refused with `--client` (exit 2), and the run is logged as
+`client-restart-authorized: …`. A refusal is `restart.client-refused` (exit 1). Every other refusal of a restart
+(a seat that is not declared, signed off, working, a human's pane) stands.
 
 ## Who may run it
 

@@ -30,7 +30,7 @@ import { getAgent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
-import { BUNDLE_ELIGIBLE_OPS, BUNDLE_HARD_MAX_DAYS, canonicalBundleOps, isBundleName, isForbiddenBundleCommand, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
+import { BUNDLE_HARD_MAX_DAYS, DEVELOPER_ONLY_OPS, MANAGER_ONLY_OPS, bundleOpsOf, bundleSignsFile, canonicalBundleOps, isBundleName, isForbiddenBundleCommand, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
 
 /** The domain tag client-grant and client-revocation signatures carry. */
 export const CLIENT_GRANT_DOMAIN = 'team-client-grant-v1\n';
@@ -1328,14 +1328,16 @@ export type ClientUpGrantRecord = {
   keyDir: string;
   issued: string;
   expires: string;
-  /** 4: the one-op grants (`up`, `down`, both). 5: a bundle grant (see `CLIENT_BUNDLE_VOCABULARY_VERSION`). */
-  vocabulary: 4 | 5;
-  /** What the grant admits, explicitly: `up`, `down`, or both on vocabulary 4; on vocabulary 5 the
-   *  bundle's expansion as the owner signed it. These decide; `bundle` never does. */
+  /** 4: the one-op grants (`up`, `down`, both). 5: an `observer` or `operator` bundle grant (see
+   *  `CLIENT_BUNDLE_VOCABULARY_VERSION`). 6: a `manager` bundle grant (`CLIENT_MANAGER_VOCABULARY_VERSION`).
+   *  7: a `developer` bundle grant (`CLIENT_DEVELOPER_VOCABULARY_VERSION`). */
+  vocabulary: 4 | 5 | 6 | 7;
+  /** What the grant admits, explicitly: `up`, `down`, or both on vocabulary 4; on vocabularies 5 and 6
+   *  the bundle's expansion as the owner signed it. These decide; `bundle` never does. */
   ops: BundleOp[];
-  /** Vocabulary 5 only: the bundle's name, for display. Never read as authority. */
+  /** Vocabularies 5 and 6 only: the bundle's name, for display. Never read as authority. */
   bundle?: BundleName;
-  /** Vocabulary 5 only: the seats `send` may reach, as signed (empty when `send` is not an op). */
+  /** Vocabularies 5 and 6 only: the seats `send` may reach, as signed (empty when `send` is not an op). */
   seats?: string[];
   /** The one team and folder every op binds. The name is the first build's: it binds `down` too. */
   up: ClientUpBinding;
@@ -1373,7 +1375,7 @@ function bindingKeyOf(ops: readonly string[]): 'up' | 'team' {
 }
 
 function onDiskUpGrant(grant: ClientUpGrantRecord): Record<string, Json> {
-  if (grant.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION) return onDiskBundleGrant(grant);
+  if (isBundleVocabulary(grant.vocabulary)) return onDiskBundleGrant(grant);
   return {
     grant_id: grant.grantId,
     client_id: grant.clientId,
@@ -1469,7 +1471,7 @@ export function writeClientUpGrant(
   return publishTeamGrant(home, plan.grant, options);
 }
 
-/** Signs and publishes one planned team grant (vocabulary 4 or 5) under a fresh random id. */
+/** Signs and publishes one planned team grant (vocabulary 4, 5 or 6) under a fresh random id. */
 function publishTeamGrant(home: string, plan: ClientUpGrantRecord, options: ClientGrantOptions): { ok: true; grant: ClientUpGrantRecord; path: string } | { ok: false; why: string } {
   const folder = clientGrantsFolder(home);
   try {
@@ -1486,7 +1488,7 @@ function publishTeamGrant(home: string, plan: ClientUpGrantRecord, options: Clie
     const published = publishExclusive(folder, `${grant.grantId}.json`, `${JSON.stringify({ client_grant: disk, signature }, null, 2)}\n`);
     if (published === 'written') return { ok: true, grant, path };
     if (published === 'exists') continue;
-    return refusal(`the ${plan.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION ? 'bundle' : 'up'} grant could not be published in "${folder}"`);
+    return refusal(`the ${plan.vocabulary === 4 ? 'up' : 'bundle'} grant could not be published in "${folder}"`);
   }
   return refusal('a fresh grant id could not be found; nothing was written');
 }
@@ -1499,7 +1501,7 @@ function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGr
   const raw = envelope.client_grant;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const fields = raw as Record<string, unknown>;
-  if (fields.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION) return bundleGrantFrom(envelope, fields, key);
+  if (isBundleVocabulary(fields.vocabulary)) return bundleGrantFrom(envelope, fields, key);
   if (fields.vocabulary !== CLIENT_UP_VOCABULARY_VERSION) return null;
   // The ops are exactly what a request writes: known, once each, in canonical order. Anything else
   // is not a record this build wrote, and the binding's key follows from them.
@@ -1572,7 +1574,9 @@ function claimsUpVocabulary(parsed: unknown): boolean {
 function claimsBundleVocabulary(parsed: unknown): boolean {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
   const grant = (parsed as { client_grant?: unknown }).client_grant;
-  return grant !== null && typeof grant === 'object' && !Array.isArray(grant) && (grant as { vocabulary?: unknown }).vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION;
+  if (grant === null || typeof grant !== 'object' || Array.isArray(grant)) return false;
+  const vocabulary = (grant as { vocabulary?: unknown }).vocabulary;
+  return isBundleVocabulary(vocabulary);
 }
 
 /** Whether the file at `path` claims to be a bundle grant. It judges nothing: the route it is sent
@@ -1587,7 +1591,7 @@ export function claimsBundleGrantFile(path: string): boolean {
   }
 }
 
-/** The ops a vocabulary-5 file names, for the wording of a refusal only. */
+/** The ops a vocabulary-5, -6 or -7 file names, for the wording of a refusal only. */
 function claimedBundleOps(parsed: unknown): string[] {
   const grant = (parsed as { client_grant?: { allowed_ops?: unknown } }).client_grant;
   return Array.isArray(grant?.allowed_ops) ? (grant.allowed_ops as unknown[]).filter((op): op is string => typeof op === 'string') : [];
@@ -1600,8 +1604,11 @@ function claimedTeamOps(parsed: unknown): ClientTeamOp[] {
   return canonicalTeamOps(named) ?? ['up'];
 }
 
-/** The bundle that would carry an op: `operator` for the ones that act, `observer` for the ones that read. */
+/** The bundle that would carry an op: `manager` for the ones only it carries, `operator` for the ones
+ *  that act, `observer` for the ones that read. */
 export function bundleForOp(op: string): BundleName {
+  if ((DEVELOPER_ONLY_OPS as readonly string[]).includes(op)) return 'developer';
+  if ((MANAGER_ONLY_OPS as readonly string[]).includes(op)) return 'manager';
   return op === 'send' || op === 'up' || op === 'down' ? 'operator' : 'observer';
 }
 
@@ -1683,9 +1690,10 @@ export function activeClientUpGrant(
 
 // ---- bundle grants -------------------------------------------------------------------------
 //
-// A bundle grant (vocabulary 5) is a named, fixed list of commands grouped in one owner-signed
+// A bundle grant (vocabulary 5 or 6) is a named, fixed list of commands grouped in one owner-signed
 // grant for ONE team at ONE folder: `observer` (read-only) or `operator` (observer, plus `send` to
-// the granted seats, `up` and `down`). One Touch ID covers the whole list. It complements the
+// the granted seats, `up` and `down`) on vocabulary 5, and `manager` (the team's day-to-day
+// management, seat lifecycle included) on vocabulary 6. One Touch ID covers the whole list. It complements the
 // per-command grants above, which stay valid, readable and unchanged; a grant is never widened in
 // place, and an older build refuses vocabulary 5 whole (it reads only 1 to 4).
 //
@@ -1697,11 +1705,34 @@ export function activeClientUpGrant(
 //
 // The binding is one team (name, registry id from its real root, the real root), the entity whose
 // policy governs the grant, the client's key, and the expiry. The fingerprints of the team file
-// are signed only when `up` is an op, and only `up` checks them: a file edit does not end a
-// grant's status, send or down.
+// are signed only when `up` is an op, and only `up` checks them: a file edit does not end a grant's
+// status, send, down or any other op. A manager's own `add` is such an edit, and the one it ends is
+// its `up`, until the owner re-signs: the roster change is the owner's to approve.
 
-/** The vocabulary of a bundle grant. */
+/** The vocabulary of an `observer` or `operator` bundle grant. */
 export const CLIENT_BUNDLE_VOCABULARY_VERSION = 5;
+
+/** The vocabulary of a `manager` bundle grant. Its ops include the seat lifecycle (`add`, `remove`)
+ *  that vocabulary 5 can never carry, so a build that reads only 1 to 5 refuses the record whole as an
+ *  unknown vocabulary rather than reading half of it, and this build holds each vocabulary to its own
+ *  bundles and op lists: a vocabulary-5 record that lists `add` is nothing, signed or not. */
+export const CLIENT_MANAGER_VOCABULARY_VERSION = 6;
+
+/** The vocabulary of a `developer` bundle grant. Its ops include the pacing and work commands the manager
+ *  can never carry, so a build that reads only 1 to 6 refuses the record whole as an unknown vocabulary,
+ *  and this build holds the manager's vocabulary-6 record to the manager's list: a vocabulary-6 record that
+ *  lists `pause` is nothing, signed or not. */
+export const CLIENT_DEVELOPER_VOCABULARY_VERSION = 7;
+
+/** The vocabulary a bundle's record is written in. */
+export function bundleVocabularyOf(bundle: BundleName): 5 | 6 | 7 {
+  return bundle === 'developer' ? CLIENT_DEVELOPER_VOCABULARY_VERSION : bundle === 'manager' ? CLIENT_MANAGER_VOCABULARY_VERSION : CLIENT_BUNDLE_VOCABULARY_VERSION;
+}
+
+/** Whether a vocabulary number is one a bundle record is written in. */
+function isBundleVocabulary(vocabulary: unknown): boolean {
+  return vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION || vocabulary === CLIENT_MANAGER_VOCABULARY_VERSION || vocabulary === CLIENT_DEVELOPER_VOCABULARY_VERSION;
+}
 
 export type ClientBundleGrantRequest = {
   clientId: string;
@@ -1726,14 +1757,14 @@ export type ClientBundleGrantRequest = {
 const EMPTY_FINGERPRINTS: Fingerprints = { sections: {}, seats: {} };
 
 /** The problem with a bundle binding's shape, or null. The fingerprints are checked only for `up`. */
-export function clientBundleBindingProblem(binding: ClientUpBinding, ops: readonly string[]): string | null {
-  if (ops.includes('up')) return clientUpBindingProblem(binding);
+export function clientBundleBindingProblem(binding: ClientUpBinding, ops: readonly string[], bundle: BundleName = 'operator'): string | null {
+  if (bundleSignsFile(bundle, ops)) return clientUpBindingProblem(binding);
   return clientUpBindingProblem({ ...binding, fingerprints: { sections: {}, seats: { '-': '0'.repeat(64) } } });
 }
 
 function onDiskBundleGrant(grant: ClientUpGrantRecord): Record<string, Json> {
   const team: Record<string, Json> = { project: grant.up.project, team_id: grant.up.teamId, root: grant.up.root };
-  if (grant.ops.includes('up')) team.fingerprints = { sections: { ...grant.up.fingerprints.sections }, seats: { ...grant.up.fingerprints.seats } };
+  if (bundleSignsFile(grant.bundle ?? 'operator', grant.ops)) team.fingerprints = { sections: { ...grant.up.fingerprints.sections }, seats: { ...grant.up.fingerprints.seats } };
   return {
     grant_id: grant.grantId,
     client_id: grant.clientId,
@@ -1746,7 +1777,7 @@ function onDiskBundleGrant(grant: ClientUpGrantRecord): Record<string, Json> {
     seats: [...(grant.seats ?? [])],
     issued: grant.issued,
     expires: grant.expires,
-    vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+    vocabulary: bundleVocabularyOf(grant.bundle ?? 'operator'),
     team,
   };
 }
@@ -1766,12 +1797,12 @@ export function planClientBundleGrant(home: string, request: ClientBundleGrantRe
   const now = options.now ?? new Date();
   const nowMs = now.getTime();
   if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
-  if (!isBundleName(request.bundle)) return refusal(`"${String(request.bundle)}" is not a bundle: observer or operator`);
+  if (!isBundleName(request.bundle)) return refusal(`"${String(request.bundle)}" is not a bundle: observer, operator, manager or developer`);
   for (const op of request.ops) {
-    if (isForbiddenBundleCommand(op)) return refusal(`"${op}" can never be in a bundle: it changes who may do what, and only the owner does that`);
+    if (isForbiddenBundleCommand(op, request.bundle)) return refusal(`"${op}" can never be in a bundle (the ${request.bundle} bundle among them): it changes who may do what, and only the owner does that`);
   }
-  const ops = canonicalBundleOps(request.ops);
-  if (ops === null) return refusal(`a bundle carries only ${BUNDLE_ELIGIBLE_OPS.join(', ')}, not "${request.ops.join(', ')}"`);
+  const ops = canonicalBundleOps(request.ops, request.bundle);
+  if (ops === null) return refusal(`a ${request.bundle} bundle carries only ${bundleOpsOf(request.bundle).join(', ')}, not "${request.ops.join(', ')}"`);
   if (new Set(request.ops).size !== request.ops.length) return refusal('a bundle names an op twice');
   const spec = request.specs?.[request.bundle];
   if (spec !== undefined) {
@@ -1784,7 +1815,9 @@ export function planClientBundleGrant(home: string, request: ClientBundleGrantRe
   if (request.keyId !== keyIdOf(request.publicKey)) return refusal(`the key id "${request.keyId}" is not the public key's own (${keyIdOf(request.publicKey)})`);
   const placement = clientKeyPlacementProblem(home, request.keyDir);
   if (placement !== null) return refusal(placement);
-  const bound = clientBundleBindingProblem(request.up, ops);
+  // A manager or developer grant is always for one team: a binding that names none (no team id, no root) is no grant.
+  if ((request.bundle === 'manager' || request.bundle === 'developer') && (request.up.teamId === '' || request.up.root === '' || request.up.project === '')) return refusal(`a ${request.bundle} bundle is for one team: it needs --team <team>`);
+  const bound = clientBundleBindingProblem(request.up, ops, request.bundle);
   if (bound !== null) return refusal(bound);
   // The seats `send` reaches: signed explicitly, each one still admitted now.
   const seats = [...(request.seats ?? [])];
@@ -1827,7 +1860,7 @@ export function planClientBundleGrant(home: string, request: ClientBundleGrantRe
       keyDir: canonical(request.keyDir),
       issued: now.toISOString(),
       expires,
-      vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+      vocabulary: bundleVocabularyOf(request.bundle),
       bundle: request.bundle,
       ops,
       seats,
@@ -1835,7 +1868,7 @@ export function planClientBundleGrant(home: string, request: ClientBundleGrantRe
         project: request.up.project,
         teamId: request.up.teamId,
         root: request.up.root,
-        fingerprints: ops.includes('up') ? { sections: { ...request.up.fingerprints.sections }, seats: { ...request.up.fingerprints.seats } } : { sections: {}, seats: {} },
+        fingerprints: bundleSignsFile(request.bundle, ops) ? { sections: { ...request.up.fingerprints.sections }, seats: { ...request.up.fingerprints.seats } } : { sections: {}, seats: {} },
       },
     },
   };
@@ -1865,11 +1898,13 @@ function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<strin
   if (typeof fields.key_id !== 'string' || fields.key_id !== keyIdOf(fields.public_key)) return null;
   if (typeof fields.key_dir !== 'string' || !isAbsolute(fields.key_dir)) return null;
   if (!isBundleName(fields.bundle)) return null;
-  // The explicit ops decide: known, none forbidden, each once, in canonical order.
+  // Each vocabulary holds only its own bundles: 5 the observer and operator (no seat lifecycle), 6 the manager, 7 the developer.
+  if (fields.vocabulary !== bundleVocabularyOf(fields.bundle)) return null;
+  // The explicit ops decide: known for this bundle, none forbidden for it, each once, in canonical order.
   if (!Array.isArray(fields.allowed_ops) || fields.allowed_ops.some((op) => typeof op !== 'string')) return null;
   const listed = fields.allowed_ops as string[];
-  if (listed.some((op) => isForbiddenBundleCommand(op))) return null;
-  const ops = canonicalBundleOps(listed);
+  if (listed.some((op) => isForbiddenBundleCommand(op, fields.bundle as BundleName))) return null;
+  const ops = canonicalBundleOps(listed, fields.bundle);
   if (ops === null || ops.join(',') !== listed.join(',')) return null;
   if (!Array.isArray(fields.seats) || fields.seats.some((name) => typeof name !== 'string' || !SEAT_NAME.test(name))) return null;
   const seats = fields.seats as string[];
@@ -1882,7 +1917,7 @@ function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<strin
   const team = fields.team;
   if (team === null || typeof team !== 'object' || Array.isArray(team)) return null;
   const teamFields = team as Record<string, unknown>;
-  const withPrints = ops.includes('up');
+  const withPrints = bundleSignsFile(fields.bundle, ops);
   if (Object.keys(teamFields).sort().join(',') !== (withPrints ? 'fingerprints,project,root,team_id' : 'project,root,team_id')) return null;
   let fingerprints: Fingerprints = { sections: {}, seats: {} };
   if (withPrints) {
@@ -1892,7 +1927,7 @@ function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<strin
     fingerprints = prints as Fingerprints;
   }
   const binding: ClientUpBinding = { project: teamFields.project as string, teamId: teamFields.team_id as string, root: teamFields.root as string, fingerprints };
-  if (clientBundleBindingProblem(binding, ops) !== null) return null;
+  if (clientBundleBindingProblem(binding, ops, fields.bundle) !== null) return null;
   if (typeof envelope.signature !== 'string') return null;
   if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw), envelope.signature, key)) return null;
   return {
@@ -1905,7 +1940,7 @@ function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<strin
       keyDir: fields.key_dir,
       issued: fields.issued,
       expires: fields.expires,
-      vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+      vocabulary: bundleVocabularyOf(fields.bundle),
       bundle: fields.bundle,
       ops,
       seats,

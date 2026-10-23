@@ -15,8 +15,8 @@ identity, an agent id for a seat or a team id for `@team`.
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> [--seat <seats>] [--expires <ISO>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> --request [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> --request [--seat <seats>] [--expires <ISO>] [--json]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
 `--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,
@@ -113,21 +113,37 @@ build that knows only `up` refuses it whole instead of reading half of it.
 
 ## A bundle grant
 
-`--bundle observer` or `--bundle operator` writes a **bundle grant**: one owner-signed record that
+`--bundle observer`, `--bundle operator`, `--bundle manager` or `--bundle developer` writes a **bundle grant**: one owner-signed record that
 carries a named, fixed list of commands for one team at one folder, so one signature covers them
 all. `observer` is read-only (`status`, `list`, `check`, `feed`, `messages`); `operator` is the
 observer plus `send` to the granted seats (`--seat`, a comma-separated list), `up` and `down`.
+`manager` is for one team only and **needs `--team`**: the operator's list, plus the team's own
+reads, `restart` and `reload`, and the seat lifecycle, `add` and `remove` (28 ops; the whole list is in
+[Client grant bundles](../concepts/client-grant-bundles.md#the-manager-bundle)). Its length is capped at,
+and defaults to, ninety days. It may carry `add` and `remove`, and so may `developer`; `observer` and
+`operator` never do.
+`developer` is the manager's list plus `rename`, `swap`, `pause`, `resume`, `hold`, `release`, `tempo`, `queue`, `lock`,
+`unlock`, `worktree`, `raise`, `route`, `pr`, `workflow` and `proc` (44 ops), also for one team only and ninety
+days at most; `pause` and `resume` stop and restart new work for the grant's team without interrupting a seat (see
+[Client grant bundles](../concepts/client-grant-bundles.md#the-developer-bundle)).
 
     team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
       --team docs --bundle operator --seat orchestrator --request
+
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
+      --team teamcli --bundle manager --request
+
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
+      --team teamcli --bundle developer --request
 
 The bundle is expanded at signing time into the explicit op list stored in `allowed_ops`; the
 bundle's name is a label and decides nothing, so a command added to a bundle later never widens a
 grant already signed. The owner's signature prompt reads, for example: "Grok Bot may, for team docs
 until 2027-01-21 09:00 UTC: see status, send to orchestrator, start (file 3f9a1c0b2d4e), stop. It
 cannot change permissions, add or remove seats, or create teams." Commands that change who may do
-what (`grant`, `revoke`, `init`, `policy`, `add`, `remove`, `daemon`, and the rest of the list in
-[Client grant bundles](../concepts/client-grant-bundles.md)) can never be in a bundle. `--bundle`
+what (`grant`, `revoke`, `init`, `policy`, `settings`, `owner-seat`, `delegate`, `daemon`, and the rest of the list in
+[Client grant bundles](../concepts/client-grant-bundles.md)) can never be in a bundle, and `add` and `remove`
+can be in the manager and developer bundles only. `--bundle`
 refuses `--up`, `--down`, `--inbox`, `--allow-grant` and `--client-request`. As for `--up`, only `up`
 reads the team file's fingerprints; `always` is refused; `--expires` is capped by the `client-bundles`
 policy (ninety days at most, and by default); and [`team revoke`](revoke.md) `<grant-id>` ends the

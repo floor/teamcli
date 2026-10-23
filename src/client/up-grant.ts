@@ -159,7 +159,12 @@ export type ClientUpVerification =
 function renew(grant: ClientUpGrantRecord, ops: readonly string[] = grant.ops): string {
   const base = { clientId: grant.clientId, entity: grant.entity, keyDir: grant.keyDir, project: grant.up.project };
   // A bundle grant is renewed as a bundle: the one that carries every op it carried, and the new one if it is wider.
-  if (grant.bundle !== undefined) return upRequestCommand({ ...base, bundle: ops.some((op) => bundleForOp(op) === 'operator') || grant.bundle === 'operator' ? 'operator' : 'observer' });
+  if (grant.bundle !== undefined) {
+    const developer = grant.bundle === 'developer' || ops.some((op) => bundleForOp(op) === 'developer');
+    if (developer) return upRequestCommand({ ...base, bundle: 'developer' });
+    const manager = grant.bundle === 'manager' || ops.some((op) => bundleForOp(op) === 'manager');
+    return upRequestCommand({ ...base, bundle: manager ? 'manager' : ops.some((op) => bundleForOp(op) === 'operator') || grant.bundle === 'operator' ? 'operator' : 'observer' });
+  }
   return upRequestCommand({ ...base, ops: canonicalTeamOps(ops) ?? ops });
 }
 

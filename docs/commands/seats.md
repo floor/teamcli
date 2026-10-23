@@ -7,6 +7,7 @@ when `--all` is given, with its human name when the file writes one, its stable 
 ## Synopsis
 
     team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+    team seats --client <grant-file> --key <client-key> [--team <team>] [--all] [--json]
 
 ## Flags
 
@@ -14,6 +15,9 @@ when `--all` is given, with its human name when the file writes one, its stable 
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--client` | `<grant-file>` | the client form: an owner-signed manager bundle grant that carries `seats`; it reads that one team, as signed. `--file`, `--session` and `--watch` are refused with it. A refusal is `seats.client-refused` (exit 1) |
+| `--key` | `<client-key>` | the client's private key file; required with `--client` |
+| `--team` | `<team>` | with `--client`, the team the grant is for |
 | `--all` | — | include the seats whose STATUS reads `stopped`; without it those rows are dropped, and every other state is listed either way |
 | `--watch` | — | refresh the table every 2 seconds until interrupted |
 | `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seats`), each seat carrying its own reading as `state` and `state_source`, and `blind: true` where it applies; a seat the daemon observes also carries `presence` — the canonical four-state word (`working`, `idle`, `waiting-for-a-person`, `gone`), its runtime source (`runtime-hook`, `runtime-event`, `daemon-launch`), the event and its `since` instant, and `live` — beside the legacy state word |

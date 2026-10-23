@@ -63,6 +63,8 @@ Usage:
 
     team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+    team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -72,14 +74,17 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--effort` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--like` | yes | no | no |
 | `--model` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `--temporary` | no | no | no |
 | `--until` | yes | no | no |
 | `--worktree` | yes | no | no |
@@ -817,8 +822,8 @@ Usage:
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> [--seat <seats>] [--expires <ISO>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> --request [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> --request [--seat <seats>] [--expires <ISO>] [--json]
     team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
     team grant --execute <request-id> [--json]
     team grant --answer <request-id> <oui|always|non> [--json]
@@ -919,6 +924,8 @@ Usage:
 
     team hold <reason> [--until <time>] [--json]
     team hold --release [--json]
+    team hold <reason> --client <grant-file> --key <client-key> [--team <team>] [--until <time>] [--json]
+    team hold --release --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ### Who may run it
 
@@ -928,9 +935,12 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--client` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--release` | no | no | no |
+| `--team` | yes | no | no |
 | `--until` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1361,6 +1371,7 @@ Hidden: no
 Usage:
 
     team pause [<team>] [--reason <text>] [--all] [--json]
+    team pause --client <grant-file> --key <client-key> [--team <team>] [--reason <text>] [--json]
 
 ### Who may run it
 
@@ -1373,9 +1384,12 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
+| `--client` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--reason` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1954,6 +1968,7 @@ Hidden: no
 Usage:
 
     team reload <seat> [--file <path>] [--json]
+    team reload <seat> --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ### Who may run it
 
@@ -1963,9 +1978,12 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--client` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1981,6 +1999,7 @@ Hidden: no
 Usage:
 
     team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
+    team remove <name> --client <grant-file> --key <client-key> --team <team> [--json]
 
 ### Who may run it
 
@@ -1991,11 +2010,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--abandon` | no | no | no |
+| `--client` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--keep` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2072,6 +2094,7 @@ Hidden: no
 Usage:
 
     team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
 
 ### Who may run it
 
@@ -2082,11 +2105,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--abandon` | no | no | no |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2102,6 +2128,7 @@ Hidden: no
 Usage:
 
     team resume [<team>] [--all] [--json]
+    team resume --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ### Who may run it
 
@@ -2114,8 +2141,11 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
+| `--client` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2243,6 +2273,7 @@ Hidden: no
 Usage:
 
     team seat <seat> [--session <name>] [--file <path>] [--json]
+    team seat <seat> --client <grant-file> --key <client-key> [--team <team>] [--json]
     team seat add <seat> [--session <name>] [--file <path>] [--json]
     team seat remove <seat> [--session <name>] [--file <path>] [--json]
     team seat restart <seat> [--session <name>] [--file <path>] [--json]
@@ -2256,10 +2287,13 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--client` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2388,6 +2422,7 @@ Hidden: no
 Usage:
 
     team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+    team seats --client <grant-file> --key <client-key> [--team <team>] [--all] [--json]
 
 ### Who may run it
 
@@ -2398,10 +2433,13 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
+| `--client` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -2465,6 +2503,7 @@ Hidden: no
 Usage:
 
     team sessions [<seat>] [--by <model|team|entity>] [--json]
+    team sessions [<seat>] --client <grant-file> --key <client-key> [--team <team>] [--by <model|team|entity>] [--json]
 
 ### Who may run it
 
@@ -2475,8 +2514,11 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--by` | yes | no | no |
+| `--client` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

@@ -5,6 +5,8 @@
 // the last stop TeamCLI saw, and a session whose CLI died without a stop still reads open.
 import { readArgs } from '../args.ts';
 import { homedir } from 'node:os';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import {
   hasJsonFlag,
@@ -15,9 +17,11 @@ import {
   writeJsonError,
 } from '../output/index.ts';
 import { plainText } from '../launch/plain.ts';
-import { readAllSessions, type SessionRecord } from '../sessions/registry.ts';
+import { readAllSessions, readStoreSessions, type SessionRecord } from '../sessions/registry.ts';
+import { storePath } from '../store/store.ts';
 
 export const USAGE = `Usage: team sessions [<seat>] [--by <model|team|entity>] [--json]
+       team sessions [<seat>] --client <grant-file> --key <client-key> [--team <team>] [--by <model|team|entity>] [--json]
 
 Lists one record per CLI session TeamCLI launched for a seat, across every team on this machine.
 The record carries the seat, the team and entity, the CLI and lab, the model, version and
@@ -28,7 +32,9 @@ command measured is absent, and its cost prints as \`unknown\` — never as zero
 \`--by\` groups the listing by model, team or entity. \`<seat>\` narrows it to one seat name.
 \`team resume\` is not part of this release.
 
-Exits 0 when the records are listed, 1 when a session registry can't be read, 2 when the invocation can't be read.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying sessions for: it lists the records of that one team, as signed, and not the other teams on this machine. It changes nothing and never prompts.
+
+Exits 0 when the records are listed, 1 when a session registry can't be read or a client grant is refused, 2 when the invocation can't be read.
 `;
 
 export type SessionsSources = {
@@ -158,14 +164,16 @@ export function groupSessions(
 
 export async function runSessions(argv: string[], io: Io, sources: SessionsSources = realSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['by'], ['json']);
+  const args = readArgs(argv, ['by', 'client', 'key', 'team'], ['json']);
   const json = hasJsonFlag(argv);
   const byValue = args.values.by;
+  const clientProblem = args.error === undefined ? clientFormProblem(args.values, 'team sessions --client <grant-file> --key <client-key-file>') : null;
   const by = GROUPS.find((one) => one === byValue);
   const seat = args.rest[0];
   // One refusal site for every malformed invocation: the contract row names this return once.
   const malformed = args.error !== undefined
     || args.rest.length > 1
+    || clientProblem !== null
     || (byValue !== undefined && by === undefined)
     || (seat !== undefined && !SEAT.test(seat));
   if (malformed) {
@@ -173,9 +181,11 @@ export async function runSessions(argv: string[], io: Io, sources: SessionsSourc
       args.error
         ?? (args.rest.length > 1
           ? `unexpected "${args.rest[1]}"`
-          : seat !== undefined && !SEAT.test(seat)
-            ? `"${seat}" is not a seat name`
-            : `--by must be one of ${GROUPS.join(', ')}`),
+          : clientProblem !== null
+            ? clientProblem
+            : seat !== undefined && !SEAT.test(seat)
+              ? `"${seat}" is not a seat name`
+              : `--by must be one of ${GROUPS.join(', ')}`),
     );
     const repair = seat !== undefined && !SEAT.test(seat)
       ? 'a seat name reads like a role: letters, digits, dot, dash or underscore'
@@ -186,7 +196,29 @@ export async function runSessions(argv: string[], io: Io, sources: SessionsSourc
     return 2;
   }
 
-  const read = readAllSessions(sources.home);
+  // The client form: a manager grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key and verified whole before anything is read. The records it lists are that team's own store,
+  // never the machine-wide listing the owner's run reads.
+  let read: ReturnType<typeof readAllSessions>;
+  if (args.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const at = sources.now();
+    const verified = verifyClientForm({ home: sources.home, now: at }, { op: 'sessions', values: args.values, cwd: io.cwd });
+    const stood = verified.ok ? authorizeClientRun(sources.home, verified.run, 'sessions', at) : null;
+    if (!verified.ok || stood !== null) {
+      const why = plainText(verified.ok ? stood! : verified.why);
+      auditClientRefusal('sessions', verified.ok ? verified.run.grant : verified.named, why, at);
+      if (json) writeJsonError(io, 'sessions.client-refused', why, null);
+      else out.stderr(`team sessions: ${why}\n`);
+      // exit: sessions.client-refused
+      return 1;
+    }
+    const { grant } = verified.run;
+    if (!json) io.stderr(`client grant ${grant.grantId}: ${grant.clientId} for team ${grant.up.project} at ${verified.run.root}, until ${grant.expires}\n`);
+    read = readStoreSessions(storePath(grant.up.project, grant.up.root, sources.home), sources.home);
+  } else {
+    read = readAllSessions(sources.home);
+  }
   if (!read.ok) {
     if (json) writeJsonError(io, 'sessions.read', read.reason, null);
     else out.stderr(`team sessions: ${read.reason}\n`);

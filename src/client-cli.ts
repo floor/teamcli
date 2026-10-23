@@ -30,7 +30,7 @@ import {
 } from './client/records.ts';
 import { resolveClientUpTarget } from './client/up-grant.ts';
 import { readTeams } from './registry/teams.ts';
-import { isBundleName, type BundleName, type BundleOp } from './client/bundle-ops.ts';
+import { bundleSignsFile, isBundleName, type BundleName, type BundleOp } from './client/bundle-ops.ts';
 import { bundleCard, expandBundle, projectIdOfTeam } from './client/bundles.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
@@ -134,7 +134,7 @@ export function clientGrantProblem(args: Args): string | null {
     // A bundle is the owner's form alone, like `--up`: it never rides a master grant, so a sub-grant
     // can never carry one, and it carries only what its name expands to for the one team it names.
     const asked = args.values.bundle;
-    if (!isBundleName(asked)) return `--bundle takes observer or operator, not "${asked}"`;
+    if (!isBundleName(asked)) return `--bundle takes observer, operator, manager or developer, not "${asked}"`;
     if (teamOps !== null) return `--bundle ${asked} and ${teamOpFlags(teamOps)} are two forms: a bundle's ops come from its name; ask for one or the other`;
     if (args.flags.has('client-request')) return `--bundle belongs to the owner form: a sub-grant never carries a bundle`;
     if (args.values.team === undefined) return `--bundle ${asked} needs --team <team>: a bundle binds one team and its folder`;
@@ -256,7 +256,7 @@ export function bundleParamsOf(home: string, args: Args, now: Date, cwd: string)
   if (!target.ok) return target;
   const expanded = expandBundle(home, bundle, entity, projectIdOfTeam(home, target.binding.teamId), now);
   if (!expanded.ok) return expanded;
-  const withUp = expanded.ops.includes('up');
+  const withUp = bundleSignsFile(bundle, expanded.ops);
   const up: PendingUpBinding = {
     project: target.binding.project,
     team_id: target.binding.teamId,
@@ -282,7 +282,7 @@ export function bundleParamsOf(home: string, args: Args, now: Date, cwd: string)
   return { ok: true, up, bundle, bundle_ops: expanded.ops, bundle_seats: seats };
 }
 
-/** `team grant --client … --team <team> --bundle observer|operator`, at the owner's terminal. */
+/** `team grant --client … --team <team> --bundle observer|operator|manager|developer`, at the owner's terminal. */
 function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicInput, json: boolean, home: string, at?: Date): 'ok' | 'refused' {
   const refuse = (why: string): 'refused' => {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(why), null);

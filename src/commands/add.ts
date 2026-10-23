@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, rosterApprovalText, verifyClientForm, type ClientRun } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { approvedFingerprints, budgetsInForceOf, ceilingsOf, notInForce, recordSeatDigestOf } from '../approve/approval.ts';
 import { fingerprints } from '../approve/fingerprint.ts';
 import { readArgs } from '../args.ts';
@@ -144,6 +146,10 @@ export const realSources: AddSources = {
 
 export const USAGE = `Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+       team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+       team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, never starts the orchestrator or the operator, and does not touch the approval record: the roster change is for the owner to approve with the owner seat, and the run says so.
 
 Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
 `;
@@ -188,18 +194,51 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(wantsJson ? { ...io, stdout: collectInto(finalRecords), stderr: collectInto(jsonNotes) } : io);
-  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file'], ['temporary', 'dry-run', 'json']);
+  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team'], ['temporary', 'dry-run', 'json']);
   const json = wantsJson;
-  if (args.error) {
-    refuse(io, json, 'add', { id: 'add.invocation', message: args.error, repair: null, usage: USAGE });
+  // The one refusal of the client form, at every site.
+  const clientRefused = (message: string): number => {
+    refuse(io, json, 'add', { id: 'add.client-refused', message, repair: null });
+    // exit: add.client-refused
+    return 1;
+  };
+  const clientProblem = args.error === undefined
+    ? clientFormProblem(args.values, 'team add <name> --client <grant-file> --key <client-key-file>')
+      ?? (args.values.client !== undefined && args.values.team === undefined
+        ? '--client needs --team <team>: a roster change names the one team it is for'
+        : args.values.client !== undefined && ['file', 'session', 'model', 'effort'].some((flag) => args.values[flag] !== undefined)
+          ? "--client adds a seat to the one team its grant names: --file, --session, --model and --effort are the owner's and take no --client"
+          : null)
+    : null;
+  if (args.error || clientProblem !== null) {
+    refuse(io, json, 'add', { id: 'add.invocation', message: args.error ?? clientProblem ?? 'the invocation cannot be read', repair: null, usage: USAGE });
     // exit: add.invocation
     return 2;
   }
+  // The client form: a manager grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key and verified whole before anything else is read — before the terminal check below, which no
+  // client has a record for. The verified run is the second door past the caller gates, never the owner's:
+  // it is logged as `client:<id>`, takes no owner-only flag, and leaves the approval record as it is. Every
+  // other caller goes through the ordinary gates below, unchanged.
+  let clientRun: ClientRun | null = null;
+  if (args.values.client !== undefined) {
+    if (!wantsJson) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const at = sources.now();
+    const verified = verifyClientForm({ home: sources.home, now: at }, { op: 'add', values: args.values, cwd: io.cwd });
+    if (!verified.ok) {
+      if (!args.flags.has('dry-run')) auditClientRefusal('add', verified.named, verified.why, at);
+      return clientRefused(plainText(verified.why));
+    }
+    clientRun = verified.run;
+    io = { ...io, cwd: verified.run.root };
+    if (!wantsJson) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
+  }
+  const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
   // send every reader to the owner.
-  const detached = detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
+  const detached = clientRun !== null ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
     // exit: add.detached
@@ -263,7 +302,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
 
-  const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
+  const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
   const loaded = loadTeamFile(io.cwd, {
     ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
     home: sources.home,
@@ -287,6 +326,11 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 2;
   }
   const { team, root, path } = loaded;
+  // A client never starts a lead seat: that is the second half of a swap, which is the owner's.
+  if (clientRun !== null && !temporary && isLeadSeat(team, args.rest[0] ?? '')) {
+    auditClientRefusal('add', clientRun.grant, `${args.rest[0]} is a lead seat of the team`, sources.now());
+    return clientRefused(`${plainText(args.rest[0] ?? '')} is the team's orchestrator or operator: a client grant never starts a lead seat (that is the owner's swap)`);
+  }
   // The send grammar's team-lead address is `lead@<team>` (src/send/resolve.ts), so the word may
   // not become a new seat's name. A file written before 0.5.0 may already declare a seat of that
   // name: it keeps loading, `lead@<team>` still addresses the seat holding `leads`, and this
@@ -311,6 +355,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     ? { ...judgeCallerOf(io, args.values.session === 'default' ? undefined : args.values.session), session: args.values.session }
     : judgeCallerIn(io, dir, team);
   const { caller, shown } = judged;
+  // A client run is never the owner's, whatever terminal it stands in.
+  const ownerRun = clientRun === null && caller.kind === 'owner';
   const session = judged.session;
   // Dev mode, from the file this run edits: a `dev-mode` value anywhere in the caller's chain
   // governs, and `TEAMCLI_DEV_MODE` is then ignored; before any such value the variable set to
@@ -338,10 +384,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // granted seat's or an approved delegate's, as `remove`'s own gate says, so a run naming a
   // lead seat is not admitted by the record and the ordinary caller refusal below stands.
   const leadSeat = !temporary && isLeadSeat(team, args.rest[0] ?? '');
-  const createGranted = mayChange.kind !== 'ok'
+  const createGranted = clientRun !== null || (mayChange.kind !== 'ok'
     && !leadSeat
     && readEntityCreateGrants(sources.home).length > 0
-    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
+    && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
   // The delegate branch, tried only when the ordinary rule just refused and the file names a
   // delegate at all: with no `delegates` section every refusal below stays exactly today's, and
   // the gate is never asked. A refused verdict takes the ordinary refusal's place; a passed one
@@ -545,7 +591,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const runningNow = !repair ? agents.find((agent) => agent.name === built.name) : undefined;
   if (runningNow) {
     const unknown = screenUnknown(built.seat.cli, sources.launch.paneText(session, runningNow.pane));
-    const owner = caller.kind === 'owner';
+    const owner = ownerRun;
     if (json) {
       refuse(io, true, 'add', {
         id: 'add.already-running',
@@ -594,7 +640,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.no-profile
     return 1;
   }
-  if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && caller.kind !== 'owner') {
+  if (!temporary && (args.values.model !== undefined || args.values.effort !== undefined) && !ownerRun) {
     refuse(io, json, 'add', {
       id: 'add.override-owner',
       message: "--model and --effort on a declared seat are the owner's; use --temporary --like <seat> for a temporary seat",
@@ -953,6 +999,16 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     return 1;
   }
   try {
+    // The client's grant, read once more under its own lock immediately before the first effect (the
+    // lobby, the file edit and the launch all come after), and its audit line written while that lock
+    // is held. A dry run returned above and decides nothing.
+    if (clientRun !== null) {
+      const stood = authorizeClientRun(sources.home, clientRun, 'add', sources.now(), `seat ${built.name}`);
+      if (stood !== null) {
+        auditClientRefusal('add', clientRun.grant, stood, sources.now());
+        return clientRefused(plainText(stood));
+      }
+    }
     if (intoLobby) {
       const gate = verifyLobby(sources.home, { create: true, getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby });
       if (!gate.ok) return refuseLobby(io, json, built.name, gate.text, false);
@@ -1004,7 +1060,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       }
       const parsed = validateTeamFile(built.edited, { home: sources.home, fs: sources.fs, root });
       // The amendment re-signs from the command's own one snapshot, read at its gate.
-      if (parsed.ok && standing.kind === 'verified') recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
+      // A client's roster change is the owner's to approve: the approval record is left as it was.
+      if (parsed.ok && standing.kind === 'verified' && clientRun === null) recordSeatDigestOf(standing, parsed.team, root, built.name, sources.home);
       // The reach projection, from the file just written: a seat added with a `reach` grant
       // reaches the bridge and the shuttle at this approval, without waiting for an `up`.
       if (parsed.ok) {
@@ -1014,7 +1071,12 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     }
 
     const planSeat = verifiedLobby && seatForPlan.lobby ? { ...seatForPlan, cwd: verifiedLobby } : seatForPlan;
-    const who = describeCaller(caller);
+    const who = clientText ?? describeCaller(caller);
+    if (clientRun !== null && built.edited !== original) {
+      const said = rosterApprovalText('add', built.name, clientRun);
+      out.stderr(`team add: ${plainText(said)}\n`);
+      logLine(dir, 'add', who, said, sources.now());
+    }
     // The general seat brief goes first, before the state hook and the plan's rules line: the
     // claim is written before the hook that resolves it and the signed drop before the launch,
     // human seats included. A delivery that cannot be written is said and logged, and the launch
@@ -1058,7 +1120,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     const outcome = { swallowed: false, unknown: false, launched: false };
     const host = hostOf({
       dir, session, team: prepared.team, root, home: sources.home, ceilings, running, seat: built.seat, temporary: built.temporary,
-      caller: who, owner: caller.kind === 'owner', devMode: devModeMark(dev, devFolded), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
+      caller: who, owner: ownerRun, devMode: devModeMark(dev, devFolded), now: sources.now, launch: sources.launch, readMachine: sources.machine, samples, limits: team.machine, io: out, standing,
       ...(delegatePane === null ? {} : { delegated: { actor: delegatePane, command: 'add' as const } }),
       verifiedLobby, startCwd: planSeat.cwd, inLobby: planSeat.lobby === true, records, teamFile: path, outcome,
       doctor: sources.doctor,
@@ -1100,7 +1162,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         // run's own sentence — not a record — is this document's error.
         refuse(io, true, 'add', {
           id: 'add.already-running',
-          message: alreadyRunningText(built.name, caller.kind === 'owner', outcome.unknown),
+          message: alreadyRunningText(built.name, ownerRun, outcome.unknown),
           repair: null,
         });
       } else if (launched && !report.serverFailed) {

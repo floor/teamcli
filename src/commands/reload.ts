@@ -1,5 +1,7 @@
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { readArgs } from '../args.ts';
 import {
   anotherPaneRefusal,
@@ -76,6 +78,9 @@ import type { Launch } from './up.ts';
 import { registerInbox } from '../mcp/register.ts';
 
 export const USAGE = `Usage: team reload <seat> [--file <path>] [--json]
+       team reload <seat> --client <grant-file> --key <client-key> [--team <team>] [--json]
+
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying reload for: it reloads a seat of that one team, as signed, and nothing else. It never prompts and is never the owner (--file is the owner's and takes no --client).
 
 Exits 0 when the seat is reloaded or already matches the file, 1 when reload is refused or relaunch fails, 2 when the invocation or team file can't be read.
 `;
@@ -164,20 +169,45 @@ export default reload;
  * from the file when the screen names none, and recorded in place when nothing drifts.
  */
 export async function runReload(argv: string[], io: Io, sources: ReloadSources = realSources): Promise<number> {
-  const out = cleanedIo(io);
+  let out = cleanedIo(io);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['file'], ['json']);
+  const args = readArgs(argv, ['file', 'client', 'key', 'team'], ['json']);
   if (args.error) return invocation(io, json, args.error);
   const name = args.rest.length === 1 ? args.rest[0] : undefined;
   if (!name) {
     const extra = args.rest[1];
     return invocation(io, json, extra === undefined ? 'a <seat> is required' : `unexpected "${plainLine(extra)}"`);
   }
+  const clientProblem = clientFormProblem(args.values, 'team reload <seat> --client <grant-file> --key <client-key-file>')
+    ?? (args.values.client !== undefined && args.values.file !== undefined
+      ? "--client reloads a seat of the one team its grant names: --file is the owner's and takes no --client"
+      : null);
+  if (clientProblem !== null) return invocation(io, json, clientProblem);
+
+  // The client form: a manager grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key and verified whole before anything is read. The verified run is the second door past the
+  // caller and grant gates below, never the owner's, and it is logged as `client:<id>`.
+  let clientRun: ClientRun | null = null;
+  if (args.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const at = sources.now ? sources.now() : new Date();
+    const verified = verifyClientForm({ home: sources.home ?? homedir(), now: at }, { op: 'reload', values: args.values, cwd: io.cwd });
+    if (!verified.ok) {
+      auditClientRefusal('reload', verified.named, verified.why, at);
+      return clientRefused(io, json, verified.why);
+    }
+    clientRun = verified.run;
+    io = { ...io, cwd: verified.run.root };
+    out = cleanedIo(io);
+    if (!json) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
+  }
 
   const caller = walkCaller(io);
-  const owner = isOwner(caller);
+  // A client run is never the owner's, whatever terminal it stands in.
+  const owner = clientRun === null && isOwner(caller);
+  const who = clientRun === null ? describeCaller(caller) : `client:${clientRun.grant.clientId}`;
   const flagged = args.values.file;
   const foreign = flagged !== undefined && resolve(io.cwd, flagged) !== resolve(io.cwd, TEAM_FILE);
   // Dev mode, from this folder's own file: the caller's place, never a file the caller names.
@@ -198,11 +228,11 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // under a governing policy, an expiry, a source that could not be read. Nothing is written
   // when the chain had nothing to say.
   const placeDir = policyLoad.ok ? dirname(policyLoad.path) : dirname(join(io.cwd, TEAM_FILE));
-  logDevModeState(placeDir, 'reload', describeCaller(caller), dev, sources.now ? sources.now() : new Date());
+  logDevModeState(placeDir, 'reload', who, dev, sources.now ? sources.now() : new Date());
   let devWarning: string | null = null;
   let grantSeat: string | null = null;
   let said: GrantVerdict | null = null;
-  if (!owner) {
+  if (!owner && clientRun === null) {
     said = (sources.grantGate ?? grantGate)({ act: 'reload', io, home: sources.home, dev });
     // A grant that cannot be read is the refusal it was, before any other reading: the rest is
     // judged with the team file in hand, where the map's `reload` row admits a lead.
@@ -249,7 +279,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // `down`: its refusal is a refusal even where the map would admit the caller. With no grant,
   // a lead passes on the map's row alone.
   const placed = callerOf(io, session);
-  if (!owner && grantSeat === null) {
+  if (!owner && clientRun === null && grantSeat === null) {
     const rule = gateVerdict(
       placed, team, loaded.root, sources.home ?? homedir(), 'reload',
       standingOf(dir, session, placed), sources.now ?? (() => new Date()),
@@ -309,7 +339,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // The audit line the fold owes: written where the gate is used, before any later refusal
   // ends the run. A run the owner's `--file` refusal ended above owes none — no close was
   // permitted — so the line waits until that refusal has passed.
-  if (devWarning !== null) logDevMode(dir, 'reload', describeCaller(placed), devWarning, sources.now?.() ?? new Date());
+  if (devWarning !== null) logDevMode(dir, 'reload', who, devWarning, sources.now?.() ?? new Date());
   const seat = team.seats.find((item) => item.name === name);
   if (!seat) {
     refuse(io, json, 'reload', {
@@ -351,6 +381,15 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // exit: reload.not-running
     return 1;
   }
+  // The client's grant, read once more under its lock immediately before the first effect (the brief, the
+  // state record and the close all come after), and its audit line written while the lock is held.
+  if (clientRun !== null) {
+    const stood = authorizeClientRun(home ?? homedir(), clientRun, 'reload', sources.now ? sources.now() : new Date(), `seat ${seat.name}`);
+    if (stood !== null) {
+      auditClientRefusal('reload', clientRun.grant, stood, sources.now ? sources.now() : new Date());
+      return clientRefused(io, json, stood);
+    }
+  }
   // A seat started before the launch record kept a model still reloads: its screen's status row
   // is the first answer, the team file's declared values the second, and whichever answered is
   // said and then recorded. A seat already running what that answer declares is recorded in
@@ -382,7 +421,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   const sayBrief = (said: string): void => {
     if (json) jsonNotes.push(said);
     else out.stdout(`team reload: ${said}\n`);
-    logLine(dir, 'reload', describeCaller(caller), said, now());
+    logLine(dir, 'reload', who, said, now());
   };
   // The general seat brief goes to the seat on every path this command reaches it: the check
   // names `team reload <seat>` as a repair, so a reload must deliver the brief even when nothing
@@ -501,7 +540,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         }
         const warning = `warning: ${reading}; dev mode continues${devModeLevelNote(dev)}`;
         out.stderr(`team reload: ${warning}\n`);
-        logDevMode(dir, 'reload', describeCaller(placed), warning, sources.now?.() ?? new Date());
+        logDevMode(dir, 'reload', who, warning, sources.now?.() ?? new Date());
       }
     }
 
@@ -603,7 +642,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     const plannedHooks = plannedCliHooks(dir, session, [planned]);
     const installed = installCliHooks(dir, session, [{ ...planned, fresh: true }], home === undefined ? undefined : { project: team.project, root, home });
     if (plannedHooks[planned.name] !== undefined && installed[planned.name] === undefined) {
-      logLine(dir, 'reload', describeCaller(caller), `${planned.name}: no state hook written; its launch line is the file's own`,
+      logLine(dir, 'reload', who, `${planned.name}: no state hook written; its launch line is the file's own`,
         sources.now ? sources.now() : new Date());
     }
     // The successor binding this install minted for the launch, when it is not the one the seat
@@ -739,7 +778,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           ...(started.cli_session === undefined ? {} : { cli_session: started.cli_session }),
           now: now(),
         });
-        if ('note' in began) logLine(dir, 'reload', describeCaller(caller), began.note, now());
+        if ('note' in began) logLine(dir, 'reload', who, began.note, now());
       },
       drop(next) {
         updateState(dir, (file) => {
@@ -748,8 +787,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         });
         // The registry: a reload whose seat was dropped leaves its agent stopped.
         if (next === seat.name && sources.home) {
-          const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, next, 'stopped', 'swap');
-          if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
+          const ended = registerEnd({ home: sources.home, team, root, by: who, session }, next, 'stopped', 'swap');
+          if (ended) logLine(dir, 'reload', who, ended.note, now());
         }
       },
       record(next, patch) {
@@ -775,17 +814,17 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           // the same agent session, never a second derivation of either.
           const kept = readState(dir).sessions[session]?.seats[next];
           const made = registerLaunch(
-            { home: sources.home, team, root, by: describeCaller(caller), session, owner },
+            { home: sources.home, team, root, by: who, session, owner },
             seat,
             patch.pane,
             kept?.id,
             kept?.agent_session,
           );
-          if ('note' in made) logLine(dir, 'reload', describeCaller(caller), made.note, now());
+          if ('note' in made) logLine(dir, 'reload', who, made.note, now());
           else {
             // The address: the live session socket this relaunch answers at, recorded on the agent.
             const refreshed = refreshAgentAddress(sources.home, made.id, patch.pane, session);
-            if (refreshed.note) logLine(dir, 'reload', describeCaller(caller), refreshed.note, now());
+            if (refreshed.note) logLine(dir, 'reload', who, refreshed.note, now());
           }
         }
       },
@@ -798,14 +837,14 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
         if (record.kind !== 'left out') return;
         const line = recordText(seat, record);
         says(`${line}\n`);
-        logLine(dir, 'reload', describeCaller(caller), line, now());
+        logLine(dir, 'reload', who, line, now());
       },
       sleep: (ms) => launch.sleep(ms),
       now: () => launch.now().getTime(),
       log(_who, what) {
         if (what !== driftDetail) return;
         if (grantSeat !== null) (sources.logGranted ?? logGranted)(dir, grantSeat, 'reload', now(), `${seat.name} ${driftDetail}`);
-        else logLine(dir, 'reload', describeCaller(caller), `${seat.name}: ${driftDetail}`, now());
+        else logLine(dir, 'reload', who, `${seat.name}: ${driftDetail}`, now());
       },
     };
     const report = await executePlan(steps, session, host);
@@ -851,8 +890,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     // registry records the seat as down. `stopped` keeps the same agent for the next launch and
     // clears its pane; a record left `running` would describe a seat no pane holds.
     if (sources.home) {
-      const ended = registerEnd({ home: sources.home, team, root, by: describeCaller(caller), session }, seat.name, 'stopped', 'swap');
-      if (ended) logLine(dir, 'reload', describeCaller(caller), ended.note, now());
+      const ended = registerEnd({ home: sources.home, team, root, by: who, session }, seat.name, 'stopped', 'swap');
+      if (ended) logLine(dir, 'reload', who, ended.note, now());
     }
     refuse(io, json, 'reload', {
       id: 'reload.launch',
@@ -901,6 +940,12 @@ function effortFromFile(recorded: SeatState, compared: SeatState): string {
 function mentioned(shown: Running | null, compared: SeatState, recorded: SeatState): string {
   if (shown === null) return `the file's ${compared.model} ${compared.version}${effortSaid(recorded, compared)}, since its screen names none`;
   return `${compared.model} ${compared.version} from its screen${effortFromFile(recorded, compared)}`;
+}
+
+function clientRefused(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'reload', { id: 'reload.client-refused', message: plainLine(message), repair: null });
+  // exit: reload.client-refused
+  return 1;
 }
 
 function invocation(io: Io, json: boolean, message: string): number {
