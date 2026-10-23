@@ -6,6 +6,7 @@
 // policies come from a closed, release-owned vocabulary; advised policies may be from the
 // catalogue or a project's own text.
 
+import { bundlePolicyWithin, formatBundlePolicy, parseBundlePolicy } from '../client/bundle-ops.ts';
 import { DURATION, parseMeasure } from '../file/sections/units.ts';
 import {
   DEFAULT_STATE_THRESHOLDS,
@@ -117,6 +118,7 @@ export const ENFORCED_POLICY_NAMES = [
   'owner-signers',
   'owner-signer-mode',
   'approval-rule-ttl',
+  'client-bundles',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -207,6 +209,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   owner_signers: 'owner-signers',
   owner_signer_mode: 'owner-signer-mode',
   approval_rule_ttl: 'approval-rule-ttl',
+  client_bundles: 'client-bundles',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -984,6 +987,29 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseApprovalRuleTtlDays,
     isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // What the client grant bundles (`observer`, `operator`) expand to at signing time, and how long
+  // a grant of one lasts: `operator=status,send,up,down@30d;observer=status`. Empty (the default)
+  // is the release lists in `src/client/bundle-ops.ts`. A policy can only choose among the ops a
+  // bundle may ever carry; the commands that change who may do what are never eligible, whatever
+  // it says. Entity and project levels; a lower level may only narrow the ops and shorten the days.
+  'client-bundles': {
+    name: 'client-bundles',
+    kind: 'enforced',
+    levels: ['entity', 'project'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: (raw: unknown) => {
+      if (typeof raw !== 'string') return null;
+      const parsed = parseBundlePolicy(raw);
+      return parsed.ok ? formatBundlePolicy(parsed.specs) : null;
+    },
+    valueProblem: (raw: unknown) => {
+      if (typeof raw !== 'string') return 'client-bundles takes text like operator=status,send,up,down@30d;observer=status';
+      const parsed = parseBundlePolicy(raw);
+      return parsed.ok ? null : parsed.why;
+    },
+    isWithin: (lower: string, higher: string) => bundlePolicyWithin(lower, higher),
   },
   'grant-emission': {
     name: 'grant-emission',
