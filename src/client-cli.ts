@@ -23,10 +23,15 @@ import {
   writeClientGrant,
   writeClientGrantAudit,
   writeClientUpGrant,
+  writeClientBundleGrant,
+  bundleSeatsAdmitted,
   type ClientGrantScope,
   type ClientTeamOp,
 } from './client/records.ts';
 import { resolveClientUpTarget } from './client/up-grant.ts';
+import { readTeams } from './registry/teams.ts';
+import { isBundleName, type BundleName, type BundleOp } from './client/bundle-ops.ts';
+import { bundleCard, expandBundle, projectIdOfTeam } from './client/bundles.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
 import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
@@ -125,6 +130,18 @@ export function clientGrantProblem(args: Args): string | null {
   if (args.flags.has('approvals')) return '--approvals takes no other arguments';
   if (args.flags.has('request') && args.flags.has('client-request')) return '--request and --client-request are two different forms';
   const teamOps = teamOpsOfArgs(args);
+  if (args.values.bundle !== undefined) {
+    // A bundle is the owner's form alone, like `--up`: it never rides a master grant, so a sub-grant
+    // can never carry one, and it carries only what its name expands to for the one team it names.
+    const asked = args.values.bundle;
+    if (!isBundleName(asked)) return `--bundle takes observer or operator, not "${asked}"`;
+    if (teamOps !== null) return `--bundle ${asked} and ${teamOpFlags(teamOps)} are two forms: a bundle's ops come from its name; ask for one or the other`;
+    if (args.flags.has('client-request')) return `--bundle belongs to the owner form: a sub-grant never carries a bundle`;
+    if (args.values.team === undefined) return `--bundle ${asked} needs --team <team>: a bundle binds one team and its folder`;
+    if (args.flags.has('inbox')) return `--bundle ${asked} takes no --inbox: a bundle carries the ops its name expands to and nothing else`;
+    if (args.flags.has('allow-grant') || MASTER_SCOPE_FLAGS.some((flag) => args.values[flag] !== undefined)) return `--bundle ${asked} takes no --allow-grant: a bundle never carries grant`;
+    if (args.values.via !== undefined || args.values.key !== undefined) return '--via and --key belong to the --client-request form';
+  }
   if (teamOps !== null) {
     // An up or down grant is the owner's form alone: it never rides a master grant, so a sub-grant
     // can never carry `up` or `down`, and it carries nothing but those for the one team it names.
@@ -156,6 +173,15 @@ export function clientGrantProblem(args: Args): string | null {
 
 const MASTER_SCOPE_FLAGS = ['grant-entity', 'grant-project', 'grant-team'] as const;
 
+/** The seat names the registry's roster holds for a team, or none when it is not registered. */
+function readRosterSeats(home: string, teamId: string): string[] {
+  try {
+    return (readTeams(home)[teamId]?.roster ?? []).map((entry) => entry.seat);
+  } catch {
+    return [];
+  }
+}
+
 function listOf(value: string | undefined): string[] {
   return value === undefined ? [] : value.split(',').map((word) => word.trim()).filter((word) => word !== '');
 }
@@ -185,6 +211,7 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean,
     else io.stderr(`team grant: ${key.why}\n`);
     return 'refused';
   }
+  if (args.values.bundle !== undefined) return runDirectBundleGrantMode(rawIo, io, args, key.key, json, home, approval.now);
   if (teamOpsOfArgs(args) !== null) return runDirectUpGrantMode(rawIo, io, args, key.key, json, home);
   const result = writeClientGrant(home, {
     clientId: args.values.client!,
@@ -215,6 +242,77 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean,
     });
   } else {
     io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nexpires: ${result.grant.expires}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
+  }
+  return 'ok';
+}
+
+/** What a `--bundle` request resolves to: the live team's binding (its file's fingerprints only when
+ *  `up` is an op, so a file edit before the answer never moves a bundle that does not start the
+ *  team), the bundle's explicit ops under the policy in force, and the seats `send` reaches. */
+export function bundleParamsOf(home: string, args: Args, now: Date, cwd: string): { ok: true; up: PendingUpBinding; bundle: BundleName; bundle_ops: BundleOp[]; bundle_seats: string[] } | { ok: false; why: string } {
+  const bundle = args.values.bundle as BundleName;
+  const entity = args.values.entity!;
+  const target = resolveClientUpTarget(home, entity, args.values.team!, cwd);
+  if (!target.ok) return target;
+  const expanded = expandBundle(home, bundle, entity, projectIdOfTeam(home, target.binding.teamId), now);
+  if (!expanded.ok) return expanded;
+  const withUp = expanded.ops.includes('up');
+  const up: PendingUpBinding = {
+    project: target.binding.project,
+    team_id: target.binding.teamId,
+    root: target.binding.root,
+    fingerprints: withUp ? target.binding.fingerprints : { sections: {}, seats: {} },
+  };
+  let seats: string[] = [];
+  if (expanded.ops.includes('send')) {
+    const named = listOf(args.values.seat);
+    if (named.length > 0) {
+      seats = named;
+    } else {
+      // No --seat: every seat the team admits this client that the registry's roster holds.
+      const admitted = bundleSeatsAdmitted(home, target.binding.root, args.values.client!, entity);
+      if (!admitted.ok) return admitted;
+      const held = new Set(readRosterSeats(home, target.binding.teamId));
+      seats = admitted.seats.filter((seat) => held.has(seat));
+      if (seats.length === 0) return { ok: false, why: `the ${bundle} bundle carries send but no seat of team ${target.binding.project} is open to client ${args.values.client!}; name the seats with --seat <seat>[,<seat>]` };
+    }
+  } else if (args.values.seat !== undefined) {
+    return { ok: false, why: `--seat names where send goes, and the ${bundle} bundle in force does not carry send` };
+  }
+  return { ok: true, up, bundle, bundle_ops: expanded.ops, bundle_seats: seats };
+}
+
+/** `team grant --client … --team <team> --bundle observer|operator`, at the owner's terminal. */
+function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicInput, json: boolean, home: string, at?: Date): 'ok' | 'refused' {
+  const refuse = (why: string): 'refused' => {
+    if (json) writeJsonError(rawIo, 'grant.refused', plainText(why), null);
+    else io.stderr(`team grant: ${why}\n`);
+    return 'refused';
+  };
+  const now = at ?? new Date();
+  const params = bundleParamsOf(home, args, now, io.cwd);
+  if (!params.ok) return refuse(params.why);
+  const specs = expandBundle(home, params.bundle, args.values.entity!, projectIdOfTeam(home, params.up.team_id), now);
+  if (!specs.ok) return refuse(specs.why);
+  const result = writeClientBundleGrant(home, {
+    clientId: args.values.client!,
+    entity: args.values.entity!,
+    publicKey: key.publicKey,
+    keyId: key.keyId,
+    keyDir: key.keyDir,
+    bundle: params.bundle,
+    ops: params.bundle_ops,
+    seats: params.bundle_seats,
+    ...(args.values.expires !== undefined ? { expires: args.values.expires } : {}),
+    up: { project: params.up.project, teamId: params.up.team_id, root: params.up.root, fingerprints: params.up.fingerprints },
+    specs: specs.specs,
+  }, { now });
+  if (!result.ok) return refuse(result.why);
+  const card = bundleCard({ clientId: result.grant.clientId, project: result.grant.up.project, ops: result.grant.ops, seats: result.grant.seats ?? [], expires: result.grant.expires });
+  if (json) {
+    writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: updated', project: null, session: null, target: result.grant.grantId });
+  } else {
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nbundle: ${result.grant.bundle}\nops: ${result.grant.ops.join(', ')}\nteam: ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${result.grant.expires}\ncard: ${card}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }
@@ -363,6 +461,12 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
     if (!target.ok) return refuse(target.why);
     up = { project: target.binding.project, team_id: target.binding.teamId, root: target.binding.root, fingerprints: target.binding.fingerprints };
   }
+  let bundled: ReturnType<typeof bundleParamsOf> | null = null;
+  if (args.values.bundle !== undefined) {
+    bundled = bundleParamsOf(home, args, approval.now ?? new Date(), io.cwd);
+    if (!bundled.ok) return refuse(bundled.why);
+    up = bundled.up;
+  }
   const params: PendingGrantParams = {
     client_id: args.values.client!,
     entity: args.values.entity!,
@@ -370,12 +474,13 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
     key_id: key.key.keyId,
     key_dir: key.key.keyDir,
     team: args.values.team ?? null,
-    seat: args.values.seat ?? null,
+    seat: bundled !== null ? null : args.values.seat ?? null,
     expires: args.values.expires ?? null,
     inbox: args.flags.has('inbox'),
     allow_grant: allow,
     grant_scope: allow ? masterScopeOf(args) : null,
     ...(up !== null ? { up } : {}),
+    ...(bundled !== null && bundled.ok ? { bundle: bundled.bundle, bundle_ops: bundled.bundle_ops, bundle_seats: bundled.bundle_seats } : {}),
     // Written only when it adds `down`: a request for an up grant is the request it always was.
     ...(up !== null && teamOps !== null && teamOps.join(',') !== 'up' ? { team_ops: teamOps } : {}),
   };
@@ -459,7 +564,11 @@ export function runExecuteGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
       grant_scope: allow ? masterScopeOf(args) : null,
     };
     const teamOps = teamOpsOfArgs(args);
-    if (teamOps !== null) {
+    if (args.values.bundle !== undefined && isBundleName(args.values.bundle)) {
+      const bundled = bundleParamsOf(home, args, approval.now ?? new Date(), io.cwd);
+      if (!bundled.ok) return refuse(bundled.why);
+      params = { ...params, seat: null, up: bundled.up, bundle: bundled.bundle, bundle_ops: bundled.bundle_ops, bundle_seats: bundled.bundle_seats };
+    } else if (teamOps !== null) {
       const target = resolveClientUpTarget(home, params.entity, params.team ?? '', io.cwd);
       if (!target.ok) return refuse(target.why);
       params = {

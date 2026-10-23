@@ -20,8 +20,10 @@ import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import type { Fingerprints } from '../approve/fingerprint.ts';
-import { CLIENT_EXPIRY_MAX_MS, CLIENT_UP_EXPIRY_MAX_MS, canonicalTeamOps, teamGrantLabel, planClientGrant, planClientUpGrant, writeClientGrant, writeClientUpGrant, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope, type ClientTeamOp, type ClientUpGrantRecord, type ClientUpGrantRequest } from './records.ts';
+import { CLIENT_EXPIRY_MAX_MS, CLIENT_UP_EXPIRY_MAX_MS, canonicalTeamOps, teamGrantLabel, planClientGrant, planClientUpGrant, planClientBundleGrant, writeClientBundleGrant, writeClientGrant, writeClientUpGrant, type ClientBundleGrantRequest, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope, type ClientTeamOp, type ClientUpGrantRecord, type ClientUpGrantRequest } from './records.ts';
 import { upBindingProblem } from './up-grant.ts';
+import { BUNDLE_HARD_MAX_DAYS, type BundleName, type BundleOp } from './bundle-ops.ts';
+import { bundleCard, bundleSpecsInForce, projectIdOfTeam } from './bundles.ts';
 
 export type GrantEmission = 'owner-terminal' | 'conversational';
 
@@ -68,6 +70,13 @@ export type PendingGrantParams = {
    *  request for an up grant hashes as it always did, and one that adds `down` hashes differently —
    *  the owner's answer approves exactly these ops. */
   team_ops?: ClientTeamOp[];
+  /** A bundle grant's name: a display label, never authority. Present with `up` (the binding). */
+  bundle?: BundleName;
+  /** The bundle as it expanded at the request, explicitly: what the owner's answer approves and the
+   *  record carries. A policy changed since never widens it, and a request is refused if it narrowed. */
+  bundle_ops?: BundleOp[];
+  /** The seats `send` reaches, when the bundle carries it. */
+  bundle_seats?: string[];
 };
 
 /** The binding as a pending request stores it: plain JSON, snake_case. */
@@ -104,6 +113,29 @@ export function teamOpsOf(p: PendingGrantParams): ClientTeamOp[] {
   return canonicalTeamOps(p.team_ops) ?? ['up'];
 }
 
+/** The ops a request's grant carries: a bundle's explicit expansion, or the one-op team grant's. */
+function grantOpsOf(p: PendingGrantParams): BundleOp[] {
+  return p.bundle !== undefined ? [...(p.bundle_ops ?? [])] : teamOpsOf(p);
+}
+
+/** The bundle request a pending request's parameters stand for, or null when it is not a bundle. */
+function bundleRequestOf(p: PendingGrantParams, specs?: ClientBundleGrantRequest['specs']): ClientBundleGrantRequest | null {
+  if (p.bundle === undefined || p.up === undefined || p.up === null) return null;
+  return {
+    clientId: p.client_id,
+    entity: p.entity,
+    publicKey: p.public_key,
+    keyId: p.key_id,
+    keyDir: p.key_dir,
+    bundle: p.bundle,
+    ops: p.bundle_ops ?? [],
+    seats: p.bundle_seats ?? [],
+    ...(p.expires !== null ? { expires: p.expires } : {}),
+    up: { project: p.up.project, teamId: p.up.team_id, root: p.up.root, fingerprints: p.up.fingerprints },
+    ...(specs !== undefined ? { specs } : {}),
+  };
+}
+
 function canonicalParams(p: PendingGrantParams): Json {
   return {
     client_id: p.client_id,
@@ -118,7 +150,8 @@ function canonicalParams(p: PendingGrantParams): Json {
     allow_grant: p.allow_grant,
     grant_scope: p.grant_scope === null ? null : { entities: [...p.grant_scope.entities], projects: [...p.grant_scope.projects], teams: [...p.grant_scope.teams] },
     ...(p.up !== undefined && p.up !== null ? { up: canonicalUp(p.up) } : {}),
-    ...(p.up !== undefined && p.up !== null && teamOpsOf(p).join(',') !== 'up' ? { team_ops: teamOpsOf(p) } : {}),
+    ...(p.up !== undefined && p.up !== null && p.bundle === undefined && teamOpsOf(p).join(',') !== 'up' ? { team_ops: teamOpsOf(p) } : {}),
+    ...(p.bundle !== undefined ? { bundle: p.bundle, bundle_ops: [...(p.bundle_ops ?? [])], bundle_seats: [...(p.bundle_seats ?? [])] } : {}),
   };
 }
 
@@ -387,6 +420,7 @@ function ownerKey(home: string): KeyObject | null {
 }
 
 function summaryOf(p: PendingGrantParams): string {
+  if (p.bundle !== undefined && p.up !== undefined && p.up !== null) return `${p.bundle} bundle for ${p.client_id} to team ${p.up.project} at ${p.up.root}: ${(p.bundle_ops ?? []).join(', ')}`;
   if (p.up !== undefined && p.up !== null) return `${teamGrantLabel(teamOpsOf(p))} for ${p.client_id} to team ${p.up.project} at ${p.up.root} (file ${fileFingerprintOf(p.up)})`;
   const where = `${p.seat ?? 'orchestrator'}@${p.team ?? p.entity}`;
   return `client grant for ${p.client_id} to ${where}${p.inbox ? ' with inbox' : ''}${p.allow_grant ? ' as a MASTER grant' : ''}`;
@@ -535,12 +569,14 @@ export function executePendingGrant(
   }
   const written = issueFromParams(home, p, now, key);
   if (!written.ok) return written;
-  const audited = writeEmissionAudit(home, { request_id: record.request_id, params_sha256: record.params_sha256, grant_id: written.grant.grantId, adapter: adapter.name, choice: always ? 'always' : 'once', ...(ruleId !== undefined ? { rule_id: ruleId } : {}), ...(p.up ? { op: teamOpsOf(p).join('+'), up_project: p.up.project, up_root: p.up.root, up_file: fileFingerprintOf(p.up) } : {}), at: now.toISOString() }, record.request_id, key);
+  const audited = writeEmissionAudit(home, { request_id: record.request_id, params_sha256: record.params_sha256, grant_id: written.grant.grantId, adapter: adapter.name, choice: always ? 'always' : 'once', ...(ruleId !== undefined ? { rule_id: ruleId } : {}), ...(p.up ? { op: grantOpsOf(p).join('+'), ...(p.bundle !== undefined ? { bundle: p.bundle } : {}), up_project: p.up.project, up_root: p.up.root, up_file: fileFingerprintOf(p.up) } : {}), at: now.toISOString() }, record.request_id, key);
   if (!audited.ok) return { ok: false, why: `the grant ${written.grant.grantId} was written but its audit entry could not be; the owner revokes it with team revoke` };
   return { ok: true, grant: written.grant, path: written.path, adapter: adapter.name, audit: audited.path, ...(ruleId !== undefined ? { ruleId } : {}) };
 }
 
 function issueFromParams(home: string, p: PendingGrantParams, now: Date, key: KeyObject): { ok: true; grant: IssuedClientGrant; path: string } | { ok: false; why: string } {
+  const bundle = bundleRequestOf(p, bundleSpecsFor(home, p, now));
+  if (bundle !== null) return writeClientBundleGrant(home, bundle, { now, key });
   const up = upRequestOf(p);
   return up !== null ? writeClientUpGrant(home, up, { now, key }) : writeClientGrant(home, grantRequestOf(p), { now, key });
 }
@@ -549,6 +585,20 @@ function issueFromParams(home: string, p: PendingGrantParams, now: Date, key: Ke
  *  grant is also checked against the live team: the answer is for the file in front of the owner
  *  now, so a file that changed since the request refuses here and the request is not spent. */
 function planPending(home: string, p: PendingGrantParams, now: Date): { ok: true } | { ok: false; why: string } {
+  if (p.bundle !== undefined) {
+    // The policy in force NOW bounds the ops and the days; the ops themselves are the ones the
+    // request hashed, so a policy loosened since never adds one.
+    const specs = bundleSpecsInForce(home, p.entity, p.up ? projectIdOfTeam(home, p.up.team_id) : null, now);
+    if (!specs.ok) return specs;
+    const request = bundleRequestOf(p, specs.specs);
+    if (request === null) return { ok: false, why: 'a bundle request names its team' };
+    const planned = planClientBundleGrant(home, request, { now });
+    if (!planned.ok) return planned;
+    const live = upBindingProblem(home, p.entity, request.up, planned.grant.ops.includes('up') ? 'up' : 'status');
+    if (live === null) return { ok: true };
+    if (live.kind === 'drift') return { ok: false, why: `the team file of ${request.up.project} changed since the request (${live.changes.join('; ')}); ask again so the owner answers for the file as it is now` };
+    return { ok: false, why: live.why };
+  }
   const up = upRequestOf(p);
   if (up === null) {
     const planned = planClientGrant(home, grantRequestOf(p), { now });
@@ -563,6 +613,12 @@ function planPending(home: string, p: PendingGrantParams, now: Date): { ok: true
   if (live === null) return { ok: true };
   if (live.kind === 'drift') return { ok: false, why: `the team file of ${up.up.project} changed since the request (${live.changes.join('; ')}); ask again so the owner answers for the file as it is now` };
   return { ok: false, why: live.why };
+}
+
+/** The bundle specs in force for a request's team, for the write's own check (defaults on a chain that will not read: the plan refused first). */
+function bundleSpecsFor(home: string, p: PendingGrantParams, now: Date) {
+  const specs = bundleSpecsInForce(home, p.entity, p.up ? projectIdOfTeam(home, p.up.team_id) : null, now);
+  return specs.ok ? specs.specs : undefined;
 }
 
 /** Twelve hex of the digest of the file fingerprints: the short name an owner reads on screen. */
@@ -599,12 +655,20 @@ function writeEmissionAudit(home: string, audit: Record<string, string>, name: s
 
 /** The ops a pending request asks for: never `grant` outside a master. */
 export function pendingOps(p: PendingGrantParams): string[] {
-  if (p.up !== undefined && p.up !== null) return teamOpsOf(p);
+  if (p.up !== undefined && p.up !== null) return grantOpsOf(p);
   return [...(p.inbox ? ['send', 'messages'] : ['send']), ...(p.allow_grant ? ['grant'] : [])];
 }
 
 /** The human summary a requester shows or speaks, and the three choices it offers. */
 export function pendingSummary(p: PendingGrantParams, now: Date): { client: string; entity: string; team: string; seat: string; ops: string[]; expires: string; master: boolean; text: string; up?: { project: string; team_id: string; root: string; seats: string[]; file_fingerprint: string } } {
+  if (p.bundle !== undefined && p.up !== undefined && p.up !== null) {
+    const ops = grantOpsOf(p);
+    const seats = Object.keys(p.up.fingerprints.seats);
+    const expires = p.expires ?? new Date(now.getTime() + BUNDLE_HARD_MAX_DAYS * 86_400_000).toISOString();
+    const file = fileFingerprintOf(p.up);
+    const card = bundleCard({ clientId: p.client_id, project: p.up.project, ops, seats: p.bundle_seats ?? [], expires, fileFingerprint: file });
+    return { client: p.client_id, entity: p.entity, team: p.up.project, seat: (p.bundle_seats ?? []).join(',') || 'none', ops, expires, master: false, text: card, up: { project: p.up.project, team_id: p.up.team_id, root: p.up.root, seats, file_fingerprint: file } };
+  }
   if (p.up !== undefined && p.up !== null) {
     const expires = p.expires ?? new Date(now.getTime() + CLIENT_UP_EXPIRY_MAX_MS).toISOString();
     const seats = Object.keys(p.up.fingerprints.seats);

@@ -15,6 +15,8 @@ export const USAGE = `Usage: team grant <seat> --scope <act,...> [--dry-run] [--
        team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
        team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
        team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
+       team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> [--seat <seat>[,<seat>]] [--expires <ISO>] [--json]
+       team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> --request [--seat <seat>[,<seat>]] [--expires <ISO>] [--json]
        team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
        team grant --execute <request-id> [--json]
        team grant --answer <request-id> <oui|always|non> [--json]
@@ -44,7 +46,7 @@ export default grant;
 export async function runGrant(argv: string[], rawIo: Io, options: AuthorityEditOptions & GrantApprovalOptions = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name', 'client', 'entity', 'public-key', 'seat', 'team', 'via', 'key', 'grant-entity', 'grant-project', 'grant-team', 'execute', 'code', 'approve', 'deny', 'revoke-approval', 'answer', 'approve-as-owner-seat', 'signer', 'type', 'signer-public-key', 'credential-id', 'rp-id', 'assertion', 'at'], ['dry-run', 'inbox', 'json', 'allow-grant', 'client-request', 'request', 'approvals', 'add-owner-seat', 'owner-seat-inbox', 'add-owner-signer', 'up', 'down']);
+  const args = readArgs(argv, ['scope', 'capabilities', 'expires', 'name', 'client', 'entity', 'public-key', 'seat', 'team', 'via', 'key', 'grant-entity', 'grant-project', 'grant-team', 'execute', 'code', 'approve', 'deny', 'revoke-approval', 'answer', 'approve-as-owner-seat', 'signer', 'type', 'signer-public-key', 'credential-id', 'rp-id', 'assertion', 'at', 'bundle'], ['dry-run', 'inbox', 'json', 'allow-grant', 'client-request', 'request', 'approvals', 'add-owner-seat', 'owner-seat-inbox', 'add-owner-signer', 'up', 'down']);
   const dryRun = args.flags.has('dry-run');
   let result: 'ok' | 'refused' | 'invalid';
   const approval: GrantApprovalOptions = {
@@ -117,6 +119,7 @@ function invocationProblem(args: Args): string | null {
   if (args.values.code !== undefined) return '--code belongs to the execute form: team grant --execute <request-id> --code <code>';
   if (args.flags.has('allow-grant')) return '--allow-grant belongs to the --client form: a master client grant';
   if (args.flags.has('up') || args.flags.has('down')) return '--up and --down belong to the --client form: a client grant that lets the client run team up or team down for one team';
+  if (args.values.bundle !== undefined) return '--bundle belongs to the --client form: a client grant that carries a named list of commands for one team';
   if (args.flags.has('approvals')) return '--approvals takes no other arguments';
   for (const flag of ['via', 'key', 'grant-entity', 'grant-project', 'grant-team', 'execute', 'approve', 'deny', 'revoke-approval', 'answer'] as const) {
     if (args.values[flag] !== undefined) return `--${flag} belongs to the --client form`;
