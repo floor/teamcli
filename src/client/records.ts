@@ -1575,6 +1575,18 @@ function claimsBundleVocabulary(parsed: unknown): boolean {
   return grant !== null && typeof grant === 'object' && !Array.isArray(grant) && (grant as { vocabulary?: unknown }).vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION;
 }
 
+/** Whether the file at `path` claims to be a bundle grant. It judges nothing: the route it is sent
+ *  down verifies the record whole, and says why when it does not. */
+export function claimsBundleGrantFile(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > 1_000_000) return false;
+    return claimsBundleVocabulary(JSON.parse(readFileSync(path, 'utf8')));
+  } catch {
+    return false;
+  }
+}
+
 /** The ops a vocabulary-5 file names, for the wording of a refusal only. */
 function claimedBundleOps(parsed: unknown): string[] {
   const grant = (parsed as { client_grant?: { allowed_ops?: unknown } }).client_grant;

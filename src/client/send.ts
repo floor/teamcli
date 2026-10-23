@@ -16,7 +16,9 @@ import type { Io } from '../io.ts';
 import type { SendHost } from '../commands/send.ts';
 import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
 import { claimClientRequest } from './replay.ts';
+import { sendWithBundle } from './bundles.ts';
 import {
+  claimsBundleGrantFile,
   clientAddressOf,
   clientAdmission,
   KEY_ISOLATION_LINE,
@@ -192,6 +194,23 @@ export async function runClientSend(args: Args, io: Io, host: SendHost, json: bo
     }
   }
   if (body.trim() === '') return usage('a message is required');
+
+  // A bundle grant (vocabulary 5) that carries `send` is its own route: the address is
+  // `<seat>@<team>` for a seat the owner's signed list names, and the whole check is the bundle's.
+  if (claimsBundleGrantFile(grantFile)) {
+    const sent = sendWithBundle(host, {
+      grantFile,
+      keyFile,
+      cwd: io.cwd,
+      address: address.trim(),
+      body,
+      ...(args.values['request-id'] !== undefined ? { requestId: args.values['request-id'] } : {}),
+    });
+    if (!sent.ok) return refuse(sent.why);
+    if (json) io.stdout(`${document({ sent: { to: sent.to, record: sent.id, request_id: sent.requestId } })}\n`);
+    else io.stdout(`sent: ${sent.to} (drop ${sent.id})\n`);
+    return 0; // exit: send.client-sent
+  }
 
   let outcome:
     | { ok: true; path: string; id: string; recipientId: string; to: string; request: ClientRequest }
