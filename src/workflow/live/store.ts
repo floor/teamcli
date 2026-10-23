@@ -865,6 +865,25 @@ class Transaction implements StoreTx {
       step,
     });
     if (fault !== undefined) throw new LiveStoreError('workflow.store.record-invalid', fault);
+    if (step.evidence.length > 0) {
+      const records = step.evidenceRecords;
+      if (records === undefined) {
+        throw new LiveStoreError(
+          'workflow.store.record-invalid',
+          'the step cites evidence but records no evidence records',
+          run.path,
+        );
+      }
+      for (const ref of step.evidence) {
+        if (!Object.prototype.hasOwnProperty.call(records, ref)) {
+          throw new LiveStoreError(
+            'workflow.store.record-invalid',
+            `the step cites evidence "${ref}" but records no record for it`,
+            run.path,
+          );
+        }
+      }
+    }
     const record: LiveStepRecord = {
       format: 1,
       kind: 'workflow-run-live',

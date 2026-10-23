@@ -13,9 +13,13 @@ import {
   payloadDigest,
 } from '../canonical.ts';
 import type { OccurrenceRecord, RunState } from '../core-state.ts';
+import { decide } from '../core.ts';
+import type { CoreDecision } from '../core.ts';
+import { provisionalResolvers } from '../registry.ts';
+import type { EvidenceSource, SettingSource } from '../registry.ts';
 import type { SignalName } from '../signals.ts';
-import type { ArtifactRef, DefinitionId, DryEffectRecord, EvidenceDocument, EvidenceRecord, RequestId, Revision, RunId, Workflow } from '../types.ts';
-import { waitsAfterStep, waitsAtEntry } from '../waits.ts';
+import type { ArtifactRef, DefinitionId, DryEffectRecord, EvidenceDocument, EvidenceRecord, RequestId, Revision, RunId, Workflow, WorkflowEnvelope } from '../types.ts';
+import { fireRecordedWait, waitsAfterStep, waitsAtEntry } from '../waits.ts';
 import type { LiveErrorMove, LiveRecord, LiveState } from './records.ts';
 import { itemKeyText, runIdFor, validateItemKey } from './records.ts';
 import { parseJournalText } from './journal.ts';
@@ -392,7 +396,10 @@ export function stepFault(input: {
     return `the definition moves ${step.transition.from}/${step.signal} to "${transition.to}", not "${step.transition.to}"`;
   }
   if (transition.guard !== undefined) {
-    if (step.guard === undefined || step.guard.name !== transition.guard.name) {
+    // The guard is recorded on a normal step; the error path abandons the transition before it.
+    if (step.next !== undefined && step.next !== step.transition.to) {
+      if (step.guard !== undefined) return 'an error-path step records a guard';
+    } else if (step.guard === undefined || step.guard.name !== transition.guard.name) {
       return `the transition's guard "${transition.guard.name}" is not recorded`;
     }
   } else if (step.guard !== undefined) {
@@ -566,6 +573,13 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     waits: waitsAtEntry(input.definition, open.initial, 1),
   };
 
+  const settings: SettingSource = {
+    get(name) {
+      return Object.prototype.hasOwnProperty.call(open.settings, name) ? open.settings[name] : undefined;
+    },
+  };
+  const guards = provisionalResolvers().guards;
+
   let stepIndex = 0;
   for (const record of parsed.records) {
     if (record.record !== 'step') continue;
@@ -582,16 +596,121 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
     if (fault !== undefined) {
       return { ok: false, fail: { code: 'step-mismatch', record: record.seq, why: fault } };
     }
+
+    // Re-derive the decision from the journal alone: the folded run state, the recorded
+    // envelope fields, the recorded evidence document and the pinned settings, with the real
+    // guard catalogue. A saved verdict is never authoritative, and next/error/plan are compared
+    // against what the engine derives rather than accepted as recorded.
+    const envelope: WorkflowEnvelope = {
+      format: 1,
+      run: open.run,
+      definition: pin,
+      expectedRevision: run.revision,
+      requestId: record.requestId,
+      move: { transition: record.transition },
+      target: open.target,
+      artifact: open.artifact,
+      evidence: record.evidence,
+    };
+    const decisionRun = fireRecordedWait(run, input.definition, {
+      signal: record.signal,
+      at: record.at,
+      settings,
+    });
+    let decision: CoreDecision;
+    try {
+      decision = decide({
+        definition: input.definition,
+        definitionId: pin,
+        run: decisionRun,
+        envelope,
+        signal: { name: record.signal, at: record.at },
+        evidence: evidenceOf(record),
+        settings,
+        guards,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: `the core could not re-evaluate the step: ${String(error)}`,
+        },
+      };
+    }
+    if (decision.kind !== 'step') {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: `the decision is ${decision.kind}${'code' in decision ? ` (${decision.code})` : ''}, not a step`,
+        },
+      };
+    }
+    if (canonicalJson(decision.transition) !== canonicalJson(record.transition)) {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: 'the recorded transition is not the one the decision selects',
+        },
+      };
+    }
+    if (decision.revision !== run.revision || decision.nextRevision !== record.revision) {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: `the decision takes revision ${decision.revision} to ${decision.nextRevision}; the step records ${record.revision}`,
+        },
+      };
+    }
+    if (canonicalJson(record.guard ?? null) !== canonicalJson(decision.guard ?? null)) {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: `the step records guard ${canonicalJson(record.guard ?? null)}; the core answers ${canonicalJson(decision.guard ?? null)}`,
+        },
+      };
+    }
+    const nextState = record.next ?? record.transition.to;
+    if (decision.next.state !== nextState || decision.next.activation !== record.activation) {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: `the step records next ${nextState}@${record.activation}; the decision moves to ${decision.next.state}@${decision.next.activation}`,
+        },
+      };
+    }
+    if (canonicalJson(record.error ?? null) !== canonicalJson(decision.error ?? null)) {
+      return {
+        ok: false,
+        fail: {
+          code: 'step-mismatch',
+          record: record.seq,
+          why: `the step records error ${canonicalJson(record.error ?? null)}; the decision carries ${canonicalJson(decision.error ?? null)}`,
+        },
+      };
+    }
+
     requests.set(record.requestId, { payloadDigest: record.requestDigest, step: stepIndex });
     run = {
       ...run,
-      state: record.next ?? record.transition.to,
+      state: decision.next.state,
       revision: record.revision,
-      activation: record.activation,
-      waits: waitsAfterStep(run, input.definition, {
+      activation: decision.next.activation,
+      waits: waitsAfterStep(decisionRun, input.definition, {
         signal: record.signal,
-        nextState: record.next ?? record.transition.to,
-        nextActivation: record.activation,
+        nextState: decision.next.state,
+        nextActivation: decision.next.activation,
       }),
     };
     stepIndex += 1;
@@ -616,6 +735,16 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
 
 function liveSteps(records: readonly LiveRecord[]): Array<Extract<LiveRecord, { record: 'step' }>> {
   return records.filter((record): record is Extract<LiveRecord, { record: 'step' }> => record.record === 'step');
+}
+
+/** The evidence the step recorded, keyed by ref: the only evidence re-derivation may read. */
+function evidenceOf(record: Extract<LiveRecord, { record: 'step' }>): EvidenceSource {
+  const document = record.evidenceRecords ?? {};
+  return {
+    record(ref) {
+      return Object.prototype.hasOwnProperty.call(document, ref) ? document[ref] : undefined;
+    },
+  };
 }
 
 function sameDefinition(left: DefinitionId, right: DefinitionId): boolean {
