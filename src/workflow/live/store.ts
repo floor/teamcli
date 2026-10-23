@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LockBusyError, withLock } from '../../state.ts';
-import { canonicalJson, definitionId } from '../canonical.ts';
+import { canonicalJson, definitionId, occurrenceId } from '../canonical.ts';
 import { parseWorkflow } from '../schema.ts';
 import type { ArtifactRef, DefinitionId, EvidenceRecord, OccurrenceId, RunId, Workflow } from '../types.ts';
 import {
@@ -35,6 +35,7 @@ import {
   type ItemRecord,
   type LiveDecisionKind,
   type LiveDecisionRecord,
+  type LiveEntryOutcomeRecord,
   type LiveEvidenceRecord,
   type LiveHoldRecord,
   type LiveIntentRecord,
@@ -185,6 +186,10 @@ export type RenewHoldResult =
 
 export type StepRecordInput = StepInput & { at: string };
 
+/** A pending state-entry effect cancelled by a lead stop, before the run ends failed. The state,
+ *  activation and occurrence are the store's to derive from the live run. */
+export type EntryOutcomeInput = { effect: string; why?: string; by?: string; at: string };
+
 export type IntentInput = {
   intentId: string;
   occurrence: OccurrenceId;
@@ -261,6 +266,7 @@ export type StoreTx = {
   busySeats(): string[];
   appendStep(runId: RunId, step: StepRecordInput): LiveStepRecord;
   appendEvidence(runId: RunId, input: { entries: EvidenceRecord[]; at: string }): LiveEvidenceRecord;
+  recordEntryOutcome(runId: RunId, input: EntryOutcomeInput): LiveEntryOutcomeRecord;
   beginIntent(runId: RunId, input: IntentInput): LiveIntentRecord;
   finishIntent(runId: RunId, intentId: string, input: ResultInput): LiveResultRecord;
   armTimer(runId: RunId, input: ArmTimerInput): LiveTimerRecord;
@@ -873,6 +879,7 @@ class Transaction implements StoreTx {
       transition: step.transition,
       activation: step.activation,
       ...(step.next !== undefined ? { next: step.next } : {}),
+      ...(step.error !== undefined ? { error: step.error } : {}),
       evidence: [...step.evidence],
       ...(step.evidenceRecords !== undefined ? { evidenceRecords: step.evidenceRecords } : {}),
       ...(step.guard !== undefined ? { guard: step.guard } : {}),
@@ -892,6 +899,40 @@ class Transaction implements StoreTx {
       at: input.at,
       record: 'evidence',
       entries: input.entries,
+    };
+    appendJournal(run.path, record);
+    return record;
+  }
+
+  recordEntryOutcome(runId: RunId, input: EntryOutcomeInput): LiveEntryOutcomeRecord {
+    const run = this.runForAppend(runId);
+    if (run.live.status !== 'live') {
+      throw new LiveStoreError('workflow.store.outcome-closed', `the run ended ${run.live.status}`, run.path);
+    }
+    const definition = this.definitionOf(run.open);
+    const state = run.live.state;
+    const declared = definition.states[state];
+    if (declared === undefined || !(declared.onEnter ?? []).some((hook) => hook.name === input.effect)) {
+      throw new LiveStoreError(
+        'workflow.store.record-invalid',
+        `"${input.effect}" is not an entry effect of "${state}"`,
+        run.path,
+      );
+    }
+    const record: LiveEntryOutcomeRecord = {
+      format: 1,
+      kind: 'workflow-run-live',
+      authoritative: true,
+      seq: run.live.lastSeq + 1,
+      at: input.at,
+      record: 'entry-outcome',
+      result: 'cancelled',
+      state,
+      activation: run.live.activation,
+      effect: input.effect,
+      occurrence: occurrenceId(runId, run.live.activation, input.effect),
+      ...(input.why !== undefined ? { why: input.why } : {}),
+      ...(input.by !== undefined ? { by: input.by } : {}),
     };
     appendJournal(run.path, record);
     return record;

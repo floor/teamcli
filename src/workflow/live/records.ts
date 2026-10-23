@@ -9,6 +9,7 @@ import type {
   ArtifactRef,
   DefinitionId,
   DryEffectRecord,
+  EvidenceDocument,
   EvidenceRecord,
   EvidenceRef,
   OccurrenceId,
@@ -149,6 +150,17 @@ export type RunIndex = {
  *  decision/intent record, never a mutated effect. */
 export type LiveEffectRecord = DryEffectRecord;
 
+/** The decision's error move, recorded verbatim on a step that takes the second engine rule: a
+ *  refused state-entry effect moves the run to the definition's top-level `error` state. The
+ *  occurrence is the refused effect's, at the state it was refused in. */
+export type LiveErrorMove = {
+  rule: 'entry-effect-refused';
+  from: string;
+  to: string;
+  effect: string;
+  occurrence: OccurrenceId;
+};
+
 type LiveHead = {
   format: typeof LIVE_FORMAT;
   kind: typeof LIVE_KIND;
@@ -185,13 +197,31 @@ export type LiveStepRecord = LiveHead & {
    *  path names the definition's top-level `error` state here while `transition` stays the
    *  envelope's request. */
   next?: string;
+  /** Present exactly on the error path: the decision's refused entry move, verbatim. */
+  error?: LiveErrorMove;
   evidence: EvidenceRef[];
-  evidenceRecords?: EvidenceRecord[];
+  /** The evidence records this step cited, keyed by ref: enough to re-derive the decision
+   *  without any outside document. A step that cites no evidence writes `{}`. */
+  evidenceRecords?: EvidenceDocument;
   guard?: { name: string; answer: boolean; evidence: EvidenceRef[] };
   effects: LiveEffectRecord[];
 };
 
 export type LiveEvidenceRecord = LiveHead & { record: 'evidence'; entries: EvidenceRecord[] };
+
+/** The live-only outcome of a pending state-entry effect. A lead stop over a pending entry effect
+ *  records `result: 'cancelled'` here, before the run ends failed; the dry evidence shape keeps
+ *  its done/refused results, and this record is never cited as evidence. */
+export type LiveEntryOutcomeRecord = LiveHead & {
+  record: 'entry-outcome';
+  result: 'cancelled';
+  state: string;
+  activation: number;
+  effect: string;
+  occurrence: OccurrenceId;
+  why?: string;
+  by?: string;
+};
 
 export type LiveIntentRecord = LiveHead & {
   record: 'intent';
@@ -294,6 +324,7 @@ export type LiveRecord =
   | LiveRunOpenRecord
   | LiveStepRecord
   | LiveEvidenceRecord
+  | LiveEntryOutcomeRecord
   | LiveIntentRecord
   | LiveResultRecord
   | LiveHoldRecord
@@ -319,6 +350,7 @@ export type LiveState = {
   activation: number;
   evidence: EvidenceRef[];
   evidenceRecords: EvidenceRecord[];
+  entryOutcomes: LiveEntryOutcomeRecord[];
   holds: HoldRecord[];
   timers: LiveTimerRecord[];
   attempts: Record<string, number>;
@@ -501,10 +533,29 @@ export function validateRecord(raw: unknown): { ok: true; record: LiveRecord } |
       if (!isSignalName(raw.transition.on)) return { ok: false, why: 'the step transition signal is invalid' };
       if (!isInt(raw.activation, 2)) return { ok: false, why: 'the step activation is not above the start' };
       if (raw.next !== undefined && !isText(raw.next)) return { ok: false, why: 'the step next state is invalid' };
+      if (raw.error !== undefined) {
+        if (!isJson(raw.error)) return { ok: false, why: 'the step error move is invalid' };
+        if (raw.error.rule !== 'entry-effect-refused') {
+          return { ok: false, why: 'the step error rule is invalid' };
+        }
+        if (
+          !isText(raw.error.from) ||
+          !isText(raw.error.to) ||
+          !isText(raw.error.effect) ||
+          !isText(raw.error.occurrence)
+        ) {
+          return { ok: false, why: 'the step error move is missing its fields' };
+        }
+      }
       if (!isStringArray(raw.evidence)) return { ok: false, why: 'the step evidence is invalid' };
       if (raw.evidenceRecords !== undefined) {
-        if (!Array.isArray(raw.evidenceRecords) || !raw.evidenceRecords.every(isJson)) {
+        if (!isJson(raw.evidenceRecords)) {
           return { ok: false, why: 'the step evidence records are invalid' };
+        }
+        for (const [ref, entry] of Object.entries(raw.evidenceRecords)) {
+          if (ref.length === 0 || !isJson(entry) || !isText(entry.type)) {
+            return { ok: false, why: `the step evidence record for "${ref}" is invalid` };
+          }
         }
       }
       if (raw.guard !== undefined) {
@@ -522,6 +573,20 @@ export function validateRecord(raw: unknown): { ok: true; record: LiveRecord } |
     case 'evidence': {
       if (!Array.isArray(raw.entries) || !raw.entries.every(isJson)) {
         return { ok: false, why: 'the evidence entries are invalid' };
+      }
+      break;
+    }
+    case 'entry-outcome': {
+      if (raw.result !== 'cancelled') return { ok: false, why: 'the entry outcome result is invalid' };
+      if (!isText(raw.state) || !isText(raw.effect) || !isText(raw.occurrence)) {
+        return { ok: false, why: 'the entry outcome is missing its effect' };
+      }
+      if (!isInt(raw.activation, 1)) return { ok: false, why: 'the entry outcome activation is invalid' };
+      if (raw.why !== undefined && typeof raw.why !== 'string') {
+        return { ok: false, why: 'the entry outcome why is invalid' };
+      }
+      if (raw.by !== undefined && typeof raw.by !== 'string') {
+        return { ok: false, why: 'the entry outcome by is invalid' };
       }
       break;
     }

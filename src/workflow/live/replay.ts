@@ -14,9 +14,9 @@ import {
 } from '../canonical.ts';
 import type { OccurrenceRecord, RunState } from '../core-state.ts';
 import type { SignalName } from '../signals.ts';
-import type { ArtifactRef, DefinitionId, DryEffectRecord, EvidenceRecord, RequestId, Revision, RunId, Workflow } from '../types.ts';
+import type { ArtifactRef, DefinitionId, DryEffectRecord, EvidenceDocument, EvidenceRecord, RequestId, Revision, RunId, Workflow } from '../types.ts';
 import { waitsAfterStep, waitsAtEntry } from '../waits.ts';
-import type { LiveRecord, LiveState } from './records.ts';
+import type { LiveErrorMove, LiveRecord, LiveState } from './records.ts';
 import { itemKeyText, runIdFor, validateItemKey } from './records.ts';
 import { parseJournalText } from './journal.ts';
 
@@ -49,6 +49,7 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
     activation: 1,
     evidence: [],
     evidenceRecords: [],
+    entryOutcomes: [],
     holds: [],
     timers: [],
     attempts: {},
@@ -67,6 +68,7 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
   live.key = itemKeyText(first.item);
 
   const occurrences = new Set<string>();
+  const evidenceByRef = new Map<string, string>();
   const intentIds = new Map<string, string>();
   const resolved = new Map<string, string>();
   let closed = false;
@@ -97,6 +99,18 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
         }
         const previousActivation = live.activation;
         const next = record.next ?? record.transition.to;
+        if (next === record.transition.to) {
+          if (record.error !== undefined) return fail('a normal step records an error move', record.seq);
+        } else if (record.error === undefined) {
+          return fail('an error-path step records no refused effect', record.seq);
+        } else {
+          if (record.error.from !== record.transition.from || record.error.to !== next) {
+            return fail('the error move names another move', record.seq);
+          }
+          if (record.error.occurrence !== occurrenceId(live.run, previousActivation, record.error.effect)) {
+            return fail('the error move carries a foreign occurrence id', record.seq);
+          }
+        }
         for (const effect of record.effects) {
           if (effect.activation !== previousActivation && effect.activation !== record.activation) {
             return fail(`effect "${effect.name}" names an activation that is neither the old nor the new one`, record.seq);
@@ -120,7 +134,18 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
           occurrences.add(effect.occurrence);
         }
         live.evidence.push(...record.evidence);
-        if (record.evidenceRecords !== undefined) live.evidenceRecords.push(...record.evidenceRecords);
+        if (record.evidenceRecords !== undefined) {
+          for (const [ref, entry] of Object.entries(record.evidenceRecords)) {
+            const seen = evidenceByRef.get(ref);
+            const canonical = canonicalJsonSafe(entry);
+            if (seen !== undefined) {
+              if (seen !== canonical) return fail(`evidence "${ref}" is recorded with different bytes`, record.seq);
+            } else {
+              evidenceByRef.set(ref, canonical);
+              live.evidenceRecords.push(entry);
+            }
+          }
+        }
         live.state = next;
         live.revision = record.revision;
         live.activation = record.activation;
@@ -129,6 +154,23 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
       case 'evidence':
         live.evidenceRecords.push(...record.entries);
         break;
+      case 'entry-outcome': {
+        if (closed) return fail('an entry outcome after the run ended', record.seq);
+        if (record.state !== live.state) {
+          return fail(`the entry outcome names "${record.state}" while the run is in "${live.state}"`, record.seq);
+        }
+        if (record.activation !== live.activation) {
+          return fail('the entry outcome names another activation', record.seq);
+        }
+        if (record.occurrence !== occurrenceId(live.run, record.activation, record.effect)) {
+          return fail('the entry outcome carries a foreign occurrence id', record.seq);
+        }
+        if (live.entryOutcomes.some((seen) => seen.occurrence === record.occurrence)) {
+          return fail(`the entry outcome "${record.occurrence}" is recorded twice`, record.seq);
+        }
+        live.entryOutcomes.push(record);
+        break;
+      }
       case 'intent': {
         const canonical = intentCanonical(record);
         const seen = intentIds.get(record.intentId);
@@ -303,8 +345,9 @@ export type StepInput = {
   transition: { from: string; to: string; on: SignalName };
   activation: number;
   next?: string;
+  error?: LiveErrorMove;
   evidence: string[];
-  evidenceRecords?: EvidenceRecord[];
+  evidenceRecords?: EvidenceDocument;
   guard?: { name: string; answer: boolean; evidence: string[] };
   effects: DryEffectRecord[];
 };
@@ -369,6 +412,7 @@ export function stepFault(input: {
   const next = step.next ?? step.transition.to;
   let expected: DryEffectRecord[];
   if (next === step.transition.to) {
+    if (step.error !== undefined) return 'a normal step records an error move';
     const exit = expectedEffects(
       definition,
       input.runId,
@@ -397,6 +441,18 @@ export function stepFault(input: {
     if (definition.error === undefined) return 'the definition declares no error state';
     if (next !== definition.error) {
       return `the step moves to "${next}", not the definition's error state "${definition.error}"`;
+    }
+    const move = step.error;
+    if (move === undefined) return 'the error-path step records no refused effect';
+    if (move.rule !== 'entry-effect-refused') return `the error move names the rule "${move.rule}"`;
+    if (move.from !== step.transition.from || move.to !== next) {
+      return 'the error move names another move than the step';
+    }
+    if (!(from.onEnter ?? []).some((hook) => hook.name === move.effect)) {
+      return `the error move names "${move.effect}", not an entry effect of "${step.transition.from}"`;
+    }
+    if (move.occurrence !== occurrenceId(input.runId, input.previousActivation, move.effect)) {
+      return 'the error move carries a foreign occurrence id';
     }
     const errorState = definition.states[next];
     if (errorState === undefined) return `error state "${next}" is not declared`;
@@ -433,7 +489,7 @@ export function stepFault(input: {
 }
 
 export type ReplayLiveFailure = {
-  code: 'journal-invalid' | 'definition-mismatch' | 'start-mismatch' | 'step-mismatch';
+  code: 'journal-invalid' | 'definition-mismatch' | 'start-mismatch' | 'step-mismatch' | 'entry-outcome-mismatch';
   record?: number;
   why: string;
 };
@@ -539,6 +595,20 @@ export function replayLive(input: ReplayLiveInput): ReplayLiveResult {
       }),
     };
     stepIndex += 1;
+  }
+
+  for (const outcome of live.entryOutcomes) {
+    const state = input.definition.states[outcome.state];
+    if (state === undefined || !(state.onEnter ?? []).some((hook) => hook.name === outcome.effect)) {
+      return {
+        ok: false,
+        fail: {
+          code: 'entry-outcome-mismatch',
+          record: outcome.seq,
+          why: `the entry outcome names "${outcome.effect}", not an entry effect of "${outcome.state}"`,
+        },
+      };
+    }
   }
 
   return { ok: true, run, live };
