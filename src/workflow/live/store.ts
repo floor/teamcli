@@ -720,15 +720,15 @@ class Transaction implements StoreTx {
       return { ok: false, reason: 'hold-live', hold: existing };
     }
 
-    if (input.kind === 'reservation') {
-      const seat = input.seat;
-      for (const candidate of Object.values(index.items)) {
-        if (candidate.key === key) continue;
-        const hold = candidate.hold;
-        if (hold === undefined || !holdIsLive(hold, nowMs)) continue;
-        if (holdSeat(hold) === seat) {
-          return { ok: false, reason: 'receiver-busy', item: candidate.key, hold };
-        }
+    // One seat works one item: a live hold of either kind excludes its seat from any other item,
+    // so a seat holding or reserving one item can neither reserve nor next-claim another.
+    const seat = input.seat;
+    for (const candidate of Object.values(index.items)) {
+      if (candidate.key === key) continue;
+      const hold = candidate.hold;
+      if (hold === undefined || !holdIsLive(hold, nowMs)) continue;
+      if (holdSeat(hold) === seat) {
+        return { ok: false, reason: 'receiver-busy', item: candidate.key, hold };
       }
     }
 
