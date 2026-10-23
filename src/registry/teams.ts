@@ -11,8 +11,11 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync,
 import { dirname, join, resolve } from 'node:path';
 import { resolveLobby } from '../lobby/gate.ts';
 import * as projects from './projects.ts';
+import { checkIssueTracker, type IssueTracker } from './issue-tracker.ts';
 import { writeAtomic } from '../state.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
+
+export type { IssueTracker } from './issue-tracker.ts';
 
 export type TeamLifecycle = 'defined' | 'running' | 'stopped' | 'archived';
 
@@ -52,6 +55,9 @@ export type TeamRecord = {
   lifecycle: TeamLifecycle;
   /** Owner-signed team-level settings, one signed entry per key, when present. */
   settings?: Record<string, YamlValue>;
+  /** The issue tracker project the team's work is tracked in (src/registry/issue-tracker.ts), or
+   *  absent: the team names none. Team level, a reference only, written as `issue_tracker`. */
+  issueTracker?: IssueTracker;
   provenance: TeamProvenance;
 };
 
@@ -109,9 +115,11 @@ export function getTeam(home: string, id: string): TeamRecord | null {
 
 /** What `upsertTeam` takes: any of the record's fields, and who is writing and when. A team not
  *  yet registered needs `project`, `session` and `root` at least. */
-export type TeamPatch = Partial<Omit<TeamRecord, 'id' | 'provenance'>> & {
+export type TeamPatch = Partial<Omit<TeamRecord, 'id' | 'provenance' | 'issueTracker'>> & {
   by?: string;
   at?: string;
+  /** The team's issue tracker: a value sets it, `null` removes it, absent leaves it as it is. */
+  issueTracker?: IssueTracker | null;
   /** Entries to set, or to remove with `null`, inside the record's settings map. Applied to the
    *  record the writer reads under the registry lock, so two writes of different keys both land. */
   settingsDelta?: Record<string, YamlValue | null>;
@@ -123,7 +131,7 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     const teams = readTeams(home);
     const at = patch.at ?? new Date().toISOString();
     const prior = teams[id];
-    const { by, at: _at, settingsDelta, ...fields } = patch;
+    const { by, at: _at, settingsDelta, issueTracker, ...fields } = patch;
     let record: TeamRecord;
     if (prior) {
       record = { ...prior, ...definedOnly(fields), provenance: { ...prior.provenance, updated_at: at } };
@@ -147,6 +155,13 @@ export function upsertTeam(home: string, id: string, patch: TeamPatch): TeamReco
     }
     if (!TEAM_LIFECYCLES.includes(record.lifecycle)) throw new TeamsError(`"${record.lifecycle}" is not a team lifecycle`);
     if (record.projectId !== null && typeof record.projectId !== 'string') throw new TeamsError('"project_id" must be a project ID or null');
+    // An update that names no tracker keeps the one on record (the spread above carried it).
+    if (issueTracker === null) delete record.issueTracker;
+    else if (issueTracker !== undefined) {
+      const checked = checkIssueTracker(issueTracker);
+      if (!checked.ok) throw new TeamsError(checked.why);
+      record.issueTracker = checked.value;
+    }
     if (settingsDelta !== undefined) {
       const settings: Record<string, YamlValue> = { ...(record.settings ?? {}) };
       for (const [key, entry] of Object.entries(settingsDelta)) {
@@ -418,6 +433,15 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
   // would answer as if the team had no settings, and the settings it holds would vanish unseen.
   if (raw.settings !== undefined && raw.settings !== null && !isMap(raw.settings)) bad('"settings" must be a map');
   const settings = isMap(raw.settings) && Object.keys(raw.settings).length > 0 ? raw.settings : undefined;
+  // Absent is a team that names no tracker, so a record written before the field reads unchanged.
+  // A value that does not read as one is refused here, not dropped: a reader that ignored it would
+  // answer as if the team had none, and the next write would erase it unseen.
+  let issueTracker: IssueTracker | undefined;
+  if (raw.issue_tracker !== undefined) {
+    const checked = checkIssueTracker(raw.issue_tracker);
+    if (!checked.ok) bad(checked.why);
+    else issueTracker = checked.value;
+  }
   return {
     id,
     project: text('project'),
@@ -430,6 +454,7 @@ function recordOf(id: string, raw: YamlValue, path: string): TeamRecord {
     roster: entries,
     lifecycle: lifecycle as TeamLifecycle,
     ...(settings !== undefined ? { settings } : {}),
+    ...(issueTracker !== undefined ? { issueTracker } : {}),
     provenance: { registered_by: prov.registered_by as string, registered_at: prov.registered_at as string, updated_at: prov.updated_at as string },
   };
 }
@@ -477,6 +502,14 @@ function emitSettings(indent: string, settings: Record<string, YamlValue>): stri
   return lines;
 }
 
+/** One flow map in a fixed key order, every text through `scalar`, so it reads back as written. */
+function emitIssueTracker(tracker: IssueTracker): string {
+  const parts = [`type: ${scalar(tracker.type)}`, `project: ${scalar(tracker.project)}`];
+  if (tracker.team !== undefined) parts.push(`team: ${scalar(tracker.team)}`);
+  if (tracker.url !== undefined) parts.push(`url: ${scalar(tracker.url)}`);
+  return `{ ${parts.join(', ')} }`;
+}
+
 function emit(teams: Record<string, TeamRecord>): string {
   const ids = Object.keys(teams).sort();
   if (!ids.length) return 'teams: {}\n';
@@ -513,6 +546,8 @@ function emit(teams: Record<string, TeamRecord>): string {
       lines.push('    roster: []');
     }
     lines.push(`    lifecycle: ${team.lifecycle}`);
+    // Only a team that names a tracker says so: absent and "none" are the same record.
+    if (team.issueTracker) lines.push(`    issue_tracker: ${emitIssueTracker(team.issueTracker)}`);
     if (team.settings && Object.keys(team.settings).length > 0) {
       lines.push(...emitSettings('    ', team.settings));
     }

@@ -50,7 +50,67 @@ of the SHA-256 of the root's real path, so two stores of one root are one team:
 | `lobbies` | the lobby recorded for each session, `session` among them — recorded at a session's first registration and kept: editing the file's `entity` never moves a registered team's lobby, and an explicit `lobby:` in the file re-records it. A second team file in the same checkout, and `up --session alt`, each record their own session's entry without taking another's; `up --session alt` also records the file's own session, so a plain `team check` reads the same lobby back. A record written before the map reads as one entry: `lobby` under `session` |
 | `roster` | one `{agent, seat, role}` per seat, and the capabilities on the seats that hold them: `leads: true` on the one seat the team file marks as its lead, `assistant: true` on the one it marks as its entity's assistant — readable without a role name; an absent field means the seat is not known to hold the capability, so a record written before the fields reads unchanged |
 | `lifecycle` | `defined`, `running`, `stopped` or `archived` |
+| `issue_tracker` | optional: the issue tracker project the team's work is tracked in, one per team — see [The team's issue tracker](#the-teams-issue-tracker). Absent means the team names none |
 | `provenance` | including when the record was last updated |
+
+### The team's issue tracker
+
+A team record can name the project, in some issue tracker, where the team's work is tracked. It is
+a property of the team, not of an agent or a seat, and it is a reference only: the tracker's name
+and where to look, never a credential. TeamCLI stores and returns it; it does not call the tracker.
+
+```yaml
+issue_tracker: { type: linear, project: "Team CLI", team: FLO }
+```
+
+| Key | Required | Format |
+| --- | --- | --- |
+| `type` | yes | the tracker kind, an open word and not a fixed list: `^[a-z][a-z0-9-]{0,31}$` — lowercase, starting with a letter, then letters, digits or `-`, at most 32 characters |
+| `project` | yes | the tracker's own reference to the project, as free text, 1 to 200 characters: a Linear project name, a GitHub `owner/repo` or project |
+| `team` | no | the tracker's team or namespace key, when it has one, 1 to 64 characters: a Linear team key such as `FLO` |
+| `url` | no | a link to the project: an absolute `http` or `https` URL of at most 512 characters, with no credentials (`user:password@`), no query and no fragment |
+
+Every text is one line: no control characters or line breaks, and no whitespace at either end. No
+other key is accepted, and a value that looks like a credential (a Linear or GitHub token prefix
+followed by a token) is refused. Do not put a token, a password or an API key here, in any key; the
+field is read by every command that reads the registry and is not a place for secrets.
+
+`type` is not an enum: `linear` and `github` are the values the documentation names, and any other
+word that matches the pattern is valid and kept as written. What a word means is for whoever reads
+the field; TeamCLI attaches no behaviour to one.
+
+**Absent means no tracker.** A team whose record has no `issue_tracker` names none: every record
+written before the field existed reads this way, and it is never written as an empty value or
+`null`. A record that has the key but not in the shape above is refused with a message naming the
+file, the team and the key, like any other malformed record, and the registry file is left as it
+was: it is never dropped or rewritten. Every write that changes the team's record (`up`, `down`,
+`init`, `register`, a roster or lifecycle change, a settings write) keeps the field exactly as it
+was.
+
+Examples:
+
+```yaml
+# Linear: the project by name, the Linear team by its key.
+issue_tracker: { type: linear, project: "Team CLI", team: FLO }
+
+# GitHub: a repository as owner/repo, with a link to it.
+issue_tracker: { type: github, project: acme/widgets, url: "https://github.com/acme/widgets" }
+
+# A tracker TeamCLI has no word for: any valid type works, and the project is free text.
+issue_tracker: { type: youtrack, project: "Platform" }
+```
+
+**Older builds.** A build from before this field reads the key without complaint — the team record
+reader of those builds ignores keys it does not know — but its writers rebuild a team's record from
+the fields they know, so the first write by an older build (`up`, `down`, a roster change) drops
+`issue_tracker` from the file without a message. On a machine where more than one TeamCLI build
+runs against the same home, set the field only after every build there is upgraded, or set it again
+afterwards. The same holds the other way for a build that knows the field, reading a record written
+by a later build that adds a key to it: the key is refused, not ignored, as above.
+
+**Setting it today.** The field is part of the registry format and of the registry module's
+write path (`upsertTeam` takes an `issueTracker`, and `null` removes it). No team file section and
+no command sets it yet.
 
 ## The project record
 
