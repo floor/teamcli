@@ -85,6 +85,11 @@ if [ "$dry" = 1 ]; then
   exit 0
 fi
 
+# Shared entity policies are also read by the global CLI, even when setup uses team-branch.
+# Fail before helper installation, owner prompts or policy writes if that reader is too old.
+installed_team=$(command -v team) || { echo "install team with the owner policy catalogue first" >&2; exit 1; }
+node "$repo/scripts/check-installed-policies.mjs" "$installed_team" "$signer"
+
 say "1 owner-seat helper"
 if [ "$test_signer" = 1 ]; then
   mkdir -p "$seatdir"
