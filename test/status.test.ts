@@ -458,9 +458,9 @@ describe('team status', () => {
   });
 
   test('--session reads another session, with its own state', async () => {
-    const { out } = await status('--session', 'team-test');
-    expect(out).toContain('session "team-test"');
-    expect(out).toContain('no watch has run for this session\n  repair: team watch --session team-test');
+    const { out } = await status('--session', 'sandbox');
+    expect(out).toContain('session "sandbox"');
+    expect(out).toContain('no watch has run for this session\n  repair: team watch --session sandbox');
   });
 
   test('a broken file: status falls back to the last valid copy and says so first', async () => {

@@ -19,8 +19,8 @@ const AGENT = 'agt_0123456789ab';
 const OTHER_AGENT = 'agt_ffffffffffff';
 const TEAM = 'cccccccccccc';
 const NOW = new Date('2026-10-17T12:00:00.000Z');
-const ROOT = '/Users/x/Code/acme';
-const OTHER_ROOT = '/Users/x/Code/other';
+const ROOT = '/home/x/Code/acme';
+const OTHER_ROOT = '/home/x/Code/other';
 
 /** The map's seat-record rows: the read surfaces that admit a caller by a registry record alone. */
 const SEAT_RECORDS = Object.entries(COMMAND_GATES)

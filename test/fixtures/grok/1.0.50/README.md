@@ -1,7 +1,7 @@
 # Grok (grok) 1.0.50 terminal captures
 
 Captured from the installed macOS grok CLI on 2026-10-09 with herdr 0.7.1,
-`herdr --session team-test-grok pane read --source visible --lines 40`, in a scratch session
+`herdr --session sandbox-grok pane read --source visible --lines 40`, in a scratch session
 created for the purpose (stopped and deleted afterwards; the owner's default session was not
 touched). There was at most one grok seat. `grok --version` printed
 `grok 1.0.50 (c58f321264ba) [stable]`. The pane was launched with the launch line itself,

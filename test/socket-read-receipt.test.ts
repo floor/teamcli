@@ -309,7 +309,7 @@ test('the read receipt verifies with read_by and an older receipt without it sti
 
 test('a seat with no nickname opens the frame with its written label name, and with its seat name when that is blank', async () => {
   const made = world(null, [
-    { name: 'labelled', role: 'builder', label: 'Epimetheus · builder 5' },
+    { name: 'labelled', role: 'builder', label: 'Seat Eight · builder 5' },
     { name: 'blank', role: 'builder', label: '   ' },
   ]);
   cleanup = made.cleanup;
@@ -323,7 +323,7 @@ test('a seat with no nickname opens the frame with its written label name, and w
   // The roster holds no nickname, so the written label's name before the middle dot stands.
   expect(await runSend(['lead', 'from the label'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('Message from Epimetheus (labelled@acme)\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Message from Seat Eight (labelled@acme)\n\n')).toBe(true);
 
   // A written label with nothing before the middle dot falls through to the seat name.
   const blank = registerSeat(made, 'blank', 'w5:p1');

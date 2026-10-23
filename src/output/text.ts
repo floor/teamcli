@@ -6,7 +6,7 @@ import { ttyStyle, type TtyStyle } from './tty.ts';
 
 /**
  * Formats a filesystem path or human-facing text so that any path under `home` (`$HOME`)
- * is displayed with a `~` prefix (`~/.config/team/lobby` instead of `/Users/name/.config/team/lobby`),
+ * is displayed with a `~` prefix (`~/.config/team/lobby` instead of `/home/name/.config/team/lobby`),
  * while JSON output keeps absolute paths.
  */
 export function displayPath(text: string, home: string = homedir()): string {

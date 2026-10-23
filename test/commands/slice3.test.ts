@@ -636,7 +636,7 @@ describe('team doctor', () => {
 
   test('--session names another session', async () => {
     await approve([], OWNER);
-    expect((await doctor({}, ['--session', 'team-test'])).out).toContain('note  session team-test is not running\n');
+    expect((await doctor({}, ['--session', 'sandbox'])).out).toContain('note  session sandbox is not running\n');
   });
 });
 
@@ -717,12 +717,12 @@ describe('team up', () => {
   test('--dry-run names an edited file and a silent herdr', async () => {
     await approve([], OWNER);
     edit((text) => text.replace('launch: team-deepseek', 'launch: team-deepseek --yolo'));
-    const run = await up(['--dry-run', '--session', 'team-test'], OWNER, { sessionRunning: () => null });
+    const run = await up(['--dry-run', '--session', 'sandbox'], OWNER, { sessionRunning: () => null });
     expect(run.out).not.toContain('not the approved one');
     // The plan's rules line still says never to run the command. That is not a refusal.
     expect(run.out).not.toContain('run `team approve`');
     expect(run.out).toContain("! up would refuse: herdr doesn't answer\n");
-    expect(run.out).toContain('+ herdr --session team-test workspace create');
+    expect(run.out).toContain('+ herdr --session sandbox workspace create');
   });
 
   test('a resumed session passes when the state records its agents', async () => {

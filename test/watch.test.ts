@@ -1883,7 +1883,7 @@ describe('team watch', () => {
     expect(await runWatch(['--file', file], io, sources(1, { alive: (pid) => pid === 99 }))).toBe(1);
     expect(io.err).toContain('a watch already runs for the session "acme-web" (pid 99)');
     // Another session is free, and so is this one once the first watch is dead.
-    expect(await runWatch(['--file', file, '--session', 'team-test'], testIo(dir, { kind: 'owner' }), sources(1, { alive: (pid) => pid === 99 }))).toBe(0);
+    expect(await runWatch(['--file', file, '--session', 'sandbox'], testIo(dir, { kind: 'owner' }), sources(1, { alive: (pid) => pid === 99 }))).toBe(0);
     expect(await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(1))).toBe(0);
   });
 
@@ -2003,7 +2003,7 @@ describe('team watch', () => {
     // Anyone may watch another session; only the file's own session's watch is the cache that
     // `up` and `add` count (§ 4.4).
     const io = testIo(dir, { kind: 'owner' });
-    expect(await runWatch(['--file', file, '--session', 'team-test'], io, sources(2, { readChecks: checks }))).toBe(0);
+    expect(await runWatch(['--file', file, '--session', 'sandbox'], io, sources(2, { readChecks: checks }))).toBe(0);
     expect(loadReadings(join(dir, '.agents'))).toEqual([]);
     expect(loadSpendReadings(join(dir, '.agents'))).toEqual([]);
     expect(io.out.match(/is not this file's "acme-web"/g)?.length).toBe(1);
@@ -2115,7 +2115,7 @@ describe('team watch', () => {
     // A record in the older mailbox store (`.agents/messages/<seat>`): `team messages` serves it,
     // but the ring's line names `team drops --read`, which reads only the drop folder. Ringing it
     // typed a command that printed nothing and left the record unread, so the wake re-fired every
-    // pass — the report Atlas reproduced after the runtime report drops had been moved out.
+    // pass — the report Reviewer reproduced after the runtime report drops had been moved out.
     const body = 'the message body itself';
     planted('deepseek-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });

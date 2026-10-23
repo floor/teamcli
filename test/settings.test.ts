@@ -32,7 +32,7 @@ delivery_order: [mcp-inbox, typed]
 seats:
   - role: coordinator
     name: lead
-    nickname: Atlas
+    nickname: Reviewer
     effort: high
     label: lead
     cli: claude-code
@@ -116,7 +116,7 @@ describe('a seat the launcher selects the model for', () => {
   test('the model reads unset, because the file does not decide it', async () => {
     writeFileSync(
       join(root, '.agents', 'team.yaml'),
-      TEAM.replace('    name: lead\n    nickname: Atlas', '    name: lead\n    model_from: launcher\n    nickname: Atlas'),
+      TEAM.replace('    name: lead\n    nickname: Reviewer', '    name: lead\n    model_from: launcher\n    nickname: Reviewer'),
     );
     const result = await run(['lead', '--json']);
     expect(result.code).toBe(0);
@@ -138,7 +138,7 @@ describe('a seat that writes every setting', () => {
       '  KEY             VALUE             SOURCE      APPLIES\n'
       + '  model           Claude Opus       team file   restart that resumes\n'
       + '  effort          high              team file   restart that resumes\n'
-      + '  nickname        Atlas             team file   at once\n'
+      + '  nickname        Reviewer          team file   at once\n'
       + '  delivery_order  mcp-inbox, typed  team order  at once\n'
       + '  human           false             default     at once\n',
     );
@@ -185,7 +185,7 @@ describe('--json', () => {
     expect(doc.settings).toEqual([
       { key: 'model', value: 'Claude Opus', source: 'team file', applies: 'restart-resume' },
       { key: 'effort', value: 'high', source: 'team file', applies: 'restart-resume' },
-      { key: 'nickname', value: 'Atlas', source: 'team file', applies: 'at-once' },
+      { key: 'nickname', value: 'Reviewer', source: 'team file', applies: 'at-once' },
       { key: 'delivery_order', value: ['mcp-inbox', 'typed'], source: 'team default', applies: 'at-once' },
       { key: 'human', value: false, source: 'default', applies: 'at-once' },
     ]);
@@ -300,7 +300,7 @@ describe('signed seat records', () => {
     });
     expect(doc.settings.find((entry) => entry.key === 'nickname')).toEqual({
       key: 'nickname',
-      value: 'Atlas',
+      value: 'Reviewer',
       source: 'team file',
       applies: 'at-once',
     });
@@ -428,7 +428,7 @@ describe('the write verbs', () => {
     const doc = JSON.parse(read.out) as { settings: { key: string; value: unknown; source: string; applies: string; source_file?: string }[] };
     expect(doc.settings.find((entry) => entry.key === 'nickname')).toEqual({
       key: 'nickname',
-      value: 'Atlas',
+      value: 'Reviewer',
       source: 'team file',
       applies: 'at-once',
     });
@@ -584,11 +584,11 @@ describe('the write verbs', () => {
   });
 
   test('a nickname collision on a seat that never launched creates nothing', async () => {
-    // The team file gives lead the word "Atlas"; a first write for worker is checked against the
+    // The team file gives lead the word "Reviewer"; a first write for worker is checked against the
     // composed roster before any record exists for either of them.
-    const result = await run(['set', 'worker', 'nickname=Atlas']);
+    const result = await run(['set', 'worker', 'nickname=Reviewer']);
     expect(result.code).toBe(2);
-    expect(result.err).toContain('seat "worker": the nickname "Atlas" is also on seat "lead"');
+    expect(result.err).toContain('seat "worker": the nickname "Reviewer" is also on seat "lead"');
     expect(readAgents(home)).toHaveLength(0);
   });
 

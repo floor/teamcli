@@ -24,7 +24,7 @@ import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-19T09:00:00Z');
 const AT = NOW.toISOString();
-const SOCKET = '/Users/someone/.config/team/daemon.sock';
+const SOCKET = '/home/someone/.config/team/daemon.sock';
 const HEALTHY_LINE = `machine daemon: running since 2026-10-19T08:00:00.000Z (pid 42), started by the system's service manager`;
 
 function health(over: Partial<DaemonHealth> = {}): DaemonHealth {

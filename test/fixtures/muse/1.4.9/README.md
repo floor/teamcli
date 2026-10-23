@@ -4,7 +4,7 @@ Taken from the installed macOS build (`muse --version` printed `Muse Code 1.4.9 
 with herdr 0.7.1, `pane read --source visible` (muse draws on the alternate screen, so the
 default read shows nothing), in a scratch session made for the purpose. The composer's rules are
 53 columns wide in the idle and usage captures. These are the operator spike's captures, split
-where one file held two screens. The owner's home folder reads `/Users/example`,
+where one file held two screens. The owner's home folder reads `/home/example`,
 the workspace path is `<workspace>`, and a session id is `<session-id>`, padded to the width of
 the original so the box stays aligned. The owner's account name and address were in a `/status`
 capture that is not kept here.

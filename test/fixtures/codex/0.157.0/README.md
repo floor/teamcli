@@ -1,7 +1,7 @@
 # Codex 0.157.0 terminal captures
 
 Captured from the installed macOS Codex CLI on 2026-10-03 with herdr 0.7.1,
-`pane read --source visible --lines 80`, in the scratch session `team-test-codex`.
+`pane read --source visible --lines 80`, in the scratch session `sandbox-codex`.
 There was at most one Codex seat at a time. The session was stopped and deleted;
 the default session had eight agents before and after. Config and auth hashes were unchanged.
 
@@ -68,7 +68,7 @@ acknowledgement and `/exit`, then its workspace and scratch session were removed
 
 ## Round 3: the person's own box — the trust question before the composer
 
-A repeat scratch run on 2026-10-04 (`team-test-pc-codex`, the profile's own
+A repeat scratch run on 2026-10-04 (`sandbox-pc-codex`, the profile's own
 `codex -a never -s danger-full-access --no-daemon --no-alt-screen`) opened on the
 workspace trust question before any composer was drawn: `capture-sandbox/codex` is
 not trusted, the question shows `1. Trust and continue`, and the capture rule allows
@@ -127,7 +127,7 @@ recognizes. Without an override pattern the line reads no figure.
 
 ## Permission dialog
 
-- `permission.txt` was captured on 2026-10-04 in `team-test-codex-perm`, with one
+- `permission.txt` was captured on 2026-10-04 in `sandbox-codex-perm`, with one
 seat in a throwaway folder under an already-trusted project. The command was
 `codex -a on-request -s danger-full-access --no-daemon --no-alt-screen -c check_for_update_on_startup=false`
 with an initial prompt requesting approval for `ls`. No input followed launch;
