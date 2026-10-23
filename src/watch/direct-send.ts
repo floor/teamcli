@@ -14,7 +14,7 @@
 import type { Io } from '../io.ts';
 import { sendDirect, realHost, type SendHost, type WatchSendPrincipal } from '../commands/send.ts';
 import { verifyWatchAuthority, WATCH_DIRECT_WORK, type WatchActorVerdict } from './authority.ts';
-import { workPushResultOf, type WorkPushRequest, type WorkPushResult } from './dispatch.ts';
+import { workPushResultOf, type WorkPush, type WorkPushRequest, type WorkPushResult } from './dispatch.ts';
 
 /** What a watch host hands its direct-work send: the team root and session it was bound to, and
  *  the epoch it captured when it acquired the watch. */
@@ -53,6 +53,21 @@ export async function sendWatchDirect(
     watch: principal,
   });
   return workPushResultOf(run.result, said.join(''));
+}
+
+/** The direct-work route a watch source may wire, chosen by whether this process holds a verified
+ *  watch context. With one, the send is the verified `sendWatchDirect` above; without one — a
+ *  watch started by hand in a pane or a terminal, which records no epoch — the wake is held, and
+ *  no transport, admission walk or sender identity is attempted. A placement is never used as the
+ *  sender: an infrastructure pane is not a worker and is not registered as one. */
+export function watchPushWork(context: WatchDirectContext | null, host: SendHost = realHost): WorkPush {
+  if (context === null) {
+    return async () => ({
+      ok: false,
+      refused: 'this watch holds no verified watch authority, so the work wake is held and nothing was typed',
+    });
+  }
+  return (request) => sendWatchDirect(context, request, host);
 }
 
 /** The actual verifier, read as a verdict on every path: an exception is a refusal with its own
