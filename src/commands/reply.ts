@@ -629,10 +629,57 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
         if (!('release' in seatLock)) return { ok: false, why: `${me}: another command holds it (pid ${String(seatLock.held)}); nothing was written` };
         try {
           sealDropTree(dir, session, me);
-          const placedInbox = ensureClientInbox(root, session, grant.clientId);
-          if (!placedInbox.ok) return { ok: false, why: `the client inbox cannot be used: ${placedInbox.why}; nothing was written` };
+          // Both publication locks are held here. The thread facts and the registry binding were
+          // read before the waits; a close, a TTL boundary, a cap or a rebinding that landed while
+          // this call waited must be seen now, in the section that publishes, and must refuse.
+          const freshInbox = ensureClientInbox(root, session, grant.clientId);
+          if (!freshInbox.ok) return { ok: false, why: `the client inbox cannot be used: ${freshInbox.why}; nothing was written` };
+          const freshScan = scanClientInbox({ home: host.home, root, session, clientId: grant.clientId, key });
+          if (!freshScan.ok) return { ok: false, why: `${freshScan.why}; nothing was written` };
+          const freshOnThread = freshScan.scan.shown
+            .filter((reply) => reply.thread === answered.id)
+            .map((reply) => ({ at: reply.at }));
+          const freshState = threadStateOf(root, session, answered.id, key, host.now(), thresholds.thresholds, freshOnThread);
+          if (!freshState.open) {
+            return {
+              ok: false,
+              why: `${closedWords(answered.id, freshState.reason ?? 'close', thresholds.thresholds)}; a client thread is answered only while it is open, never reopened; nothing was written`,
+            };
+          }
+          const freshResolved = resolveEntityCoordinator(host.home, grant.entity, {
+            seat: grant.recipientSeat,
+            clientId: grant.clientId,
+            ...(grant.team !== undefined ? { team: grant.team } : {}),
+          });
+          if (!freshResolved.ok) {
+            return { ok: false, why: `the grant's recipient cannot be resolved: ${freshResolved.why}; nothing was written` };
+          }
+          const freshCoordinator = freshResolved.coordinator;
+          if (
+            freshCoordinator.teamId !== grant.teamId ||
+            freshCoordinator.recipientSeat !== grant.recipientSeat ||
+            freshCoordinator.recipientId !== grant.recipientId
+          ) {
+            return {
+              ok: false,
+              why: `the registry no longer names the team and recipient the grant ${grant.grantId} signs; a changed binding makes the thread unanswerable; nothing was written`,
+            };
+          }
+          if (!samePath(freshCoordinator.teamRoot, root) || freshCoordinator.session !== session) {
+            return {
+              ok: false,
+              why: `the grant's recipient lives in another checkout or session than this record; a changed binding makes the thread unanswerable; nothing was written`,
+            };
+          }
+          const freshAgent = findAgent(host.home, { team: freshCoordinator.teamId, seat: me });
+          if (freshAgent === null || freshAgent.id !== grant.recipientId) {
+            return {
+              ok: false,
+              why: `seat ${me} has no registered agent record in team ${freshCoordinator.teamId} naming ${grant.recipientId}; a reply never claims an identity it does not have; nothing was written`,
+            };
+          }
           const signed = signRecord(payload, host.home);
-          const wrote = writeClientInboxFile(placedInbox.dir, replyId, `${JSON.stringify(signed, null, 2)}\n`);
+          const wrote = writeClientInboxFile(freshInbox.dir, replyId, `${JSON.stringify(signed, null, 2)}\n`);
           if (wrote === 'exists') return { ok: false, why: `client ${grant.clientId}: a record already holds the id ${replyId}; nothing was written` };
           if (wrote !== 'written') return { ok: false, why: 'the record could not be written; nothing was written' };
           // The answered record moves to `replied`: a seat-side receipt beside the client's
