@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
+import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
 
 // The team files as they were at tag v0.1.2, copied into fixtures/legacy/v0.1.2 and never edited:
 // the digests below are pinned to those copies, so nothing here reads a live team file and an edit
@@ -81,7 +82,8 @@ function approveAsV012(text: string, seats: Record<string, string>, file: string
   const parsed = team(text);
   const approval = approvalOf(parsed, home);
   approval.fingerprints = { ...approval.fingerprints, seats };
-  writeApproval(storePath(parsed.project, home, home), { approval, file }, parsed.seats, home);
+  // v0.1.2 signed the stored text; that record still verifies on the compatibility path.
+  writeTextSignedApproval(storePath(parsed.project, home, home), { approval, file }, parsed.seats, home);
 }
 
 describe('an approval written by v0.1.2', () => {

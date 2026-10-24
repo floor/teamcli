@@ -674,3 +674,61 @@ describe('round 2: what a standing that is not verified yields', () => {
     expect(budgetsInForceOf(gate, loaded.team).accounts.anthropic).toMatchObject({ reserve: 20 });
   });
 });
+
+describe('the signature covers the canonical team record, not the text', () => {
+  // The same team as FILE with its top-level keys reordered, its seat keys reordered and a comment.
+  const REORDERED = `# reordered by hand
+operator: lead
+seats:
+  - name: lead
+    role: coordinator
+    vendor: anthropic
+    label: lead
+    cli: claude-code
+    launch: claude --model claude-opus-5-5
+    model: Claude Opus
+    version: "5.5"
+project: acme
+workspace:
+  mode: shared
+coordinator: lead
+format: 1
+`;
+
+  test('a stored copy reordered and reformatted still verifies, signed over the record', () => {
+    approve();
+    expect(standing()).toMatchObject({ kind: 'verified', signedOver: 'record' });
+    restore({ ...stored(), file: REORDERED });
+    expect(standing()).toMatchObject({ kind: 'verified', signedOver: 'record' });
+  });
+
+  test('a stored copy whose meaning changed refuses', () => {
+    approve();
+    restore({ ...stored(), file: FILE.replace('claude-opus-5-5', 'claude-haiku-5-5') });
+    expect(standing().kind).toBe('refused');
+    restore({ ...stored(), file: 'not a team file: [' });
+    expect(standing().kind).toBe('refused');
+  });
+
+  test('a record signed over the text before this version still verifies, and only as text', () => {
+    const loaded = team();
+    const store = storePath(loaded.team.project, loaded.root, home);
+    const at = new Date('2026-10-03T14:02:00Z');
+    writeApproval(store, { approval: approvalOf(loaded.team, loaded.root, at), file: FILE }, loaded.team.seats, home, at);
+    const record = stored();
+    // Re-sign the same generation the way earlier versions did: over the stored text.
+    const legacy = signPayload(payloadOf(readApproval(store)!.approval, FILE, record.generation as number), keyOf(home));
+    restore({ ...record, signature: legacy });
+    expect(standing()).toMatchObject({ kind: 'verified', signedOver: 'text' });
+    // The text form binds the bytes: a reformatted copy under a text signature refuses.
+    restore({ ...record, signature: legacy, file: REORDERED });
+    expect(standing().kind).toBe('refused');
+  });
+
+  test('nothing is signed for a copy that is not a team record', () => {
+    const loaded = team();
+    expect(() =>
+      writeApproval(storePath('acme', loaded.root, home), { approval: approvalOf(loaded.team, loaded.root), file: 'format: 1\n' }, [], home),
+    ).toThrow('nothing signed');
+  });
+});

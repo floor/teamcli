@@ -7,7 +7,9 @@ import { fingerprints } from '../src/approve/fingerprint.ts';
 import { checkDrift, checkReadings, resolveCheck, resolveChecks } from '../src/budgets/checks.ts';
 import { blocksLaunch, doctorFindings, type DoctorSources } from '../src/commands/doctor.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
+import { approvalStanding, storePath } from '../src/store/store.ts';
+// The stored copy is not what these tests read: a text-signed record lets it be a stub.
+import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
 
 const minimal = `format: 1
 project: acme
@@ -122,7 +124,7 @@ describe('budgets', () => {
       const first = resolveChecks(team, dir, '');
       expect(first.ok).toBe(true);
       if (!first.ok) return;
-      writeApproval(storePath(team.project, dir, home), {
+      writeTextSignedApproval(storePath(team.project, dir, home), {
         approval: approvalOf(team, dir, new Date('2026-10-04T00:00:00Z'), first.checks),
         file: 'format: 1\n',
       }, [], home);

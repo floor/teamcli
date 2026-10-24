@@ -12,6 +12,7 @@ import { cleanedIo, type Io } from './io.ts';
 import { plainText } from './launch/plain.ts';
 import { writeJson, writeJsonError } from './output/index.ts';
 import { withLock } from './state.ts';
+import { approvedRecordOf } from './store/store.ts';
 import { parseYaml, type YamlNode } from './yaml.ts';
 
 export type AuthorityEdit =
@@ -103,7 +104,9 @@ export async function runAuthorityEdit(
     }
     return 'invalid';
   }
-  if (next === loaded.text) {
+  // Unchanged is decided on the canonical team record, the form an approval signs, not on the
+  // text: an edit that only reorders or reformats is no change. A text with no record is a change.
+  if (next === loaded.text || sameRecord(loaded.text, next)) {
     if (json) {
       writeAuthorityJson(rawIo, command, edit, loaded.team, Boolean(options.dryRun), 'unchanged', `${command}: unchanged`);
     } else {
@@ -185,6 +188,12 @@ function writeAuthorityJson(
         }
       : {}),
   });
+}
+
+/** Whether two texts are the same canonical team record; false when either has none. */
+function sameRecord(a: string, b: string): boolean {
+  const left = approvedRecordOf(a);
+  return left !== null && left === approvedRecordOf(b);
 }
 
 function message(error: unknown): string {
