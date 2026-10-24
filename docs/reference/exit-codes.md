@@ -137,6 +137,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
 | `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.keygen.pane` | `client` | 1 | keygen ran inside a team pane (a herdr seat or its child) and was refused before any directory was written | `team client keygen --out ~/.config/team-client/grok-bot` |
 | `client.keygen.refused` | `client` | 1 | the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked | `team client keygen --out .` |
 | `client.keygen.write` | `client` | 1 | the key directory already holds a key, or the pair could not be written 0600 | `team client keygen --out ~/.config/team-client/grok-bot` |
 | `client.keygen.invocation` | `client` | 2 | the command arguments are invalid | `team client keygen` |
@@ -301,6 +302,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
 | `messages.client-key` | `messages` | 1 | the client key is missing or unreadable, or the ack receipt could not be signed with it | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `messages.client-pane` | `messages` | 1 | a client reading ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team messages --client client-grant.json --key client.key` |
 | `messages.client-refused` | `messages` | 1 | the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify | `team messages --client client-grant.json --key client.key` |
 | `messages.file` | `messages` | 1 | the team file can't be read | `team messages` |
 | `messages.id` | `messages` | 1 | the filename is not the record's id | `team messages` |
@@ -582,6 +584,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
+| `send.client-pane` | `send` | 1 | a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team send --client client-grant.json --key client.key orchestrator@floor hello` |
 | `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |

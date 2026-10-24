@@ -921,6 +921,13 @@
     {
       "code": 1,
       "command": "client",
+      "id": "client.keygen.pane",
+      "meaning": "keygen ran inside a team pane (a herdr seat or its child) and was refused before any directory was written",
+      "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 1,
+      "command": "client",
       "id": "client.keygen.refused",
       "meaning": "the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked",
       "trigger": "team client keygen --out ."
@@ -2065,6 +2072,13 @@
       "id": "messages.client-key",
       "meaning": "the client key is missing or unreadable, or the ack receipt could not be signed with it",
       "trigger": "team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+    },
+    {
+      "code": 1,
+      "command": "messages",
+      "id": "messages.client-pane",
+      "meaning": "a client reading ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened",
+      "trigger": "team messages --client client-grant.json --key client.key"
     },
     {
       "code": 1,
@@ -4032,6 +4046,13 @@
       "id": "send.brief-memory",
       "meaning": "a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback",
       "trigger": "team send worker --brief brief.md"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.client-pane",
+      "meaning": "a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened",
+      "trigger": "team send --client client-grant.json --key client.key orchestrator@floor hello"
     },
     {
       "code": 1,

@@ -92,7 +92,7 @@ then by id; `--limit` cuts that page. `--ack` is independent of the page: its re
 against the whole verified inbox, so a reply outside the page can be acknowledged without its
 body being printed. A receipt is written once and never replaced: a second acknowledgement of the
 same reply prints `ack: <id> already acknowledged` and writes nothing. Every client invocation,
-a usage refusal included, writes `key isolation: not enforced (pane guard pending)` to stderr
+a usage refusal included, writes `key isolation: enforced against team panes (key file still readable by same-user processes)` to stderr
 first; under `--json` the same line also rides in the document as `key_isolation`.
 
 | Outcome | What is printed | Exit |
@@ -111,7 +111,7 @@ then by id; `--limit` cuts that page. `--ack` is independent of the page: its re
 against the whole verified inbox, so a reply outside the page can be acknowledged without its
 body being printed. A receipt is written once and never replaced: a second acknowledgement of the
 same reply prints `ack: <id> already acknowledged` and writes nothing. Every client invocation,
-a usage refusal included, writes `key isolation: not enforced (pane guard pending)` to stderr
+a usage refusal included, writes `key isolation: enforced against team panes (key file still readable by same-user processes)` to stderr
 first; under `--json` the same line also rides in the document as `key_isolation`.
 
 | Outcome | What is printed | Exit |

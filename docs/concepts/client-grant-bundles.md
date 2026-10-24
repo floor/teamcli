@@ -211,5 +211,6 @@ no one and writes nothing. `team revoke <cg_id>` ends the whole bundle at once.
 ## Key isolation
 
 The client key is a file outside every team folder. That is a file-hygiene rule, not isolation:
-every seat runs as the owner's user, so `team client keygen` says `key isolation: not enforced
-(pane guard pending)`, and a bundle grant is no stronger than that.
+every seat runs as the owner's user. Client commands refuse to run inside a team pane, so
+`team client keygen` says `key isolation: enforced against team panes (key file still readable by
+same-user processes)`, and a bundle grant is no stronger than that.

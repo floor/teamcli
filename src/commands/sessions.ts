@@ -203,7 +203,7 @@ export async function runSessions(argv: string[], io: Io, sources: SessionsSourc
   if (args.values.client !== undefined) {
     if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
     const at = sources.now();
-    const verified = verifyClientForm({ home: sources.home, now: at }, { op: 'sessions', values: args.values, cwd: io.cwd });
+    const verified = verifyClientForm({ home: sources.home, now: at, io }, { op: 'sessions', values: args.values, cwd: io.cwd });
     const stood = verified.ok ? authorizeClientRun(sources.home, verified.run, 'sessions', at) : null;
     if (!verified.ok || stood !== null) {
       const why = plainText(verified.ok ? stood! : verified.why);

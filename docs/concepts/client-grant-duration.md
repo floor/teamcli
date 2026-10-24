@@ -136,7 +136,7 @@ for this: a bump would only change the wording of the refusal, and the refusal a
 ## Risks the owner should weigh
 
 - `none` makes the client key a standing credential. The key is a file readable by every process of
-  the owner's user (`key isolation: not enforced (pane guard pending)`), so a no-end-date grant is as
+  the owner's user (`key isolation: enforced against team panes (key file still readable by same-user processes)`), so a no-end-date grant is as
   strong as that file's secrecy forever. Rotate the client key (a new `team client keygen`, a new
   grant, `team revoke` of the old one) on a schedule you choose; TeamCLI does not do it for you.
 - A policy can be `none` for one kind only: `send=none` leaves `up` and `bundle` at ninety days.

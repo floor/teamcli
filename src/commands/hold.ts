@@ -84,7 +84,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   let clientRun: ClientRun | null = null;
   if (args.values.client !== undefined) {
     if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
-    const entered = enterClientForm({ home: sources.home ?? homedir(), now }, { op: 'hold', values: args.values, cwd: io.cwd });
+    const entered = enterClientForm({ home: sources.home ?? homedir(), now, io }, { op: 'hold', values: args.values, cwd: io.cwd });
     if (!entered.ok) return clientRefused(out, json, entered.why);
     clientRun = entered.run;
     io = { ...io, cwd: clientRun.root };

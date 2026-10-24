@@ -8,6 +8,8 @@
 
 import { createPrivateKey } from 'node:crypto';
 import type { BundleOp } from './bundle-ops.ts';
+import type { Io } from '../io.ts';
+import { clientPaneGuard } from './pane-guard.ts';
 import { randomBytes } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
@@ -185,9 +187,19 @@ export function verifyClientUp(input: {
   now: Date;
   /** The op this invocation runs; the grant must carry it. Default `up`. */
   op?: BundleOp;
+  /** The invocation's io: the pane guard places the caller from it before the grant or key is read.
+   *  `null` only where the caller has already run the guard itself (`team send --client` with a bundle). */
+  io: Io | null;
 }): ClientUpVerification {
   const op: BundleOp = input.op ?? 'up';
   const fail = (why: string, identified: ClientUpGrantRecord | null = null): ClientUpVerification => ({ ok: false, why, identified });
+  // The pane guard, judged before the grant or the key is opened (see pane-guard.ts): a caller inside
+  // a team pane never acts as the client. Dev mode lifts it with its warning.
+  if (input.io !== null) {
+    const pane = clientPaneGuard(input.io, op, input.home);
+    if (!pane.ok) return fail(pane.why);
+    if (pane.warning !== undefined) input.io.stderr(`${pane.warning}\n`);
+  }
   const presented = readClientUpGrantFile(input.home, input.grantFile, op);
   if (!presented.ok) return fail(presented.why);
   const grant = presented.grant;

@@ -31,6 +31,9 @@ import {
 } from '../src/client/records.ts';
 import { claimClientRequest } from '../src/client/replay.ts';
 import { resolveClientTarget, runClientSend } from '../src/client/send.ts';
+import { insideTeamPane } from '../src/client/pane-guard.ts';
+import { runClient } from '../src/commands/client.ts';
+import { runClientMessages } from '../src/client/inbox.ts';
 import { clientRequestBody, signClientRequest, type ClientRequest } from '../src/client/verify.ts';
 import { CLIENT_REQUEST_DOMAIN } from '../src/client/verify.ts';
 import type { Caller } from '../src/caller.ts';
@@ -761,5 +764,95 @@ describe('the declared limitation is printed on both paths', () => {
     const doc = JSON.parse(machine.out) as { key_isolation?: string; format?: number };
     expect(doc.format).toBe(1);
     expect(doc.key_isolation).toBe(KEY_ISOLATION_LINE);
+  });
+});
+
+describe('the client pane guard', () => {
+  const seat: Caller = { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' };
+  const pane: Caller = { kind: 'pane', pane: 'w1:p2' };
+  const underHerdr: Caller = { kind: 'unplaced', reason: 'it runs under herdr' };
+
+  test('places only callers inside a herdr pane as inside a team pane', () => {
+    expect(insideTeamPane(seat)).toBe(true);
+    expect(insideTeamPane(pane)).toBe(true);
+    expect(insideTeamPane(underHerdr)).toBe(true);
+    expect(insideTeamPane({ kind: 'owner' })).toBe(false);
+    expect(insideTeamPane({ kind: 'owner-no-tty' })).toBe(false);
+    expect(insideTeamPane({ kind: 'unplaced', reason: 'AGENT_UNATTENDED is set' })).toBe(false);
+  });
+
+  for (const caller of [seat, pane, underHerdr]) {
+    test(`send refuses a ${caller.kind} caller before any drop, exit 1`, async () => {
+      const f = fixture('pane-send');
+      const io = capture(f, { caller });
+      const code = await sendClient(f, clientArgs(f), io.io);
+      expect(code).toBe(1);
+      expect(io.err()).toContain('team send: refused: a client key is not used from inside a team pane');
+      expect(io.err().split('\n')[0]).toBe(KEY_ISOLATION_LINE);
+      expect(existsSync(f.dropDir) ? readdirSync(f.dropDir) : []).toEqual([]);
+    });
+  }
+
+  test('send --json names the refusal send.client-pane', async () => {
+    const f = fixture('pane-json');
+    const io = capture(f, { caller: seat });
+    const code = await sendClient(f, [...clientArgs(f), '--json'], io.io);
+    expect(code).toBe(1);
+    const doc = JSON.parse(io.out()) as { error: { code: string }; key_isolation: string };
+    expect(doc.error.code).toBe('send.client-pane');
+    expect(doc.key_isolation).toBe(KEY_ISOLATION_LINE);
+  });
+
+  test('a usage error inside a pane stays a usage error, exit 2', async () => {
+    const f = fixture('pane-usage');
+    const io = capture(f, { caller: seat });
+    expect(await sendClient(f, ['--client', f.grantPath], io.io)).toBe(2);
+  });
+
+  test('messages refuses a seat caller with messages.client-pane', () => {
+    const f = fixture('pane-messages');
+    const io = capture(f, { caller: seat });
+    const code = runClientMessages(
+      readArgs(['--client', f.grantPath, '--key', f.keyPath, '--json'], ['client', 'key', 'since', 'ack', 'limit', 'request-id'], ['json']),
+      io.io,
+      { home: f.home, now: () => NOW },
+      true,
+    );
+    expect(code).toBe(1);
+    expect((JSON.parse(io.out()) as { error: { code: string } }).error.code).toBe('messages.client-pane');
+  });
+
+  test('the client outside herdr is not refused by the guard', async () => {
+    const f = fixture('pane-owner');
+    const io = capture(f, { caller: { kind: 'owner-no-tty' } });
+    const code = await sendClient(f, clientArgs(f), io.io);
+    expect(io.err()).not.toContain('inside a team pane');
+    expect(code).toBe(0);
+  });
+});
+
+describe('the client pane guard on keygen', () => {
+  test('keygen inside a team pane is refused and writes nothing', () => {
+    const base = realpathSync(mkdtempSync(join(process.cwd(), '.client-keygen-pane-')));
+    made.push(base);
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const out = join(home, '.config', 'team-client', 'grok-bot');
+    let err = '';
+    const io: Io = { stdout: () => {}, stderr: (t) => { err += t; }, cwd: base, env: {}, stdinIsTTY: false, caller: { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' } };
+    expect(runClient(['keygen', '--out', out], io, home)).toBe(1);
+    expect(err).toContain('team client keygen: refused: a client key is not used from inside a team pane');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test('keygen by an external agent outside herdr is not refused by the guard', () => {
+    const base = realpathSync(mkdtempSync(join(process.cwd(), '.client-keygen-ext-')));
+    made.push(base);
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const out = join(home, '.config', 'team-client', 'grok-bot');
+    const io: Io = { stdout: () => {}, stderr: () => {}, cwd: base, env: {}, stdinIsTTY: false, caller: { kind: 'unplaced', reason: 'it is run by an agent (cursor-agent) outside herdr' } };
+    expect(runClient(['keygen', '--out', out], io, home)).toBe(0);
+    expect(existsSync(join(out, 'client.key'))).toBe(true);
   });
 });

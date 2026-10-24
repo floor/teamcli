@@ -193,7 +193,7 @@ meet the refusal every command gives them and exit 1.
 ## Output and exit codes
 
 Every run prints the declared limitation of a client app key, on stdout in text mode and as
-the `key_isolation` field in JSON: `key isolation: not enforced (pane guard pending)`.
+the `key_isolation` field in JSON: `key isolation: enforced against team panes (key file still readable by same-user processes)`.
 
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
@@ -268,7 +268,7 @@ housekeeping of a role word written the 0.3.5/0.4 way):
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
-key isolation: not enforced (pane guard pending)
+key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 no differences
@@ -284,7 +284,7 @@ policy: set model-rule=*=!anthropic at entity (lab)
 exit 0
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
-key isolation: not enforced (pane guard pending)
+key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed

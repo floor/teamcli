@@ -532,7 +532,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       ...(args.values.team !== undefined ? { team: args.values.team } : {}),
       now: clientNow,
       op: 'down',
-    });
+
+      io,    });
     if (!verified.ok) return clientRefusedFor(verified.why, verified.identified, clientNow);
     clientDown = { grant: verified.grant, signature: verified.signature, requestId: verified.requestId };
     // The folder is the grant's, whatever the caller's: from here every read is of that team.

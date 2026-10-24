@@ -635,7 +635,7 @@ describe('a grant with no end date verifies everywhere, and is not expired in th
   test('up, down and status: verified ten years on, each op from its own record', () => {
     const { w, up, down, observer } = noEndWorld('verify-up');
     const run = (grantPath: string, op: 'up' | 'down' | 'status') =>
-      verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.keyPath, cwd: w.acme, team: 'acme', now: FAR, op });
+      verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.keyPath, cwd: w.acme, team: 'acme', now: FAR, op, io: null });
     for (const [issued, op] of [[up, 'up'], [up, 'down'], [down, 'down'], [observer, 'status']] as const) {
       const verified = run(issued.path, op);
       expect(verified.ok, verified.ok ? '' : verified.why).toBe(true);
@@ -664,7 +664,7 @@ describe('a grant with no end date verifies everywhere, and is not expired in th
     expect(afterSend.code).toBe(1);
     expect(afterSend.err).toContain('was revoked');
     const verify = (grantPath: string, op: 'up' | 'down' | 'status') =>
-      verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.keyPath, cwd: w.acme, team: 'acme', now: FAR, op });
+      verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.keyPath, cwd: w.acme, team: 'acme', now: FAR, op, io: null });
     for (const [issued, op] of [[up, 'up'], [up, 'down'], [observer, 'status']] as const) {
       const verified = verify(issued.path, op);
       expect(verified.ok).toBe(false);

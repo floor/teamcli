@@ -195,7 +195,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   if (args.values.client !== undefined) {
     if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
     const at = sources.now();
-    const verified = verifyClientForm({ home: sources.home ?? homedir(), now: at }, { op: 'remove', values: args.values, cwd: io.cwd });
+    const verified = verifyClientForm({ home: sources.home ?? homedir(), now: at, io }, { op: 'remove', values: args.values, cwd: io.cwd });
     if (!verified.ok) {
       auditClientRefusal('remove', verified.named, verified.why, at);
       return clientRefused(plainLine(verified.why));

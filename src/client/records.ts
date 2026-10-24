@@ -63,8 +63,10 @@ export type ClientGrantScope = { entities: string[]; projects: string[]; teams: 
 /** The ops a sub-grant may ever carry: never `grant`, so a sub-grant is never a master. */
 export const CLIENT_SUB_GRANT_OPS: readonly ClientOp[] = ['send', 'messages'];
 
-/** The owner-directed runtime line. It states the limit; it is not a claim of isolation. */
-export const KEY_ISOLATION_LINE = 'key isolation: not enforced (pane guard pending)';
+/** The owner-directed runtime line. It states what is enforced and what is not: a client
+ *  command refuses to run inside a team pane (src/client/pane-guard.ts), and the key file is
+ *  still readable by a same-user process outside herdr. */
+export const KEY_ISOLATION_LINE = 'key isolation: enforced against team panes (key file still readable by same-user processes)';
 
 // This slice admits exactly one principal and one destination. The names are checked at issuance,
 // in the stored record's decoder and again in the send resolver, so no path widens by a string.

@@ -205,7 +205,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
     const at = sources.now();
     const clientHome = sources.home ?? homedir();
-    const verified = verifyClientForm({ home: clientHome, now: at }, { op: 'restart', values: args.values, cwd: io.cwd });
+    const verified = verifyClientForm({ home: clientHome, now: at, io }, { op: 'restart', values: args.values, cwd: io.cwd });
     if (!verified.ok) {
       if (!dry) auditClientRefusal('restart', verified.named, verified.why, at);
       return clientRefused(out, json, verified.why);

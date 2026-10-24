@@ -1024,7 +1024,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       cwd: io.cwd,
       ...(args.values.team !== undefined ? { team: args.values.team } : {}),
       now: clientNow,
-    });
+
+      io,    });
     if (!verified.ok) {
       // A refusal for a client the key identified goes on the team's own log, where the owner reads
       // what ran; a grant that did not verify identifies no one and writes nothing.
