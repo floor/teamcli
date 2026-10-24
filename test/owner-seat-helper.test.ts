@@ -7,7 +7,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { verify as cryptoVerify } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, statSync } from 'node:fs';
-import { platform } from 'node:os';
+import { platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ownerSeatPublicKey } from '../src/client/owner-seat.ts';
 
@@ -16,7 +16,7 @@ const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) spawnSync('/usr/bin/trash', [d]); });
 
 describe.skipIf(!swift)('owner-seat helper (macOS)', () => {
-  const dest = mkdtempSync('/private/tmp/owner-seat-helper-test-');
+  const dest = mkdtempSync(join(tmpdir(), 'owner-seat-helper-test-'));
   dirs.push(dest);
   let helper = '';
 
