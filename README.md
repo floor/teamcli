@@ -73,7 +73,7 @@ Every command, flag, refusal and exit code is in
 request with it through `team send --client <grant-file> --key <key-file> <address>`. A send is
 one signed record on disk, written to the orchestrator the grant names; the run prints
 `sent: <seat>@<entity> (drop <id>)` and types nothing. Every `send --client` and
-`messages --client` invocation prints `key isolation: not enforced (pane guard pending)`.
+`messages --client` invocation prints `key isolation: enforced against team panes (key file still readable by same-user processes)`.
 
 This release admits client `grok-bot` for entity `floor`, addressed to
 `orchestrator@floor`; a grant written with `--inbox` also admits the client's own read and

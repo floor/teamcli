@@ -428,7 +428,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           format: 1 as const,
           project: 'beacon',
           session: 'beacon',
-          key_isolation: 'key isolation: not enforced (pane guard pending)',
+          key_isolation: 'key isolation: enforced against team panes (key file still readable by same-user processes)',
           warnings: [],
           repaired: [],
           notes: [],
@@ -445,7 +445,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           key_dir: '/home/u/.config/team-client/grok-bot',
           public_key: 'a'.repeat(64),
           key_id: '0123456789ab',
-          key_isolation: 'key isolation: not enforced (pane guard pending)',
+          key_isolation: 'key isolation: enforced against team panes (key file still readable by same-user processes)',
         }),
       ],
       'team.list': [
@@ -919,7 +919,7 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           differences: [],
           summary: { differences: 0, owner_differences: 0 },
           counts: { messages: 2, shown: 1, refused: 1 },
-          key_isolation: 'key isolation: not enforced (pane guard pending)',
+          key_isolation: 'key isolation: enforced against team panes (key file still readable by same-user processes)',
         }),
       ],
       'team.next': [

@@ -1065,8 +1065,8 @@ function clientHome(label: string): string {
   return realpathSync(mkdtempSync(join(process.cwd(), `.client-exit-${label}-`)));
 }
 
-function ranClient(place: Place, argv: string[], home: string = place.home): Ran {
-  const io = testIo(place.root, owner);
+function ranClient(place: Place, argv: string[], home: string = place.home, caller: Caller = owner): Ran {
+  const io = testIo(place.root, caller);
   return { code: runClient(argv, io, home), out: io.out, err: io.err };
 }
 
@@ -1074,6 +1074,10 @@ scene('client.usage', async (place) => show(ranClient(place, []), 'a subcommand 
 scene('client.unknown', async (place) => show(ranClient(place, ['nope']), 'unknown subcommand'));
 scene('client.keygen.invocation', async (place) => show(ranClient(place, ['keygen']), '--out is required'));
 scene('client.keygen.refused', async (place) => show(ranClient(place, ['keygen', '--out', join(place.home, 'keys')]), 'is outside'));
+scene('client.keygen.pane', async (place) => show(
+  ranClient(place, ['keygen', '--out', join(place.home, '.config', 'team-client', 'grok-bot')], place.home, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' }),
+  'a client key is not used from inside a team pane',
+));
 scene('client.keygen.write', async (place) => {
   const home = clientHome('write');
   try {
@@ -1093,7 +1097,7 @@ scene('client.keygen.done', async (place) => {
     if (ran.code !== 0) throw new Error(`${ran.err}${ran.out}`);
     expect(existsSync(join(dir, 'client.key'))).toBe(true);
     expect(existsSync(join(dir, 'client.pub'))).toBe(true);
-    return show(ran, 'key isolation: not enforced (pane guard pending)');
+    return show(ran, 'key isolation: enforced against team panes (key file still readable by same-user processes)');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -4642,14 +4646,14 @@ function plantClientReply(place: Place, world: ReturnType<typeof clientWorld>, r
   writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, world.home), null, 2)}\n`, { mode: 0o600 });
 }
 
-async function readClient(place: Place, home: string, argv: string[]): Promise<Ran> {
-  const io = testIo(place.root);
+async function readClient(place: Place, home: string, argv: string[], caller?: Caller): Promise<Ran> {
+  const io = caller === undefined ? testIo(place.root) : testIo(place.root, caller);
   const code = await runMessages(argv, io, { home, now: () => NOW });
   return { code, out: io.out, err: io.err };
 }
 
-async function sentClient(place: Place, home: string, argv: string[]): Promise<Ran> {
-  const io = testIo(place.root, { kind: 'owner' });
+async function sentClient(place: Place, home: string, argv: string[], caller: Caller = { kind: 'owner' }): Promise<Ran> {
+  const io = testIo(place.root, caller);
   const host = { home, now: () => NOW, sendId: () => '99999999-9999-4999-8999-999999999999' } as unknown as SendHost;
   const code = await runSend(argv, io, host);
   return { code, out: io.out, err: io.err };
@@ -4673,6 +4677,18 @@ scene('send.client-refused', async (place) => {
     return show(
       await sentClient(place, world.home, ['--client', join(world.base, 'missing.json'), '--key', world.keyPath, 'orchestrator@floor', 'hello']),
       'team send: refused: ',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('send.client-pane', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath, 'orchestrator@floor', 'hello'], { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' }),
+      'team send: refused: a client key is not used from inside a team pane',
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });
@@ -4727,6 +4743,18 @@ scene('messages.client-key', async (place) => {
     return show(
       await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
       'team messages:',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-pane', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' }),
+      'team messages: refused: a client key is not used from inside a team pane',
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });

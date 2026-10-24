@@ -9,7 +9,7 @@ The directory is the placement rule, not a suggestion: it must sit under
 `~/.config/team-client`, and a path overlapping a registered team root or lobby, or the OS temp
 folder, is refused, as is a symbolic link anywhere on it. This is where a same-user process could
 still read the key, and the command says so rather than implying otherwise:
-`key isolation: not enforced (pane guard pending)`.
+`key isolation: enforced against team panes (key file still readable by same-user processes)`.
 
 A key pair alone admits nothing. The owner issues a grant for it with
 [`team grant`](grant.md) `--client`, bound to the client id, the entity and the key's directory,
