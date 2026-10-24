@@ -76,7 +76,8 @@ export function protectedLanding(root: string, folder: string, checkouts: readon
 export type SeatStart = { cwd: string; lobby?: true } | { problem: string; once?: true };
 
 // Where a seat starts. In a migrated file, the orchestrator and the operator start in the
-// project root, and every other seat (shared and worktree-mode alike) starts in the resolved
+// project root, and every other seat (shared and worktree-mode alike) starts in the folder its
+// `cwd` names when the file sets one (resolved against the project root), else in the resolved
 // lobby. In a legacy file, a shared seat starts in its cwd, and a worktree seat starts in the
 // old derived lobby.
 export function seatStart(
@@ -168,6 +169,10 @@ export function seatStart(
       }
       return { cwd: root };
     }
+    // An explicit cwd in the file is where any other seat starts too (never the lobby). The
+    // loader already refused one outside trust or behind a symlink, and the protected-checkout
+    // check above has run on it. `.` is the default for an absent cwd, so it means "not set".
+    if (seat.cwd !== '.') return { cwd: resolve(root, seat.cwd) };
     return { cwd: verifiedLobby ?? lobbyOf(home, root, team), lobby: true };
   }
 

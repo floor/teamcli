@@ -7,6 +7,7 @@
 // catalogue or a project's own text.
 
 import { bundlePolicyWithin, formatBundlePolicy, parseBundlePolicy } from '../client/bundle-ops.ts';
+import { durationPolicyWithin, formatDurationPolicy, inheritDurationPolicy, parseDurationPolicy } from '../client/duration-policy.ts';
 import { DURATION, parseMeasure } from '../file/sections/units.ts';
 import {
   DEFAULT_STATE_THRESHOLDS,
@@ -119,6 +120,7 @@ export const ENFORCED_POLICY_NAMES = [
   'owner-signer-mode',
   'approval-rule-ttl',
   'client-bundles',
+  'client-grant-max-duration',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -210,6 +212,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   owner_signer_mode: 'owner-signer-mode',
   approval_rule_ttl: 'approval-rule-ttl',
   client_bundles: 'client-bundles',
+  client_grant_max_duration: 'client-grant-max-duration',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -988,11 +991,11 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseApprovalRuleTtlDays,
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
-  // What the client grant bundles (`observer`, `operator`) expand to at signing time, and how long
-  // a grant of one lasts: `operator=status,send,up,down@30d;observer=status`. Empty (the default)
+  // What the client grant bundles (`observer`, `operator`, `manager`) expand to at signing time, and how long
+  // a grant of one lasts: `operator=status,send,up,down@30d;observer=status;manager=status,add@30d`. Empty (the default)
   // is the release lists in `src/client/bundle-ops.ts`. A policy can only choose among the ops a
   // bundle may ever carry; the commands that change who may do what are never eligible, whatever
-  // it says. Entity and project levels; a lower level may only narrow the ops and shorten the days.
+  // it says; `add` and `remove` are eligible for `manager` alone. Entity and project levels; a lower level may only narrow the ops and shorten the days.
   'client-bundles': {
     name: 'client-bundles',
     kind: 'enforced',
@@ -1010,6 +1013,31 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
       return parsed.ok ? null : parsed.why;
     },
     isWithin: (lower: string, higher: string) => bundlePolicyWithin(lower, higher),
+  },
+  // How long a NEW client grant may last, per kind: `send=7d;up=90d;bundle=90d` are the release
+  // defaults, so a machine that sets nothing behaves as it always did. One word names every kind
+  // (`30d`, `none`); `none` allows a grant with no end date (`team grant --expires never`), which
+  // stays revocable with `team revoke`. A cap bounds a request, it never lengthens one that names
+  // no date. Entity and project levels; a lower level may only shorten (`none` is the loosest), a
+  // kind it leaves out inherits the value above it, and a chain that cannot be read or verified
+  // refuses a new grant instead of falling back to a looser default. Grants already signed keep
+  // their own end date.
+  'client-grant-max-duration': {
+    name: 'client-grant-max-duration',
+    kind: 'enforced',
+    levels: ['entity', 'project'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: (raw: unknown) => {
+      const parsed = parseDurationPolicy(raw);
+      return parsed.ok ? formatDurationPolicy(parsed.caps) : null;
+    },
+    valueProblem: (raw: unknown) => {
+      const parsed = parseDurationPolicy(raw);
+      return parsed.ok ? null : parsed.why;
+    },
+    inherit: (higher: string, lower: string) => inheritDurationPolicy(higher, lower),
+    isWithin: (lower: string, higher: string) => durationPolicyWithin(lower, higher),
   },
   'grant-emission': {
     name: 'grant-emission',

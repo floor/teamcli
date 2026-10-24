@@ -102,6 +102,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.client-refused",
+      "meaning": "the owner-signed manager grant, or the client add it admits, did not verify, or the seat is a lead seat",
+      "trigger": "team add Desk --like worker --client grant.json --key client.key --team docs"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.default-session",
       "meaning": "the session can't be \"default\"",
       "trigger": "team add worker --session default"
@@ -914,6 +921,13 @@
     {
       "code": 1,
       "command": "client",
+      "id": "client.keygen.pane",
+      "meaning": "keygen ran inside a team pane (a herdr seat or its child) and was refused before any directory was written",
+      "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 1,
+      "command": "client",
       "id": "client.keygen.refused",
       "meaning": "the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked",
       "trigger": "team client keygen --out ."
@@ -1698,6 +1712,13 @@
     {
       "code": 1,
       "command": "hold",
+      "id": "hold.client-refused",
+      "meaning": "the owner-signed developer grant did not verify for this run",
+      "trigger": "team hold \"freeze deploys\" --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "hold",
       "id": "hold.detached",
       "meaning": "a run with no terminal",
       "trigger": "team hold \"freeze deploys\""
@@ -2055,6 +2076,13 @@
     {
       "code": 1,
       "command": "messages",
+      "id": "messages.client-pane",
+      "meaning": "a client reading ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened",
+      "trigger": "team messages --client client-grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "messages",
       "id": "messages.client-refused",
       "meaning": "the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify",
       "trigger": "team messages --client client-grant.json --key client.key"
@@ -2275,6 +2303,13 @@
       "id": "pause.caller",
       "meaning": "not the owner or the orchestrator",
       "trigger": "team pause"
+    },
+    {
+      "code": 1,
+      "command": "pause",
+      "id": "pause.client-refused",
+      "meaning": "the owner-signed developer grant did not verify for this run",
+      "trigger": "team pause --client grant.json --key client.key"
     },
     {
       "code": 1,
@@ -3007,6 +3042,13 @@
     {
       "code": 1,
       "command": "reload",
+      "id": "reload.client-refused",
+      "meaning": "the owner-signed manager grant, or the client reload it admits, did not verify",
+      "trigger": "team reload worker --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "reload",
       "id": "reload.grant-another-pane",
       "meaning": "the state records another pane for the granted seat",
       "trigger": "team reload worker"
@@ -3206,6 +3248,13 @@
       "id": "remove.caller",
       "meaning": "the caller may not change the team",
       "trigger": "team remove worker"
+    },
+    {
+      "code": 1,
+      "command": "remove",
+      "id": "remove.client-refused",
+      "meaning": "the owner-signed manager grant, or the client removal it admits, did not verify, or the seat is a lead seat or a human's pane",
+      "trigger": "team remove spare --client grant.json --key client.key --team docs"
     },
     {
       "code": 1,
@@ -3456,7 +3505,7 @@
       "code": 1,
       "command": "reply",
       "id": "reply.client-refused",
-      "meaning": "a record a client wrote can't be answered: client reply publication is not in this release, or the record is bound to another session or checkout",
+      "meaning": "a client thread can't be answered: its origin grant, its placement, its recipient or the writer's own seat does not bind it, or the reply can't be written",
       "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
     },
     {
@@ -3514,6 +3563,13 @@
       "id": "restart.caller",
       "meaning": "the caller may not restart a seat, or passed an owner-only flag",
       "trigger": "team restart worker"
+    },
+    {
+      "code": 1,
+      "command": "restart",
+      "id": "restart.client-refused",
+      "meaning": "the owner-signed manager grant, or the client restart it admits, did not verify",
+      "trigger": "team restart worker --client grant.json --key client.key"
     },
     {
       "code": 1,
@@ -3619,6 +3675,13 @@
       "id": "resume.caller",
       "meaning": "not the owner or the orchestrator",
       "trigger": "team resume"
+    },
+    {
+      "code": 1,
+      "command": "resume",
+      "id": "resume.client-refused",
+      "meaning": "the owner-signed developer grant did not verify for this run",
+      "trigger": "team resume --client grant.json --key client.key"
     },
     {
       "code": 1,
@@ -3749,6 +3812,13 @@
     {
       "code": 1,
       "command": "seat",
+      "id": "seat.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team seat worker --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "seat",
       "id": "seat.file-owner",
       "meaning": "--file is the owner's",
       "trigger": "team seat lead --file .agents/team.yaml"
@@ -3829,6 +3899,13 @@
       "id": "seats.shown",
       "meaning": "the seats table was printed",
       "trigger": "team seats"
+    },
+    {
+      "code": 1,
+      "command": "seats",
+      "id": "seats.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team seats --client grant.json --key client.key"
     },
     {
       "code": 1,
@@ -3973,6 +4050,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.client-pane",
+      "meaning": "a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened",
+      "trigger": "team send --client client-grant.json --key client.key orchestrator@floor hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.client-refused",
       "meaning": "a client grant invocation was refused before any record was written",
       "trigger": "team send --client missing.json --key client.key orchestrator@floor hello"
@@ -4060,6 +4144,13 @@
       "id": "sessions.shown",
       "meaning": "the session records were listed",
       "trigger": "team sessions"
+    },
+    {
+      "code": 1,
+      "command": "sessions",
+      "id": "sessions.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team sessions --client grant.json --key client.key"
     },
     {
       "code": 1,

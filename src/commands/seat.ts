@@ -8,7 +8,10 @@
 import { watchInForceOf } from '../approve/approval.ts';
 import { runAdd } from './add.ts';
 import { readArgs } from '../args.ts';
+import { homedir } from 'node:os';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { readSeatSettings } from '../config/read.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
 import { currentTeam } from '../file/current.ts';
@@ -41,12 +44,13 @@ import {
 } from './seats.ts';
 
 export const USAGE = `Usage: team seat <seat> [--session <name>] [--file <path>] [--json]
+       team seat <seat> --client <grant-file> --key <client-key> [--team <team>] [--json]
        team seat add <seat> [--session <name>] [--file <path>] [--json]
        team seat remove <seat> [--session <name>] [--file <path>] [--json]
        team seat restart <seat> [--session <name>] [--file <path>] [--json]
        team seat rename <seat> <name> [--session <name>] [--file <path>] [--json]
 
-Shows one seat as an object: its settings and where each value comes from, its status and state as \`team seats\` reads them, and the newest CLI session TeamCLI recorded for it in this session — the conversation, when it started and ended, and its cost when one was measured. Reads the team file, the state and the session registry; changes nothing. The lifecycle verbs group the commands of the same names — \`team seat add\` runs \`team add\`, and so on — and take that command's own options; the top-level commands stay. A common option may come before the verb: \`team seat --json restart <seat>\` runs \`team restart <seat> --json\`.
+Shows one seat as an object: its settings and where each value comes from, its status and state as \`team seats\` reads them, and the newest CLI session TeamCLI recorded for it in this session — the conversation, when it started and ended, and its cost when one was measured. Reads the team file, the state and the session registry; changes nothing. The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying seat for: it reads that one team, as signed, and nothing else (--file and --session are the owner's and take no --client). The lifecycle verbs group the commands of the same names — \`team seat add\` runs \`team add\`, and so on — and take that command's own options; the top-level commands stay. A common option may come before the verb: \`team seat --json restart <seat>\` runs \`team restart <seat> --json\`.
 
 Exits 0 when the seat is shown, 1 when an owner-only flag is refused, the seat is not declared, or a session registry can't be read, and 2 when the invocation, the team file, or herdr can't be read.
 `;
@@ -105,12 +109,18 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   if (verb === 'restart') return runRestart(args.rest.slice(1), rawIo);
   if (verb === 'rename') return runRename(args.rest.slice(1), rawIo);
 
-  const io = cleanedIo(rawIo);
+  let io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const read = readArgs(argv, ['session', 'file'], ['json']);
-  if (read.error !== undefined || read.rest.length !== 1) {
+  const read = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['json']);
+  const clientProblem = read.error === undefined && read.rest.length === 1
+    ? clientFormProblem(read.values, 'team seat <seat> --client <grant-file> --key <client-key-file>')
+      ?? (read.values.client !== undefined && (read.values.file !== undefined || read.values.session !== undefined)
+        ? "--client reads the one team its grant names: --file and --session are the owner's and take no --client"
+        : null)
+    : null;
+  if (read.error !== undefined || read.rest.length !== 1 || clientProblem !== null) {
     const why = read.error
-      ?? (read.rest.length === 0 ? 'a seat name is required' : `unexpected "${read.rest[1]}"`);
+      ?? (read.rest.length === 0 ? 'a seat name is required' : read.rest.length > 1 ? `unexpected "${read.rest[1]}"` : clientProblem ?? 'the invocation cannot be read');
     if (json) {
       writeJsonError(io, 'seat.invocation', why, null);
     } else {
@@ -121,8 +131,31 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   }
   const seatName = read.rest[0] as string;
 
+  // The client form: a manager grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key and verified whole before any file is read; the read gate's second door, never a second gate.
+  let clientRead = false;
+  if (read.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const at = sources.now();
+    const home = sources.home ?? homedir();
+    const verified = verifyClientForm({ home, now: at, io }, { op: 'seat', values: read.values, cwd: io.cwd });
+    const stood = verified.ok ? authorizeClientRun(home, verified.run, 'seat', at) : null;
+    if (!verified.ok || stood !== null) {
+      const why = verified.ok ? stood! : verified.why;
+      auditClientRefusal('seat', verified.ok ? verified.run.grant : verified.named, why, at);
+      if (json) writeJsonError(io, 'seat.client-refused', why, null);
+      else io.stderr(`team seat: ${why}\n`);
+      // exit: seat.client-refused
+      return 1;
+    }
+    clientRead = true;
+    // The folder is the grant's, whatever the caller's: from here every read is of that team.
+    io = { ...io, cwd: verified.run.root };
+    if (!json) io.stderr(`client grant ${verified.run.grant.grantId}: ${verified.run.grant.clientId} for team ${verified.run.grant.up.project} at ${verified.run.root}, until ${verified.run.grant.expires}\n`);
+  }
   const walked = walkCaller(io);
-  const owner = isOwner(walked);
+  // A client run is never the owner's, whatever terminal it stands in.
+  const owner = !clientRead && isOwner(walked);
   if (read.values.file !== undefined) {
     const refusal = fileOwnerRefusal(io, read.values.file);
     if (refusal !== undefined) {
@@ -149,7 +182,7 @@ export async function runSeat(argv: string[], rawIo: Io, sources: SeatSources = 
   const now = sources.now();
   const current = currentTeam(io.cwd, owner ? read.values.file : undefined, now, sources.home, owner);
   if (!owner) {
-    if (!current.ok || !mayReadTeam(current, io, sources)) {
+    if (!current.ok || !(clientRead || mayReadTeam(current, io, sources))) {
       if (json) {
         writeJsonError(io, 'seat.not-yours', 'this team is not yours to read', null);
       } else {

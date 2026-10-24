@@ -1,6 +1,8 @@
 import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { stripSgr } from '../ansi.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
@@ -90,6 +92,9 @@ import { stopRunning, type RemoveSources } from './remove.ts';
 import type { Launch } from './up.ts';
 
 export const USAGE = `Usage: team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>] [--json]
+       team restart <seat> --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--json]
+
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying restart for: it restarts a seat of that one team, as signed, and nothing else. It never prompts, never abandons a pane (--abandon, --file and --session are the owner's and take no --client), and is never the owner.
 
 Exits 0 when the seat is restarted or the dry-run plan is printed, 1 when restart is refused or fails, 2 when the invocation or team file can't be read.
 `;
@@ -169,13 +174,19 @@ export const restart: Command = (argv, io) => runRestart(argv, io, realSources);
 export default restart;
 
 export async function runRestart(argv: string[], io: Io, sources: RestartSources = realSources): Promise<number> {
-  const out = cleanedIo(io);
+  let out = cleanedIo(io);
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file'], ['abandon', 'dry-run', 'json']);
-  if (args.error || args.rest.length !== 1) {
-    const reason = args.error ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : 'a seat name is required');
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['abandon', 'dry-run', 'json']);
+  const clientProblem = args.error === undefined && args.rest.length === 1
+    ? clientFormProblem(args.values, 'team restart <seat> --client <grant-file> --key <client-key-file>')
+      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon'))
+        ? "--client restarts a seat of the one team its grant names: --file, --session and --abandon are the owner's and take no --client"
+        : null)
+    : null;
+  if (args.error || args.rest.length !== 1 || clientProblem !== null) {
+    const reason = args.error ?? (args.rest.length > 1 ? `unexpected "${plainLine(args.rest[1] ?? '')}"` : args.rest.length === 0 ? 'a seat name is required' : clientProblem ?? 'the invocation cannot be read');
     return usage(out, json, reason);
   }
   const name = args.rest[0] ?? '';
@@ -185,9 +196,30 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // the stop's own lines) ride on the document instead.
   const notes: string[] = [];
 
+  // The client form: a manager grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key and verified whole before anything is read. The verified run is the second door past the
+  // placement and who-may-run-it gates below, never the owner's: it cannot abandon a pane, and it is
+  // logged as `client:<id>`.
+  let clientRun: ClientRun | null = null;
+  if (args.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const at = sources.now();
+    const clientHome = sources.home ?? homedir();
+    const verified = verifyClientForm({ home: clientHome, now: at, io }, { op: 'restart', values: args.values, cwd: io.cwd });
+    if (!verified.ok) {
+      if (!dry) auditClientRefusal('restart', verified.named, verified.why, at);
+      return clientRefused(out, json, verified.why);
+    }
+    clientRun = verified.run;
+    io = { ...io, cwd: verified.run.root };
+    out = cleanedIo(io);
+    if (!json) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
+  }
+  const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
+
   const walked = walkCaller(io);
   const detached = detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
-  if (detached !== undefined) return detachedExit(out, json, detached);
+  if (detached !== undefined && clientRun === null) return detachedExit(out, json, detached);
 
   const flagRefusal = fileOwnerRefusal(io, args.values.file)
     ?? (args.values.session !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
@@ -239,7 +271,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   // `up` does. Every other refusal stays a refusal: the target placement, the CLI, the
   // records, the approvals and trust. The warning is logged where this call runs; a dry run
   // says it beside the dry answer and decides nothing.
-  const mayRun = mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
+  const mayRun = clientRun !== null ? null : mayChange.kind === 'no-pane' ? noPaneRefusal(mayChange.name)
     : mayChange.kind === 'another-pane' ? anotherPaneRefusal(mayChange.name, mayChange.recordedPane)
       : mayChange.kind === 'refused' ? `only the owner or \`leads\` restarts a seat; this call is ${plainLine(describeCaller(shown))}${devModeExpiryNote(dev)}`
         : null;
@@ -400,6 +432,16 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     }
   }
 
+  // The client's grant, read once more under its lock immediately before the first effect, and its audit
+  // line written while the lock is held. A dry run decides nothing and writes nothing.
+  if (clientRun !== null && !dry) {
+    const stood = authorizeClientRun(home, clientRun, 'restart', sources.now(), `seat ${name}`);
+    if (stood !== null) {
+      auditClientRefusal('restart', clientRun.grant, stood, sources.now());
+      return clientRefused(out, json, stood);
+    }
+  }
+
   const performed = await performRestart({
     out,
     json,
@@ -415,8 +457,8 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     recorded: recordedSeat,
     agents,
     abandon,
-    owner: caller.kind === 'owner',
-    callerText: describeCaller(caller),
+    owner: clientRun === null && caller.kind === 'owner',
+    callerText: clientText ?? describeCaller(caller),
     standing,
     ceilings,
     dev,
@@ -456,7 +498,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         out,
         json,
         dir,
-        describeCaller(caller),
+        clientText ?? describeCaller(caller),
         name,
         performed.oldPane,
         performed.pane,
@@ -1776,6 +1818,12 @@ function configuration(out: Io, json: boolean, message: string): number {
   refuse(out, json, 'restart', { id: 'restart.configuration', message, repair: null });
   // exit: restart.configuration
   return 2;
+}
+
+function clientRefused(out: Io, json: boolean, message: string): number {
+  refuse(out, json, 'restart', { id: 'restart.client-refused', message: plainText(message), repair: null });
+  // exit: restart.client-refused
+  return 1;
 }
 
 function detachedExit(out: Io, json: boolean, message: string): number {

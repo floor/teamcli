@@ -17,6 +17,7 @@ import {
   canonicalClientGrant,
   clientAddressOf,
   clientAdmission,
+  clientGrantExpired,
   clientGrantScopeAdmits,
   clientMasterRevocation,
   clientRevocations,
@@ -27,6 +28,8 @@ import {
   type ClientGrantRecord,
 } from './records.ts';
 import { ofTeam } from '../registry/projects.ts';
+import { DAY_MS, endsAtMs } from './duration-policy.ts';
+import { grantDurationInForce, projectIdOfTeamId } from './grant-duration.ts';
 import { signDomain, verifyDomain, type Json } from '../store/keys.ts';
 
 /** The domain tag a client send request signature carries. */
@@ -240,8 +243,7 @@ export function verifyClientRequest(input: {
 
   const canonical = canonicalClientGrant(input.home, presented);
   if (!canonical.ok) return { ok: false, why: canonical.why };
-  const expiresMs = Date.parse(canonical.grant.expires);
-  if (!Number.isFinite(expiresMs) || expiresMs <= input.now.getTime()) {
+  if (clientGrantExpired(canonical.grant.expires, input.now)) {
     return { ok: false, why: `the grant ${grant.grantId} expired at ${grant.expires}` };
   }
   const revocation = clientRevocations(input.home, grant.grantId);
@@ -344,8 +346,7 @@ export function verifyClientRead(input: {
 
   const canonical = canonicalClientGrant(input.home, presented);
   if (!canonical.ok) return { ok: false, why: canonical.why, kind: 'refused' };
-  const expiresMs = Date.parse(canonical.grant.expires);
-  if (!Number.isFinite(expiresMs) || expiresMs <= input.now.getTime()) {
+  if (clientGrantExpired(canonical.grant.expires, input.now)) {
     return { ok: false, why: `the grant ${grant.grantId} expired at ${grant.expires}`, kind: 'refused' };
   }
   const revocation = clientRevocations(input.home, grant.grantId);
@@ -451,11 +452,18 @@ export function admitClientGrantIssue(
   if (!clientGrantScopeAdmits(master, { entity: request.entity, team, project })) {
     return { ok: false, why: `${request.seat ?? 'orchestrator'}@${team} (entity ${request.entity}, project ${project}) is outside the master grant ${master.grantId}'s scope` };
   }
-  const masterExpires = Date.parse(master.expires);
+  // A master grant always carries an end date (its decoder refuses `null`), so this is a number.
+  const masterExpires = endsAtMs(master.expires);
   const nowMs = now.getTime();
   let expires: string;
   if (request.expires === null) {
-    expires = new Date(Math.min(nowMs + CLIENT_EXPIRY_MAX_MS, masterExpires)).toISOString();
+    // The default length is seven days or the `client-grant-max-duration` send cap when that is
+    // shorter, and never past the master's own end. An unreadable chain refuses.
+    const inForce = grantDurationInForce(home, request.entity, projectIdOfTeamId(home, resolved.coordinator.teamId), now);
+    if (!inForce.ok) return { ok: false, why: `${inForce.why}; nothing was signed` };
+    const sendCap = inForce.caps.send;
+    const lengthMs = sendCap === null ? CLIENT_EXPIRY_MAX_MS : Math.min(CLIENT_EXPIRY_MAX_MS, sendCap * DAY_MS);
+    expires = new Date(Math.min(nowMs + lengthMs, masterExpires)).toISOString();
   } else {
     const wanted = Date.parse(request.expires);
     if (!Number.isFinite(wanted)) return { ok: false, why: `"${request.expires}" is not a readable expiry timestamp` };

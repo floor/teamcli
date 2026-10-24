@@ -92,7 +92,26 @@ then by id; `--limit` cuts that page. `--ack` is independent of the page: its re
 against the whole verified inbox, so a reply outside the page can be acknowledged without its
 body being printed. A receipt is written once and never replaced: a second acknowledgement of the
 same reply prints `ack: <id> already acknowledged` and writes nothing. Every client invocation,
-a usage refusal included, writes `key isolation: not enforced (pane guard pending)` to stderr
+a usage refusal included, writes `key isolation: enforced against team panes (key file still readable by same-user processes)` to stderr
+first; under `--json` the same line also rides in the document as `key_isolation`.
+
+| Outcome | What is printed | Exit |
+| --- | --- | --- |
+| the client reading completed, with or without shown replies | the reading above; an `ack:` line follows an `--ack` | 0 |
+| nothing was waiting | the reading with no rows and the note `nothing is waiting` | 0 |
+| a record or the ack does not verify, or the request, grant, placement or inbox can't be read | the refused rows with their differences, or `team messages: refused: <why>` | 1 |
+| the client key is missing or unreadable, or the ack receipt cannot be signed | `team messages: <why>` | 1 |
+| the client invocation can't be read | `team messages: <why>` and the usage | 2 |
+
+The client reading has the same shape: the context line, the table, one heading and body under
+each verified reply, the notes and differences, the `ack:` line when `--ack` was given, and the
+closing `<n> message` or `<n> messages`. A refused record is a `refused` row with its difference
+and never a body. `--since` narrows the page to replies ordered after the named reply by time,
+then by id; `--limit` cuts that page. `--ack` is independent of the page: its reply is validated
+against the whole verified inbox, so a reply outside the page can be acknowledged without its
+body being printed. A receipt is written once and never replaced: a second acknowledgement of the
+same reply prints `ack: <id> already acknowledged` and writes nothing. Every client invocation,
+a usage refusal included, writes `key isolation: enforced against team panes (key file still readable by same-user processes)` to stderr
 first; under `--json` the same line also rides in the document as `key_isolation`.
 
 | Outcome | What is printed | Exit |

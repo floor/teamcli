@@ -254,7 +254,7 @@ async function clientDown(w: World, grantPath: string, keyPath: string, extra: s
 }
 
 const verifyAs = (w: World, grantPath: string, op: 'up' | 'down', at: { now?: Date; cwd?: string } = {}) =>
-  verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.grok.keyPath, cwd: at.cwd ?? w.docs, now: at.now ?? new Date(), op });
+  verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.grok.keyPath, cwd: at.cwd ?? w.docs, now: at.now ?? new Date(), op, io: null });
 
 describe('request, owner-seat answer, execute, then the client stops the team', () => {
   test('a down grant binds one team and its folder, and the client stops it with no terminal and no prompt', async () => {
@@ -275,7 +275,7 @@ describe('request, owner-seat answer, execute, then the client stops the team', 
     expect(Date.parse(record.expires) - Date.parse(record.issued)).toBe(90 * DAY);
 
     const run = await clientDown(w, g.path, w.grok.keyPath);
-    expect(run.err).toContain('key isolation: not enforced');
+    expect(run.err).toContain('key isolation: enforced against team panes');
     expect(run.code, run.err + run.out).toBe(0);
     expect(run.closed).toEqual(['lead-ws']);
     expect(run.typed.length).toBeGreaterThan(0);

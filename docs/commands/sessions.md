@@ -11,11 +11,15 @@ command measured is absent, and its cost prints as `unknown`, never as zero.
 ## Synopsis
 
     team sessions [<seat>] [--by <model|team|entity>] [--json]
+    team sessions [<seat>] --client <grant-file> --key <client-key> [--team <team>] [--by <model|team|entity>] [--json]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
+| `--client` | `<grant-file>` | the client form: an owner-signed manager bundle grant that carries `sessions`; it lists the records of that one team and not the other teams on this machine. A refusal is `sessions.client-refused` (exit 1) |
+| `--key` | `<client-key>` | the client's private key file; required with `--client` |
+| `--team` | `<team>` | with `--client`, the team the grant is for |
 | `--by` | `model`, `team` or `entity` | group the listing under one heading per value instead of one table |
 | `--json` | — | print a JSON document (`format: 1`, `by`, `seat`, `sessions`), each record whole |
 | `--help`, `-h` | — | the usage, and exit 0 |

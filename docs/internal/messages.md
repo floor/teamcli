@@ -159,10 +159,8 @@ own receipt. It never reads a seat's mailbox, and a seat never reads it.
 The folder is `<root>/.agents/send-drops/<session>/.clients/<client id>/`. The leading dot is what
 keeps it out of every seat reader: `team messages`, `team reply`, `team drops`, the watch and the
 bus reconciliation all filter the session folder's first segment with a name pattern a leading dot
-cannot match. A record carrying `from_client` is not answered in this release: `team reply`
-refuses it with `reply.client-refused` before any grant is read or this folder is created, and
-writes nothing here. The client's own read and ack path below is retained; a seat's replies and
-`--close` are unchanged.
+cannot match. A reply on a client thread lands there, written by the seat the thread's grant names;
+the client's read is the only reader.
 
 The folder is created mode 0700 and never `chmod`'ed. A folder found with any group or other bit, a
 symbolic link, another user's folder, or a non-directory is refused with the repair named, rather
@@ -214,9 +212,26 @@ An existing receipt that does not verify is not replaced — the ack is refused,
 and the reason names the file for the owner to remove. A reply whose body is outside the page is
 never printed.
 
+### The client pane guard
+
+A client key is the client's, never a seat's. `team send --client`, `team messages --client` and
+`team client keygen` place their caller with the same parent-process walk the owner gates use (never an environment
+variable) and refuse a caller that runs inside a herdr pane — a seat, an agentless team pane, or a
+process either started — before the grant or the key is opened: exit 1, `send.client-pane`,
+`messages.client-pane` or `client.keygen.pane`. Every grant-verified client form (`team up
+--client`, `team down --client`, `team status --client` and the bundle ops such as `pause`,
+`resume`, `hold`, `add`, `remove`, `seat`, `seats`, `reload`, `restart` and `sessions`) runs the
+same guard inside `verifyClientUp`, so it is refused with that command's own client refusal
+before its grant or key is read. Keys stay under `~/.config/team-client`, and
+an external client outside herdr (an agent CLI included) is not refused. A usage error is still judged first and keeps exit 2. The guard is a
+policy, not a wall: the owner's dev mode lifts it through the shared owner-gate admission
+(`devModeOwnerLiftAtCwd`), and a lifted run prints the dev-mode warning and goes on. Seatbelt
+confinement of `~/.config/team-client` for guarded seats belongs to the pane guard
+(`src/guard`), which is not on this line yet.
+
 ### Known limits
 
-The key is still a file on disk: `key isolation: not enforced (pane guard pending)` is printed on
+The key is still a file on disk: `key isolation: enforced against team panes (key file still readable by same-user processes)` is printed on
 stderr on every client invocation, usage refusals included, and carried in the JSON as
 `key_isolation`. The read protects the inbox from other principals by grant and signature, not the
 key from same-user processes. The request replay claim is per checkout and client; it does not

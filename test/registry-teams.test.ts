@@ -19,6 +19,7 @@ import {
   upsertTeam,
 } from '../src/registry/teams.ts';
 import { get as getProject, list as listProjects, projectsFile } from '../src/registry/projects.ts';
+import { ISSUE_TRACKER_LIMITS } from '../src/registry/issue-tracker.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T12:00:00Z');
@@ -674,5 +675,197 @@ seats:
   test('a run given no home leaves the registry alone', async () => {
     expect(await runDown([], testIo(project, owner), sources({ running: true }))).toBe(0);
     expect(existsSync(teamsFile(home))).toBe(false);
+  });
+});
+
+describe('a team record names its issue tracker', () => {
+  const id = 'abcdef012345';
+  const linear = { type: 'linear', project: 'Team CLI', team: 'FLO' };
+  const github = { type: 'github', project: 'acme/widgets', url: 'https://github.com/acme/widgets' };
+  const custom = { type: 'youtrack-cloud', project: 'Platform: core, v2' };
+
+  /** A registry as an older build wrote it: no `issue_tracker` anywhere. */
+  const OLD_FILE = [
+    'teams:',
+    `  ${id}:`,
+    '    project: acme',
+    '    project_id: null',
+    '    entity: null',
+    '    session: acme',
+    '    root: /work/acme',
+    '    lobby: /home/lobby',
+    '    roster: []',
+    '    lifecycle: running',
+    `    provenance: { registered_by: owner, registered_at: "${AT}", updated_at: "${AT}" }`,
+    '',
+  ].join('\n');
+
+  function writeRaw(tracker: string): void {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(teamsFile(home), OLD_FILE.replace('    lifecycle: running\n', `    lifecycle: running\n    issue_tracker: ${tracker}\n`));
+  }
+
+  test('a Linear project, with its team key, is written in the documented shape and reads back whole', () => {
+    upsertTeam(home, id, { ...seed, lobby: '/home/lobby', issueTracker: linear, by: 'owner', at: AT });
+    expect(readFileSync(teamsFile(home), 'utf8')).toContain('    lifecycle: defined\n    issue_tracker: { type: linear, project: "Team CLI", team: FLO }\n    provenance:');
+    expect(getTeam(home, id)?.issueTracker).toEqual(linear);
+  });
+
+  test('a GitHub repository, with its link, reads back whole', () => {
+    upsertTeam(home, id, { ...seed, issueTracker: github, at: AT });
+    expect(getTeam(home, id)?.issueTracker).toEqual(github);
+    expect(readFileSync(teamsFile(home), 'utf8')).toContain('issue_tracker: { type: github, project: acme/widgets, url: "https://github.com/acme/widgets" }');
+  });
+
+  test('a type nobody listed is valid and kept as written, and text a plain scalar would misread survives', () => {
+    upsertTeam(home, id, { ...seed, issueTracker: custom, at: AT });
+    expect(getTeam(home, id)?.issueTracker).toEqual(custom);
+  });
+
+  test('a value read from the file by hand reads back the same as one written by the module', () => {
+    writeRaw('{ type: linear, project: "Team CLI", team: FLO }');
+    expect(getTeam(home, id)?.issueTracker).toEqual(linear);
+    writeRaw('\n      type: github\n      project: acme/widgets');
+    expect(getTeam(home, id)?.issueTracker).toEqual({ type: 'github', project: 'acme/widgets' });
+  });
+
+  test.each([
+    ['an uppercase word', 'Linear'],
+    ['a word that starts with a digit', '1tracker'],
+    ['a word with an underscore', 'my_tracker'],
+    ['an empty word', ''],
+    ['a word of 33 characters', 'a'.repeat(33)],
+    ['a word with a space', 'my tracker'],
+  ])('a type that is %s is refused and the file stays as it was', (_what, type) => {
+    upsertTeam(home, id, { ...seed, at: AT });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    expect(() => upsertTeam(home, id, { issueTracker: { type, project: 'p' } })).toThrow(/"issue_tracker\.type" must be a lowercase word/);
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+  });
+
+  test('a type of 32 characters is the longest', () => {
+    upsertTeam(home, id, { ...seed, issueTracker: { type: `t${'a'.repeat(31)}`, project: 'p' }, at: AT });
+    expect(getTeam(home, id)?.issueTracker?.type).toHaveLength(32);
+  });
+
+  test.each([
+    ['an empty project', { type: 'linear', project: '' }, /"issue_tracker\.project" must be text, and is required/],
+    ['a project over the cap', { type: 'linear', project: 'p'.repeat(ISSUE_TRACKER_LIMITS.project + 1) }, /"issue_tracker\.project" is longer than 200 characters/],
+    ['a project with a line break', { type: 'linear', project: 'Team\nCLI' }, /"issue_tracker\.project" must not hold control characters/],
+    ['a project with a tab', { type: 'linear', project: 'Team\tCLI' }, /must not hold control characters/],
+    ['a project with spaces at the end', { type: 'linear', project: 'Team CLI ' }, /must not start or end with whitespace/],
+    ['a project that is a token', { type: 'github', project: 'ghp_0123456789abcdefghij' }, /looks like a credential/],
+    ['a team key over the cap', { type: 'linear', project: 'p', team: 'T'.repeat(ISSUE_TRACKER_LIMITS.team + 1) }, /"issue_tracker\.team" is longer than 64 characters/],
+    ['an empty team key', { type: 'linear', project: 'p', team: '' }, /"issue_tracker\.team" must be non-empty text/],
+    ['a url with credentials', { type: 'github', project: 'p', url: 'https://user:secret@github.com/acme/widgets' }, /must not carry credentials/],
+    ['a url with a query', { type: 'github', project: 'p', url: 'https://github.com/acme/widgets?token=abc' }, /must not carry a query or a fragment/],
+    ['a url that is not http', { type: 'github', project: 'p', url: 'ftp://example.com/x' }, /must be an http or https URL/],
+    ['a url that is not absolute', { type: 'github', project: 'p', url: 'acme/widgets' }, /must be an absolute http or https URL/],
+    ['a url with a space', { type: 'github', project: 'p', url: 'https://example.com/a b' }, /must not hold whitespace/],
+    ['a url over the cap', { type: 'github', project: 'p', url: `https://example.com/${'a'.repeat(ISSUE_TRACKER_LIMITS.url)}` }, /"issue_tracker\.url" is longer than 512 characters/],
+    ['a key it does not take', { type: 'linear', project: 'p', token: 'x' }, /"issue_tracker" has no key "token"/],
+  ])('%s is refused and the file stays as it was', (_what, tracker, message) => {
+    upsertTeam(home, id, { ...seed, at: AT });
+    const before = readFileSync(teamsFile(home), 'utf8');
+    expect(() => upsertTeam(home, id, { issueTracker: tracker as never })).toThrow(message);
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+  });
+
+  test('a project of 200 characters is the longest', () => {
+    const project = 'p'.repeat(ISSUE_TRACKER_LIMITS.project);
+    upsertTeam(home, id, { ...seed, issueTracker: { type: 'linear', project }, at: AT });
+    expect(getTeam(home, id)?.issueTracker?.project).toBe(project);
+  });
+
+  test('a record on file that does not read as a tracker names the file, the team and the key, and is never replaced', () => {
+    for (const [tracker, message] of [
+      ['linear', /team abcdef012345: "issue_tracker" must be a map/],
+      ['{ type: Linear, project: p }', /team abcdef012345: "issue_tracker\.type" must be a lowercase word/],
+      ['{ type: linear }', /"issue_tracker\.project" must be text, and is required/],
+      ['{ type: linear, project: p, owner: x }', /"issue_tracker" has no key "owner"/],
+      ['{ type: linear, project: 7 }', /"issue_tracker\.project" must be text/],
+    ] as const) {
+      writeRaw(tracker);
+      const before = readFileSync(teamsFile(home), 'utf8');
+      expect(() => readTeams(home)).toThrow(TeamsError);
+      expect(() => readTeams(home)).toThrow(message);
+      expect(() => upsertTeam(home, 'def', { ...seed })).toThrow(TeamsError);
+      expect(readFileSync(teamsFile(home), 'utf8')).toBe(before);
+    }
+  });
+
+  test('a team that names none reads as before: no field, and a rewrite leaves the file byte for byte', () => {
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    writeFileSync(teamsFile(home), OLD_FILE);
+    const read = getTeam(home, id);
+    expect(read).not.toBeNull();
+    expect(read).not.toHaveProperty('issueTracker');
+    // A write that changes nothing but the lifecycle it already holds moves only updated_at.
+    const later = '2026-10-17T08:00:00.000Z';
+    upsertTeam(home, id, { lifecycle: 'running', at: later });
+    expect(readFileSync(teamsFile(home), 'utf8')).toBe(OLD_FILE.replace(`updated_at: "${AT}"`, `updated_at: "${later}"`));
+    expect(readFileSync(teamsFile(home), 'utf8')).not.toContain('issue_tracker');
+  });
+
+  test('a new team with no tracker is written without one, and the field is never null or empty', () => {
+    upsertTeam(home, id, { ...seed, at: AT });
+    expect(readFileSync(teamsFile(home), 'utf8')).not.toContain('issue_tracker');
+    expect(getTeam(home, id)).not.toHaveProperty('issueTracker');
+  });
+
+  test('every writer that rewrites the record keeps the field exactly as it was', () => {
+    const root = join(base, 'acme');
+    mkdirSync(root);
+    const teamId = teamIdOf(root);
+    const the = { project: 'acme', entity: null, session: 'acme', lobby: null };
+    noteTeam(home, root, the, 'defined', 'owner');
+    upsertTeam(home, teamId, { issueTracker: linear });
+    const tracker = () => getTeam(home, teamId)?.issueTracker;
+    expect(tracker()).toEqual(linear);
+    setRoster(home, teamId, [{ agent: 'agt_0123456789ab', seat: 'a', role: 'builder', leads: true }]);
+    expect(tracker()).toEqual(linear);
+    setTeamLifecycle(home, teamId, 'stopped');
+    expect(tracker()).toEqual(linear);
+    // The `up`, `init` and `down` paths all record the team through noteTeam.
+    expect(noteTeam(home, root, the, 'running', 'someone else')).toBeNull();
+    expect(tracker()).toEqual(linear);
+    expect(noteTeam(home, root, { ...the, inProject: 'Acme Suite' }, 'stopped', 'someone else')).toBeNull();
+    expect(tracker()).toEqual(linear);
+    upsertTeam(home, teamId, { settingsDelta: { 'some.key': 'value' }, by: 'owner' });
+    expect(tracker()).toEqual(linear);
+    upsertTeam(home, teamId, { session: 'renamed', lifecycle: 'archived' });
+    expect(tracker()).toEqual(linear);
+    // A second team's writes never touch it either.
+    upsertTeam(home, 'bbbbbbbbbbbb', { ...seed, project: 'other', issueTracker: github, at: AT });
+    expect(tracker()).toEqual(linear);
+    expect(getTeam(home, 'bbbbbbbbbbbb')?.issueTracker).toEqual(github);
+    // And the file reads back to the same record after all of it.
+    const before = readTeams(home);
+    upsertTeam(home, teamId, {});
+    expect(readTeams(home)[teamId]?.issueTracker).toEqual(before[teamId]?.issueTracker);
+  });
+
+  test('a patch with a tracker replaces it whole, and null removes it', () => {
+    upsertTeam(home, id, { ...seed, issueTracker: linear, at: AT });
+    upsertTeam(home, id, { issueTracker: { type: 'github', project: 'acme/widgets' } });
+    expect(getTeam(home, id)?.issueTracker).toEqual({ type: 'github', project: 'acme/widgets' });
+    const set = upsertTeam(home, id, { issueTracker: null });
+    expect(set).not.toHaveProperty('issueTracker');
+    expect(readFileSync(teamsFile(home), 'utf8')).not.toContain('issue_tracker');
+    expect(getTeam(home, id)).not.toHaveProperty('issueTracker');
+  });
+
+  test('only the known keys are kept: a value is written in a fixed key order whatever order it came in', () => {
+    upsertTeam(home, id, { ...seed, issueTracker: { url: 'https://example.com/p', team: 'T', project: 'p', type: 'x' }, at: AT });
+    expect(readFileSync(teamsFile(home), 'utf8')).toContain('issue_tracker: { type: x, project: p, team: T, url: "https://example.com/p" }');
+  });
+
+  test('a record with a tracker differs from one without only in that field', () => {
+    upsertTeam(home, id, { ...seed, lobby: '/home/lobby', issueTracker: linear, by: 'owner', at: AT });
+    const { issueTracker: _tracker, ...rest } = getTeam(home, id) as NonNullable<ReturnType<typeof getTeam>>;
+    mkdirSync(join(base, 'plain'), { recursive: true });
+    const plain = join(base, 'plain');
+    upsertTeam(plain, id, { ...seed, lobby: '/home/lobby', by: 'owner', at: AT });
+    expect(getTeam(plain, id)).toEqual(rest);
   });
 });

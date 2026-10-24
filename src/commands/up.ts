@@ -99,6 +99,7 @@ import { watchIdentity, watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
+import { expiryPhrase } from '../client/duration-policy.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
@@ -819,7 +820,7 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
-        ...restartNote(team, seat.name, recorded, home, root, session),
+        ...restartNote(team, seat.name, recorded, home, root, session, seat.cwd),
       };
     }
     return planned;
@@ -857,12 +858,13 @@ function restoredDetail(
 }
 
 function restartNote(
-  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
+  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby' | 'trust'>,
   name: string,
   recorded: SeatState,
   home: string,
   root: string,
   session: string,
+  declaredCwd: string = '.',
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
   // The identity a launch predating the record could not write is `team register`'s to write:
@@ -873,6 +875,8 @@ function restartNote(
   // is. Every other seat still outside the lobby is told how to move.
   if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
     if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
+    // A migrated file starts a non-lead seat in its explicit cwd: that start is its home too.
+    if (!isLeadSeat(team, name) && declaredCwd !== '.' && isMigratedTrust(team.trust) && recorded.start_cwd === resolve(root, declaredCwd)) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};
@@ -1023,7 +1027,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       cwd: io.cwd,
       ...(args.values.team !== undefined ? { team: args.values.team } : {}),
       now: clientNow,
-    });
+
+      io,    });
     if (!verified.ok) {
       // A refusal for a client the key identified goes on the team's own log, where the owner reads
       // what ran; a grant that did not verify identifies no one and writes nothing.
@@ -1036,7 +1041,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     clientUp = { grant: verified.grant, signature: verified.signature, requestId: verified.requestId };
     // The folder is the grant's, whatever the caller's: from here every read is of that team.
     io = { ...io, cwd: verified.root };
-    stderrLine(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, until ${verified.grant.expires}\n`);
+    stderrLine(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   // §RFC0007: a caller the ordinary rule refuses is judged by the delegate gate against the
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is

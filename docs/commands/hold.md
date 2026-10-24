@@ -12,6 +12,8 @@ consults a hold: no command, no launch and no watch changes what it does while o
 
     team hold <reason> [--until <time>] [--json]
     team hold --release [--json]
+    team hold <reason> --client <grant-file> --key <client-key> [--team <team>] [--until <time>] [--json]
+    team hold --release --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ## What it reads and writes
 
@@ -56,8 +58,15 @@ its own seat.
 | `<reason>` | the line stored as the reason; required unless `--release` |
 | `--until <time>` | a local `<HH:MM>`, the next time that clock comes (today, or tomorrow when today's has passed), or an ISO 8601 instant carrying `Z` or an offset |
 | `--release` | clears the hold that stands; takes no `<reason>` and no `--until` |
+| `--client <grant-file>` | the client form: an owner-signed developer bundle grant that carries `hold`, see [A client's hold](#a-clients-hold) |
+| `--key <client-key>` | the client's private key file; required with `--client`, refused without it |
+| `--team <team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--json` | emit a `team.hold` v1 JSON document (`schema/hold.schema.json`) on `stdout` |
 | `--help`, `-h` | the usage, and exit 0 |
+
+## A client's hold
+
+A client with no terminal that the owner signed a **developer** bundle grant for (see [Client grant bundles](../concepts/client-grant-bundles.md#the-developer-bundle)) places or releases the hold of that one team with `team hold --client <grant-file> --key <client-key>`. The grant is verified whole before any gate, and again under the grant lock before the first effect; it must carry `hold` and name exactly this team, and the run is the one team the grant's folder holds: `<team>` and `--all` are the owner's and are refused with `--client` (exit 2). The run is the second door past the placement and who-may-run-it gates, never the owner's, and is logged as `client:<id>` and as `client-hold-authorized: …`. A refusal is `hold.client-refused` (exit 1).
 
 ## Refusals
 

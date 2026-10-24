@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
 import { KEY_ISOLATION_LINE, clientKeyPlacementProblem, newClientKeyPair, writeClientKeyFiles } from '../client/records.ts';
+import { clientPaneGuard } from '../client/pane-guard.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import { writeJson, writeJsonError } from '../output/index.ts';
@@ -11,7 +12,7 @@ export const USAGE = `Usage: team client keygen --out <dir> [--json]
 keygen writes an Ed25519 client key pair into <dir> (created when absent, mode 700): client.key
 holds the private half 0600 and client.pub holds the public half and the key id. The directory
 must sit under ~/.config/team-client, outside every project, lobby and the OS temp folder.
-key isolation: not enforced (pane guard pending).
+key isolation: enforced against team panes (key file still readable by same-user processes).
 
 Exits 0 when the key is written, 1 when refused, 2 when the invocation is invalid.
 `;
@@ -39,6 +40,14 @@ function runKeygen(args: Args, rawIo: Io, io: Io, home: string): number {
     else io.stderr(`team client keygen: ${problem}\n${USAGE}`);
     return 2; // exit: client.keygen.invocation
   }
+  // The pane guard, before any directory is checked or written: a seat never mints a client key.
+  const pane = clientPaneGuard(rawIo, 'client keygen', home);
+  if (!pane.ok) {
+    if (json) writeJsonError(rawIo, 'client.keygen.pane', plainText(pane.why), null);
+    else io.stderr(`team client keygen: refused: ${pane.why}\n`);
+    return 1; // exit: client.keygen.pane
+  }
+  if (pane.warning !== undefined) io.stderr(`${pane.warning}\n`);
   const dir = resolve(io.cwd, args.values.out as string);
   const placement = clientKeyPlacementProblem(home, dir);
   if (placement !== null) {

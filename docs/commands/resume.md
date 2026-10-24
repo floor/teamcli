@@ -8,6 +8,7 @@ nothing and is refused.
 ## Synopsis
 
     team resume [<team>] [--all] [--json]
+    team resume --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ## What it reads and writes
 
@@ -46,8 +47,15 @@ seat.
 | --- | --- |
 | `<team>` | a registered team's id, project or session name; without it, the team file of the current folder |
 | `--all` | every registered team; a team whose file does not load is named on `stderr` and left as it is |
+| `--client <grant-file>` | the client form: an owner-signed developer bundle grant that carries `resume`, see [A client's resume](#a-clients-resume) |
+| `--key <client-key>` | the client's private key file; required with `--client`, refused without it |
+| `--team <team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--json` | emit a `team.resume` v1 JSON document (`schema/resume.schema.json`) on `stdout`; refused with `--all` |
 | `--help`, `-h` | the usage, and exit 0 |
+
+## A client's resume
+
+A client with no terminal that the owner signed a **developer** bundle grant for (see [Client grant bundles](../concepts/client-grant-bundles.md#the-developer-bundle)) resumes that one team with `team resume --client <grant-file> --key <client-key>`. The grant is verified whole before any gate, and again under the grant lock before the first effect; it must carry `resume` and name exactly this team, and the run is the one team the grant's folder holds: `<team>` and `--all` are the owner's and are refused with `--client` (exit 2). The run is the second door past the placement and who-may-run-it gates, never the owner's, and is logged as `client:<id>` and as `client-resume-authorized: …`. A refusal is `resume.client-refused` (exit 1).
 
 ## Refusals
 

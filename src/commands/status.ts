@@ -70,6 +70,7 @@ import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
+import { expiryPhrase } from '../client/duration-policy.ts';
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
 export type StatusSources = {
@@ -308,7 +309,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       ...(args.values.team !== undefined ? { team: args.values.team } : {}),
       now: at,
       op: 'status',
-    });
+
+      io,    });
     if (!verified.ok) {
       const named = verified.identified;
       if (named !== null) auditClientOp(named.up.root, 'status', named.clientId, 'refused', `grant ${named.grantId}: ${verified.why}`, at);
@@ -321,7 +323,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     clientRead = true;
     // The folder is the grant's, whatever the caller's: from here every read is of that team.
     io = { ...io, cwd: verified.root };
-    if (!json) out.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, until ${verified.grant.expires}\n`);
+    if (!json) out.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   if (args.values.project !== undefined) {
     return projectReport(args.values.project, out, io, sources, json);

@@ -21,6 +21,8 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
     team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>]
              [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+    team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+    team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
 
 ## What it reads and writes
 
@@ -48,6 +50,28 @@ expected id by another file, a link or a folder is refused, never replaced or fo
 [`team brief rollout --apply`](brief.md) recovers that delivery at the claim's next attempt. A
 delivery that cannot be written is said and logged, and the launch goes on;
 [`team check`](check.md) names the seat.
+
+## A client's add
+
+A client with no terminal that the owner signed a **manager** bundle grant for (`team grant --client <id>
+--entity <entity> --public-key <file> --team <team> --bundle manager --request`, see
+[Client grant bundles](../concepts/client-grant-bundles.md#the-manager-bundle)) adds a seat to that one team with
+
+    team add Desk --like operator-1 --client ~/.config/team/grants/cg_<24 hex>.json --key ~/.config/team-client/<id>/client.key --team teamcli
+
+`--team` is required. The client form is dispatched **before** the terminal check below, which no client has
+a record for: the grant is verified whole first (the owner's signature, the client's key, `add` in the signed
+`allowed_ops`, unexpired, unrevoked, and the exact team, root and registry id signed), then re-read under the
+grant lock immediately before the first effect, and the run is the grant's folder alone. Without `--client`
+the refusal above is unchanged. The run is never the owner's: `--file`, `--session`, `--model` and `--effort`
+are refused with `--client` (exit 2), a seat marked `human: true` is never a source or a target, and a lead
+seat (the orchestrator or the operator) is never started by a client, because that is the second half of the
+owner's swap. The new entry is **not** added to the approval record: the roster change is for the owner to
+approve with the owner seat, and the run says so. Because the new seat is not in the fingerprints the owner
+signed, `team up --client` for this team stops until the owner signs a fresh manager grant. Each run writes
+`client-add-authorized: grant <cg_id> client <client-id> team <project> root <root> request <rid> seat <name>`
+to `<root>/.agents/team.log`, or `client-add-refused: …` after the key proved who the client is. A refusal is
+`add.client-refused` (exit 1).
 
 ## Who may run it
 
@@ -98,6 +122,9 @@ that proceeds is attributed in the log before its effects, as
 | `--until <end>` | what the temporary seat works for: `result:<path>` or `merged:<branch>`, as below |
 | `--worktree <task>` | the worktree the temporary seat is started in, instead of the seat's own `cwd` |
 | `--session <name>` | the herdr session, instead of `team.session`; the owner's alone |
+| `--client <grant-file>` | the client form: an owner-signed manager bundle grant that carries `add`, see [A client's add](#a-clients-add) |
+| `--key <client-key>` | the client's private key file; required with `--client`, refused without it |
+| `--team <team>` | with `--client`, the team the grant is for; required |
 | `--dry-run` | print whether this seat would launch or be refused. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) |
 | `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
 | `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
@@ -372,6 +399,10 @@ $ team add ; echo "exit $?"
 team add: a seat name is required
 Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
+       team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+       team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, never starts the orchestrator or the operator, and does not touch the approval record: the roster change is for the owner to approve with the owner seat, and the run says so.
 
 Exits 0 when the seat is ready or the dry-run plan is printed, 1 when add is refused or launch fails, 2 when the invocation or team file can't be read.
 exit 2

@@ -3,9 +3,10 @@
 Starts the team: the herdr session when it is not up, a workspace and a seat for every seat the file
 declares and this machine can run, and the watch, in a workspace of its own labelled
 `Watch · <project>`. A fresh launch of
-the orchestrator or the operator starts in the project folder; every other seat starts in the team's
-lobby. A seat already running or ready is left as it is — its pane is not closed, moved or typed
-into — and its sidebar is rewritten from the file either way. A seat the file marks `human: true`
+the orchestrator or the operator starts in the project folder; every other seat starts in the folder
+its `cwd` names when the file sets one (resolved against the project folder, and never inside a
+protected checkout), else in the team's lobby. A seat already running or ready is left as it is —
+its pane is not closed, moved or typed into — and its sidebar is rewritten from the file either way. A seat the file marks `human: true`
 is a human's own pane: the plan skips it — nothing is launched into it or typed into it; left as
 it is — and it does not count as short of ready.
 

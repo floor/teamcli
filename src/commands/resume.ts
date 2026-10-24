@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import {
   anotherPaneRefusal,
@@ -12,6 +13,8 @@ import {
   type Caller,
   type CallerVerdict,
 } from '../caller.ts';
+import { auditClientRefusal, authorizeClientRun, clientActor, clientBanner, clientFormProblem, enterClientForm, type ClientRun } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { logLine } from '../log.ts';
@@ -29,6 +32,10 @@ export const USAGE = `Usage: team resume [<team>] [--all] [--json]
 Clears the team's pause and prints the stop points it recorded; team next claims and the watch
 nudges again. The owner or the team's orchestrator runs it. <team> is a registered team's name,
 project or id, and --all is every registered team.
+
+       team resume --client <grant-file> --key <client-key> [--team <team>] [--json]
+
+The --client form is for a client with no terminal that the owner signed a developer bundle grant carrying resume for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle developer --request): it resumes that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no <team> and no --all.
 
 Exits 0 when the team resumes, 1 when it is refused or state I/O fails, 2 when the invocation or team file can't be read.
 `;
@@ -50,17 +57,33 @@ type Outcome =
   | { kind: 'io'; target: PauseTarget; message: string };
 
 export async function runResume(argv: string[], io: Io, sources: ResumeSources = realResumeSources): Promise<number> {
-  const out = cleanedIo(io);
+  let out = cleanedIo(io);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, [], ['all', 'json']);
+  const args = readArgs(argv, ['client', 'key', 'team'], ['all', 'json']);
   if (args.error) return invocation(out, args.error, json);
+  const clientProblem = clientFormProblem(args.values, 'team resume --client <grant-file> --key <client-key-file>')
+    ?? (args.values.client !== undefined && (args.rest.length > 0 || args.flags.has('all'))
+      ? '--client resumes the one team its grant names: <team> and --all are the owner\'s and take no --client'
+      : null);
+  if (clientProblem !== null) return invocation(out, clientProblem, json);
   const all = args.flags.has('all');
   if (all && args.rest.length > 0) return invocation(out, '--all takes no <team>', json);
   if (!all && args.rest.length > 1) return invocation(out, `unexpected "${plainLine(args.rest[1] ?? '')}"`, json);
   if (all && json) return invocation(out, '--all and --json can\'t be used together', json);
   const now = sources.now?.() ?? new Date();
+  // The client form: see `team pause`. A developer grant for ONE team at ONE folder, verified whole first.
+  let clientRun: ClientRun | null = null;
+  if (args.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const entered = enterClientForm({ home: sources.home ?? homedir(), now, io }, { op: 'resume', values: args.values, cwd: io.cwd });
+    if (!entered.ok) return clientRefused(out, json, entered.why);
+    clientRun = entered.run;
+    io = { ...io, cwd: clientRun.root };
+    out = cleanedIo(io);
+    if (!json) io.stderr(`${clientBanner(clientRun)}\n`);
+  }
   const walked = walkCaller(io);
-  const detached = detachedRefusal(walked, { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' });
+  const detached = clientRun !== null ? undefined : detachedRefusal(walked, { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' });
   if (detached !== undefined) {
     if (json) {
       writeJsonError(out, 'resume.detached', detached, null, 1, 'unplaced');
@@ -76,7 +99,7 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
     io,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     now: () => now,
-    owner: isOwner(walked),
+    owner: clientRun === null && isOwner(walked),
   });
   if (!resolved.ok) {
     if (resolved.kind === 'io') return ioRefuse(out, resolved.message, json);
@@ -90,6 +113,10 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
   // resumes none.
   const judged: Array<{ target: PauseTarget; by: string; session: string }> = [];
   for (const target of resolved.targets) {
+    if (clientRun !== null) {
+      judged.push({ target, by: clientActor(clientRun), session: target.team.session });
+      continue;
+    }
     const { caller, session } = judgeCallerIn(io, target.dir, target.team, (candidate, at) => mayPauseTeamVerdict(candidate, target.team, at));
     const verdict = mayPauseTeamVerdict(caller, target.team, standingOf(target.dir, session, caller));
     if (verdict.kind !== 'ok') {
@@ -99,6 +126,14 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
     judged.push({ target, by: describeCaller(caller), session });
   }
 
+  // The client's grant, read once more under its lock immediately before the first effect (see `team pause`).
+  if (clientRun !== null) {
+    const stood = authorizeClientRun(sources.home ?? homedir(), clientRun, 'resume', now);
+    if (stood !== null) {
+      auditClientRefusal('resume', clientRun.grant, stood, now);
+      return clientRefused(out, json, stood);
+    }
+  }
   const outcomes: Outcome[] = [];
   for (const entry of judged) {
     const { target, by, session } = entry;
@@ -201,6 +236,16 @@ function ioRefuse(io: Io, message: string, json: boolean, notice?: string): numb
     io.stderr(`team resume: ${message}\n`);
   }
   // exit: resume.io
+  return 1;
+}
+
+function clientRefused(io: Io, json: boolean, message: string): number {
+  if (json) {
+    writeJsonError(io, 'resume.client-refused', plainLine(message), null);
+  } else {
+    io.stderr(`team resume: ${plainLine(message)}\n`);
+  }
+  // exit: resume.client-refused
   return 1;
 }
 

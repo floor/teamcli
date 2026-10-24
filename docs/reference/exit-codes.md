@@ -20,6 +20,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.ceiling` | `add` | 1 | the file's seat ceiling would be passed | `team add worker` |
 | `add.ceilings` | `add` | 1 | a record that does not verify is not in force | `team add worker` |
 | `add.changed` | `add` | 1 | the file changed while add was checking | `team add worker` |
+| `add.client-refused` | `add` | 1 | the owner-signed manager grant, or the client add it admits, did not verify, or the seat is a lead seat | `team add Desk --like worker --client grant.json --key client.key --team docs` |
 | `add.default-session` | `add` | 1 | the session can't be "default" | `team add worker --session default` |
 | `add.delegate` | `add` | 1 | the caller is not the approved delegate | `team add worker` |
 | `add.delegate-approval` | `add` | 1 | delegation needs a verified approval | `team add worker` |
@@ -136,6 +137,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
 | `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.keygen.pane` | `client` | 1 | keygen ran inside a team pane (a herdr seat or its child) and was refused before any directory was written | `team client keygen --out ~/.config/team-client/grok-bot` |
 | `client.keygen.refused` | `client` | 1 | the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked | `team client keygen --out .` |
 | `client.keygen.write` | `client` | 1 | the key directory already holds a key, or the pair could not be written 0600 | `team client keygen --out ~/.config/team-client/grok-bot` |
 | `client.keygen.invocation` | `client` | 2 | the command arguments are invalid | `team client keygen` |
@@ -248,6 +250,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `hold.placed` | `hold` | 0 | the hold was placed | `team hold "freeze deploys"` |
 | `hold.released` | `hold` | 0 | the hold was released | `team hold --release` |
 | `hold.caller` | `hold` | 1 | not the owner, the orchestrator or the operator | `team hold "freeze deploys"` |
+| `hold.client-refused` | `hold` | 1 | the owner-signed developer grant did not verify for this run | `team hold "freeze deploys" --client grant.json --key client.key` |
 | `hold.detached` | `hold` | 1 | a run with no terminal | `team hold "freeze deploys"` |
 | `hold.held` | `hold` | 1 | a hold already stands | `team hold "freeze deploys"` |
 | `hold.io` | `hold` | 1 | the state can't be read or written | `team hold "freeze deploys"` |
@@ -299,6 +302,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.none` | `messages` | 0 | nothing is waiting | `team messages` |
 | `messages.shown` | `messages` | 0 | a waiting message was shown and its receipt was written | `team messages` |
 | `messages.client-key` | `messages` | 1 | the client key is missing or unreadable, or the ack receipt could not be signed with it | `team messages --client client-grant.json --key client.key --ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
+| `messages.client-pane` | `messages` | 1 | a client reading ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team messages --client client-grant.json --key client.key` |
 | `messages.client-refused` | `messages` | 1 | the signed request, its grant, its placement or its inbox can't be read, or a reply record or the ack does not verify | `team messages --client client-grant.json --key client.key` |
 | `messages.file` | `messages` | 1 | the team file can't be read | `team messages` |
 | `messages.id` | `messages` | 1 | the filename is not the record's id | `team messages` |
@@ -331,6 +335,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `owner-seat.invocation` | `owner-seat` | 2 | the command arguments are invalid | `team owner-seat profile maybe` |
 | `pause.placed` | `pause` | 0 | the team was paused | `team pause` |
 | `pause.caller` | `pause` | 1 | not the owner or the orchestrator | `team pause` |
+| `pause.client-refused` | `pause` | 1 | the owner-signed developer grant did not verify for this run | `team pause --client grant.json --key client.key` |
 | `pause.detached` | `pause` | 1 | a run with no terminal | `team pause` |
 | `pause.io` | `pause` | 1 | the state or the registry can't be read or written | `team pause` |
 | `pause.paused` | `pause` | 1 | the team is already paused | `team pause` |
@@ -435,6 +440,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `reload.unrecorded` | `reload` | 0 | its launch record held no model; the screen's or the file's values were recorded, and nothing was closed | `team reload worker` |
 | `reload.absent` | `reload` | 1 | the file has no seat of that name | `team reload missing` |
 | `reload.changed` | `reload` | 1 | the seat changed before it closed; nothing relaunched | `team reload worker` |
+| `reload.client-refused` | `reload` | 1 | the owner-signed manager grant, or the client reload it admits, did not verify | `team reload worker --client grant.json --key client.key` |
 | `reload.grant-another-pane` | `reload` | 1 | the state records another pane for the granted seat | `team reload worker` |
 | `reload.grant-approval` | `reload` | 1 | a grant needs a verified approval | `team reload worker` |
 | `reload.grant-caller` | `reload` | 1 | only the seat the grant names runs this | `team reload worker` |
@@ -464,6 +470,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.another-pane` | `remove` | 1 | the state records another pane for the caller's seat | `team remove worker` |
 | `remove.busy` | `remove` | 1 | the seat is not free | `team remove worker` |
 | `remove.caller` | `remove` | 1 | the caller may not change the team | `team remove worker` |
+| `remove.client-refused` | `remove` | 1 | the owner-signed manager grant, or the client removal it admits, did not verify, or the seat is a lead seat or a human's pane | `team remove spare --client grant.json --key client.key --team docs` |
 | `remove.coordinator` | `remove` | 1 | only the owner removes the orchestrator's or the operator's seat | `team remove lead` |
 | `remove.default-session` | `remove` | 1 | the session can't be "default" | `team remove worker --session default` |
 | `remove.delegate` | `remove` | 1 | the caller is not the approved delegate | `team remove worker` |
@@ -499,7 +506,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `rename.invalid` | `rename` | 2 | the team file or new seat name is invalid | `team rename worker Bad_Name` |
 | `rename.invocation` | `rename` | 2 | the invocation can't be read | `team rename` |
 | `reply.replied` | `reply` | 0 | the reply record was written on its thread, or its thread was closed | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
-| `reply.client-refused` | `reply` | 1 | a record a client wrote can't be answered: client reply publication is not in this release, or the record is bound to another session or checkout | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.client-refused` | `reply` | 1 | a client thread can't be answered: its origin grant, its placement, its recipient or the writer's own seat does not bind it, or the reply can't be written | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.refused` | `reply` | 1 | the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.configuration` | `reply` | 2 | the team file can't be read | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.usage` | `reply` | 2 | the invocation can't be read | `team reply` |
@@ -508,6 +515,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.abandon-working` | `restart` | 1 | a seat caller passed --abandon on a working seat | `team restart worker --abandon` |
 | `restart.busy` | `restart` | 1 | the seat is busy and --abandon was not given, or graceful stop did not close the pane | `team restart worker` |
 | `restart.caller` | `restart` | 1 | the caller may not restart a seat, or passed an owner-only flag | `team restart worker` |
+| `restart.client-refused` | `restart` | 1 | the owner-signed manager grant, or the client restart it admits, did not verify | `team restart worker --client grant.json --key client.key` |
 | `restart.detached` | `restart` | 1 | a run with no terminal | `team restart worker` |
 | `restart.herdr` | `restart` | 1 | herdr doesn't answer | `team restart worker` |
 | `restart.lead` | `restart` | 1 | a seat caller passed --abandon for the orchestrator's or the operator's seat | `team restart lead --abandon` |
@@ -523,6 +531,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `restart.usage` | `restart` | 2 | the invocation can't be read | `team restart` |
 | `resume.resumed` | `resume` | 0 | the team resumed | `team resume` |
 | `resume.caller` | `resume` | 1 | not the owner or the orchestrator | `team resume` |
+| `resume.client-refused` | `resume` | 1 | the owner-signed developer grant did not verify for this run | `team resume --client grant.json --key client.key` |
 | `resume.detached` | `resume` | 1 | a run with no terminal | `team resume` |
 | `resume.io` | `resume` | 1 | the state or the registry can't be read or written | `team resume` |
 | `resume.not-paused` | `resume` | 1 | no pause stands | `team resume` |
@@ -541,6 +550,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `route.configuration` | `route` | 2 | the team file cannot be read | `team route builder-2` |
 | `route.usage` | `route` | 2 | the invocation cannot be read | `team route` |
 | `seat.shown` | `seat` | 0 | the seat is printed | `team seat lead` |
+| `seat.client-refused` | `seat` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team seat worker --client grant.json --key client.key` |
 | `seat.file-owner` | `seat` | 1 | --file is the owner's | `team seat lead --file .agents/team.yaml` |
 | `seat.no-seat` | `seat` | 1 | the team file declares no seat of that name | `team seat ghost` |
 | `seat.session-owner` | `seat` | 1 | --session is the owner's | `team seat lead --session team` |
@@ -553,6 +563,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `seat.not-yours` | `seat` | 2 | the team is not the caller's to read | `team seat lead` |
 | `seat.source` | `seat` | 2 | a signed settings record can't be read or does not verify | `team seat lead` |
 | `seats.shown` | `seats` | 0 | the seats table was printed | `team seats` |
+| `seats.client-refused` | `seats` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team seats --client grant.json --key client.key` |
 | `seats.file-owner` | `seats` | 1 | --file is the owner's | `team seats --file .agents/team.yaml` |
 | `seats.session-owner` | `seats` | 1 | --session is the owner's | `team seats --session team` |
 | `seats.file` | `seats` | 2 | the team file can't be read | `team seats --file missing.yaml` |
@@ -573,6 +584,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
+| `send.client-pane` | `send` | 1 | a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team send --client client-grant.json --key client.key orchestrator@floor hello` |
 | `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
@@ -586,6 +598,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.usage` | `send` | 2 | the invocation can't be read | `team send` |
 | `sessions.none` | `sessions` | 0 | no session record matched | `team sessions` |
 | `sessions.shown` | `sessions` | 0 | the session records were listed | `team sessions` |
+| `sessions.client-refused` | `sessions` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team sessions --client grant.json --key client.key` |
 | `sessions.read` | `sessions` | 1 | a session registry can't be read | `team sessions` |
 | `sessions.invocation` | `sessions` | 2 | the invocation can't be read | `team sessions --by nothing` |
 | `settings.dry-run` | `settings` | 0 | the change a write would make is printed and nothing is written | `team settings set lead nickname=Ada --dry-run` |

@@ -1,6 +1,10 @@
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import { watchInForceOf } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
+import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { currentTeam } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
@@ -190,8 +194,11 @@ export interface SeatsJson {
 }
 
 export const USAGE = `Usage: team seats [--session <name>] [--file <path>] [--all] [--watch] [--json]
+       team seats --client <grant-file> --key <client-key> [--team <team>] [--all] [--json]
 
-Exits 0 when the seats are shown, 1 when an owner-only flag is refused, 2 when the invocation, team file, or herdr can't be read.
+The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying seats for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it reads that one team, as signed, and nothing else. It changes nothing and never prompts; --file, --session and --watch are the owner's and take no --client.
+
+Exits 0 when the seats are shown, 1 when an owner-only flag or a client grant is refused, 2 when the invocation, team file, or herdr can't be read.
 `;
 
 export function formatRelativeTime(iso: string | null | undefined, now: Date): string {
@@ -422,12 +429,18 @@ export function renderSeatsTable(rows: SeatRegistryRow[], indent = '', style: Tt
 }
 
 export async function runSeats(argv: string[], io: Io, sources: SeatsSources = realSeatsSources): Promise<number> {
-  const args = readArgs(argv, ['session', 'file'], ['all', 'watch', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['all', 'watch', 'json']);
   const json = hasJsonFlag(argv);
   const watching = args.flags.has('watch');
-  if (args.error || args.rest.length || (watching && json)) {
+  const clientProblem = args.error === undefined && args.rest.length === 0
+    ? clientFormProblem(args.values, 'team seats --client <grant-file> --key <client-key-file>')
+      ?? (args.values.client !== undefined && (args.values.file !== undefined || args.values.session !== undefined || watching)
+        ? "--client reads the one team its grant names, once: --file, --session and --watch are the owner's and take no --client"
+        : null)
+    : null;
+  if (args.error || args.rest.length || (watching && json) || clientProblem !== null) {
     const why = args.error
-      ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : "--watch and --json can't be used together");
+      ?? (args.rest.length ? `unexpected "${args.rest[0]}"` : clientProblem ?? "--watch and --json can't be used together");
     if (json) {
       writeJsonError(io, 'seats.invocation', why, null);
     } else {
@@ -436,8 +449,32 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
     // exit: seats.invocation
     return 2;
   }
+  // The client form: a manager grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key and verified whole before any file is read. It is the read gate's second door, never a
+  // second gate: every other caller goes through the gates below, unchanged. It writes only its audit line.
+  let clientRead = false;
+  if (args.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const at = sources.now();
+    const home = sources.home ?? homedir();
+    const verified = verifyClientForm({ home, now: at, io }, { op: 'seats', values: args.values, cwd: io.cwd });
+    const stood = verified.ok ? authorizeClientRun(home, verified.run, 'seats', at) : null;
+    if (!verified.ok || stood !== null) {
+      const why = verified.ok ? stood! : verified.why;
+      auditClientRefusal('seats', verified.ok ? verified.run.grant : verified.named, why, at);
+      if (json) writeJsonError(io, 'seats.client-refused', why, null);
+      else io.stderr(`team seats: ${why}\n`);
+      // exit: seats.client-refused
+      return 1;
+    }
+    clientRead = true;
+    // The folder is the grant's, whatever the caller's: from here every read is of that team.
+    io = { ...io, cwd: verified.run.root };
+    if (!json) io.stderr(`client grant ${verified.run.grant.grantId}: ${verified.run.grant.clientId} for team ${verified.run.grant.up.project} at ${verified.run.root}, until ${verified.run.grant.expires}\n`);
+  }
   const walked = walkCaller(io);
-  const owner = isOwner(walked);
+  // A client run is never the owner's, whatever terminal it stands in.
+  const owner = !clientRead && isOwner(walked);
   if (args.values.file !== undefined) {
     const refusal = fileOwnerRefusal(io, args.values.file);
     if (refusal !== undefined) {
@@ -463,7 +500,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
 
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
-    if (!current.ok || !mayReadTeam(current, io, sources)) {
+    if (!current.ok || !(clientRead || mayReadTeam(current, io, sources))) {
       if (json) {
         writeJsonError(io, 'seats.not-yours', 'this team is not yours to read', null);
       } else {

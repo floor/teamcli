@@ -792,6 +792,7 @@ scene('add.ceiling', async (place) => {
     agents: () => [agent('lead')],
   })), 'allows 1 seats');
 });
+scene('add.client-refused', async (place) => show(await added(place, ['worker', '--client', 'missing-grant.json', '--key', 'missing.key', '--team', 'acme'], detachedCaller, addSources(place)), 'no client grant can verify'));
 scene('add.dry-run', async (place) => {
   approve(place, TWO);
   return show(await added(place, ['worker', '--dry-run', '--file', place.file], owner, addSources(place)), 'dry run: nothing was run');
@@ -1064,8 +1065,8 @@ function clientHome(label: string): string {
   return realpathSync(mkdtempSync(join(process.cwd(), `.client-exit-${label}-`)));
 }
 
-function ranClient(place: Place, argv: string[], home: string = place.home): Ran {
-  const io = testIo(place.root, owner);
+function ranClient(place: Place, argv: string[], home: string = place.home, caller: Caller = owner): Ran {
+  const io = testIo(place.root, caller);
   return { code: runClient(argv, io, home), out: io.out, err: io.err };
 }
 
@@ -1073,6 +1074,10 @@ scene('client.usage', async (place) => show(ranClient(place, []), 'a subcommand 
 scene('client.unknown', async (place) => show(ranClient(place, ['nope']), 'unknown subcommand'));
 scene('client.keygen.invocation', async (place) => show(ranClient(place, ['keygen']), '--out is required'));
 scene('client.keygen.refused', async (place) => show(ranClient(place, ['keygen', '--out', join(place.home, 'keys')]), 'is outside'));
+scene('client.keygen.pane', async (place) => show(
+  ranClient(place, ['keygen', '--out', join(place.home, '.config', 'team-client', 'grok-bot')], place.home, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' }),
+  'a client key is not used from inside a team pane',
+));
 scene('client.keygen.write', async (place) => {
   const home = clientHome('write');
   try {
@@ -1092,7 +1097,7 @@ scene('client.keygen.done', async (place) => {
     if (ran.code !== 0) throw new Error(`${ran.err}${ran.out}`);
     expect(existsSync(join(dir, 'client.key'))).toBe(true);
     expect(existsSync(join(dir, 'client.pub'))).toBe(true);
-    return show(ran, 'key isolation: not enforced (pane guard pending)');
+    return show(ran, 'key isolation: enforced against team panes (key file still readable by same-user processes)');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -1735,6 +1740,7 @@ async function removed(place: Place, argv: string[], caller: Caller, sources: Re
 }
 
 scene('remove.invocation', async (place) => show(await removed(place, [], owner, downSources()), 'a seat name is required'));
+scene('remove.client-refused', async (place) => show(await removed(place, ['worker', '--client', 'missing-grant.json', '--key', 'missing.key', '--team', 'acme'], detachedCaller, downSources()), 'no client grant can verify'));
 scene('remove.not-a-repo', async (place) => show(await removed(place, ['worker'], owner, downSources()), 'not inside a git repository'), false);
 scene('remove.file', async (place) => show(await removed(place, ['worker', '--file', 'missing.yaml'], owner, downSources()), 'no team file'));
 scene('remove.file-invalid', async (place) => {
@@ -2072,7 +2078,7 @@ scene('status.difference', async (place) => {
   return show(await status(place, [], statusSources(quiet)), 'is in the file and is not running');
 });
 scene('status.file-owner', async (place) => show(await status(place, ['--file', '.agents/team.yaml'], statusSources(quiet), other), "--file is the owner's"));
-scene('status.client-refused', async (place) => show(await status(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, other), 'no client grant can verify'));
+scene('status.client-refused', async (place) => show(await status(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, detachedCaller), 'no client grant can verify'));
 scene('status.session-owner', async (place) => show(await status(place, ['--session', 'team'], statusSources(quiet), other), "--session is the owner's"));
 scene('status.not-yours', async (place) => {
   // A caller that does not pass learns nothing, even when the target does not load: the answer is
@@ -2132,6 +2138,7 @@ async function seats(place: Place, argv: string[], sources: SeatsSources, caller
 }
 
 scene('seats.invocation', async (place) => show(await seats(place, ['extra'], statusSources(quiet)), 'unexpected'));
+scene('seats.client-refused', async (place) => show(await seats(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, detachedCaller), 'no client grant can verify'));
 scene('seats.not-a-repo', async (place) => show(await seats(place, [], statusSources(quiet)), 'not inside a git repository'), false);
 scene('seats.file', async (place) => show(await seats(place, ['--file', 'missing.yaml'], statusSources(quiet)), 'no team file'));
 scene('seats.file-invalid', async (place) => {
@@ -2324,6 +2331,7 @@ function tamperedSeatSetting(place: Place): void {
     return { code: await runSeat([...argv], io, sources), out: io.out, err: io.err };
   }
   scene('seat.invocation', async (place) => show(await seatRun(place, []), 'a seat name is required'));
+  scene('seat.client-refused', async (place) => show(await seatRun(place, ['lead', '--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller, { ...statusSources(quiet), home: place.home }), 'no client grant can verify'));
   scene('seat.file-owner', async (place) => show(await seatRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
   scene('seat.session-owner', async (place) => show(await seatRun(place, ['lead', '--session', 'acme'], other), "--session is the owner's"));
   scene('seat.not-a-repo', async (place) => show(await seatRun(place, ['lead']), 'not inside a git repository'), false);
@@ -3406,6 +3414,7 @@ async function sessionsRun(place: Place, argv: string[] = []): Promise<Ran> {
 }
 
 scene('sessions.none', async (place) => show(await sessionsRun(place), '0 sessions'));
+scene('sessions.client-refused', async (place) => show(await sessionsRun(place, ['--client', 'missing-grant.json', '--key', 'missing.key']), 'no client grant can verify'));
 scene('sessions.shown', async (place) => {
   const file = sessionsRegistry(place);
   mkdirSync(dirname(file), { recursive: true });
@@ -3610,6 +3619,7 @@ scene('hold.until', async (place) => {
   write(place, TEAM);
   return show(await held(place, ['freeze deploys', '--until', 'tomorrow']), '--until is a local <HH:MM>');
 });
+scene('hold.client-refused', async (place) => show(await held(place, ['freeze deploys', '--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller), 'no client grant can verify'));
 scene('hold.detached', async (place) => {
   write(place, TEAM);
   return show(await held(place, ['freeze deploys'], detachedCaller), 'only the owner, the orchestrator or the operator runs this, from a terminal outside herdr or its own seat');
@@ -3654,6 +3664,7 @@ scene('pause.caller', async (place) => {
   write(place, TEAM);
   return show(await pausedTeam(place, [], other), 'only the owner or the orchestrator pauses the team; this call is other');
 });
+scene('pause.client-refused', async (place) => show(await pausedTeam(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller), 'no client grant can verify'));
 scene('pause.detached', async (place) => {
   write(place, TEAM);
   return show(await pausedTeam(place, [], detachedCaller), 'only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat');
@@ -3691,6 +3702,7 @@ scene('resume.caller', async (place) => {
   write(place, TEAM);
   return show(await resumedTeam(place, [], other), 'only the owner or the orchestrator resumes the team; this call is other');
 });
+scene('resume.client-refused', async (place) => show(await resumedTeam(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller), 'no client grant can verify'));
 scene('resume.detached', async (place) => {
   write(place, TEAM);
   return show(await resumedTeam(place, [], detachedCaller), 'only the owner or the orchestrator runs this, from a terminal outside herdr or its own seat');
@@ -4634,14 +4646,14 @@ function plantClientReply(place: Place, world: ReturnType<typeof clientWorld>, r
   writeFileSync(join(dir, id), `${JSON.stringify(signRecord(payload, world.home), null, 2)}\n`, { mode: 0o600 });
 }
 
-async function readClient(place: Place, home: string, argv: string[]): Promise<Ran> {
-  const io = testIo(place.root);
+async function readClient(place: Place, home: string, argv: string[], caller?: Caller): Promise<Ran> {
+  const io = caller === undefined ? testIo(place.root) : testIo(place.root, caller);
   const code = await runMessages(argv, io, { home, now: () => NOW });
   return { code, out: io.out, err: io.err };
 }
 
-async function sentClient(place: Place, home: string, argv: string[]): Promise<Ran> {
-  const io = testIo(place.root, { kind: 'owner' });
+async function sentClient(place: Place, home: string, argv: string[], caller: Caller = { kind: 'owner' }): Promise<Ran> {
+  const io = testIo(place.root, caller);
   const host = { home, now: () => NOW, sendId: () => '99999999-9999-4999-8999-999999999999' } as unknown as SendHost;
   const code = await runSend(argv, io, host);
   return { code, out: io.out, err: io.err };
@@ -4665,6 +4677,18 @@ scene('send.client-refused', async (place) => {
     return show(
       await sentClient(place, world.home, ['--client', join(world.base, 'missing.json'), '--key', world.keyPath, 'orchestrator@floor', 'hello']),
       'team send: refused: ',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('send.client-pane', async (place) => {
+  const world = clientWorld(place);
+  try {
+    return show(
+      await sentClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath, 'orchestrator@floor', 'hello'], { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' }),
+      'team send: refused: a client key is not used from inside a team pane',
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });
@@ -4719,6 +4743,18 @@ scene('messages.client-key', async (place) => {
     return show(
       await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
       'team messages:',
+    );
+  } finally {
+    rmSync(world.base, { recursive: true, force: true });
+  }
+});
+
+scene('messages.client-pane', async (place) => {
+  const world = clientWorld(place, { inbox: true });
+  try {
+    return show(
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], { kind: 'seat', name: 'orchestrator', pane: 'w1:p1' }),
+      'team messages: refused: a client key is not used from inside a team pane',
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });
@@ -5303,6 +5339,7 @@ async function reloaded(place: Place, argv: string[], caller: Caller = owner, so
   };
 }
 
+scene('reload.client-refused', async (place) => show(await reloaded(place, ['lead', '--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller), 'no client grant can verify'));
 scene('reload.reloaded', async (place) => {
   write(place, RELOAD_FILE);
   recordReload(place, 'lead');
@@ -5476,6 +5513,7 @@ async function restarted(
 }
 
 scene('restart.usage', async (place) => show(await restarted(place, []), 'a seat name is required'));
+scene('restart.client-refused', async (place) => show(await restarted(place, ['worker', '--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller), 'no client grant can verify'));
 scene('restart.configuration', async (place) => show(await restarted(place, ['worker', '--file', 'missing.yaml']), 'no team file'));
 scene('restart.detached', async (place) => show(await restarted(place, ['worker'], detachedCaller), LEADS));
 scene('restart.caller', async (place) => {

@@ -17,6 +17,7 @@ import type { SendHost } from '../commands/send.ts';
 import { ensureRecord, signRecord, type RecordPayload } from '../send/record.ts';
 import { claimClientRequest } from './replay.ts';
 import { sendWithBundle } from './bundles.ts';
+import { clientPaneGuard } from './pane-guard.ts';
 import {
   claimsBundleGrantFile,
   clientAddressOf,
@@ -194,6 +195,17 @@ export async function runClientSend(args: Args, io: Io, host: SendHost, json: bo
     }
   }
   if (body.trim() === '') return usage('a message is required');
+
+  // The pane guard, judged before the grant or the key is opened: a caller inside a team pane
+  // never signs as the client. Dev mode, the owner's switch, lifts it with a warning.
+  const pane = clientPaneGuard(io, 'send', host.home);
+  if (!pane.ok) {
+    if (json) io.stdout(`${document({ error: { code: 'send.client-pane', message: pane.why } })}\n`);
+    else io.stderr(`team send: refused: ${pane.why}\n`);
+    // exit: send.client-pane
+    return 1;
+  }
+  if (pane.warning !== undefined) io.stderr(`${pane.warning}\n`);
 
   let outcome:
     | { ok: true; path: string; id: string; recipientId: string; to: string; request: ClientRequest }

@@ -16,6 +16,7 @@ value.
 ## Synopsis
 
     team seat <seat> [--session <name>] [--file <path>] [--json]
+    team seat <seat> --client <grant-file> --key <client-key> [--team <team>] [--json]
     team seat add <seat>
     team seat remove <seat>
     team seat restart <seat>
@@ -37,6 +38,9 @@ position: `team seat add` is the lifecycle command, never a read of a seat calle
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--client` | `<grant-file>` | the client form of the read: an owner-signed manager bundle grant that carries `seat`; it reads that one team. `--file` and `--session` are refused with it. A refusal is `seat.client-refused` (exit 1) |
+| `--key` | `<client-key>` | the client's private key file; required with `--client` |
+| `--team` | `<team>` | with `--client`, the team the grant is for |
 | `--json` | — | print a JSON document (`format: 1`, `project`, `session`, `seat`, `settings`, `status`, `turn`, `conversation`, and `cost`/`tokens` when the record holds them); a setting a signed record wins adds `source_file` |
 | `--help`, `-h` | — | the usage, and exit 0 |
 

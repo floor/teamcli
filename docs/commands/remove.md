@@ -10,6 +10,7 @@ being touched: nothing is typed into it; left running.
 ## Synopsis
 
     team remove <name> [--keep] [--abandon] [--session <name>] [--file <path>] [--json]
+    team remove <name> --client <grant-file> --key <client-key> --team <team> [--json]
 
 ## Flags
 
@@ -19,8 +20,27 @@ being touched: nothing is typed into it; left running.
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--client` | `<grant-file>` | the client form: an owner-signed manager bundle grant that carries `remove`, see [A client's remove](#a-clients-remove) |
+| `--key` | `<client-key>` | the client's private key file; required with `--client`, refused without it |
+| `--team` | `<team>` | with `--client`, the team the grant is for; required |
 | `--json` | — | one `team.remove` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
+
+## A client's remove
+
+A client with no terminal that the owner signed a **manager** bundle grant for (see [Client grant bundles](../concepts/client-grant-bundles.md#the-manager-bundle)) removes a seat of
+that one team with
+
+    team remove spare --client ~/.config/team/grants/cg_<24 hex>.json --key ~/.config/team-client/<id>/client.key --team teamcli
+
+`--team` is required. The grant is verified whole before the terminal check, which no client has a record for,
+and again under the grant lock before the first effect; it must carry `remove` and name exactly this team.
+Without `--client` the refusal below is unchanged. The run is never the owner's, and it is narrower than the
+owner's: `--keep`, `--abandon`, `--file` and `--session` are refused with `--client` (exit 2), a seat marked
+`human: true` is never removed, and the orchestrator and the operator are never removed (exit 1,
+`remove.client-refused`). The approval record is not touched: the roster change is for the owner to approve with
+the owner seat, and the closing line says so. Removing a seat does not end `team up --client`, because a removed
+seat is no difference to the fingerprints the owner signed. The run is logged as `client-remove-authorized: …`.
 
 ## Who may run it
 
