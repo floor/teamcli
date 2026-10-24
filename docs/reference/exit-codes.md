@@ -504,7 +504,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `rename.invalid` | `rename` | 2 | the team file or new seat name is invalid | `team rename worker Bad_Name` |
 | `rename.invocation` | `rename` | 2 | the invocation can't be read | `team rename` |
 | `reply.replied` | `reply` | 0 | the reply record was written on its thread, or its thread was closed | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
-| `reply.client-refused` | `reply` | 1 | a record a client wrote can't be answered: client reply publication is not in this release, or the record is bound to another session or checkout | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
+| `reply.client-refused` | `reply` | 1 | a client thread can't be answered: its origin grant, its placement, its recipient or the writer's own seat does not bind it, or the reply can't be written | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.refused` | `reply` | 1 | the record can't be answered, the thread can't be closed, or the call is not the owner or a seat of the team | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.configuration` | `reply` | 2 | the team file can't be read | `team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered` |
 | `reply.usage` | `reply` | 2 | the invocation can't be read | `team reply` |

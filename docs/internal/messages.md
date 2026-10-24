@@ -159,10 +159,8 @@ own receipt. It never reads a seat's mailbox, and a seat never reads it.
 The folder is `<root>/.agents/send-drops/<session>/.clients/<client id>/`. The leading dot is what
 keeps it out of every seat reader: `team messages`, `team reply`, `team drops`, the watch and the
 bus reconciliation all filter the session folder's first segment with a name pattern a leading dot
-cannot match. A record carrying `from_client` is not answered in this release: `team reply`
-refuses it with `reply.client-refused` before any grant is read or this folder is created, and
-writes nothing here. The client's own read and ack path below is retained; a seat's replies and
-`--close` are unchanged.
+cannot match. A reply on a client thread lands there, written by the seat the thread's grant names;
+the client's read is the only reader.
 
 The folder is created mode 0700 and never `chmod`'ed. A folder found with any group or other bit, a
 symbolic link, another user's folder, or a non-directory is refused with the repair named, rather

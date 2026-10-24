@@ -3491,7 +3491,7 @@
       "code": 1,
       "command": "reply",
       "id": "reply.client-refused",
-      "meaning": "a record a client wrote can't be answered: client reply publication is not in this release, or the record is bound to another session or checkout",
+      "meaning": "a client thread can't be answered: its origin grant, its placement, its recipient or the writer's own seat does not bind it, or the reply can't be written",
       "trigger": "team reply 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d answered"
     },
     {
