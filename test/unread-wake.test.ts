@@ -17,6 +17,7 @@ import { listUnacked } from '../src/commands/messages.ts';
 import { listDrops } from '../src/commands/drops.ts';
 import { runAck } from '../src/commands/ack.ts';
 import { runWatch, type WatchSources } from '../src/commands/watch.ts';
+import { CLIENT_RULE } from '../src/client/send.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { generalBriefRecord } from '../src/launch/general-brief.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
@@ -27,7 +28,7 @@ import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
 import { dropMessage, readTriggerLine } from '../src/send/native.ts';
 import { markPending, pendingDropPath } from '../src/send/pending.ts';
-import { readRecord, signReceiptPayload, signRecord, writeReceipt } from '../src/send/record.ts';
+import { readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
 import { takenDropPath } from '../src/send/taken.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -170,6 +171,38 @@ function seedMessage(
     from_id: fromId,
     rule: 'the owner',
     thread: id,
+  }, at.home);
+  dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+  utimesSync(join(dropDir, id), new Date(), ts);
+  return dropDir;
+}
+
+/** The record a client grant writes: the client address as `from`, no agent id, and the signed
+ *  `from_client` principal. There is no seat behind it and no mailbox for it in any team. */
+function seedClientMessage(
+  at: { root: string; dir: string; home: string },
+  session: string,
+  seat: string,
+  id: string,
+  body: string,
+  ts: Date,
+  clientId = 'atlas',
+): string {
+  const dropDir = join(at.dir, 'send-drops', session, seat);
+  const record = signRecord({
+    kind: 'message',
+    id,
+    to: seat,
+    to_id: null,
+    root: realpathSync(at.root),
+    session,
+    at: ts.toISOString(),
+    body,
+    from: `client:${clientId}`,
+    from_id: null,
+    rule: CLIENT_RULE,
+    thread: id,
+    from_client: { client_id: clientId, grant_id: 'grant-aaaaaaaa' },
   }, at.home);
   dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
   utimesSync(join(dropDir, id), new Date(), ts);
@@ -946,6 +979,87 @@ describe('reportUnreadDrops', () => {
 
     expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
     expect(said).toEqual([]);
+  });
+
+  test('a signed client-origin message is reported to the team lead alone, with clean words', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedClientMessage(made, 'acme', 'lead', UNREAD_A, 'from a client\n\nplease look', new Date(NOW.getTime() - 21 * MIN));
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    // The source is one signed client-origin record, complete as written: the client address and
+    // its grant, with no agent id — the shape the record validator admits and no other.
+    const key = messageKeyOf(made.home);
+    const source = readRecord(join(dropDir, UNREAD_A), UNREAD_A);
+    expect(source.ok).toBe(true);
+    if (!source.ok || source.record === null) throw new Error('missing client-origin record');
+    expect(verifyRecord(source.record, key)).toBe(true);
+    expect(source.record.payload.from_client).toEqual({ client_id: 'atlas', grant_id: 'grant-aaaaaaaa' });
+    expect(source.record.payload.from_id).toBeNull();
+
+    // The one mailbox the report reaches is the receiving team's lead. A client principal has no
+    // internal mailbox, so none is resolved and none is written.
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    expect(existsSync(join(made.root, '.agents', 'messages'))).toBe(false);
+
+    // The lead's drop is signed with the checkout's message key and says the message cleanly: the
+    // report names the client record and no missing sender metadata, because none is missing.
+    const reportId = leadReportId(made.dir, UNREAD_A);
+    const report = readRecord(join(made.dir, 'send-drops', 'acme', 'lead', reportId), reportId);
+    expect(report.ok).toBe(true);
+    if (!report.ok || report.record === null) throw new Error('missing lead report drop');
+    expect(verifyRecord(report.record, key)).toBe(true);
+    expect(report.record.payload.from).toBe('runtime');
+    expect(report.record.payload.to).toBe('lead');
+    expect(report.record.payload.body).toContain('a message from client:atlas has been unread for 21 min');
+    expect(report.record.payload.body).not.toContain('could not be resolved');
+    expect(report.record.payload.body).not.toContain('mailbox');
+    expect(said).toEqual(['lead: a message from client:atlas was still unread after 21 min; reported to lead']);
+  });
+
+  test('a client-origin report is written once, and a repeat pass finds the standing record', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedClientMessage(made, 'acme', 'lead', UNREAD_A, 'from a client\n\nplease look', new Date(NOW.getTime() - 21 * MIN));
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), []), { unreadAfter: N });
+    const leadDir = join(made.dir, 'send-drops', 'acme', 'lead');
+    const firstId = leadReportId(made.dir, UNREAD_A);
+    const firstBody = leadReportBody(made.dir, UNREAD_A);
+
+    // A second pass at the same instant: the marker is the memory, and the lead's drop id is
+    // fixed by the message set, so neither a second drop nor a second line appears.
+    const said: string[] = [];
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+    expect(said).toEqual([]);
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    expect(readdirSync(leadDir).filter((name) => MESSAGE_ID.test(name)).sort()).toEqual([UNREAD_A, firstId].sort());
+    expect(leadReportId(made.dir, UNREAD_A)).toBe(firstId);
+    expect(leadReportBody(made.dir, UNREAD_A)).toBe(firstBody);
+    expect(existsSync(join(made.root, '.agents', 'messages'))).toBe(false);
+  });
+
+  test('an ordinary sender with no agent id still says its mailbox could not be resolved', () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    // No `from_client`: this is the ordinary unresolved-seat case, whose words are unchanged by
+    // the client-origin route.
+    const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from scout\n\nunpinned', new Date(NOW.getTime() - 21 * MIN), 'scout', null);
+    const said: string[] = [];
+
+    reportUnreadDrops(sceneOf(made, team, pane(claudeBox('')), said), { unreadAfter: N });
+
+    expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(true);
+    expect(existsSync(join(made.root, '.agents', 'messages', 'scout'))).toBe(false);
+    const body = leadReportBody(made.dir, UNREAD_A);
+    expect(body).toContain('the signed record names no agent id for "scout"');
+    expect(body).toContain("so this report goes to the team's lead only");
+    expect(said).toEqual([
+      'lead: a message from scout was still unread after 21 min; reported to lead only: '
+      + "the sender's own mailbox could not be resolved (the signed record names no agent id for \"scout\")",
+    ]);
   });
 });
 
