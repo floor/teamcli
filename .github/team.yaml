@@ -345,3 +345,12 @@ seats:
     version: "6"
     display: GPT Luna 6
     launch: codex
+
+  - role: builder
+    name: grokbot-builder
+    cli: grok
+    vendor: xai
+    model: GrokBot
+    version: "6.1"
+    display: GrokBot 6.1
+    launch: grok
