@@ -6,7 +6,8 @@
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
 import type { BrokerRequest } from '../broker/protocol.ts';
-import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isNoRepository, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
@@ -110,7 +111,7 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
   // beside it). A folder that is neither is the no-repository refusal — `team plan` takes no
   // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
   // own exit.
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const problem = loaded.errors[0];
     const message = problem?.message ?? 'the team file can\'t be read';

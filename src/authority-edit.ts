@@ -3,7 +3,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describeCaller, isOwner, walkCaller } from './caller.ts';
 import { devModeOwnerLiftAtCwd } from './dev_mode.ts';
-import { findRoot, loadTeamFile, withoutFileOffer } from './file/load.ts';
+import { findRoot, withoutFileOffer } from './file/load.ts';
+import { readTeamConfig } from './file/team-config.ts';
 import type { TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
 import { writeTeamFile } from './file/write.ts';
@@ -56,11 +57,11 @@ export async function runAuthorityEdit(
   }
 
   const home = options.home ?? homedir();
-  let loaded: ReturnType<typeof loadTeamFile>;
+  let loaded: ReturnType<typeof readTeamConfig>;
   try {
     const root = findRoot(io.cwd) ?? realpathSync(io.cwd);
     requireRegularFile(join(root, '.agents', 'team.yaml'));
-    loaded = loadTeamFile(io.cwd, { home });
+    loaded = readTeamConfig(io.cwd, { home });
   } catch (error) {
     const msg = withoutFileOffer(message(error));
     if (json) {

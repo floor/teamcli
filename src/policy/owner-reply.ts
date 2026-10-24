@@ -3,7 +3,7 @@
 // Entity `floor` ships a default naming its orchestrator; every other entity must declare one,
 // and the reader says so rather than inventing a seat. A signed declaration replaces the
 // default, and an expired one is unset at its level, as it is everywhere in the chain.
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import {
   OWNER_REPLY_DEFAULT,
   OWNER_REPLY_FLOOR_ENTITY,
@@ -87,7 +87,7 @@ export function resolveOwnerReplyTo(
 /** The team file's own entity, or null when the file cannot be read or names none. */
 function entityOfTeam(root: string, home: string): string | null {
   try {
-    const loaded = loadTeamFile(root, { home });
+    const loaded = readTeamConfig(root, { home });
     if (!loaded.ok) return null;
     const entity = loaded.team.entity;
     return typeof entity === 'string' && entity.trim() !== '' ? entity.trim() : null;

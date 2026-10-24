@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { entitiesPath } from '../entities.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { grantsDir } from '../grant.ts';
 import { agentsDir, findAgent, getAgent, isAgentId, readAgents, updateAgent } from '../registry/agents.ts';
@@ -683,7 +683,7 @@ function seatTargetProblem(home: string, target: string, declaration?: SeatDecla
       if (record.roster.some((line) => line.agent === target || line.seat === target)) return null;
       // A seat the team file declares but `team up` never launched has no registry roster line
       // yet; the declaration itself is what the bootstrap ruling plans against.
-      const loaded = loadTeamFile(record.root, { home });
+      const loaded = readTeamConfig(record.root, { home });
       const declared = loaded.ok ? loaded.team.seats.map((seat) => seat.name) : declaredSeatNames(record.root);
       if (declared.includes(target)) return null;
     }
@@ -709,7 +709,7 @@ function seatBindings(home: string, name: string): Map<string, SeatDeclaration |
     for (const [teamId, record] of Object.entries(readTeams(home))) {
       let declaration: SeatDeclaration | null = null;
       try {
-        const loaded = loadTeamFile(record.root, { home });
+        const loaded = readTeamConfig(record.root, { home });
         if (loaded.ok) {
           const seat = loaded.team.seats.find((one) => one.name === name);
           if (seat !== undefined) declaration = { root: record.root, team: loaded.team, seat };

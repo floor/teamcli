@@ -33,7 +33,7 @@ import { ensureClientInbox, scanClientInbox, writeClientInboxFile } from '../cli
 import { activeClientGrant, clientAdmission, readClientGrant, resolveEntityCoordinator, withClientGrantLock } from '../client/records.ts';
 import { callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, standingOf, type Caller } from '../caller.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -378,7 +378,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     return refused(io, json, `only the owner or a seat of this team replies; this call is ${describeCaller(caller)}`);
   }
 
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, json, message || 'the team file cannot be read');

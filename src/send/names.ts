@@ -21,7 +21,7 @@
 // earlier build printed it.
 
 import { seatOverridesOf } from '../config/apply.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { ofTeam as projectOfTeam, type ProjectRecord } from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
@@ -204,7 +204,7 @@ export function senderNameModeFor(input: {
   let file: TeamFile | null = input.file ?? null;
   if (file === null) {
     try {
-      const loaded = loadTeamFile(input.root, input.home === undefined ? {} : { home: input.home });
+      const loaded = readTeamConfig(input.root, input.home === undefined ? {} : { home: input.home });
       file = loaded.ok ? loaded.team : null;
     } catch {
       file = null;

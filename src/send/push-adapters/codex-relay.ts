@@ -30,6 +30,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { dirname, isAbsolute, join, resolve as resolvePath } from 'node:path';
+import { readTeamConfig } from '../../file/team-config.ts';
 import {
   stage as relayStage,
   type CopyTarget,
@@ -54,7 +55,6 @@ import {
 } from '../../policy/types.ts';
 import { isPresenceBinding } from '../../daemon/presence/contract.ts';
 import { codexEndpointPath, inspectRecordedCodexEndpoint } from '../../daemon/presence/endpoint-record.ts';
-import { loadTeamFile } from '../../file/load.ts';
 import {
   recordedSeatSession,
   type RecordedSeatSession,
@@ -294,7 +294,7 @@ type SeatStateRead = { ok: true; state: SeatState | undefined } | { ok: false; w
 function readSeatState(root: string, home: string, session: string, seat: string): SeatStateRead {
   let dir: string;
   try {
-    const loaded = loadTeamFile(root, { home });
+    const loaded = readTeamConfig(root, { home });
     if (!loaded.ok) {
       return {
         ok: false,

@@ -23,7 +23,8 @@ import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
-import { loadTeamFile, placedProblems } from '../file/load.ts';
+import { placedProblems } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
@@ -279,7 +280,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const flagRefusal = fileFlag
     ?? (walked !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
   if (flagRefusal !== undefined) {
-    const named = loadTeamFile(io.cwd, { home: sources.home });
+    const named = readTeamConfig(io.cwd, { home: sources.home });
     if (named.ok && named.team.delegates) {
       const flagged = (sources.delegateGate ?? delegateGate)({
         command: 'add',
@@ -303,7 +304,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   }
 
   const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = loadTeamFile(io.cwd, {
+  const loaded = readTeamConfig(io.cwd, {
     ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.

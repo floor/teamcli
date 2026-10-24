@@ -28,12 +28,12 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { readTeamConfig } from '../../file/team-config.ts';
 import {
   stage as relayStage,
   type CopyTarget,
   type RelayReceipt as PackageRelayReceipt,
 } from '../../../packages/relay/index.js';
-import { loadTeamFile } from '../../file/load.ts';
 import {
   DELIVERY_RECEIPT_SECONDS,
   receiptSecondsFor,
@@ -368,7 +368,7 @@ type SeatStateRead = { ok: true; state: SeatState | undefined } | { ok: false; w
 function readSeatState(root: string, home: string, session: string, seat: string): SeatStateRead {
   let dir: string;
   try {
-    const loaded = loadTeamFile(root, { home });
+    const loaded = readTeamConfig(root, { home });
     if (!loaded.ok) {
       return {
         ok: false,

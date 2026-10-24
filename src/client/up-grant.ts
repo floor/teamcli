@@ -15,7 +15,7 @@ import { realpathSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { compare, describe, fingerprints } from '../approve/fingerprint.ts';
 import { declaredRoots } from '../entities.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { readTeams, teamIdOf } from '../registry/teams.ts';
 import { signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -89,7 +89,7 @@ export function resolveClientUpTarget(
 ): { ok: true; binding: ClientUpBinding; team: TeamFile } | { ok: false; why: string } {
   if (!CLIENT_WORD_PATTERN.test(project)) return { ok: false, why: `"${project}" is not a team name: one lowercase word, digits and hyphens` };
   let root: string | null = null;
-  const here = loadTeamFile(cwd, { home });
+  const here = readTeamConfig(cwd, { home });
   if (here.ok && here.team.project === project) root = real(here.root);
   if (root === null) {
     let records;
@@ -107,7 +107,7 @@ export function resolveClientUpTarget(
     }
     root = real(named[0]!.root);
   }
-  const loaded = loadTeamFile(root, { home });
+  const loaded = readTeamConfig(root, { home });
   if (!loaded.ok) return { ok: false, why: `the team file of "${project}" at ${root} does not load: ${loaded.errors[0]?.message ?? 'unreadable'}` };
   if (loaded.team.project !== project) return { ok: false, why: `the team file at ${root} names team "${loaded.team.project}", not "${project}"` };
   const teamId = teamIdOf(root);
@@ -136,7 +136,7 @@ export function upBindingProblem(
   op: BundleOp = 'up',
 ): { kind: 'drift' | 'team'; why: string; changes: string[] } | null {
   const team = (why: string) => ({ kind: 'team' as const, why, changes: [] as string[] });
-  const loaded = loadTeamFile(binding.root, { home });
+  const loaded = readTeamConfig(binding.root, { home });
   if (!loaded.ok) {
     if (op === 'down' && teamIdOf(binding.root) === binding.teamId) return null;
     return team(`the team file at ${binding.root} does not load: ${loaded.errors[0]?.message ?? 'unreadable'}`);
@@ -255,7 +255,7 @@ export function verifyClientUp(input: {
   // folder is refused even then, since it is not clear which of the two was meant.
   const nameIt = `Run it in ${grant.up.root}, or name the team: team ${op} --client <grant> --key <key> --team ${grant.up.project}`;
   // `send` names its target in the address, so where the caller stands is no part of it.
-  const here = op === 'send' ? null : loadTeamFile(input.cwd, { home: input.home, checkOnly: true });
+  const here = op === 'send' ? null : readTeamConfig(input.cwd, { home: input.home, checkOnly: true });
   if (here === null) {
     // (nothing to compare: see above)
   } else if (here.ok) {

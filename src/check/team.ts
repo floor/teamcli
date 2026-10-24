@@ -31,7 +31,8 @@ import { canonicalRoot } from '../daemon/routes.ts';
 import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { declaredModel } from '../file/model.ts';
-import { isParseError, loadTeamFile, TEAM_FILE } from '../file/load.ts';
+import { isParseError, TEAM_FILE } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
@@ -1397,7 +1398,7 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
     if (siblingRoot === undefined) continue;
     let loaded: LoadResult;
     try {
-      loaded = loadTeamFile(siblingRoot, { file: join(siblingRoot, TEAM_FILE), home, checkOnly: true });
+      loaded = readTeamConfig(siblingRoot, { file: join(siblingRoot, TEAM_FILE), home, checkOnly: true });
     } catch {
       // A file that cannot be read at all (permissions, a broken link) is a sibling the check
       // cannot see: not counted, and not a reason for this team's check to fail.

@@ -28,7 +28,8 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
+import { NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { briefBindingOf, currentBriefClaim, GENERAL_BRIEF_FROM, GENERAL_BRIEF_RULE } from '../launch/general-brief.ts';
@@ -366,7 +367,7 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
   // beside it). A folder that is neither is the no-repository refusal — `team drops` takes no
   // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
   // own exit.
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const message = loaded.errors[0]?.message ?? "the team file can't be read";
     if (message.startsWith(NOT_A_REPO)) {

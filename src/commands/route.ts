@@ -21,7 +21,8 @@ import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, detachedRefusal, judgeCallerIn, logTag, standingOf } from '../caller.ts';
 import { PROFILES, processNameMatches } from '../clis.ts';
-import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import type { Agent } from '../registry/agents.ts';
@@ -82,7 +83,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   if (!spec) return usage(io, 'a seat, a seat@team or an agent id is required', report);
   if (args.rest.length > 1) return usage(io, 'route names one seat and takes nothing else', report);
 
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
     // `team route` takes no `--file`, so the no-repository refusal must not offer one.
     const message = loaded.errors
@@ -114,7 +115,7 @@ export async function runRoute(argv: string[], io: Io, host: SendHost): Promise<
   // is planned, nothing is recorded, and the answer names the seat's own state rather than the
   // pane herdr no longer shows. The file is the caller's own for a same-team route, and the
   // receiving team's for a cross-team one.
-  const receiving = resolved.team.root === root ? loaded : loadTeamFile(resolved.team.root, { home: host.home });
+  const receiving = resolved.team.root === root ? loaded : readTeamConfig(resolved.team.root, { home: host.home });
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === recipient.reach.seat) : undefined;
   if (declared?.stopped === true) return refused(io, dir, who, `${recipient.reach.seat} is stopped`, host, report);
   // The placement the answer is built on: herdr's live reading of the seat, never the record's

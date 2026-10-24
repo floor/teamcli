@@ -7,7 +7,8 @@ import {
   type PresenceFeedEvent,
   type PresenceFeedResult,
 } from '../daemon/presence/feed.ts';
-import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { lobbyDir } from '../lobby/gate.ts';
@@ -924,7 +925,7 @@ export async function runFeed(argv: string[], io: Io, sources: FeedSources = rea
     io.cwd.startsWith(`${lobbyRoot}/`) ||
     io.cwd === lobbiesRoot ||
     io.cwd.startsWith(`${lobbiesRoot}/`);
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (loaded.ok) {
     project = loaded.team.project;
     session = loaded.team.session;

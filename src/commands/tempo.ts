@@ -1,7 +1,8 @@
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { loadTeamFile, NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
+import { NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { TEMPOS, type Tempo } from '../file/sections/tempo.ts';
 import { writeTeamFile } from '../file/write.ts';
@@ -70,7 +71,7 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
     }
     io.stderr(`${lift.warning}\n`);
   }
-  const loaded = loadTeamFile(io.cwd, { home: sources.home ?? homedir() });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home ?? homedir() });
   let failed: string | undefined;
   if (!loaded.ok) {
     failed = loaded.errors[0]?.message ?? 'the team file can\'t be read';

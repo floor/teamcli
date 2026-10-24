@@ -12,7 +12,7 @@ import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeOwner
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { plainLine } from '../launch/plain.ts';
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { markStopped, takeOut } from '../file/lines.ts';
 import type { Problem, Seat } from '../file/types.ts';
@@ -233,7 +233,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   const flagRefusal = fileFlagRefusal
     ?? (walked !== undefined && !isOwner(walked) ? sessionOwnerRefusal(walked) : undefined);
   if (flagRefusal !== undefined) {
-    const named = loadTeamFile(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
+    const named = readTeamConfig(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
     if (named.ok && named.team.delegates) {
       const flagged = (sources.delegateGate ?? delegateGate)({
         command: 'remove',
@@ -255,7 +255,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     return 1;
   }
   const launched = args.values.file || clientRun !== null ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), ...(sources.home ? { home: sources.home } : {}) });
+  const loaded = readTeamConfig(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), ...(sources.home ? { home: sources.home } : {}) });
   if (!loaded.ok) {
     const said = loaded.errors.map((problem) => `${problem.line ? `line ${problem.line}: ` : ''}${problem.message}`);
     refuse(io, json, 'remove', {

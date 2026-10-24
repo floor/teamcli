@@ -21,7 +21,7 @@
 //   the drop pending for `retryHeldDrops`), and appends the history line.
 import { chmodSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { claimBindingIn, inboxLive, receiptHeld } from '../mcp/inbox.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
@@ -67,7 +67,7 @@ function isHumanSeat(scene: RetryScene, home: string, record: PendingNative): bo
   if (record.root === scene.root) {
     return scene.team.seats.some((s) => s.name === record.to && s.human === true);
   }
-  const loaded = loadTeamFile(record.root, { home });
+  const loaded = readTeamConfig(record.root, { home });
   return loaded.ok && loaded.team.seats.some((s) => s.name === record.to && s.human === true);
 }
 

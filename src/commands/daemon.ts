@@ -31,7 +31,7 @@ import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
 import { routeId, routeOf } from '../daemon/routes.ts';
 import { systemServiceManager, type ServiceManager, type ServiceProgram } from '../daemon/service.ts';
 import type { DaemonHost } from '../send/daemon.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { refuse, writeJson, writeJsonError } from '../output/index.ts';
 import { version as installedVersion } from '../version.ts';
@@ -193,7 +193,7 @@ function rootsOf(parsed: Parsed, io: Io, home: string): { roots: string[] } | { 
     const roots: string[] = [];
     for (const named of parsed.roots) {
       const root = resolve(io.cwd, named);
-      const loaded = loadTeamFile(root, { home });
+      const loaded = readTeamConfig(root, { home });
       if (!loaded.ok) {
         return { problem: `${root}: ${loaded.errors[0]?.message ?? 'the team file cannot be read'}` };
       }
@@ -201,7 +201,7 @@ function rootsOf(parsed: Parsed, io: Io, home: string): { roots: string[] } | { 
     }
     return { roots };
   }
-  const loaded = loadTeamFile(io.cwd, { home });
+  const loaded = readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     return { problem: 'run team from a project, or name a checkout with --root' };
   }
@@ -304,7 +304,7 @@ async function faultWatch(
   }
   // Exactly one checkout is named (verbProblem), so this is the only read that can fail here.
   const root = resolve(io.cwd, parsed.roots[0] as string);
-  const loaded = loadTeamFile(root, { home });
+  const loaded = readTeamConfig(root, { home });
   if (!loaded.ok) {
     refuse(io, parsed.json, 'daemon', {
       id: 'daemon.fault-root',

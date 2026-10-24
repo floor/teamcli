@@ -6,7 +6,8 @@ import { notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, mayChangeTeamVerdict, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller } from '../caller.ts';
 import { insideTrust } from '../file/paths.ts';
-import { LINK_NOT_FOLLOWED, loadTeamFile, NOT_A_REPO, placedProblems } from '../file/load.ts';
+import { LINK_NOT_FOLLOWED, NOT_A_REPO, placedProblems } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Problem, TeamFile } from '../file/types.ts';
 import type { Command, Io } from '../io.ts';
@@ -126,7 +127,7 @@ export async function runWorktree(argv: string[], io: Io, sources: WorktreeSourc
   }
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = loadTeamFile(io.cwd, {
+  const loaded = readTeamConfig(io.cwd, {
     ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
     home: sources.home,
     checkOnly: true,

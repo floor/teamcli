@@ -20,7 +20,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, link
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { declaredEntityClients, declaredRoots } from '../entities.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import { approvalDifferences } from '../approve/approval.ts';
@@ -321,9 +321,9 @@ type DeclaredTeam =
 
 function readDeclarations(root: string, home: string): DeclaredTeam {
   if (!existsSync(join(root, '.agents', 'team.yaml'))) return { kind: 'absent' };
-  let loaded: ReturnType<typeof loadTeamFile>;
+  let loaded: ReturnType<typeof readTeamConfig>;
   try {
-    loaded = loadTeamFile(root, { file: join(root, '.agents', 'team.yaml'), home, checkOnly: true });
+    loaded = readTeamConfig(root, { file: join(root, '.agents', 'team.yaml'), home, checkOnly: true });
   } catch {
     return { kind: 'unreadable' };
   }

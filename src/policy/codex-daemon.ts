@@ -11,7 +11,7 @@
 //     assumes a daemon is permitted when context or a signed policy record is missing or broken.
 import { join } from 'node:path';
 import { declaredRoots } from '../entities.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { findAgent } from '../registry/agents.ts';
 import { get as getProject, ofTeam as projectOfTeam, projectIdOf } from '../registry/projects.ts';
@@ -143,7 +143,7 @@ export function resolveCodexDaemonPolicy(context: CodexDaemonContext = {}): Code
   let team: TeamFile | null = context.team ?? null;
   if (team === null && root !== null) {
     try {
-      const loaded = loadTeamFile(root, {
+      const loaded = readTeamConfig(root, {
         home,
         checkOnly: true,
         ...(context.teamFile ? { file: context.teamFile } : {}),

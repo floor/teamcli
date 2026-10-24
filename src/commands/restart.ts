@@ -26,7 +26,8 @@ import {
 import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode, type DevModeRun } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
-import { loadTeamFile, placedProblems } from '../file/load.ts';
+import { placedProblems } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
@@ -226,7 +227,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
   if (flagRefusal !== undefined) return callerRefused(out, json, flagRefusal, undefined, 'owner-only');
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, sources.home);
-  const loaded = loadTeamFile(io.cwd, {
+  const loaded = readTeamConfig(io.cwd, {
     ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
     home: sources.home,
     // The session this run addresses: the placement check reads that session's recorded lobby.

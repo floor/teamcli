@@ -7,7 +7,7 @@ import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, noPaneRefu
 import { ORDINARY_SECTIONS } from './delegate.ts';
 import { devModeFileApproval, type DevModeRun } from './dev_mode.ts';
 import { declaredRoots } from './entities.ts';
-import { loadTeamFile } from './file/load.ts';
+import { readTeamConfig } from './file/team-config.ts';
 import type { GrantScope, LoadResult } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
@@ -433,7 +433,7 @@ export function grantGate(input: {
   const sources = input.sources ?? {};
   const refuse = (id: string, text: string): GrantVerdict => ({ kind: 'refused', id: `grant.${id}`, text });
 
-  const loaded = sources.load ? sources.load(io.cwd) : loadTeamFile(io.cwd, { home });
+  const loaded = sources.load ? sources.load(io.cwd) : readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     return refuse('file', loaded.errors[0]?.message ?? 'the team file can\'t be read');
   }

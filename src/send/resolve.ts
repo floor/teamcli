@@ -5,7 +5,7 @@
 // records what it reaches. The registry's records are the address; the live herdr read is the
 // fallback for a record that carries no pane yet.
 
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
@@ -103,7 +103,7 @@ export function resolveTarget(
     return lookupInTeam(home, spec, team, parsed.target, live, true);
   }
   if (parsed.kind === 'nickname') return fromNickname(home, spec, parsed.nickname, io, live);
-  const loaded = loadTeamFile(io.cwd, { home });
+  const loaded = readTeamConfig(io.cwd, { home });
   if (!loaded.ok) return { error: `${spec}: the team of the caller's folder cannot be read (${io.cwd})` };
   const id = teamIdOf(loaded.root);
   const team = findTeam(home, id) ?? findTeam(home, loaded.team.project) ?? findTeam(home, loaded.team.session);
@@ -193,7 +193,7 @@ function fromNickname(
   // stands in when that record carries none.
   let self: TeamRecord | null = null;
   let entity: string | null = null;
-  const loaded = loadTeamFile(io.cwd, { home });
+  const loaded = readTeamConfig(io.cwd, { home });
   if (loaded.ok) {
     const id = teamIdOf(loaded.root);
     self = findTeam(home, id) ?? findTeam(home, loaded.team.project) ?? findTeam(home, loaded.team.session);
@@ -355,7 +355,7 @@ function seatOfTarget(
  */
 function fileLeadOf(home: string, team: TeamRecord): string | null {
   if (team.roster.some((entry) => entry.leads === true)) return null;
-  const loaded = loadTeamFile(team.root, { home });
+  const loaded = readTeamConfig(team.root, { home });
   return loaded.ok && loaded.team.orchestrator !== '' ? loaded.team.orchestrator : null;
 }
 

@@ -16,7 +16,8 @@ import { join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientMessages } from '../client/inbox.ts';
-import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isNoRepository, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { type Held } from '../launch/rules-file.ts';
@@ -610,7 +611,7 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   // beside it). A folder that is neither is the no-repository refusal — `team messages` takes no
   // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
   // own exit.
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const problem = loaded.errors[0];
     const message = problem?.message ?? 'the team file can\'t be read';

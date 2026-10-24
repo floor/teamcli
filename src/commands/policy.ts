@@ -6,7 +6,7 @@ import { readArgs } from '../args.ts';
 import { describeCaller, fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
@@ -453,7 +453,7 @@ function resolveWriteTarget(
     };
   }
 
-  const loaded = loadTeamFile(cwd, { file: values.file, home });
+  const loaded = readTeamConfig(cwd, { file: values.file, home });
   const team = loaded.ok ? loaded.team : null;
   const root = loaded.ok ? loaded.root : undefined;
   const logDir = root ? join(root, '.agents') : undefined;

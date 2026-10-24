@@ -16,7 +16,8 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isNoRepository, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import {
@@ -81,7 +82,7 @@ export async function runQueue(argv: string[], io: Io, sources: QueueSources = {
   // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps
   // its own exit.
   const home = sources.home ?? homedir();
-  const loaded = loadTeamFile(io.cwd, { home });
+  const loaded = readTeamConfig(io.cwd, { home });
   if (!loaded.ok) {
     const problem = loaded.errors[0];
     const message = problem?.message ?? 'the team file can\'t be read';

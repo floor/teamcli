@@ -12,7 +12,8 @@ import {
   standingOf,
   walkCaller,
 } from '../caller.ts';
-import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
+import { TEAM_FILE } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
@@ -216,7 +217,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // is the caller gate dev mode folds: a grant the file omits and one naming another seat are
   // that gate, while its placement (`no-pane`, `another-pane`), the approval, the scope, a file
   // that will not load and the owner's `--file` stay refusals in every mode.
-  const policyLoad = loadTeamFile(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
+  const policyLoad = readTeamConfig(io.cwd, { ...(sources.home ? { home: sources.home } : {}) });
   const dev = resolveDevMode('reload', io, {
     ...(sources.home ? { home: sources.home } : {}),
     team: policyLoad.ok ? policyLoad.team : null,
@@ -256,7 +257,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
     }
   }
 
-  const loaded = loadTeamFile(io.cwd, {
+  const loaded = readTeamConfig(io.cwd, {
     ...(owner && flagged ? { file: flagged } : {}),
     ...(sources.home ? { home: sources.home } : {}),
   });

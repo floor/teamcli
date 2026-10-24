@@ -14,7 +14,7 @@ import { delegateGate, logDelegated, type DelegateSources, type DelegateVerdict 
 import { entityGrantAdmits, grantGate, logGranted, readEntityCreateGrants } from '../grant.ts';
 import { currentTeam, rememberCurrent, type Current } from '../file/current.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { getTeam, noteTeam, teamIdOf } from '../registry/teams.ts';
 import { registerEnd, registerSessionEnd } from '../registry/sync.ts';
@@ -1448,7 +1448,7 @@ type LiveFile = { team: TeamFile; root: string; dir: string; path: string };
  * load carries no delegate, and the ordinary path keeps its own fallback and its own words.
  */
 function liveTeam(io: Io, home?: string): LiveFile | undefined {
-  const loaded = loadTeamFile(io.cwd, home ? { home } : {});
+  const loaded = readTeamConfig(io.cwd, home ? { home } : {});
   if (!loaded.ok) return undefined;
   return { team: loaded.team, root: loaded.root, dir: dirname(loaded.path), path: loaded.path };
 }

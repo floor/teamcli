@@ -3,7 +3,8 @@
 // here: this command connects to no broker, holds no tracker credential, and has no seat gate —
 // and it keeps holding none of those. A listing is not a claim and not the intake rule.
 import { readArgs } from '../args.ts';
-import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isNoRepository, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import {
@@ -106,7 +107,7 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
   // beside it). A folder that is neither is the no-repository refusal — `team issues` takes no
   // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
   // own exit.
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const problem = loaded.errors[0];
     const message = problem?.message ?? 'the team file can\'t be read';

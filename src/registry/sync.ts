@@ -8,7 +8,7 @@
 import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
 import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
 import * as projects from '../registry/projects.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -242,7 +242,7 @@ export function markOrphanedSeats(home: string, root: string, now: Date): string
   const marked: string[] = [];
   let declared: Set<string>;
   try {
-    const loaded = loadTeamFile(root, { home });
+    const loaded = readTeamConfig(root, { home });
     if (!loaded.ok) return marked;
     declared = new Set(loaded.team.seats.map((seat) => seat.name));
   } catch {

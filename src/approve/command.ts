@@ -10,7 +10,8 @@ import { approveFingerprint, ownerAuthorized } from './owner-token.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner, walkCaller, type Caller } from '../caller.ts';
 import { delegateGate, logDelegated, type DelegateSources } from '../delegate.ts';
-import { TEAM_FILE, loadTeamFile, placedProblems } from '../file/load.ts';
+import { TEAM_FILE, placedProblems } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { grantGate, logGranted } from '../grant.ts';
@@ -196,7 +197,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   const foreignFile =
     args.values.file !== undefined && resolve(io.cwd, args.values.file) !== resolve(io.cwd, TEAM_FILE);
   const loadFile = !foreignFile || args.flags.has('show') || isOwner(walked) ? args.values.file : undefined;
-  const loaded = loadTeamFile(io.cwd, { ...(loadFile ? { file: loadFile } : {}), home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { ...(loadFile ? { file: loadFile } : {}), home: sources.home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team approve: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);

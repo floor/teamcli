@@ -23,7 +23,8 @@ import {
   judgeCallerIn,
   standingOf,
 } from '../caller.ts';
-import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { isGeneralBriefRecord } from '../launch/general-brief.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
@@ -110,7 +111,7 @@ export async function runAck(argv: string[], io: Io, host: AckHost): Promise<num
     return refused(io, json, `only the owner or a seat of this team acknowledges a message; this call is ${describeCaller(caller)}`);
   }
 
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
     // `team ack` takes no `--file`, so the shared no-repository sentence must not offer one.
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
