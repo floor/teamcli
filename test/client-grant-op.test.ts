@@ -231,7 +231,7 @@ describe('a sub-grant requested under a master grant', () => {
     expect(sub.grant.vocabulary).toBe(1);
     expect(sub.grant.issuedBy).toBe(m.grant.grantId);
     expect(sub.grant.grantScope).toBeUndefined();
-    expect(Date.parse(sub.grant.expires)).toBeLessThanOrEqual(Date.parse(m.grant.expires));
+    expect(Date.parse(sub.grant.expires!)).toBeLessThanOrEqual(Date.parse(m.grant.expires!));
     const audit = JSON.parse(readFileSync(join(clientGrantAuditFolder(w.home), `${sub.grant.grantId}.json`), 'utf8'));
     expect(audit.client_grant_audit.master_grant_id).toBe(m.grant.grantId);
     expect(resolveClientTarget(w.home, 'orchestrator@floor', sub.grant).ok).toBe(true);

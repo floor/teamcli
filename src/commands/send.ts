@@ -239,7 +239,8 @@ CLI. \`team route <seat>\` answers the address such a delivery uses.
 as the owner or a seat: the request is signed with the client's own key and one
 signed drop is written to the entity's orchestrator — \`orchestrator@floor\` is the only
 address this build admits. The grant names the destination
-entity and the orchestrator role, expires within 7 days and is refused once revoked.
+entity and the orchestrator role, expires within 7 days (or what the owner's
+client-grant-max-duration policy allows, up to no end date) and is refused once revoked.
 A request id is used once. The key file is mode 0600 in the client's own
 configuration folder. Key isolation is not enforced: every process running as the
 same user can read that file, and each client send says so on stderr.

@@ -12,6 +12,7 @@ import { readTeams } from '../registry/teams.ts';
 import { logLine } from '../log.ts';
 import { bundleSpecsFrom, defaultBundleSpecs, parseBundlePolicy, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
 import { bundleSeatsAdmitted, withClientGrantLock, type ClientUpGrantRecord } from './records.ts';
+import { projectIdOfTeamId } from './grant-duration.ts';
 import { claimClientRequest } from './replay.ts';
 import { verifyClientUp } from './up-grant.ts';
 import { CLIENT_REQUEST_ID_PATTERN } from './verify.ts';
@@ -57,11 +58,7 @@ export function expandBundle(
 
 /** The project id the registry records for a team, or null (a team no project names is its own). */
 export function projectIdOfTeam(home: string, teamId: string): string | null {
-  try {
-    return readTeams(home)[teamId]?.projectId ?? null;
-  } catch {
-    return null;
-  }
+  return projectIdOfTeamId(home, teamId);
 }
 
 /** `grok-bot` as a person reads it: `Grok Bot`. */
@@ -84,12 +81,13 @@ const OP_PHRASES: Readonly<Record<BundleOp, (seats: readonly string[], file: str
 export const BUNDLE_CANNOT_LINE = 'It cannot change permissions, add or remove seats, or create teams.';
 
 /** `2027-01-21 09:00 UTC`: the expiry as the card reads it, with its zone. */
-function cardTime(iso: string): string {
+function cardTime(iso: string | null): string {
+  if (iso === null) return 'revoked (no end date)';
   return `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
 /** The text the owner reads at signing, one plain sentence per grant, built from the EXPLICIT ops. */
-export function bundleCard(input: { clientId: string; project: string; ops: readonly BundleOp[]; seats: readonly string[]; expires: string; fileFingerprint?: string | null }): string {
+export function bundleCard(input: { clientId: string; project: string; ops: readonly BundleOp[]; seats: readonly string[]; expires: string | null; fileFingerprint?: string | null }): string {
   const what = input.ops.map((op) => OP_PHRASES[op](input.seats, input.fileFingerprint ?? null)).join(', ');
   return `${clientDisplayName(input.clientId)} may, for team ${input.project} until ${cardTime(input.expires)}: ${what}. ${BUNDLE_CANNOT_LINE}`;
 }

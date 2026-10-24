@@ -229,7 +229,7 @@ describe('client grant and key records', () => {
 
   test('expiry defaults to seven days and anything longer, unlimited or past is refused', () => {
     const f = fixture('expiry');
-    expect(Date.parse(f.grant.expires) - Date.parse(f.grant.issued)).toBe(CLIENT_EXPIRY_MAX_MS);
+    expect(Date.parse(f.grant.expires!) - Date.parse(f.grant.issued)).toBe(CLIENT_EXPIRY_MAX_MS);
     const base = { clientId: CLIENT_ID, entity: 'floor', publicKey: f.grant.publicKey, keyId: f.grant.keyId, keyDir: f.keyDir };
     const longer = writeClientGrant(f.home, { ...base, expires: new Date(NOW.getTime() + CLIENT_EXPIRY_MAX_MS + 1000).toISOString() }, { now: NOW, key: f.ownerKey });
     expect(longer.ok).toBe(false);
@@ -555,7 +555,7 @@ describe('client send', () => {
   test('a grant past its expiry refuses the send', async () => {
     const f = fixture('expired');
     const io = capture(f);
-    const later = new Date(Date.parse(f.grant.expires) + 1000);
+    const later = new Date(Date.parse(f.grant.expires!) + 1000);
     expect(await sendClient(f, clientArgs(f), io.io, { now: later })).toBe(1);
     expect(io.err()).toContain('expired at');
   });

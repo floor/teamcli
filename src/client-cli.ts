@@ -33,6 +33,7 @@ import { readTeams } from './registry/teams.ts';
 import { isBundleName, type BundleName, type BundleOp } from './client/bundle-ops.ts';
 import { bundleCard, expandBundle, projectIdOfTeam } from './client/bundles.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
+import { expiresArgument, expiresField } from './client/duration-policy.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
 import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
 import type { Io } from './io.ts';
@@ -156,6 +157,7 @@ export function clientGrantProblem(args: Args): string | null {
     if (args.values.via !== undefined || args.values.key !== undefined) return '--via and --key belong to the --client-request form';
   }
   if (args.flags.has('client-request')) {
+    if (expiresArgument(args.values.expires).neverExpires === true) return '--expires never belongs to the owner form: a sub-grant always has an end date, and never outlives its master';
     if (args.values.via === undefined) return '--via <master-grant-file> is required with --client-request';
     if (args.values.key === undefined) return '--key <client-key> is required with --client-request';
     if (args.flags.has('allow-grant') || MASTER_SCOPE_FLAGS.some((flag) => args.values[flag] !== undefined)) {
@@ -172,6 +174,13 @@ export function clientGrantProblem(args: Args): string | null {
 }
 
 const MASTER_SCOPE_FLAGS = ['grant-entity', 'grant-project', 'grant-team'] as const;
+
+/** `--expires` as a pending request records it: a date, `never` (no end date), or the default (null). */
+function pendingExpires(raw: string | undefined): { expires: string | null; expires_never?: true } {
+  const asked = expiresArgument(raw);
+  if (asked.neverExpires === true) return { expires: null, expires_never: true };
+  return { expires: asked.expires ?? null };
+}
 
 /** The seat names the registry's roster holds for a team, or none when it is not registered. */
 function readRosterSeats(home: string, teamId: string): string[] {
@@ -191,7 +200,7 @@ export function masterScopeOf(args: Args): ClientGrantScope {
   return { entities: listOf(args.values['grant-entity']), projects: listOf(args.values['grant-project']), teams: listOf(args.values['grant-team']) };
 }
 
-/** The client form of `team grant`: owner-only, one fresh id per issuance, at most seven days. */
+/** The client form of `team grant`: owner-only, one fresh id per issuance, as long as the `client-grant-max-duration` policy allows (seven days by default). */
 export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean, home: string = homedir(), approval: GrantApprovalOptions = {}): 'ok' | 'refused' | 'invalid' {
   const problem = clientGrantProblem(args);
   if (problem !== null) {
@@ -219,7 +228,7 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean,
     publicKey: key.key.publicKey,
     keyId: key.key.keyId,
     keyDir: key.key.keyDir,
-    ...(args.values.expires !== undefined ? { expires: args.values.expires } : {}),
+    ...expiresArgument(args.values.expires),
     ...(args.flags.has('inbox') ? { inbox: true } : {}),
     ...(args.values.seat !== undefined ? { seat: args.values.seat } : {}),
     ...(args.values.team !== undefined ? { team: args.values.team } : {}),
@@ -241,7 +250,7 @@ export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean,
       target: result.grant.grantId,
     });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nexpires: ${result.grant.expires}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nexpires: ${expiresField(result.grant.expires)}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }
@@ -303,7 +312,7 @@ function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPubl
     bundle: params.bundle,
     ops: params.bundle_ops,
     seats: params.bundle_seats,
-    ...(args.values.expires !== undefined ? { expires: args.values.expires } : {}),
+    ...expiresArgument(args.values.expires),
     up: { project: params.up.project, teamId: params.up.team_id, root: params.up.root, fingerprints: params.up.fingerprints },
     specs: specs.specs,
   }, { now });
@@ -312,7 +321,7 @@ function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPubl
   if (json) {
     writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: updated', project: null, session: null, target: result.grant.grantId });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nbundle: ${result.grant.bundle}\nops: ${result.grant.ops.join(', ')}\nteam: ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${result.grant.expires}\ncard: ${card}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nbundle: ${result.grant.bundle}\nops: ${result.grant.ops.join(', ')}\nteam: ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${expiresField(result.grant.expires)}\ncard: ${card}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }
@@ -332,7 +341,7 @@ function runDirectUpGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicIn
     publicKey: key.publicKey,
     keyId: key.keyId,
     keyDir: key.keyDir,
-    ...(args.values.expires !== undefined ? { expires: args.values.expires } : {}),
+    ...expiresArgument(args.values.expires),
     ops: teamOpsOfArgs(args) ?? ['up'],
     up: target.binding,
   });
@@ -340,7 +349,7 @@ function runDirectUpGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicIn
   if (json) {
     writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: updated', project: null, session: null, target: result.grant.grantId });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\n${result.grant.ops.join(' and ')}: team ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${result.grant.expires}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\n${result.grant.ops.join(' and ')}: team ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${expiresField(result.grant.expires)}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }
@@ -377,7 +386,7 @@ export function runClientGrantRequestMode(rawIo: Io, io: Io, args: Args, json: b
     now,
   });
   if (!admitted.ok) return refuse(admitted.why);
-  let outcome: { ok: true; grantId: string; clientId: string; expires: string; path: string; audit: string } | { ok: false; why: string };
+  let outcome: { ok: true; grantId: string; clientId: string; expires: string | null; path: string; audit: string } | { ok: false; why: string };
   try {
     outcome = withClientGrantLock(home, () => {
       const again = verifyClientGrantIssue({
@@ -436,7 +445,7 @@ export function runClientGrantRequestMode(rawIo: Io, io: Io, args: Args, json: b
       target: outcome.grantId,
     });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${outcome.grantId}\nclient: ${outcome.clientId}\nissued by master grant: ${admitted.master.grantId}\nexpires: ${outcome.expires}\ngrant file: ${outcome.path}\naudit record: ${outcome.audit}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${outcome.grantId}\nclient: ${outcome.clientId}\nissued by master grant: ${admitted.master.grantId}\nexpires: ${expiresField(outcome.expires)}\ngrant file: ${outcome.path}\naudit record: ${outcome.audit}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }
@@ -475,7 +484,7 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
     key_dir: key.key.keyDir,
     team: args.values.team ?? null,
     seat: bundled !== null ? null : args.values.seat ?? null,
-    expires: args.values.expires ?? null,
+    ...pendingExpires(args.values.expires),
     inbox: args.flags.has('inbox'),
     allow_grant: allow,
     grant_scope: allow ? masterScopeOf(args) : null,
@@ -485,7 +494,7 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
     ...(up !== null && teamOps !== null && teamOps.join(',') !== 'up' ? { team_ops: teamOps } : {}),
   };
   const now = approval.now ?? new Date();
-  const summary = pendingSummary(params, now);
+  const summary = pendingSummary(params, now, home);
   // A standing rule the owner approved ('always') covers a request fully inside it: no new ask.
   if (grantEmissionOf(home, params.entity, now).mode === 'conversational') {
     const rule = matchingApprovalRule(home, params, now);
@@ -509,7 +518,7 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
   });
   if (!created.ok) return refuse(created.why);
   const id = created.record.request_id;
-  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary, at: now.toISOString() });
+  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now, home).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary, at: now.toISOString() });
   const choices = GRANT_CHOICES.filter((choice) => !(choice === 'always' && (params.allow_grant || up !== null))).map((choice) => ({
     id: choice,
     label: choice === 'once' ? 'Yes, once' : choice === 'always' ? 'Always for this' : 'No',
@@ -528,12 +537,12 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
       request: { id, params_sha256: created.record.params_sha256, expires_at: created.record.expires_at, adapter: created.record.adapter },
       summary,
       choices,
-      prompt: confirmationLine(id, params, now),
+      prompt: confirmationLine(id, params, now, home),
       answer_command: `team grant --answer ${id} <oui|always|non>`,
       owner_seat: delivered !== null ? { delivered: true, inbox: delivered, answer_command: `team grant --approve-as-owner-seat ${id} <oui|always|non>` } : { delivered: false },
     });
   } else {
-    io.stdout(`grant: request recorded\nrequest: ${id}\nconfirmation: ${confirmationLine(id, params, now)}\nsummary: ${summary.text}\nparams sha256: ${created.record.params_sha256}\napproval: ${created.record.adapter} (shown to the owner on screen only)\nexpires: ${created.record.expires_at}\nchoices: ${choices.map((c) => c.id).join(' | ')}\n${choices.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\n`);
+    io.stdout(`grant: request recorded\nrequest: ${id}\nconfirmation: ${confirmationLine(id, params, now, home)}\nsummary: ${summary.text}\nparams sha256: ${created.record.params_sha256}\napproval: ${created.record.adapter} (shown to the owner on screen only)\nexpires: ${created.record.expires_at}\nchoices: ${choices.map((c) => c.id).join(' | ')}\n${choices.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\n`);
   }
   return 'ok';
 }
@@ -558,7 +567,7 @@ export function runExecuteGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
       key_dir: key.key.keyDir,
       team: args.values.team ?? null,
       seat: args.values.seat ?? null,
-      expires: args.values.expires ?? null,
+      ...pendingExpires(args.values.expires),
       inbox: args.flags.has('inbox'),
       allow_grant: allow,
       grant_scope: allow ? masterScopeOf(args) : null,
@@ -603,7 +612,7 @@ export function runExecuteGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
       ...(result.ruleId !== undefined ? { rule_id: result.ruleId } : {}),
     });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\napproved by: ${result.adapter}${result.ruleId !== undefined ? `\nstanding rule: ${result.ruleId}` : ''}\nexpires: ${result.grant.expires}\ngrant file: ${result.path}\naudit record: ${result.audit}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\napproved by: ${result.adapter}${result.ruleId !== undefined ? `\nstanding rule: ${result.ruleId}` : ''}\nexpires: ${expiresField(result.grant.expires)}\ngrant file: ${result.path}\naudit record: ${result.audit}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }

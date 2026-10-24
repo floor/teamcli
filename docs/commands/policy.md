@@ -18,10 +18,23 @@ Every enforced policy comes from the release catalogue (`dev-mode`, `seats-cross
 `event-thread-ttl-seconds`, `event-thread-cap`, `event-retention-days`,
 `event-held-threshold-seconds`, `event-unreachable-threshold-seconds`,
 `event-idle-threshold-seconds`, `event-reconcile-interval-seconds`, `model-rule`,
-`swap-wait-seconds`).
+`swap-wait-seconds`, `client-bundles`, `client-grant-max-duration`).
 Inheritance tightens only: a lower level that loosens a higher level is refused at load and before
 writing, naming both levels. Where no level sets a value, the release default applies (`off` for
 gate-lifting policies); an expired value counts as unset at its level.
+
+`client-grant-max-duration` is how long a new client grant may last: `7d`, `30d`, `90d` or `none` (no
+end date) for every kind of grant, or per kind, `send=30d;up=90d;bundle=none`. Unset it is
+`send=7d;up=90d;bundle=90d`, today's limits. Entity and project level only; a lower level may only
+shorten (`none` is the loosest); a chain that cannot be verified refuses a new grant. It decides what
+`team grant --client … --expires <ISO|never>` may sign. The owner sets it from a terminal:
+
+    team policy set entity client-grant-max-duration send=365d --entity floor
+    team policy set entity client-grant-max-duration send=none --entity floor
+    team policy set project client-grant-max-duration send=30d --project <project-id>
+    team policy unset entity client-grant-max-duration --entity floor
+
+See [How long a client grant lasts](../concepts/client-grant-duration.md).
 
 The seven `event-*` policies are the owner's event thresholds: how long an unanswered thread
 stays open (72 hours by default), how many records a thread may hold (50), how many days the
