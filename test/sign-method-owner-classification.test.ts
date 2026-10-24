@@ -25,9 +25,9 @@ function requirements(operation: OwnerOperation, payload: { [key: string]: unkno
 }
 
 describe('the operation matrix', () => {
-  test('ordinary acts need no authority and may take both none and always', () => {
-    for (const operation of ['publish', 'spend', 'go'] as const) {
-      const requirementsFor = requirements(operation, operation === 'go' ? { run_id: 'run-054' } : {});
+  test('ordinary acts need no authority and keep none; go alone is barred from always', () => {
+    for (const operation of ['publish', 'spend'] as const) {
+      const requirementsFor = requirements(operation);
       expect(requirementsFor, operation).toStrictEqual({
         class: OWNER_KIND_CLASSES[operation],
         authorityWrite: false,
@@ -37,6 +37,12 @@ describe('the operation matrix', () => {
         alwaysAllowed: true,
       });
     }
+    // Reviewed spec §3.7 (N2): the go row keeps once, deny and none, but its always cell stays
+    // barred until amendment 04's coordinated replacement exists (§4.2).
+    expect(requirements('go', { run_id: 'run-054' })).toStrictEqual({
+      class: 'go', authorityWrite: false, grantOfGrant: false, freshHigh: false,
+      noneAllowed: true, alwaysAllowed: false,
+    });
   });
 
   test('authority writes need a proof but only fixed grant-of-grant work needs fresh HIGH', () => {
