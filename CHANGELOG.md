@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The `manager` client grant bundle.** `team grant --client <id> --entity <entity> --public-key <file>
+  --team <team> --bundle manager --request` asks the owner to sign one grant that lets a client with no
+  terminal run one team: the operator's list, the team's own reads, `restart`, `reload`, and the seat
+  lifecycle (`add` and `remove`), as an explicit list of 28 ops at vocabulary 6, for ninety days at most.
+  It needs `--team`. `team add` and `team remove` take `--client <grant> --key <key> --team <team>`, which
+  is verified on the exact team before the terminal check that refuses a caller with no herdr record;
+  a human's pane, the orchestrator and the operator are never targets, the approval record is left
+  as it was, and the run says the roster change is for the owner to approve with the owner seat. `team
+  restart`, `team reload`, `team seats`, `team seat` and `team sessions` take the same `--client` form.
+  `observer` and `operator` still never carry `add` or `remove`, and the commands that change who may do
+  what stay out of every bundle. See [Client grant bundles](docs/concepts/client-grant-bundles.md#the-manager-bundle).
+- **The `developer` client grant bundle.** `--bundle developer` is the manager's list plus `rename`, `swap`,
+  `pause`, `resume`, `hold`, `release`, `tempo`, `queue`, `lock`, `unlock`, `worktree`, `raise`, `route`, `pr`,
+  `workflow` and `proc` (44 ops, vocabulary 7), for one team and ninety days at most. `team pause`,
+  `team resume` and `team hold` take `--client <grant> --key <key>`, verified on the exact team; a client's
+  pause is as graceful as the owner's (ongoing work finishes, only new work is withheld until resume) and
+  takes no `<team>` and no `--all`. The commands that change who may do what (`grant`, `revoke`, `delegate`,
+  `owner-seat`, `policy`, `settings`, `development-mode`, `answer`, `config`, `broker`, `bus`, `daemon`,
+  `register`, `client`, `init`) stay out of every bundle. The other developer ops are listed in the grant and
+  admit nothing until their route is wired. See [Client grant bundles](docs/concepts/client-grant-bundles.md#the-developer-bundle).
+
 ## [0.5.3] - 2026-10-21
 
 0.5.3 is the event-driven send release: a message to another seat is delivered by the first

@@ -10,7 +10,7 @@ import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { getAgent } from '../registry/agents.ts';
 import { readTeams } from '../registry/teams.ts';
 import { logLine } from '../log.ts';
-import { bundleSpecsFrom, defaultBundleSpecs, parseBundlePolicy, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
+import { BUNDLE_OP_ROUTES, DEVELOPER_ONLY_OPS, MANAGER_ONLY_OPS, bundleSpecsFrom, defaultBundleSpecs, parseBundlePolicy, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
 import { bundleSeatsAdmitted, withClientGrantLock, type ClientUpGrantRecord } from './records.ts';
 import { projectIdOfTeamId } from './grant-duration.ts';
 import { claimClientRequest } from './replay.ts';
@@ -75,10 +75,54 @@ const OP_PHRASES: Readonly<Record<BundleOp, (seats: readonly string[], file: str
   send: (seats) => `send to ${seats.length === 0 ? 'no seat' : seats.join(', ')}`,
   up: (_seats, file) => `start${file !== null ? ` (file ${file})` : ''}`,
   down: () => 'stop',
+  seats: () => 'list its seats',
+  seat: () => 'read one seat',
+  sessions: () => 'list its sessions',
+  usage: () => 'read usage',
+  drops: () => 'read its drops',
+  projects: () => 'list its projects',
+  issues: () => 'read its issues',
+  plan: () => 'read the plan',
+  next: () => 'read what is next',
+  brief: () => 'read the brief',
+  watch: () => 'watch the team',
+  doctor: () => 'run the doctor',
+  commits: () => 'read its commits',
+  reply: () => 'reply to messages',
+  ack: () => 'acknowledge messages',
+  'ask-show': () => 'show asks',
+  restart: () => 'restart a seat',
+  reload: () => 'reload a seat',
+  add: () => 'add a seat',
+  remove: () => 'remove a seat',
+  rename: () => 'rename a seat',
+  swap: () => 'swap a seat',
+  pause: () => 'pause the team (seats finish their work; no new work starts until resume)',
+  resume: () => 'resume the team',
+  hold: () => 'hold and release the team',
+  release: () => 'check a release',
+  tempo: () => 'set the team tempo',
+  queue: () => 'use the task queue',
+  lock: () => 'lock a path',
+  unlock: () => 'unlock a path',
+  worktree: () => 'manage worktrees',
+  raise: () => 'raise to the owner',
+  route: () => "read a seat's route",
+  pr: () => 'check a pull request',
+  workflow: () => 'check workflows',
+  proc: () => 'record processes',
 };
 
 /** What a bundle can never do, said once on every card: the invariant the exclusion list encodes. */
 export const BUNDLE_CANNOT_LINE = 'It cannot change permissions, add or remove seats, or create teams.';
+
+/** What a manager bundle can never do, said once on its card: it adds and removes seats, so the line
+ *  says what stays the owner's instead. */
+export const MANAGER_CANNOT_LINE = "It cannot change permissions, grant or revoke access, touch a human's seat or the orchestrator's seat, or create teams; a seat it adds or removes is the owner's to approve.";
+
+/** What a developer bundle can never do, said once on its card: it does the manager's and more, and the
+ *  owner's own commands stay the owner's. */
+export const DEVELOPER_CANNOT_LINE = "It cannot change permissions, grant, revoke or delegate access, change policy or settings, answer for the owner, run the daemon, bus or broker, register or create teams or keys, touch a human's seat or the orchestrator's seat; a seat it adds or removes is the owner's to approve.";
 
 /** `2027-01-21 09:00 UTC`: the expiry as the card reads it, with its zone. */
 function cardTime(iso: string | null): string {
@@ -89,7 +133,13 @@ function cardTime(iso: string | null): string {
 /** The text the owner reads at signing, one plain sentence per grant, built from the EXPLICIT ops. */
 export function bundleCard(input: { clientId: string; project: string; ops: readonly BundleOp[]; seats: readonly string[]; expires: string | null; fileFingerprint?: string | null }): string {
   const what = input.ops.map((op) => OP_PHRASES[op](input.seats, input.fileFingerprint ?? null)).join(', ');
-  return `${clientDisplayName(input.clientId)} may, for team ${input.project} until ${cardTime(input.expires)}: ${what}. ${BUNDLE_CANNOT_LINE}`;
+  const developed = input.ops.some((op) => (DEVELOPER_ONLY_OPS as readonly string[]).includes(op));
+  const managed = developed || input.ops.some((op) => (MANAGER_ONLY_OPS as readonly string[]).includes(op));
+  // A grant may list an op whose client route is not built yet: it admits nothing until then, and the
+  // card says which, so the owner never signs for a power the client does not have.
+  const unrouted = managed ? input.ops.filter((op) => !BUNDLE_OP_ROUTES[op]) : [];
+  const later = unrouted.length > 0 ? ` Not usable yet in this build: ${unrouted.join(', ')}.` : '';
+  return `${clientDisplayName(input.clientId)} may, for team ${input.project} until ${cardTime(input.expires)}: ${what}.${later} ${developed ? DEVELOPER_CANNOT_LINE : managed ? MANAGER_CANNOT_LINE : BUNDLE_CANNOT_LINE}`;
 }
 
 /** One audit line of a client's op, in the team's own log: `client-<op>-authorized` or `-refused`. */

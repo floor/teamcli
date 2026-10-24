@@ -22,7 +22,7 @@ import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAns
 import type { Fingerprints } from '../approve/fingerprint.ts';
 import { CLIENT_EXPIRY_MAX_MS, canonicalTeamOps, resolveEntityCoordinator, teamGrantLabel, planClientGrant, planClientUpGrant, planClientBundleGrant, writeClientBundleGrant, writeClientGrant, writeClientUpGrant, type ClientBundleGrantRequest, type ClientGrantRequest, type ClientGrantRecord, type ClientGrantScope, type ClientTeamOp, type ClientUpGrantRecord, type ClientUpGrantRequest } from './records.ts';
 import { upBindingProblem } from './up-grant.ts';
-import { BUNDLE_DEFAULT_DAYS, type BundleName, type BundleOp } from './bundle-ops.ts';
+import { BUNDLE_DEFAULT_DAYS, bundleSignsFile, type BundleName, type BundleOp } from './bundle-ops.ts';
 import { GRANT_DURATION_DEFAULT_DAYS, expiryPhrase, type GrantDurationKind } from './duration-policy.ts';
 import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
 import { bundleCard, bundleSpecsInForce, projectIdOfTeam } from './bundles.ts';
@@ -610,7 +610,8 @@ function planPending(home: string, p: PendingGrantParams, now: Date): { ok: true
     if (request === null) return { ok: false, why: 'a bundle request names its team' };
     const planned = planClientBundleGrant(home, request, { now });
     if (!planned.ok) return planned;
-    const live = upBindingProblem(home, p.entity, request.up, planned.grant.ops.includes('up') ? 'up' : 'status');
+    // Only an observer or operator bundle that starts the team signs the file; a manager never does.
+    const live = upBindingProblem(home, p.entity, request.up, bundleSignsFile(request.bundle, planned.grant.ops) ? 'up' : 'status');
     if (live === null) return { ok: true };
     if (live.kind === 'drift') return { ok: false, why: `the team file of ${request.up.project} changed since the request (${live.changes.join('; ')}); ask again so the owner answers for the file as it is now` };
     return { ok: false, why: live.why };
@@ -719,7 +720,7 @@ export function pendingSummary(p: PendingGrantParams, now: Date, home?: string):
     const seats = Object.keys(p.up.fingerprints.seats);
     const expires = cardExpiry(p, now, home, 'bundle');
     const file = fileFingerprintOf(p.up);
-    const card = bundleCard({ clientId: p.client_id, project: p.up.project, ops, seats: p.bundle_seats ?? [], expires, fileFingerprint: file });
+    const card = bundleCard({ clientId: p.client_id, project: p.up.project, ops, seats: p.bundle_seats ?? [], expires, fileFingerprint: bundleSignsFile(p.bundle, ops) ? file : null });
     return { client: p.client_id, entity: p.entity, team: p.up.project, seat: (p.bundle_seats ?? []).join(',') || 'none', ops, expires, master: false, text: expires === null ? `${card} ${NO_END_DATE_NOTICE}` : card, up: { project: p.up.project, team_id: p.up.team_id, root: p.up.root, seats, file_fingerprint: file } };
   }
   if (p.up !== undefined && p.up !== null) {

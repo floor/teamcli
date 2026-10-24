@@ -32,6 +32,7 @@ reloaded, then the same difference.
 ## Synopsis
 
     team reload <seat> [--file <path>] [--json]
+    team reload <seat> --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ## What it reads and writes
 
@@ -57,6 +58,14 @@ and this command is its repair.
 The log gains one line when the close happens; a run that does not close adds none, unless it
 has a failed delivery to report.
 
+## A client's reload
+
+A client with no terminal that the owner signed a **manager** bundle grant for (see [Client grant bundles](../concepts/client-grant-bundles.md#the-manager-bundle)) reloads a seat of that
+one team with `team reload <seat> --client <grant-file> --key <client-key>`. The grant is verified whole before
+the caller and grant gates, and again under the grant lock before the first effect; it must carry `reload` and
+name exactly this team. The run is never the owner's and takes no `--file`. It is logged as
+`client-reload-authorized: …`; a refusal is `reload.client-refused` (exit 1).
+
 ## Who may run it
 
 The owner at a terminal may name any seat, including the operator. A lead — a seat the map's
@@ -73,6 +82,9 @@ not a refusal. `--file` is the owner's. A delegate is not offered this command.
 | Flag | Meaning |
 | --- | --- |
 | `--file <path>` | The team file. The owner may name one. A granted seat may not. |
+| `--client <grant-file>` | The client form: an owner-signed manager bundle grant that carries `reload`, see [A client's reload](#a-clients-reload). |
+| `--key <client-key>` | The client's private key file; required with `--client`, refused without it. |
+| `--team <team>` | With `--client`, the team the grant is for. |
 | `--json` | the same outcome as one JSON document (`team.reload`) instead of the line |
 
 ## Output and exit codes

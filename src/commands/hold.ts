@@ -1,5 +1,8 @@
+import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, isOwner, judgeCallerIn, mayChangeTeamVerdict, noPaneRefusal, standingOf, walkCaller, type Caller, type CallerVerdict } from '../caller.ts';
+import { auditClientRefusal, authorizeClientRun, clientActor, clientBanner, clientFormProblem, enterClientForm, type ClientRun } from '../client/client-form.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { currentTeam } from '../file/current.ts';
 import { withoutFileOffer } from '../file/load.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -18,6 +21,10 @@ import { holdText, liveHold, updateState, type HoldRecord } from '../state.ts';
 
 export const USAGE = `Usage: team hold <reason> [--until <time>] [--json]
        team hold --release [--json]
+       team hold <reason> --client <grant-file> --key <client-key> [--team <team>] [--until <time>] [--json]
+       team hold --release --client <grant-file> --key <client-key> [--team <team>] [--json]
+
+The --client form is for a client with no terminal that the owner signed a developer bundle grant carrying hold for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle developer --request): it places or releases the hold of that one team, as signed, and nothing else. It never prompts and is never the owner.
 
 Exits 0 when the hold is placed or released, 1 when it is refused or state I/O fails, 2 when the invocation or team file can't be read.
 `;
@@ -37,10 +44,12 @@ type Op =
   | { kind: 'not-held' };
 
 export async function runHold(argv: string[], io: Io, sources: HoldSources = realHoldSources): Promise<number> {
-  const out = cleanedIo(io);
+  let out = cleanedIo(io);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['until'], ['release', 'json']);
+  const args = readArgs(argv, ['until', 'client', 'key', 'team'], ['release', 'json']);
   if (args.error) return invocation(out, args.error, json);
+  const clientProblem = clientFormProblem(args.values, 'team hold <reason> --client <grant-file> --key <client-key-file>');
+  if (clientProblem !== null) return invocation(out, clientProblem, json);
   const now = sources.now?.() ?? new Date();
   const release = args.flags.has('release');
   let reason = '';
@@ -69,8 +78,21 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
       until = parsed;
     }
   }
+  // The client form: a developer grant the owner signed for ONE team at ONE folder, proven by the client's
+  // own key and verified whole before anything is read. The second door of the caller rule below, never a
+  // second rule: every other caller goes through it, unchanged. The run is never the owner's.
+  let clientRun: ClientRun | null = null;
+  if (args.values.client !== undefined) {
+    if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const entered = enterClientForm({ home: sources.home ?? homedir(), now }, { op: 'hold', values: args.values, cwd: io.cwd });
+    if (!entered.ok) return clientRefused(out, json, entered.why);
+    clientRun = entered.run;
+    io = { ...io, cwd: clientRun.root };
+    out = cleanedIo(io);
+    if (!json) io.stderr(`${clientBanner(clientRun)}\n`);
+  }
   const walked = walkCaller(io);
-  const detached = detachedRefusal(walked, { who: 'the owner, the orchestrator or the operator', where: 'a terminal outside herdr or its own seat' });
+  const detached = clientRun !== null ? undefined : detachedRefusal(walked, { who: 'the owner, the orchestrator or the operator', where: 'a terminal outside herdr or its own seat' });
   if (detached !== undefined) {
     if (json) {
       writeJsonError(out, 'hold.detached', detached, null, 1, 'unplaced');
@@ -80,7 +102,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     // exit: hold.detached
     return 1;
   }
-  const current = currentTeam(io.cwd, undefined, now, sources.home, isOwner(walked));
+  const current = currentTeam(io.cwd, undefined, now, sources.home, clientRun === null && isOwner(walked));
   if (!current.ok) {
     // `team hold` takes no `--file`, so the no-repository refusal must not offer one.
     const messages = current.errors.map(
@@ -99,9 +121,12 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   const { team, dir } = current;
   const notice = current.notice ? plainText(current.notice) : undefined;
   if (notice !== undefined && !json) out.stdout(`${notice}\n`);
-  const { caller, session } = judgeCallerIn(io, dir, team);
-  const verdict = mayChangeTeamVerdict(caller, team, standingOf(dir, session, caller));
-  if (verdict.kind !== 'ok') {
+  const judged = clientRun !== null ? null : judgeCallerIn(io, dir, team);
+  const session = judged?.session ?? team.session;
+  const by = clientRun !== null ? clientActor(clientRun) : describeCaller(judged!.caller);
+  const verdict: CallerVerdict = judged === null ? { kind: 'ok' } : mayChangeTeamVerdict(judged.caller, team, standingOf(dir, session, judged.caller));
+  if (verdict.kind !== 'ok' && judged !== null) {
+    const { caller } = judged;
     const msg = refusalOf(verdict, caller);
     if (json) {
       const rule = verdict.kind === 'no-pane' || verdict.kind === 'another-pane' ? 'unplaced' : 'owner-or-leads';
@@ -112,6 +137,15 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
     }
     // exit: hold.caller
     return 1;
+  }
+  // The client's grant, read once more under its lock immediately before the first effect, and its audit
+  // line written while the lock is held: a revocation is either seen here or ordered after this run.
+  if (clientRun !== null) {
+    const stood = authorizeClientRun(sources.home ?? homedir(), clientRun, 'hold', now, release ? 'release' : `reason ${reason}`);
+    if (stood !== null) {
+      auditClientRefusal('hold', clientRun.grant, stood, now);
+      return clientRefused(out, json, stood);
+    }
   }
   let op: Op;
   try {
@@ -125,7 +159,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
       }
       const standing = liveHold(state, now);
       if (standing !== null) return { kind: 'held', hold: standing };
-      const record: HoldRecord = { reason, by: describeCaller(caller), at: now.toISOString(), ...(until ? { until: until.toISOString() } : {}) };
+      const record: HoldRecord = { reason, by, at: now.toISOString(), ...(until ? { until: until.toISOString() } : {}) };
       state.hold = record;
       return { kind: 'placed', hold: record };
     });
@@ -223,6 +257,16 @@ function untilOf(text: string, now: Date): Date | string {
     if (!Number.isNaN(at.getTime())) return at;
   }
   return '--until is a local <HH:MM>, or an ISO 8601 instant with Z or an offset, and nothing else';
+}
+
+function clientRefused(io: Io, json: boolean, message: string): number {
+  if (json) {
+    writeJsonError(io, 'hold.client-refused', plainLine(message), null);
+  } else {
+    io.stderr(`team hold: ${plainLine(message)}\n`);
+  }
+  // exit: hold.client-refused
+  return 1;
 }
 
 function invocation(io: Io, message: string, json: boolean): number {

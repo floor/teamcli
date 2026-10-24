@@ -991,11 +991,11 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     parseValue: parseApprovalRuleTtlDays,
     isWithin: (lower: number, higher: number) => lower <= higher,
   },
-  // What the client grant bundles (`observer`, `operator`) expand to at signing time, and how long
-  // a grant of one lasts: `operator=status,send,up,down@30d;observer=status`. Empty (the default)
+  // What the client grant bundles (`observer`, `operator`, `manager`) expand to at signing time, and how long
+  // a grant of one lasts: `operator=status,send,up,down@30d;observer=status;manager=status,add@30d`. Empty (the default)
   // is the release lists in `src/client/bundle-ops.ts`. A policy can only choose among the ops a
   // bundle may ever carry; the commands that change who may do what are never eligible, whatever
-  // it says. Entity and project levels; a lower level may only narrow the ops and shorten the days.
+  // it says; `add` and `remove` are eligible for `manager` alone. Entity and project levels; a lower level may only narrow the ops and shorten the days.
   'client-bundles': {
     name: 'client-bundles',
     kind: 'enforced',
