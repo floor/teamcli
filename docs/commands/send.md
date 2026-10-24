@@ -231,6 +231,18 @@ omitted socket always carries its reason. It
 writes no record, dials no socket, types nothing and appends no line to `.agents/team.log`: a
 dry run writes nothing, and the log records writes.
 
+## A client's bundle send
+
+`team send --client <grant-file> --key <client-key> <seat>@<team> <text>` is also the send of a
+**bundle grant** that carries `send` (`team grant --client <id> --team <team> --bundle operator
+--seat <seats>`, see [Client grant bundles](../concepts/client-grant-bundles.md)). The address is a
+seat the owner's signed list names, at the one team the grant binds; any other seat, the operator's
+seat, a human seat, a seat the team's approved `clients:` list no longer admits, or another team is
+refused. The drop is the same signed record a one-seat client send writes. The request id is used
+once. `client-send-authorized: grant <cg_id> client <client-id> team <project> seat <seat> drop
+<id> request <rid>` (or `client-send-refused: …`) goes to `<root>/.agents/team.log`. An observer
+bundle does not carry `send` and is refused.
+
 ## Addressing
 
 | Target | Names |

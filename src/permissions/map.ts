@@ -221,6 +221,26 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'the owner alone switches the machine development mode, from a terminal outside herdr, or with the existing out-of-band owner-authorization token for exactly this machine, mode and prior generation; the switch is signed with the owner key and logged',
     },
+    'owner-seat': {
+      kind: 'any-caller',
+      why: 'it reads the owner seat and the security profile; it changes nothing',
+    },
+    'owner-seat:status': {
+      kind: 'any-caller',
+      why: 'it reads the owner seat and the security profile; it changes nothing',
+    },
+    'owner-seat:setup': {
+      kind: 'any-caller',
+      why: 'an agent may start it, but nothing is registered until the owner confirms with Touch ID on the Secure Enclave key it creates; the owner-device signature is the authority',
+    },
+    'owner-seat:profile': {
+      kind: 'any-caller',
+      why: 'an agent may propose a security profile; it counts only once signed by an owner-seat signer (Touch ID or passkey), with an expiry, and is audited',
+    },
+    'owner-seat:serve': {
+      kind: 'any-caller',
+      why: 'it serves the owner page on 127.0.0.1 behind a per-run token; every act on it needs an owner-device passkey or Touch ID signature',
+    },
     doctor: {
       kind: 'any-caller',
       why: 'the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them',

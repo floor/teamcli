@@ -1632,3 +1632,53 @@ profiles:
     expect(code).toBe(1);
   });
 });
+
+describe('team status and the owner-signed security profile', () => {
+  const raw = (key: import('node:crypto').KeyObject) => {
+    const jwk = key.export({ format: 'jwk' }) as { x: string; y: string };
+    return `04${Buffer.from(jwk.x, 'base64url').toString('hex')}${Buffer.from(jwk.y, 'base64url').toString('hex')}`;
+  };
+  async function withProfile(profile: 'strict' | 'relaxed' | null, tamper = false) {
+    const { generateKeyPairSync, sign } = await import('node:crypto');
+    const { registerOwnerSeat } = await import('../src/client/owner-seat.ts');
+    const { proposeSecurityProfile, signSecurityProfile, securityProfilePath } = await import('../src/security/profile.ts');
+    const keys = new Map<string, ReturnType<typeof generateKeyPairSync>>();
+    const store = {
+      name: 'fake', available: () => true,
+      create: (l: string) => { const p = generateKeyPairSync('ec', { namedCurve: 'P-256' }); keys.set(l, p); return { ok: true as const, publicKey: raw(p.publicKey) }; },
+      publicKey: (l: string) => (keys.has(l) ? { ok: true as const, publicKey: raw(keys.get(l)!.publicKey) } : { ok: false as const, why: 'no key' }),
+      sign: (l: string, m: Buffer) => ({ ok: true as const, signature: sign('sha256', m, { key: keys.get(l)!.privateKey, dsaEncoding: 'der' }).toString('hex') }),
+      pinSet: () => ({ ok: true as const }), pinGet: () => ({ ok: false as const, why: 'none' }),
+    };
+    const home = join(dir, 'home');
+    mkdirSync(join(home, '.config', 'team'), { recursive: true });
+    if (profile !== null) {
+      registerOwnerSeat(home, { team: 'floor', signer: 'mac' }, store);
+      proposeSecurityProfile(home, { profile, days: 7, reason: 'test' }, NOW);
+      if (!signSecurityProfile(home, store, undefined, NOW).ok) throw new Error('not signed');
+      if (tamper) {
+        const path = securityProfilePath(home);
+        writeFileSync(path, readFileSync(path, 'utf8').replace('"reason": "test"', '"reason": "edited"'));
+      }
+    }
+    const io = testIo(dir, { kind: 'owner' });
+    const code = await runStatus(['--file', file, '--json'], io, { ...sources, home, ownerSeatStore: store });
+    return { code, notes: (JSON.parse(io.out) as { notes: string[] }).notes };
+  }
+
+  test('no record: no profile line (strict is the quiet default)', async () => {
+    expect((await withProfile(null)).notes.some((n) => /security profile/i.test(n))).toBe(false);
+  });
+  test('relaxed: a loud line naming the rules and the expiry', async () => {
+    const { notes } = await withProfile('relaxed');
+    expect(notes.find((n) => n.startsWith('SECURITY PROFILE: RELAXED: 5 rules relaxed'))).toContain('until 2026-');
+  });
+  test('strict signed: a quiet strict line', async () => {
+    expect((await withProfile('strict')).notes.some((n) => /^security profile: strict \(signed by mac/.test(n))).toBe(true);
+  });
+  test('a tampered record: strict, and the line says why', async () => {
+    const { notes } = await withProfile('relaxed', true);
+    expect(notes.find((n) => n.startsWith('security profile: strict (the security-profile record does not count'))).toBeDefined();
+    expect(notes.some((n) => n.startsWith('SECURITY PROFILE: RELAXED'))).toBe(false);
+  });
+});

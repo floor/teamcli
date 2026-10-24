@@ -6,6 +6,7 @@
 // policies come from a closed, release-owned vocabulary; advised policies may be from the
 // catalogue or a project's own text.
 
+import { bundlePolicyWithin, formatBundlePolicy, parseBundlePolicy } from '../client/bundle-ops.ts';
 import { DURATION, parseMeasure } from '../file/sections/units.ts';
 import {
   DEFAULT_STATE_THRESHOLDS,
@@ -113,6 +114,11 @@ export const ENFORCED_POLICY_NAMES = [
   'idle-threshold',
   'daemon.broker',
   'watch-rhythm',
+  'grant-emission',
+  'owner-signers',
+  'owner-signer-mode',
+  'approval-rule-ttl',
+  'client-bundles',
 ] as const;
 
 export type EnforcedPolicyName = (typeof ENFORCED_POLICY_NAMES)[number];
@@ -125,6 +131,10 @@ export const ADVISED_POLICY_NAMES = [
   'seat-numbering',
   'board',
   'review-terms',
+  'workspace-mode',
+  'landing-mode',
+  'vault-root',
+  'entity-orchestrator',
 ] as const;
 
 export type AdvisedPolicyName = (typeof ADVISED_POLICY_NAMES)[number];
@@ -162,6 +172,11 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   seat_numbering: 'seat-numbering',
   pane_conduct: 'pane-conduct',
   review_terms: 'review-terms',
+  workspace_mode: 'workspace-mode',
+  landing_mode: 'landing-mode',
+  vault_root: 'vault-root',
+  entity_orchestrator: 'entity-orchestrator',
+  'chain.topology.entity.orchestrator': 'entity-orchestrator',
   event_thread_ttl_seconds: 'event-thread-ttl-seconds',
   thread_ttl_seconds: 'event-thread-ttl-seconds',
   'thread-ttl': 'event-thread-ttl-seconds',
@@ -190,6 +205,11 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   codex_daemon: 'codex-daemon',
   idle_threshold: 'idle-threshold',
   watch_rhythm: 'watch-rhythm',
+  grant_emission: 'grant-emission',
+  owner_signers: 'owner-signers',
+  owner_signer_mode: 'owner-signer-mode',
+  approval_rule_ttl: 'approval-rule-ttl',
+  client_bundles: 'client-bundles',
 };
 
 /** Normalizes a policy name, mapping known snake_case settings spellings to canonical kebab-case. */
@@ -242,6 +262,20 @@ function parseOnOff(raw: unknown): 'on' | 'off' | null {
   if (raw === 'on' || raw === true) return 'on';
   if (raw === 'off' || raw === false) return 'off';
   return null;
+}
+
+/** `owner-signers`: a list of signer names, or on the command line one comma-separated word (`phone,mac`). */
+function parseOwnerSigners(raw: unknown): string[] | null {
+  const list = typeof raw === 'string' ? raw.split(',').map((n) => n.trim()) : raw;
+  return Array.isArray(list) && list.length > 0 && list.every((n) => typeof n === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(n)) && new Set(list).size === list.length
+    ? (list as string[])
+    : null;
+}
+
+/** `approval-rule-ttl`: whole days, 1 to 90; on the command line `60` or `60d`. */
+function parseApprovalRuleTtlDays(raw: unknown): number | null {
+  const n = typeof raw === 'string' && /^[1-9][0-9]*d?$/.test(raw.trim()) ? Number.parseInt(raw.trim(), 10) : raw;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 90 ? n : null;
 }
 
 function parsePositiveSeconds(raw: unknown): number | null {
@@ -917,6 +951,76 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
   // declarations bound it: the release default is not a parent, so a team with no ancestor word
   // may choose any preset. This entry is the name, its aliases and the value rule; the watch
   // reads the effective value itself.
+  // How `team grant --client` may be emitted for an entity: `owner-terminal` (the default, and
+  // what an absent, unsigned or tampered policy reads as) is the owner at a terminal outside the
+  // multiplexer; `conversational` also admits a pending request (`--request`) that runs only with
+  // a single-use, short-lived owner approval bound to the request's hash (`--execute`). Entity
+  // level only. `owner-terminal` is the tighter word.
+  // Which owner-seat signers an entity accepts for an approval, by signer name (for example
+  // `[phone, mac]`); no signer type is preferred. Absent, no signer is accepted (fail closed).
+  'owner-signers': {
+    name: 'owner-signers',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: null,
+    gateLifting: false,
+    parseValue: parseOwnerSigners,
+    isWithin: (lower: string[] | null, higher: string[] | null) => higher === null || (lower !== null && lower.every((n) => higher.includes(n))),
+  },
+  // How the accepted signers combine: `any` (one valid assertion from any accepted signer).
+  'owner-signer-mode': {
+    name: 'owner-signer-mode',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: 'any',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'any' ? raw : null),
+    isWithin: () => true,
+  },
+  // How long a standing ('always') approval rule lives, in days from its creation: 30 by
+  // default, 90 at most. A rule past it stops matching. Entity level; shorter is tighter.
+  'approval-rule-ttl': {
+    name: 'approval-rule-ttl',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: 30,
+    gateLifting: false,
+    parseValue: parseApprovalRuleTtlDays,
+    isWithin: (lower: number, higher: number) => lower <= higher,
+  },
+  // What the client grant bundles (`observer`, `operator`) expand to at signing time, and how long
+  // a grant of one lasts: `operator=status,send,up,down@30d;observer=status`. Empty (the default)
+  // is the release lists in `src/client/bundle-ops.ts`. A policy can only choose among the ops a
+  // bundle may ever carry; the commands that change who may do what are never eligible, whatever
+  // it says. Entity and project levels; a lower level may only narrow the ops and shorten the days.
+  'client-bundles': {
+    name: 'client-bundles',
+    kind: 'enforced',
+    levels: ['entity', 'project'],
+    defaultValue: '',
+    gateLifting: false,
+    parseValue: (raw: unknown) => {
+      if (typeof raw !== 'string') return null;
+      const parsed = parseBundlePolicy(raw);
+      return parsed.ok ? formatBundlePolicy(parsed.specs) : null;
+    },
+    valueProblem: (raw: unknown) => {
+      if (typeof raw !== 'string') return 'client-bundles takes text like operator=status,send,up,down@30d;observer=status';
+      const parsed = parseBundlePolicy(raw);
+      return parsed.ok ? null : parsed.why;
+    },
+    isWithin: (lower: string, higher: string) => bundlePolicyWithin(lower, higher),
+  },
+  'grant-emission': {
+    name: 'grant-emission',
+    kind: 'enforced',
+    levels: ['entity'],
+    defaultValue: 'owner-terminal',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'owner-terminal' || raw === 'conversational' ? raw : null),
+    isWithin: (lower: 'owner-terminal' | 'conversational', higher: 'owner-terminal' | 'conversational') =>
+      lower === higher || lower === 'owner-terminal',
+  },
   'watch-rhythm': {
     name: 'watch-rhythm',
     kind: 'enforced',
@@ -995,6 +1099,60 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: (raw: unknown) => (typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null),
     isWithin: (lower: string, higher: string) => lower === higher,
+  },
+  // Where a seat works: in its own worktree (the default) or straight on a branch of the shared
+  // checkout. Set at the entity, the project or the team; the nearest level chooses, and the team
+  // file's `workspace.mode`, then a seat's `mode`, override it (src/policy/work-settings.ts).
+  'workspace-mode': {
+    name: 'workspace-mode',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'worktree',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (raw === 'worktree' ? 'worktree' : raw === 'shared' || raw === 'branch' ? 'shared' : null),
+    valueProblem: (raw: unknown) => `workspace-mode is worktree or shared (branch), got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // How changes land: one pull request per change, a batch of reviewed commits per pull request, or
+  // reviewed commits landed directly on the integration branch. Every mode keeps review: the mode
+  // chooses how much lands at once, never whether it is reviewed.
+  'landing-mode': {
+    name: 'landing-mode',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: 'batch',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (raw === 'pr-per-change' || raw === 'batch' || raw === 'direct' ? raw : null),
+    valueProblem: (raw: unknown) => `landing-mode is pr-per-change, batch or direct, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // The root of the docs vault where seats keep memory (an absolute path, or `~/` relative to the
+  // home). Empty means no vault: memory stays where each CLI keeps it.
+  'vault-root': {
+    name: 'vault-root',
+    kind: 'advised',
+    levels: ['entity', 'project', 'team'],
+    defaultValue: '',
+    gateLifting: false,
+    lowerLevelChooses: true,
+    parseValue: (raw: unknown) => (typeof raw === 'string' && (raw.startsWith('/') || raw.startsWith('~/')) && !/[\x00-\x1f\x7f]/.test(raw) ? raw.replace(/\/+$/, '') || '/' : null),
+    valueProblem: (raw: unknown) => `vault-root is an absolute path or one under ~/, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
+  },
+  // The entity's own orchestrator: `auto` (the root project's team lead plays it), `dedicated` (a
+  // seat of its own), or `off` (none; each team's orchestrator answers to the owner directly). It
+  // names a role, never a power: crossing the entity still needs a grant.
+  'entity-orchestrator': {
+    name: 'entity-orchestrator',
+    kind: 'advised',
+    levels: ['entity'],
+    defaultValue: 'auto',
+    gateLifting: false,
+    parseValue: (raw: unknown) => (raw === 'auto' || raw === 'dedicated' || raw === 'off' ? raw : null),
+    valueProblem: (raw: unknown) => `entity-orchestrator is auto, dedicated or off, got ${JSON.stringify(raw)}`,
+    isWithin: () => true,
   },
 };
 

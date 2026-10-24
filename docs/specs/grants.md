@@ -157,6 +157,115 @@ Generic examples (an entity's id is its registry id, never a folder of a person'
 
 Rules the form carries (the amendment's commitment 3.4, restated for the reader of the record): a grant MUST NOT reach into two entities' vaults — one scope, one entity; the capabilities are the closed vocabulary's `read` and `write`; every vault read and write is logged with the scope it used. The vault's own schema, its operations and its storage adapters are the memory module's spec's (planned).
 
+### 3.10. Client grants and the seats they reach
+
+A client grant (`team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>]`) admits an agent running outside the session multiplexer to `team send` as its own signed principal, never as the owner (OD-20261019-37).
+
+**Before (0.5.4 and earlier).** The first client slice admitted exactly one principal and one destination, fixed in code (`src/client/records.ts`): one client id, one entity, one seat (`orchestrator`). Issuance, the stored record's decoder and the send resolver each compared against those constants, so a client could reach only the orchestrator of that one entity; any other seat needed a relay through it.
+
+**Now (branch `iris/client-seats-config`, not yet released).** The reach is configuration, not code:
+- **Per entity**, the owner's entities file may declare which clients the entity admits and which seats each may address:
+  ```yaml
+  <entity>:
+    clients:
+      <client-id>:
+        seats: [orchestrator, <other-seat>]
+  ```
+- **Per team**, the target team's approved team file may replace that list for a client in its own `clients:` section (an owner section: honoured only while the owner's approval of it is in force; the operator and `human: true` seats are never admitted).
+- **At issuance**, `team grant --client … [--team <team>] [--seat <seat>]` signs the target team (`team`, with its registry id `team_id` and the seat's agent id `recipient_id`) and seat (`recipient_seat`) into the grant; the seat must be in the admitted list. Without `--team` the team is the entity's coordinator team (the team named like the entity) and the grant carries no `team` field, byte-shape unchanged; without `--seat` the seat is `orchestrator`.
+- **At send**, the address must equal the grant's signed `<seat>@<team>` (`<seat>@<entity>` for a grant with no `team`), so `orchestrator@teamcli` and `orchestrator@floor` are distinct grants to distinct agents, and the seat is checked again against the configured list at every use (issuance, decode, send). An empty list, an unknown or human-typed seat, and a client the entity does not declare are refused.
+
+**Default (backward compatible).** With no `clients:` entry anywhere and no `--team`, the behaviour is unchanged: only the original client id, on the original entity, addressing that entity's coordinator `orchestrator`. Existing grants (no `team` field) keep working as issued and still reach the coordinator team. A `team` field written equal to the entity is refused, so there is one spelling of the default.
+
+
+### 3.11. Master client grants: the `grant` op (branch `iris/client-seats-config`, not yet released)
+
+**Owner decision needed.** This subsection revises the owner-decisions invariant that only the owner, from a terminal, creates a client grant: a master grant lets its holder have TeamCLI issue sub-grants with no owner terminal. It needs an owner decision entry before release; the decisions files are not edited by this change.
+
+**The master grant.** The owner issues it with the client form plus `--allow-grant`:
+
+```text
+team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
+```
+
+`--entity`, `--team` and `--seat` still name the master grant's own recipient (it can `team send` like any client grant); the `--grant-*` flags name only where it may issue. Issuance is owner-only from a terminal, unchanged (`clientOwnerAllows`), and at most seven days. The record is vocabulary 3: `allowed_ops` is exactly `[send, grant]` or, with `--inbox`, `[send, messages, grant]`, and it carries `grant_scope: {entities: [...], projects: [...], teams: [...]}` (all three keys, lowercase words, none repeated). An entity in scope admits every team of that entity; a team (by name) or a project (by project ID; a team no project names is its own project) admits only within the master's own entity. All three empty grants nothing. Vocabulary 1 and 2 records are written and decoded exactly as before and may carry neither `grant_scope` nor `issued_by`; an older build refuses a vocabulary-3 record whole.
+
+**The request.** The holder asks for a sub-grant:
+
+```text
+team grant --client-request --via <master-grant-file> --key <client-key> --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--json]
+```
+
+**Flow.**
+1. The master file verifies under the owner key and is admitted by the entities file.
+2. The key file passes the client-key hygiene rules and is the master's own app key.
+3. TeamCLI builds a request (`team-client-grant-request-v1` domain: master id and key id, client, entity, team, seat, public key, key directory, expiry, inbox, request id, time), signs it with that key, and verifies the signature under the master's public key.
+4. The master is canonical, unexpired, unrevoked, vocabulary 3 and carries `grant`.
+5. The target resolves through the same issuer as the owner path (entities `clients:`, the approved team file's `clients:`, the operator and human seats refused) and lies inside `grant_scope`.
+6. Under the client grant lock the whole check is repeated, then the sub-grant is written by `writeClientGrant` with a signed `issued_by: <master id>`, and an owner-signed audit record (`~/.config/team/client-grant-audit/<sub-grant id>.json`: sub-grant id, master id, request id, request signature, time) is appended with O_EXCL.
+7. The sub-grant is an ordinary vocabulary-1 (or 2) grant: the client uses it with `team send --client <sub-grant> --key <its key>`.
+
+**Invariants (each tested in `test/client-grant-op.test.ts`).**
+- A sub-grant's ops are `send` or `send, messages`, never `grant`: no chaining. A record carrying both `issued_by` and `grant_scope` is refused at write and decode.
+- `--inbox` on a request needs a master that carries `messages`: ops never widen.
+- The target is inside the scope; an empty scope admits nothing.
+- The sub-grant's expiry is at most the master's: absent, it is the earlier of seven days and the master's expiry; a later explicit expiry is refused.
+- An expired or revoked master refuses new requests. Revoking a master also stops every sub-grant naming it at its next use (send, read).
+- A tampered request, or one signed by another key, is refused.
+- The direct owner path is unchanged: `team grant --client` without an owner terminal is still refused.
+
+**Limits.** The sub-grant is signed with the owner key by the TeamCLI process, as every client grant is. That key is readable by any process running as the owner's user, so the master's boundary holds against the CLI's own paths, not against code that signs directly (the same file-hygiene limit as `KEY_ISOLATION_LINE`).
+
+### 3.12. Conversational grant emission: the `grant-emission` policy (branch `iris/client-seats-config`, not yet released)
+
+**Owner decision needed.** This implements the owner's conversational-grant idea (tracked privately). It needs an owner decision entry before release; the decisions files are not edited by this change.
+
+**The policy.** `grant-emission` is an enforced, entity-level signed policy (`value`, `setter: owner`, `kind: enforced`, `target`, `generation`, `signature`, as every enforced policy). Its words are `owner-terminal` (the default) and `conversational`. An absent, unsigned, tampered or unreadable policy reads as `owner-terminal`, today's behaviour. The owner sets it through the existing path only: `team policy set entity grant-emission conversational --entity <entity>`. It covers the `--client` form of `team grant`; the seat forms, `team delegate` and `team revoke` stay owner-terminal.
+
+**Forms.**
+
+```text
+team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
+team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
+team grant --deny <request-id> [--json]
+team grant --approvals [--json]
+team grant --revoke-approval <rule-id> [--json]
+```
+
+**Flow.**
+1. A caller that is not the owner (for example an agent outside a terminal) runs `--request`. When the entity reads `conversational`, TeamCLI records a pending request in `~/.config/team/grant-requests/<gr_id>.json`: the full grant parameters (the public key is resolved to its key, key id and directory), their SHA-256, a fifteen-minute expiry, the approval adapter and a seal. The record is signed with the owner key. No grant is written. Under `owner-terminal` the request is refused.
+2. The output lists the choices `once | always | deny` (with `--json`: `status: "requested"`, `request`, `summary`, `choices`, `prompt`) and a one-line summary: client, entity, team, seat, ops and expiry. `always` is not offered for a master grant.
+3. The approval comes through an adapter, never through the requester relaying the owner's word:
+   - **One-time code (built).** At `--request`, a six-digit code is shown only on the owner's screen through a system notification. It is never written to stdout, stderr, a file or the process list. The record keeps only a seal: SHA-256 of an owner-key signature over (request id, parameter hash, code). Checking a code therefore needs the owner key, and a six-digit space cannot be searched offline from the file. The owner reads the code to the agent in conversation.
+   - **Local user presence (interface only).** The interface for a system authentication dialog invoked by `--execute`. TODO: a native helper calling the system's local-authentication facility. Until then the adapter is unavailable and approves nothing.
+4. `--execute <id> --code <code>` checks, in this order: the record verifies under the owner key; its parameters hash to the signed hash; any parameters passed again hash the same (a change after the request is a hash mismatch); the entity still reads `conversational`; the request is unexpired; the request is claimed single-use (an exclusive `.used` marker, so a wrong code spends it and a replay finds it taken); the adapter verifies. Then the grant is written by the owner issuer (`writeClientGrant`), identical to an owner-issued grant, and a signed audit entry (`~/.config/team/grant-emission-audit/<gr_id>.json`) names the adapter and the choice.
+5. **Owner answer (built, the primary path).** The request output and the notification carry the confirmation line `Grant request <id>: <summary>. Authorized? reply oui/approved, always, or non/deny`. The owner answers from the terminal with `team grant --answer <id> <oui|approved|yes|autorisation|always|non|deny>`. This is admitted only by the owner gate every owner-only command uses (the caller walk: a terminal outside the multiplexer, not run by an agent CLI). It writes an owner-signed answer bound to the request id and parameter hash. `team grant --execute <id>` with no `--code` then needs that answer. An answer copied to another request, an unsigned or forged answer, and an answer from a non-owner caller are refused. Gap: the owner has no seat or inbox on the bus, so the confirmation is not delivered as a bus message. It reaches the owner through the notification and through the requesting agent relaying the line; only the answer is authenticated.
+6. **Owner seat (primary when registered).** The owner registers it once from a terminal with `team grant --add-owner-seat --team <team>` (owner-only). A credential-store adapter creates a P-256 key whose private half stays in the system credential store behind user presence (a biometric or password prompt on every signature). TeamCLI records only the public key, in `~/.config/team/owner-seat.json` (seat `owner`, role `owner`, human, running, provenance "created for the human owner"). `--request` drops the confirmation into the owner seat inbox (`team grant --owner-seat-inbox`). `team grant --approve-as-owner-seat <id> <oui|always|non>` signs (request id, parameter hash, choice, team, time) with that key. `--execute` never trusts the stored public key alone. It reads the key back from the credential store (`owner-seat-keystore public <label>`, no prompt), requires it to equal the record, and verifies the signature under that key. A swapped record, a key the store does not hold, or an unavailable store fails closed; the terminal `--answer` and `--code` paths remain. `--execute` also refuses answers signed by another key or the shared message key, answers bound to another id or hash, answers given after expiry, and reuse. The macOS adapter is a Swift helper (`helpers/owner-seat-keystore.swift`, Secure Enclave plus Keychain with `.userPresence`) that the owner builds; it is untested against a real Keychain. Gaps: the owner seat is not a roster seat on the bus (its inbox is a folder, and it neither sends nor receives through `team send` or `team messages`). Replacing the plain record file no longer forges an answer, because the store is the reference. A same-user process can still use the store itself: it can delete the key, which only denies service (owner-seat answers then fail closed), or create a new key under the same label after deleting the old one and rewrite the record to match. That second attack needs the record and the store changed together, and the signature it then produces still needs no user presence of the real owner. Closing it needs a fingerprint pinned outside the user's write reach (for example shown at registration and compared by the owner), or a code-signed helper whose Keychain items other processes cannot replace.
+7. `--deny <id>` spends a request and writes nothing. Anyone may deny, since it only narrows.
+
+**Always (standing approval rules).** `--execute … --approve always` needs the same adapter approval as `once`, so an agent cannot create a rule by itself. It writes an owner-signed rule to `~/.config/team/grant-approvals/<ar_id>.json` (`rule_id`, `created`, `approved_by`, `client_id`, `entity`, `teams`, `seats`, `ops`, `max_duration_seconds`) and then issues the grant. A later `--request` is auto-approved only when it is fully inside a rule: same client and entity, team and seat listed, ops a subset, duration no longer than the rule's maximum, and never `grant` or a master grant. Anything wider asks again. A rule lives for the entity policy `approval-rule-ttl` (whole days from `created`; 30 by default, 90 at most, entity level); past it, the rule stops matching and the request asks again. Team-create rules follow the same expiry. Each auto-approval writes an audit entry (`auto_<grant id>.json`) that names the rule id. `--approvals` lists the rules that verify and the ids of those that do not; a tampered rule is ignored. `--revoke-approval <rule-id>` removes a rule, takes effect immediately, and is open to any caller because it only narrows.
+
+**Limits.** The pending record, the code seal, the rules and the audit entries are signed with the owner key by the TeamCLI process. Every process running as the owner's user can read that key, so a hostile process that reads the key file directly could forge them. The boundary holds against an agent that uses the CLI and does not read key files, the same file-hygiene limit as `KEY_ISOLATION_LINE`. The local user-presence adapter is the path to a boundary that does not depend on that. Notification Center may keep the notification text, code included, until the owner dismisses it.
+
+#### 3.12.1. Owner signers: phone and Mac are equal
+
+The owner seat holds one or more registered signers. Each has a name and a type:
+
+- `mac-keystore`: a P-256 key in the Mac Secure Enclave, created by the owner-seat helper with user presence (Touch ID or password). The key cannot be exported. At verify time TeamCLI reads the public key back from the keychain and compares it with the record.
+- `webauthn`: a passkey (on a phone, or on the Mac itself). It is registered with `team grant --add-owner-signer --signer <name> --type webauthn --signer-public-key <hex> --credential-id <id> --rp-id <rp>`. Its public key is pinned once in the keychain. An approval carries an assertion file (`--assertion`): `clientDataJSON.challenge` must be the base64url SHA-256 of the canonical answer, the rpIdHash must match, and the user-presence flag must be set. The record key must equal the pinned key.
+
+Neither type is preferred. The entity policies `owner-signers` (a list of signer names) and `owner-signer-mode` (only `any` today) decide which signers are accepted. With `any`, a valid assertion from any listed signer approves. **No fallback:** with no `owner-signers` policy, no signer is accepted and every owner-seat answer is refused (fail closed). To keep this one step, `--add-owner-seat` sets `owner-signers` to its first signer and `--add-owner-signer` adds the new signer to the list (both owner-only); the refusal names the exact `team policy set entity owner-signers … --entity …` command. Every signer follows the same rules: pinning, fail closed when the credential store is unavailable, once/always/deny, the 15-minute TTL, and single use.
+
+#### 3.12.2. Owner-seat approval of `team init`
+
+A non-owner (an agent) cannot create a team on its own. The flow:
+
+1. `team init --request [--json]` creates a pending request `tc_…` in `~/.config/team/action-requests`. It is bound to a hash of {kind `team-create`, repository realpath, team name, HEAD} and expires after 15 minutes. It is delivered to the owner seat inbox. The request is refused when no owner seat is registered.
+2. The owner runs `team init --approve-as-owner-seat <id> oui|always|non [--signer <name>] [--assertion <file>]`. This signs an answer with kind `team-create`.
+3. `team init --execute <id>` re-verifies the signature against the pinned signer key and the policy. It checks that the repository matches, claims the request (single use), writes an audit entry in `~/.config/team/action-audit`, and then writes `.agents/team.yaml`.
+
+`always` stores the signed answer as a rule in `~/.config/team/action-approvals`. The rule is scoped to the parent folder of the approved repository and covers only the action kind `team-create`. It never covers grants, and grant answers never cover team creation. Rules are listed with `team init --approvals` and revoked with `team init --revoke-approval <id>`. An edited rule fails verification and is ignored. There is no path where an unsigned chat click, the shared message key, or a file written by an agent is enough.
+
 ## 4. Commands and options
 
 From `contract/cli.json` and `contract/exit-codes.json` at v0.5.0:
@@ -261,3 +370,6 @@ This specification contributes to `registries/capabilities.md` and `registries/o
 - **§3.9 added** (the writer, 2026-10-19): the vault scope's written form and its generic examples, placed here by the amendment's review fold — the RFC keeps the one-entity bounds and the authority rules, the record's form lives in the spec; examples are generic, no entity of this machine is named.
 - **Public-bound scrub** (the writer, 2026-10-19): at the lifecycle amendment's review fold, the two home-directory shorthand literals (the scope row and rule 3) became the user's home directory spelled out, and the two terminal-multiplexer product names (the pane row and rule 5) became the generic session and multiplexer words.
 - **Fold of round 1** (the writer, 2026-10-19): at the round-1 review fold of Kernel amendment 01 Grants the §6 row's grant-word note became "administrative capabilities, not grantable operational words at this release"; at the verification follow-up rule 6 gained its Today note (at v0.5.0 a reused grant name overwrites the earlier revocation — Kernel amendment 01 Grants §10, question 13; the rule stays the target) and open point 3's count was corrected to the eight-command gate-lifting scope of Kernel amendment 01 Grants (§10, question 4).
+- **§3.10 added** (Iris, 2026-10-22, uncommitted): client grants' reach moved from code constants to per-entity and per-team configuration, with `team grant --seat` and `--team` (address `<seat>@<team>`); default unchanged.
+- **§3.11 added** (2026-10-22, uncommitted): the `grant` op: owner-issued master client grants (`--allow-grant`, `--grant-entity`, `--grant-project`, `--grant-team`) and the `--client-request` sub-grant path; revises the owner-decisions invariant and needs an owner decision entry.
+- **§3.12 added** (2026-10-22, uncommitted): conversational grant emission (`grant-emission` policy, `--request`, `--execute`, `--deny`, one-time-code and local-presence adapters, standing `always` rules); implements the owner's conversational-grant idea (tracked privately) and needs an owner decision entry.

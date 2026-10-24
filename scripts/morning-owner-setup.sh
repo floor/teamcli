@@ -1,0 +1,158 @@
+#!/bin/sh
+# The morning owner setup, run by an agent (Iris). The owner types nothing: the owner's acts are
+# the native prompts this script triggers on the owner's own Mac.
+#
+#   1. build the owner-seat helper (ad-hoc; with --identity it is codesigned: macOS keychain "Allow")
+#   2. build this branch and install it ALONGSIDE the global team, as $HOME/.local/bin/team-branch
+#      (the global /opt/homebrew/bin/team is replaced only with --replace-global)
+#   3. register the owner seat (Secure Enclave key; Touch ID confirms it)
+#   4. set the entity's owner-signers and grant-emission policies
+#   5. for each target, team grant --client grok-bot … --inbox --request: send AND messages, so the
+#      target's orchestrator can `team reply` and Iris reads it with `team messages --client`.
+#      One grant binds one entity and one team, so floor (Atlas) and teamcli (Agamemnon) are two.
+#   6. the owner seat answers always (Touch ID, once per target) and the script runs --execute; a
+#      re-run renews each grant through its standing rule with no prompt
+#
+# Every step is skipped when already done, so the script can be re-run after a cancelled prompt.
+#
+#   scripts/morning-owner-setup.sh [--home DIR] [--owner-team floor] [--targets floor/floor,teamcli/teamcli] [--seat orchestrator]
+#        [--client grok-bot] [--signer mac] [--identity SHA1 --team-id TEAMID [--profile FILE]]
+#        [--answer always|oui] [--test-signer] [--dev-mode] [--replace-global] [--set-policies] [--dry-run]
+#
+# --targets      comma list of <entity>/<team> the grant goes to (default floor/floor,teamcli/teamcli:
+#                orchestrator@floor is Atlas, orchestrator@teamcli is Agamemnon)
+# --answer       the owner seat's answer to the grant request (default always: a standing, owner-signed
+#                rule, so the weekly renewal of this same grant needs no Touch ID; oui is single-use)
+#
+# --set-policies  when the owner seat already exists, (re)writes owner-signers and grant-emission
+#                 (one owner-device Touch ID each); a fresh setup folds them into its own Touch ID.
+#
+# --test-signer  TEST ONLY: installs test/fixtures/owner-seat/fake-keystore.mjs instead of the real
+#                helper (software keys, prompts logged to prompts.log). Refused outside /private/tmp.
+# --dev-mode     exports TEAMCLI_DEV_MODE=1 for the team calls. Refused outside /private/tmp.
+# --dry-run      prints the steps and the owner dialogs they will raise; changes nothing.
+set -eu
+repo=$(cd "$(dirname "$0")/.." && pwd)
+home=$HOME; owner_team=floor; targets=floor/floor,teamcli/teamcli; seat=orchestrator; client=grok-bot; signer=mac
+identity=""; team_id=""; profile=""; test_signer=0; dev_mode=0; replace_global=0; dry=0; set_policies=0; answer=always
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --home) home=$2; shift 2 ;;
+    --targets) targets=$2; shift 2 ;;
+    --owner-team) owner_team=$2; shift 2 ;;
+    --seat) seat=$2; shift 2 ;;
+    --client) client=$2; shift 2 ;;
+    --signer) signer=$2; shift 2 ;;
+    --identity) identity=$2; shift 2 ;;
+    --team-id) team_id=$2; shift 2 ;;
+    --profile) profile=$2; shift 2 ;;
+    --test-signer) test_signer=1; shift ;;
+    --dev-mode) dev_mode=1; shift ;;
+    --replace-global) replace_global=1; shift ;;
+    --dry-run) dry=1; shift ;;
+    --set-policies) set_policies=1; shift ;;
+    --answer) answer=$2; shift 2 ;;
+    *) echo "unknown option $1" >&2; exit 2 ;;
+  esac
+done
+entities=$(printf '%s\n' "$owner_team" $(printf '%s' "$targets" | tr ',' '\n' | cut -d/ -f1) | awk 'NF && !seen[$0]++' | paste -sd, -)
+case "$home" in /private/tmp/*|/tmp/*) isolated=1 ;; *) isolated=0 ;; esac
+if [ "$test_signer" = 1 ] || [ "$dev_mode" = 1 ]; then
+  [ "$isolated" = 1 ] || { echo "--test-signer and --dev-mode are for an isolated home under /private/tmp only" >&2; exit 2; }
+fi
+export HOME="$home"
+[ "$dev_mode" = 1 ] && export TEAMCLI_DEV_MODE=1
+seatdir="$HOME/.config/team-owner-seat"
+bindir="$HOME/.local/bin"
+team_bin="$bindir/team-branch"
+pub="$HOME/.config/team-client/$client/client.pub"
+say() { printf '%s\n' "== $*"; }
+owner() { printf '%s\n' "   OWNER: $*"; }
+
+if [ "$dry" = 1 ]; then
+  say "dry run for HOME=$HOME (owner seat owner@$owner_team, grant $client with inbox -> $seat@ each of $targets)"
+  if [ -n "$identity" ]; then say "1 build + codesign helper"; owner "macOS dialog 'codesign wants to sign using key … in your keychain': click Allow (or Always Allow)";
+  else say "1 build helper (ad-hoc, no dialog)"; fi
+  say "2 build branch, install $team_bin"; [ "$replace_global" = 1 ] && owner "none (but /opt/homebrew/bin/team is replaced: only with your prior OK)"
+  say "3+4 owner seat '$signer' (owner@$owner_team) with policies owner-signers=$signer, grant-emission=conversational for $entities"
+  owner "Touch ID: 'Create the TeamCLI owner seat for $owner_team and set owner-signers=$signer, grant-emission=conversational for entities $(printf '%s' "$entities" | sed 's/,/, /g')'"
+  for t in $(printf '%s' "$targets" | tr ',' ' '); do
+    e=${t%%/*}; tm=${t#*/}
+    say "5+6 grant request $client -> $seat@$tm (entity $e), send + messages, answered $answer"
+    owner "Touch ID: 'TeamCLI: $answer for Grant for $client: send + messages to $seat@$tm (entity $e) until …'"
+  done
+  say "7 grant --execute for each answered request (no prompt)"
+  exit 0
+fi
+
+# Shared entity policies are also read by the global CLI, even when setup uses team-branch.
+# Fail before helper installation, owner prompts or policy writes if that reader is too old.
+installed_team=$(command -v team) || { echo "install team with the owner policy catalogue first" >&2; exit 1; }
+node "$repo/scripts/check-installed-policies.mjs" "$installed_team" "$signer"
+
+say "1 owner-seat helper"
+if [ "$test_signer" = 1 ]; then
+  mkdir -p "$seatdir"
+  cp "$repo/test/fixtures/owner-seat/fake-keystore.mjs" "$seatdir/owner-seat-keystore"
+  chmod 700 "$seatdir/owner-seat-keystore"
+  "$seatdir/owner-seat-keystore" selftest
+elif [ -x "$seatdir/owner-seat-keystore" ] && "$seatdir/owner-seat-keystore" selftest >/dev/null 2>&1; then
+  echo "helper already installed and self-tested"
+else
+  set -- --dest "$seatdir"
+  [ -n "$identity" ] && set -- "$@" --identity "$identity" --team-id "$team_id"
+  [ -n "$profile" ] && set -- "$@" --profile "$profile"
+  "$repo/scripts/build-owner-seat-helper.sh" "$@"
+fi
+
+say "2 branch build"
+sha=$(git -C "$repo" rev-parse --short HEAD)$(git -C "$repo" diff --quiet HEAD -- src package.json || echo -dirty-$(date +%s))
+dest="$seatdir/teamcli-$sha"
+if [ ! -f "$dest/dist/cli.js" ]; then
+  (cd "$repo" && bun run build >/dev/null)
+  mkdir -p "$dest"
+  cp -R "$repo/dist" "$dest/dist"
+  cp "$repo/package.json" "$dest/package.json"
+  [ -d "$dest/node_modules" ] || ln -s "$repo/node_modules" "$dest/node_modules"
+fi
+mkdir -p "$bindir"
+printf '#!/bin/sh\nexec node "%s/dist/cli.js" "$@"\n' "$dest" > "$team_bin.new"
+chmod 755 "$team_bin.new"; mv -f "$team_bin.new" "$team_bin"
+if [ "$replace_global" = 1 ]; then
+  [ "$isolated" = 0 ] || { echo "--replace-global is refused for an isolated home" >&2; exit 2; }
+  ln -sf "$team_bin" /opt/homebrew/bin/team
+fi
+echo "installed $team_bin ($sha)"
+T() { "$team_bin" "$@"; }
+
+say "3+4 owner seat and entity policies (one Touch ID)"
+if T owner-seat status | grep -q '^owner seat: owner@'; then
+  echo "owner seat already registered"
+  if [ "$set_policies" = 1 ]; then
+    # one owner-device Touch ID per policy write
+    for e in $(printf '%s' "$entities" | tr ',' ' '); do
+      T policy set entity owner-signers "$signer" --entity "$e"
+      T policy set entity grant-emission conversational --entity "$e"
+    done
+  fi
+else
+  T owner-seat setup --team "$owner_team" --signer "$signer" --policy-entity "$entities" --owner-signers "$signer" --grant-emission conversational
+fi
+
+[ -f "$pub" ] || T client keygen --out "$(dirname "$pub")" >/dev/null
+for t in $(printf '%s' "$targets" | tr ',' ' '); do
+  e=${t%%/*}; tm=${t#*/}
+  say "5 grant request $client -> $seat@$tm (entity $e), send + messages"
+  out=$(T grant --client "$client" --entity "$e" --public-key "$pub" --team "$tm" --seat "$seat" --inbox --request --json)
+  id=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.request_id||j.target||"")})')
+  case "$id" in
+    cg_*) echo "renewed by the standing rule, no prompt: $id"; continue ;;
+    gr_*) echo "request $id" ;;
+    *) printf '%s\n' "$out" >&2; echo "no request id for $seat@$tm" >&2; exit 1 ;;
+  esac
+  say "6 owner answer $answer (Touch ID)"
+  T grant --approve-as-owner-seat "$id" "$answer"
+  say "7 execute"
+  T grant --execute "$id"
+done
+T owner-seat status

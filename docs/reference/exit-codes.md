@@ -205,6 +205,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `down.abandon` | `down` | 1 | only the owner abandons a team | `team down --abandon` |
 | `down.another-pane` | `down` | 1 | the state records another pane for the caller's seat | `team down` |
 | `down.caller` | `down` | 1 | the caller may not change the team | `team down` |
+| `down.client-refused` | `down` | 1 | the owner-signed down grant, or the client run it admits, did not verify | `team down --client grant.json --key client.key` |
 | `down.delegate` | `down` | 1 | the caller is not the approved delegate of any entry | `team down, from a pane no delegate entry names` |
 | `down.delegate-approval` | `down` | 1 | delegation needs a verified approval | `team down, with no approval in force` |
 | `down.delegate-command` | `down` | 1 | the approved delegate may not run `down` | `team down, from the approved delegate whose commands leave it out` |
@@ -254,8 +255,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `hold.until` | `hold` | 1 | --until is not a clock or an instant | `team hold "freeze deploys" --until tomorrow` |
 | `hold.file` | `hold` | 2 | the team file can't be read | `team hold "freeze deploys"` |
 | `hold.invocation` | `hold` | 2 | the invocation can't be read | `team hold` |
+| `init.approval` | `init` | 0 | an owner-seat team request was recorded, answered, listed or revoked | `team init --request` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
+| `init.approval-refused` | `init` | 1 | an owner-seat team request, answer, rule or execute was refused | `team init --execute <request-id>` |
 | `init.detached` | `init` | 1 | a run with no terminal | `team init` |
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
@@ -323,6 +326,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `next.swap` | `next` | 1 | the seat waits on a queued model swap, so nothing was claimed | `team next` |
 | `next.invocation` | `next` | 2 | the invocation can't be read | `team next extra` |
 | `next.not-a-repo` | `next` | 2 | not inside a git repository | `team next` |
+| `owner-seat.done` | `owner-seat` | 0 | the owner seat was read, set up, its security profile signed or proposed, or the owner page served | `team owner-seat status` |
+| `owner-seat.refused` | `owner-seat` | 1 | no owner seat, a cancelled or unverifiable owner-device signature, or a profile outside its bounds | `team owner-seat profile relaxed` |
+| `owner-seat.invocation` | `owner-seat` | 2 | the command arguments are invalid | `team owner-seat profile maybe` |
 | `pause.placed` | `pause` | 0 | the team was paused | `team pause` |
 | `pause.caller` | `pause` | 1 | not the owner or the orchestrator | `team pause` |
 | `pause.detached` | `pause` | 1 | a run with no terminal | `team pause` |
@@ -603,6 +609,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `settings.write` | `settings` | 2 | the seat's record can't be replaced | `team settings set lead nickname=Ada` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
+| `status.client-refused` | `status` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team status --client grant.json --key client.key` |
 | `status.difference` | `status` | 1 | there is a difference | `team status` |
 | `status.file-owner` | `status` | 1 | --file is the owner's | `team status --file .agents/team.yaml` |
 | `status.project-unknown` | `status` | 1 | no project is named that | `team status --project nope` |
@@ -660,6 +667,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.ready` | `up` | 0 | the launch finished | `team up` |
 | `up.agents` | `up` | 1 | the agents can't be read | `team up` |
 | `up.clear` | `up` | 1 | a stopped session this team records did not clear | `team up` |
+| `up.client-refused` | `up` | 1 | the owner-signed up grant, or the client run it admits, did not verify | `team up --client grant.json --key client.key` |
 | `up.delegate` | `up` | 1 | only the owner or the approved delegate runs up | `team up` |
 | `up.delegate-approval` | `up` | 1 | the delegate gate needs a verified approval | `team up` |
 | `up.delegate-command` | `up` | 1 | the approved delegate may not run up | `team up` |

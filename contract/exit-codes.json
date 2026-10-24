@@ -1397,6 +1397,13 @@
     {
       "code": 1,
       "command": "down",
+      "id": "down.client-refused",
+      "meaning": "the owner-signed down grant, or the client run it admits, did not verify",
+      "trigger": "team down --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "down",
       "id": "down.delegate",
       "meaning": "the caller is not the approved delegate of any entry",
       "trigger": "team down, from a pane no delegate entry names"
@@ -1740,6 +1747,13 @@
     {
       "code": 0,
       "command": "init",
+      "id": "init.approval",
+      "meaning": "an owner-seat team request was recorded, answered, listed or revoked",
+      "trigger": "team init --request"
+    },
+    {
+      "code": 0,
+      "command": "init",
       "id": "init.restored",
       "meaning": "the approved copy was restored",
       "trigger": "team init --restore"
@@ -1750,6 +1764,13 @@
       "id": "init.wrote",
       "meaning": "a skeleton was written",
       "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.approval-refused",
+      "meaning": "an owner-seat team request, answer, rule or execute was refused",
+      "trigger": "team init --execute <request-id>"
     },
     {
       "code": 1,
@@ -2219,6 +2240,27 @@
       "id": "next.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team next"
+    },
+    {
+      "code": 0,
+      "command": "owner-seat",
+      "id": "owner-seat.done",
+      "meaning": "the owner seat was read, set up, its security profile signed or proposed, or the owner page served",
+      "trigger": "team owner-seat status"
+    },
+    {
+      "code": 1,
+      "command": "owner-seat",
+      "id": "owner-seat.refused",
+      "meaning": "no owner seat, a cancelled or unverifiable owner-device signature, or a profile outside its bounds",
+      "trigger": "team owner-seat profile relaxed"
+    },
+    {
+      "code": 2,
+      "command": "owner-seat",
+      "id": "owner-seat.invocation",
+      "meaning": "the command arguments are invalid",
+      "trigger": "team owner-seat profile maybe"
     },
     {
       "code": 0,
@@ -4183,6 +4225,13 @@
     {
       "code": 1,
       "command": "status",
+      "id": "status.client-refused",
+      "meaning": "the owner-signed bundle grant, or the client read it admits, did not verify",
+      "trigger": "team status --client grant.json --key client.key"
+    },
+    {
+      "code": 1,
+      "command": "status",
       "id": "status.difference",
       "meaning": "there is a difference",
       "trigger": "team status"
@@ -4578,6 +4627,13 @@
       "id": "up.clear",
       "meaning": "a stopped session this team records did not clear",
       "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.client-refused",
+      "meaning": "the owner-signed up grant, or the client run it admits, did not verify",
+      "trigger": "team up --client grant.json --key client.key"
     },
     {
       "code": 1,

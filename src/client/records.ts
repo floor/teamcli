@@ -19,14 +19,18 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import { chmodSync, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import { declaredRoots } from '../entities.ts';
+import { declaredEntityClients, declaredRoots } from '../entities.ts';
 import { loadTeamFile } from '../file/load.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
+import { SEAT_NAME } from '../file/sections/seats.ts';
+import { approvalDifferences } from '../approve/approval.ts';
+import type { Fingerprints } from '../approve/fingerprint.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
+import { BUNDLE_ELIGIBLE_OPS, BUNDLE_HARD_MAX_DAYS, canonicalBundleOps, isBundleName, isForbiddenBundleCommand, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
 
 /** The domain tag client-grant and client-revocation signatures carry. */
 export const CLIENT_GRANT_DOMAIN = 'team-client-grant-v1\n';
@@ -41,8 +45,21 @@ export const CLIENT_INBOX_VOCABULARY_VERSION = 2;
 /** The ops a vocabulary-2 grant carries, exactly, in this order. */
 export const CLIENT_INBOX_ALLOWED_OPS = ['send', 'messages'] as const;
 
+/** The master vocabulary: a grant that also carries `grant`, the right to have TeamCLI issue
+ *  sub-grants inside its signed `grant_scope`. Written only by the owner (`--allow-grant`). Its op
+ *  list is exactly `send, grant` or `send, messages, grant`; an older build refuses it whole. */
+export const CLIENT_MASTER_VOCABULARY_VERSION = 3;
+
 /** One operation a client grant can admit. */
-export type ClientOp = 'send' | 'messages';
+export type ClientOp = 'send' | 'messages' | 'grant';
+
+/** Where a master grant may issue sub-grants. An entity admits every team of that entity; a team
+ *  (by name) or a project (by project ID) admits only within the master grant's own entity. All
+ *  three empty grants nothing. */
+export type ClientGrantScope = { entities: string[]; projects: string[]; teams: string[] };
+
+/** The ops a sub-grant may ever carry: never `grant`, so a sub-grant is never a master. */
+export const CLIENT_SUB_GRANT_OPS: readonly ClientOp[] = ['send', 'messages'];
 
 /** The owner-directed runtime line. It states the limit; it is not a claim of isolation. */
 export const KEY_ISOLATION_LINE = 'key isolation: not enforced (pane guard pending)';
@@ -53,6 +70,47 @@ export const CLIENT_SLICE_CLIENT_ID = 'grok-bot';
 export const CLIENT_SLICE_ENTITY = 'floor';
 export const CLIENT_SLICE_SEAT = 'orchestrator';
 export const CLIENT_SLICE_ADDRESS = `${CLIENT_SLICE_SEAT}@${CLIENT_SLICE_ENTITY}`;
+
+/** The seats a client reaches when the coordinator team's file names none for it under
+ *  `clients:` — the orchestrator alone, so a file without the section behaves as before. */
+export const CLIENT_DEFAULT_SEATS: readonly string[] = [CLIENT_SLICE_SEAT];
+
+/**
+ * Whether `clientId` may hold a grant on `entity`, and the seats the entity lets it address, from
+ * the owner's entities file (`<entity>: clients: <client-id>: seats: [...]`). An entity that writes
+ * no `clients:` admits only the default pair — `grok-bot` on `floor`, to the orchestrator — so a
+ * machine with no such word behaves as before. An entity that writes one admits exactly the
+ * clients it lists; a map that does not read refuses. Checked at issuance, decode and send.
+ */
+export function clientAdmission(
+  home: string,
+  clientId: string,
+  entity: string,
+): { ok: true; seats: readonly string[] } | { ok: false; why: string } {
+  if (!CLIENT_WORD_PATTERN.test(clientId)) return refusal(`"${clientId}" is not a client id: one lowercase word, digits and hyphens`);
+  if (!CLIENT_WORD_PATTERN.test(entity)) return refusal(`"${entity}" is not an entity name: one lowercase word, digits and hyphens`);
+  let declared;
+  try {
+    declared = declaredEntityClients(home).get(entity);
+  } catch {
+    return refusal('the entities file cannot be read');
+  }
+  if (declared === undefined) {
+    if (clientId !== CLIENT_SLICE_CLIENT_ID || entity !== CLIENT_SLICE_ENTITY) {
+      return refusal(`entity "${entity}" declares no client "${clientId}"; with no \`clients:\` word only ${CLIENT_SLICE_CLIENT_ID} on ${CLIENT_SLICE_ENTITY} is admitted`);
+    }
+    return { ok: true, seats: CLIENT_DEFAULT_SEATS };
+  }
+  if (!declared.ok) return refusal(declared.why);
+  const seats = declared.clients[clientId];
+  if (seats === undefined) return refusal(`entity "${entity}" declares no client "${clientId}"`);
+  return { ok: true, seats };
+}
+
+/** The one address a grant admits: its signed seat at its entity. */
+export function clientAddressOf(grant: { recipientSeat: string; entity: string; team?: string }): string {
+  return `${grant.recipientSeat}@${grant.team ?? grant.entity}`.toLowerCase();
+}
 
 /** The entity coordinator's immutable binding, signed into every grant. */
 export const CLIENT_TEAM_ID_PATTERN = /^[0-9a-f]{12}$/;
@@ -68,7 +126,7 @@ export const CLIENT_KEY_ID_PATTERN = /^[0-9a-f]{12}$/;
 export const CLIENT_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/;
 
 /** A client id and an entity name: one lowercase word, hyphens allowed. */
-const CLIENT_WORD_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+export const CLIENT_WORD_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** The owner's 7-day cap, both the default and the hard ceiling. */
 export const CLIENT_EXPIRY_MAX_MS = 7 * 24 * 60 * 60 * 1000;
@@ -118,12 +176,22 @@ export type ClientGrantRecord = {
   teamId: string;
   recipientId: string;
   recipientSeat: string;
-  /** `['send']` on vocabulary 1, `['send','messages']` on vocabulary 2. */
+  /** The target team's name, when the owner named one with `--team`; absent means the entity's
+   *  coordinator team (the team named like the entity), so a grant written before it reads as
+   *  before. The address the grant admits is `<recipientSeat>@<team>`. */
+  team?: string;
+  /** `['send']` on vocabulary 1, `['send','messages']` on vocabulary 2, and on vocabulary 3 one
+   *  of those followed by `grant`. */
   allowedOps: ClientOp[];
   allowedRoles: ['orchestrator'];
   issued: string;
   expires: string;
-  vocabulary: 1 | 2;
+  vocabulary: 1 | 2 | 3;
+  /** Vocabulary 3 only: where this master grant may issue sub-grants. */
+  grantScope?: ClientGrantScope;
+  /** Set on a sub-grant: the master grant id it was issued under. Signed, so a sub-grant always
+   *  names its master, and revoking the master stops the sub-grant at its next use. */
+  issuedBy?: string;
 };
 
 /** One verified appended revocation. */
@@ -141,9 +209,20 @@ export type ClientGrantRequest = {
   keyDir: string;
   /** Absent means the 7-day default; anything past the 7-day cap is refused. */
   expires?: string;
+  /** The seat the grant addresses; absent means the orchestrator. It must be one the coordinator
+   *  team's approved `clients:` section lists for this client (or the default, orchestrator). */
+  seat?: string;
+  /** The target team by name; absent (or the entity's own name) means the entity's coordinator
+   *  team, and the grant then carries no `team` field, byte-shape unchanged. */
+  team?: string;
   /** When true, the grant is vocabulary 2 and carries `send` and `messages`; omitted or false
    *  writes the shipped vocabulary 1, send only, byte-shape unchanged. */
   inbox?: boolean;
+  /** When present, the grant is a master grant (vocabulary 3) carrying `grant` and this scope.
+   *  Owner path only. */
+  grantScope?: ClientGrantScope;
+  /** When present, the grant is a sub-grant issued under this master id. Never with grantScope. */
+  issuedBy?: string;
 };
 
 export type ClientGrantOptions = { now?: Date; key?: KeyObject };
@@ -527,12 +606,42 @@ function onDiskGrant(grant: ClientGrantRecord): Record<string, Json> {
     team_id: grant.teamId,
     recipient_id: grant.recipientId,
     recipient_seat: grant.recipientSeat,
+    ...(grant.team !== undefined ? { team: grant.team } : {}),
     allowed_ops: [...grant.allowedOps],
     allowed_roles: [...grant.allowedRoles],
     issued: grant.issued,
     expires: grant.expires,
     vocabulary: grant.vocabulary,
+    ...(grant.grantScope !== undefined
+      ? { grant_scope: { entities: [...grant.grantScope.entities], projects: [...grant.grantScope.projects], teams: [...grant.grantScope.teams] } }
+      : {}),
+    ...(grant.issuedBy !== undefined ? { issued_by: grant.issuedBy } : {}),
   };
+}
+
+/** The problem with a scope's words, or null: lowercase words, none repeated in one list. */
+export function clientGrantScopeProblem(scope: ClientGrantScope): string | null {
+  for (const field of ['entities', 'projects', 'teams'] as const) {
+    const list = scope[field];
+    if (!Array.isArray(list)) return `grant scope ${field} is not a list`;
+    for (const word of list) {
+      if (typeof word !== 'string' || !CLIENT_WORD_PATTERN.test(word)) return `"${String(word)}" is not a ${field} scope word: one lowercase word, digits and hyphens`;
+    }
+    if (new Set(list).size !== list.length) return `grant scope ${field} names a word twice`;
+  }
+  return null;
+}
+
+/** Whether a master scope admits a target: entity anywhere; team or project inside its own entity. */
+export function clientGrantScopeAdmits(
+  master: { entity: string; grantScope?: ClientGrantScope },
+  target: { entity: string; team: string; project: string },
+): boolean {
+  const scope = master.grantScope;
+  if (scope === undefined) return false;
+  if (scope.entities.includes(target.entity)) return true;
+  if (target.entity !== master.entity) return false;
+  return scope.teams.includes(target.team) || scope.projects.includes(target.project);
 }
 
 export type EntityCoordinator = {
@@ -550,38 +659,62 @@ export type EntityCoordinator = {
  * role and registered agent id. Nothing here reads the current folder, a running pane or a bare
  * seat name. A declared entity root, when the entities file names one, must hold the team root.
  */
-export function resolveEntityCoordinator(home: string, entity: string): { ok: true; coordinator: EntityCoordinator } | { ok: false; why: string } {
+export function resolveEntityCoordinator(
+  home: string,
+  entity: string,
+  target: { seat?: string; clientId?: string; team?: string } = {},
+): { ok: true; coordinator: EntityCoordinator } | { ok: false; why: string } {
+  const wanted = target.seat ?? CLIENT_SLICE_SEAT;
   let teams: Record<string, TeamRecord>;
   try {
     teams = readTeams(home);
   } catch {
     return refusal('the team registry cannot be read');
   }
-  const coordinators = Object.values(teams).filter((team) => team.entity === entity && team.project === entity);
+  const teamName = target.team ?? entity;
+  if (!CLIENT_WORD_PATTERN.test(teamName)) return refusal(`"${teamName}" is not a team name: one lowercase word, digits and hyphens`);
+  const coordinators = Object.values(teams).filter((team) => team.entity === entity && team.project === teamName);
   if (coordinators.length !== 1) {
+    const what = teamName === entity ? 'coordinator team' : `team "${teamName}"`;
     return refusal(
       coordinators.length === 0
-        ? `no coordinator team of entity "${entity}" is registered`
-        : `entity "${entity}" has ${String(coordinators.length)} coordinator teams; a client grant needs exactly one`,
+        ? `no ${what} of entity "${entity}" is registered`
+        : `entity "${entity}" has ${String(coordinators.length)} records for ${what}; a client grant needs exactly one`,
     );
   }
   const team = coordinators[0] as TeamRecord;
   if (team.lifecycle === 'archived') return refusal(`team "${team.project}" is archived`);
   const teamId = team.id ?? '';
   if (!CLIENT_TEAM_ID_PATTERN.test(teamId)) return refusal(`team "${team.project}" has no registry id`);
-  const leads = team.roster.filter((entry) => entry.leads === true);
-  if (leads.length !== 1) {
-    return refusal(
-      leads.length === 0
-        ? `team "${team.project}" marks no lead seat; a client grant needs one`
-        : `team "${team.project}" marks ${String(leads.length)} lead seats; a client grant needs exactly one`,
-    );
-  }
-  const lead = leads[0] as TeamRecord['roster'][number];
-  if (lead.seat.toLowerCase() !== CLIENT_SLICE_SEAT || lead.role.toLowerCase() !== CLIENT_SLICE_SEAT) {
-    return refusal(`team "${team.project}" leads with "${lead.seat}" (${lead.role}), not ${CLIENT_SLICE_SEAT}`);
-  }
   if (!isAbsolute(team.root)) return refusal(`team "${team.project}" has no absolute root`);
+  const admitted = clientAdmission(home, target.clientId ?? CLIENT_SLICE_CLIENT_ID, entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  const allowed = clientSeatsAt(team.root, home, target.clientId ?? CLIENT_SLICE_CLIENT_ID, admitted.seats);
+  if (!allowed.ok) return refusal(allowed.why);
+  if (allowed.seats.length === 0) return refusal(`team "${team.project}" lists no seat a client may address`);
+  if (!allowed.seats.includes(wanted)) {
+    return refusal(`team "${team.project}" does not list "${wanted}" among the seats a client may address (${allowed.seats.join(', ')})`);
+  }
+  let lead: TeamRecord['roster'][number];
+  if (wanted === CLIENT_SLICE_SEAT) {
+    const leads = team.roster.filter((entry) => entry.leads === true);
+    if (leads.length !== 1) {
+      return refusal(
+        leads.length === 0
+          ? `team "${team.project}" marks no lead seat; a client grant needs one`
+          : `team "${team.project}" marks ${String(leads.length)} lead seats; a client grant needs exactly one`,
+      );
+    }
+    lead = leads[0] as TeamRecord['roster'][number];
+    if (lead.seat.toLowerCase() !== CLIENT_SLICE_SEAT || lead.role.toLowerCase() !== CLIENT_SLICE_SEAT) {
+      return refusal(`team "${team.project}" leads with "${lead.seat}" (${lead.role}), not ${CLIENT_SLICE_SEAT}`);
+    }
+  } else {
+    const held = team.roster.filter((entry) => entry.seat === wanted);
+    if (held.length !== 1) return refusal(`team "${team.project}" has no single roster seat "${wanted}"`);
+    lead = held[0] as TeamRecord['roster'][number];
+    if (allowed.refused.includes(wanted)) return refusal(`"${wanted}" is the operator or a human seat; a client never addresses it`);
+  }
   const roots = declaredRoots(home).get(entity);
   if (roots !== undefined && !roots.some((allowed) => sameFolder(allowed, team.root))) {
     return refusal(`team "${team.project}" sits outside the roots entity "${entity}" declares`);
@@ -619,13 +752,21 @@ export function planClientGrant(home: string, request: ClientGrantRequest, optio
   const nowMs = now.getTime();
   const inbox = request.inbox === true;
   if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
-  if (request.clientId !== CLIENT_SLICE_CLIENT_ID) {
-    return refusal(`this build admits one client principal, "${CLIENT_SLICE_CLIENT_ID}", not "${request.clientId}"`);
+  const master = request.grantScope !== undefined;
+  if (master && request.issuedBy !== undefined) return refusal('a sub-grant never carries grant: master grants do not chain');
+  if (master) {
+    const problem = clientGrantScopeProblem(request.grantScope!);
+    if (problem !== null) return refusal(problem);
   }
-  if (request.entity !== CLIENT_SLICE_ENTITY) {
-    return refusal(`this build admits one entity, "${CLIENT_SLICE_ENTITY}", not "${request.entity}"`);
-  }
-  const coordinator = resolveEntityCoordinator(home, request.entity);
+  if (request.issuedBy !== undefined && !CLIENT_GRANT_ID_PATTERN.test(request.issuedBy)) return refusal(`"${request.issuedBy}" is not a client grant id`);
+  const admitted = clientAdmission(home, request.clientId, request.entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  const team = request.team === undefined || request.team === request.entity ? undefined : request.team;
+  const coordinator = resolveEntityCoordinator(home, request.entity, {
+    clientId: request.clientId,
+    ...(team !== undefined ? { team } : {}),
+    ...(request.seat !== undefined ? { seat: request.seat } : {}),
+  });
   if (!coordinator.ok) return refusal(coordinator.why);
   if (!CLIENT_WORD_PATTERN.test(request.clientId)) {
     return refusal(`"${request.clientId}" is not a client id: one lowercase word, digits and hyphens`);
@@ -660,11 +801,14 @@ export function planClientGrant(home: string, request: ClientGrantRequest, optio
       teamId: coordinator.coordinator.teamId,
       recipientId: coordinator.coordinator.recipientId,
       recipientSeat: coordinator.coordinator.recipientSeat,
-      allowedOps: inbox ? [...CLIENT_INBOX_ALLOWED_OPS] : [...CLIENT_ALLOWED_OPS],
+      ...(team !== undefined ? { team } : {}),
+      allowedOps: [...(inbox ? CLIENT_INBOX_ALLOWED_OPS : CLIENT_ALLOWED_OPS), ...(master ? (['grant'] as const) : [])],
       allowedRoles: [...CLIENT_ALLOWED_ROLES],
       issued: now.toISOString(),
       expires,
-      vocabulary: inbox ? CLIENT_INBOX_VOCABULARY_VERSION : CLIENT_GRANT_VOCABULARY_VERSION,
+      vocabulary: master ? CLIENT_MASTER_VOCABULARY_VERSION : inbox ? CLIENT_INBOX_VOCABULARY_VERSION : CLIENT_GRANT_VOCABULARY_VERSION,
+      ...(master ? { grantScope: { entities: [...request.grantScope!.entities], projects: [...request.grantScope!.projects], teams: [...request.grantScope!.teams] } } : {}),
+      ...(request.issuedBy !== undefined ? { issuedBy: request.issuedBy } : {}),
     },
   };
 }
@@ -720,8 +864,20 @@ export function readClientGrantFile(home: string, path: string): ClientGrantRead
   } catch {
     return refusal(`the grant file "${path}" is not whole JSON`);
   }
+  // An up grant is a different record: it admits `team up --client` for one team and never a send,
+  // a read or a sub-grant. Said plainly here, so a send that is handed one knows what it holds.
+  if (claimsBundleVocabulary(parsed)) {
+    return refusal(`the grant file "${path}" is a bundle grant (${claimedBundleOps(parsed).join(', ')}): it admits those commands for one team through their own --client forms, and this route does not read it`);
+  }
+  if (claimsUpVocabulary(parsed)) {
+    const claimed = claimedTeamOps(parsed);
+    const admits = claimed.map((op) => `\`team ${op} --client ${path} --key <client.key>\``).join(' and ');
+    return refusal(`the grant file "${path}" is ${teamGrantLabelWithArticle(claimed)}: it admits ${admits} for one team and nothing else, never send, messages or grant`);
+  }
   const record = clientGrantFrom(parsed, state.key);
   if (record === null) return refusal(`the grant file "${path}" is not a verified owner-signed client grant`);
+  const admitted = clientAdmission(home, record.grant.clientId, record.grant.entity);
+  if (!admitted.ok) return refusal(admitted.why);
   return { ok: true, grant: record.grant, signature: record.signature };
 }
 
@@ -739,7 +895,7 @@ export function readClientGrant(home: string, grantId: string): ClientGrantRead 
 export function canonicalClientGrant(home: string, presented: { grant: ClientGrantRecord; signature: string }): ClientGrantRead {
   const canonical = readClientGrant(home, presented.grant.grantId);
   if (!canonical.ok) return canonical;
-  const fields: (keyof ClientGrantRecord)[] = ['grantId', 'clientId', 'entity', 'publicKey', 'keyId', 'keyDir', 'teamId', 'recipientId', 'recipientSeat', 'issued', 'expires', 'vocabulary'];
+  const fields: (keyof ClientGrantRecord)[] = ['grantId', 'clientId', 'entity', 'publicKey', 'keyId', 'keyDir', 'teamId', 'recipientId', 'recipientSeat', 'team', 'issued', 'expires', 'vocabulary', 'issuedBy'];
   for (const field of fields) {
     if (canonical.grant[field] !== presented.grant[field]) {
       return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (${field} differs)`);
@@ -751,6 +907,9 @@ export function canonicalClientGrant(home: string, presented: { grant: ClientGra
     if (canonical.grant[field].join(',') !== presented.grant[field].join(',')) {
       return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (${field} differs)`);
     }
+  }
+  if (JSON.stringify(canonical.grant.grantScope ?? null) !== JSON.stringify(presented.grant.grantScope ?? null)) {
+    return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (grantScope differs)`);
   }
   if (canonical.signature !== presented.signature) {
     return refusal(`the presented grant is not the canonical record for ${presented.grant.grantId} (signature differs)`);
@@ -778,7 +937,57 @@ export function activeClientGrant(
   if (revocation.records[0] !== undefined) {
     return refusal(`the grant ${grant.grantId} was revoked at ${revocation.records[0].at}`);
   }
+  const master = clientMasterRevocation(home, grant);
+  if (master !== null) return refusal(master);
   return { ok: true, grant };
+}
+
+/** For a sub-grant, the reason its master no longer stands behind it (revoked, or its revocations
+ *  unreadable), or null. A grant with no `issued_by` always answers null. */
+export function clientMasterRevocation(home: string, grant: ClientGrantRecord): string | null {
+  if (grant.issuedBy === undefined) return null;
+  const revocation = clientRevocations(home, grant.issuedBy);
+  if (!revocation.ok) return revocation.why;
+  if (revocation.records[0] !== undefined) {
+    return `the master grant ${grant.issuedBy} that issued ${grant.grantId} was revoked at ${revocation.records[0].at}`;
+  }
+  return null;
+}
+
+/** The audit folder for sub-grants issued under a master grant: kept apart from the grants folder,
+ *  whose standing-grant reader owns every file name there. */
+export function clientGrantAuditFolder(home: string = homedir()): string {
+  return join(home, '.config', 'team', 'client-grant-audit');
+}
+
+/**
+ * Appends one owner-signed audit record for a sub-grant: which master issued it, under which signed
+ * client request. Created with O_EXCL under the sub-grant's own fresh id, never overwritten.
+ */
+export function writeClientGrantAudit(
+  home: string,
+  record: { subGrantId: string; masterGrantId: string; clientId: string; requestId: string; requestSignature: string; at: string },
+  key: KeyObject = keyOf(home),
+): { ok: true; path: string } | { ok: false; why: string } {
+  const folder = clientGrantAuditFolder(home);
+  try {
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+  } catch {
+    return refusal(`the audit folder "${folder}" cannot be created`);
+  }
+  const body: Json = {
+    sub_grant_id: record.subGrantId,
+    master_grant_id: record.masterGrantId,
+    client_id: record.clientId,
+    request_id: record.requestId,
+    request_signature: record.requestSignature,
+    at: record.at,
+  };
+  const signature = signDomain(CLIENT_GRANT_DOMAIN, { name: record.subGrantId, client_grant_audit: body }, key);
+  const name = `${record.subGrantId}.json`;
+  const published = publishExclusive(folder, name, `${JSON.stringify({ client_grant_audit: body, signature }, null, 2)}\n`);
+  if (published !== 'written') return refusal(`the audit record for ${record.subGrantId} could not be published in "${folder}"`);
+  return { ok: true, path: join(folder, name) };
 }
 
 // ---- appended revocations ------------------------------------------------------------------
@@ -856,7 +1065,7 @@ export function appendClientRevocation(
   const now = options.now ?? new Date();
   if (!CLIENT_GRANT_ID_PATTERN.test(grantId)) return refusal(`"${grantId}" is not a client grant id`);
   const canonical = readClientGrant(home, grantId);
-  if (!canonical.ok) return refusal(`there is no canonical client grant ${grantId}: ${canonical.why}`);
+  if (!canonical.ok && !readClientUpGrant(home, grantId).ok) return refusal(`there is no canonical client grant ${grantId}: ${canonical.why}`);
   return withClientGrantLock(home, () => {
     const key = options.key ?? keyOf(home);
     const folder = clientGrantsFolder(home);
@@ -1007,6 +1216,710 @@ function publishExclusive(folder: string, name: string, content: string): 'writt
   return 'written';
 }
 
+/**
+ * The seats one client may address on the team at `root`, from its file's `clients:` section.
+ * A file with no section for the client yields the default (the orchestrator), so a team that
+ * writes nothing behaves as before. A section that names the client is honoured only while the
+ * owner's approval of it is in force: an unapproved or changed `clients:` is refused, never read
+ * as the default. `refused` names the operator and human seats, which no list admits.
+ */
+export function clientSeatsAt(
+  root: string,
+  home: string,
+  clientId: string,
+  base: readonly string[] = CLIENT_DEFAULT_SEATS,
+): { ok: true; seats: readonly string[]; refused: string[] } | { ok: false; why: string } {
+  const declared = readDeclarations(root, home);
+  if (declared.kind !== 'read') return { ok: true, seats: base, refused: [] };
+  const team = declared.team;
+  // The operator is refused unless it is the lead itself (a file whose operator is its
+  // orchestrator keeps the default reach it always had); a `human: true` seat always is.
+  const operator = team.operator === team.orchestrator ? [] : [team.operator];
+  const refused = [...operator, ...team.seats.filter((seat) => seat.human === true).map((seat) => seat.name)];
+  if (team.clients === null || team.clients === undefined) return { ok: true, seats: base.filter((seat) => !refused.includes(seat)), refused };
+  let differences: string[] | null;
+  try {
+    differences = approvalDifferences(team, root, home);
+  } catch {
+    differences = null;
+  }
+  if (differences === null || differences.includes('`clients` changed')) {
+    return { ok: false, why: 'the team file\'s `clients:` section is not the one the owner approved' };
+  }
+  const listed = team.clients[clientId];
+  if (listed === undefined) return { ok: true, seats: base.filter((seat) => !refused.includes(seat)), refused };
+  return { ok: true, seats: listed.seats.filter((seat) => !refused.includes(seat)), refused };
+}
+
+// ---- up and down grants --------------------------------------------------------------------
+//
+// A client team grant admits one client's `team up --client <grant> --key <key>` and/or
+// `team down --client <grant> --key <key>` for ONE team at ONE folder, and nothing else: its op
+// list is `up`, `down`, or both, so it is never read as a send, messages or grant record (the
+// send-side decoder refuses vocabulary 4 whole, and an older build refuses it as an unknown
+// vocabulary). The `up` form is byte-for-byte the record the first build wrote (binding under the
+// key `up`); a record that carries `down` keeps the same binding under the key `team`, so a build
+// that knows only `up` refuses it whole instead of reading half of it. The team is bound by what the registry and the file say, signed:
+// its project name, its registry id (twelve hex, derived from the real root), its absolute root,
+// and the fingerprints of the team file as the owner approved it (owner sections and every seat,
+// the same digests `team approve` records). A later edit of one of those needs a new signature.
+// The entity names whose policies and owner signers govern the grant; it is not a requirement
+// that the team's own file names it (a team with no entity is bound by project, id and root).
+
+/** The vocabulary of an up grant: `up` alone. */
+export const CLIENT_UP_VOCABULARY_VERSION = 4;
+
+/** The one op an up-only grant carries. */
+export const CLIENT_UP_ALLOWED_OPS = ['up'] as const;
+
+/** Every op a team grant can carry, in the one canonical order a record lists them. */
+export const CLIENT_TEAM_OPS = ['up', 'down'] as const;
+export type ClientTeamOp = (typeof CLIENT_TEAM_OPS)[number];
+
+/** The ops as a record writes them: known, each once, in canonical order; an empty request is `up`
+ *  (what `--up` alone has always meant). */
+export function canonicalTeamOps(ops: readonly string[] | undefined): ClientTeamOp[] | null {
+  const asked = ops === undefined || ops.length === 0 ? ['up'] : ops;
+  if (asked.some((op) => !(CLIENT_TEAM_OPS as readonly string[]).includes(op))) return null;
+  return CLIENT_TEAM_OPS.filter((op) => asked.includes(op));
+}
+
+/** What a grant is called in a sentence: `up grant`, `down grant`, or `up and down grant`. */
+export function teamGrantLabel(ops: readonly string[]): string {
+  return `${ops.join(' and ')} grant`;
+}
+
+/** What one verified team grant is called in a sentence: `up grant`, `down grant`, `up and down
+ *  grant` for the one-op forms, `operator bundle grant` for a bundle. */
+export function grantLabelOf(grant: { ops: readonly string[]; bundle?: string }): string {
+  return grant.bundle !== undefined ? `${grant.bundle} bundle grant` : teamGrantLabel(grant.ops);
+}
+
+/** The label with its article: `an up grant`, `a down grant`, `an up and down grant`. */
+export function teamGrantLabelWithArticle(ops: readonly string[]): string {
+  return `${ops[0] === 'up' ? 'an' : 'a'} ${teamGrantLabel(ops)}`;
+}
+
+/** The flags that ask for those ops: `--up`, `--down`, or `--up --down`. */
+export function teamOpFlags(ops: readonly string[]): string {
+  return ops.map((op) => `--${op}`).join(' ');
+}
+
+/** A team grant (up, down or both) is durable: ninety days is both the default and the ceiling.
+ *  `--expires` shortens it; the owner revokes it at any time with `team revoke`. This is a constant
+ *  like the seven-day send ceiling above it: no policy sets it today. */
+export const CLIENT_UP_EXPIRY_MAX_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** Where one up grant binds: one team by name and registry id, its real root, and its file. */
+export type ClientUpBinding = {
+  project: string;
+  teamId: string;
+  root: string;
+  fingerprints: Fingerprints;
+};
+
+/** One verified up grant, exactly as written and signed. */
+export type ClientUpGrantRecord = {
+  grantId: string;
+  clientId: string;
+  entity: string;
+  publicKey: string;
+  keyId: string;
+  keyDir: string;
+  issued: string;
+  expires: string;
+  /** 4: the one-op grants (`up`, `down`, both). 5: a bundle grant (see `CLIENT_BUNDLE_VOCABULARY_VERSION`). */
+  vocabulary: 4 | 5;
+  /** What the grant admits, explicitly: `up`, `down`, or both on vocabulary 4; on vocabulary 5 the
+   *  bundle's expansion as the owner signed it. These decide; `bundle` never does. */
+  ops: BundleOp[];
+  /** Vocabulary 5 only: the bundle's name, for display. Never read as authority. */
+  bundle?: BundleName;
+  /** Vocabulary 5 only: the seats `send` may reach, as signed (empty when `send` is not an op). */
+  seats?: string[];
+  /** The one team and folder every op binds. The name is the first build's: it binds `down` too. */
+  up: ClientUpBinding;
+};
+
+export type ClientUpGrantRequest = {
+  clientId: string;
+  entity: string;
+  publicKey: string;
+  keyId: string;
+  keyDir: string;
+  /** Absent means the 90-day default; anything past 90 days is refused. */
+  expires?: string;
+  /** Absent means `up`, as before; `['down']` and `['up', 'down']` add the stop. */
+  ops?: readonly string[];
+  up: ClientUpBinding;
+};
+
+export type ClientUpGrantRead =
+  | { ok: true; grant: ClientUpGrantRecord; signature: string }
+  | { ok: false; why: string };
+
+/** The command that asks for an up grant, spelled for one client key and team: what every
+ *  refusal of an up grant ends with, so the owner's next step is always one line. */
+export function upRequestCommand(input: { clientId: string; entity: string; keyDir: string; project: string; ops?: readonly string[]; bundle?: string } | null): string {
+  if (input === null) return 'team grant --client <client-id> --entity <entity> --public-key <client.pub> --team <team> --up --request';
+  if (input.bundle !== undefined) return `team grant --client ${input.clientId} --entity ${input.entity} --public-key ${join(input.keyDir, CLIENT_PUB_FILE)} --team ${input.project} --bundle ${input.bundle} --request`;
+  return `team grant --client ${input.clientId} --entity ${input.entity} --public-key ${join(input.keyDir, CLIENT_PUB_FILE)} --team ${input.project} ${teamOpFlags(input.ops ?? ['up'])} --request`;
+}
+
+/** Where a record keeps its binding: `up` for the up-only form the first build wrote, `team` for any
+ *  record that carries `down`. */
+function bindingKeyOf(ops: readonly string[]): 'up' | 'team' {
+  return ops.length === 1 && ops[0] === 'up' ? 'up' : 'team';
+}
+
+function onDiskUpGrant(grant: ClientUpGrantRecord): Record<string, Json> {
+  if (grant.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION) return onDiskBundleGrant(grant);
+  return {
+    grant_id: grant.grantId,
+    client_id: grant.clientId,
+    entity: grant.entity,
+    public_key: grant.publicKey,
+    key_id: grant.keyId,
+    key_dir: grant.keyDir,
+    allowed_ops: [...grant.ops],
+    issued: grant.issued,
+    expires: grant.expires,
+    vocabulary: CLIENT_UP_VOCABULARY_VERSION,
+    [bindingKeyOf(grant.ops)]: {
+      project: grant.up.project,
+      team_id: grant.up.teamId,
+      root: grant.up.root,
+      fingerprints: { sections: { ...grant.up.fingerprints.sections }, seats: { ...grant.up.fingerprints.seats } },
+    },
+  };
+}
+
+const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+
+/** The problem with a binding's shape, or null. Shape only: whether it still names a live team is
+ *  the up-grant module's check, at the request and at every use. */
+export function clientUpBindingProblem(binding: ClientUpBinding): string | null {
+  if (typeof binding.project !== 'string' || !CLIENT_WORD_PATTERN.test(binding.project)) return `"${String(binding.project)}" is not a team name: one lowercase word, digits and hyphens`;
+  if (typeof binding.teamId !== 'string' || !CLIENT_TEAM_ID_PATTERN.test(binding.teamId)) return `"${String(binding.teamId)}" is not a team registry id`;
+  if (typeof binding.root !== 'string' || !isAbsolute(binding.root) || hasDotTraversal(binding.root)) return `the team root "${String(binding.root)}" is not a plain absolute path`;
+  const prints = binding.fingerprints as unknown;
+  if (prints === null || typeof prints !== 'object' || Array.isArray(prints)) return 'the team file fingerprints are not a record';
+  const { sections, seats } = prints as { sections?: unknown; seats?: unknown };
+  for (const [name, map] of [['sections', sections], ['seats', seats]] as const) {
+    if (map === null || typeof map !== 'object' || Array.isArray(map)) return `the team file fingerprints carry no ${name}`;
+    for (const [key, value] of Object.entries(map as Record<string, unknown>)) {
+      if (key === '' || typeof value !== 'string' || !FINGERPRINT_PATTERN.test(value)) return `the ${name} fingerprint of "${key}" is not a SHA-256`;
+    }
+  }
+  if (Object.keys(seats as Record<string, unknown>).length === 0) return 'the team file declares no seat to launch';
+  return null;
+}
+
+/** Validates one up grant request and builds the record a write signs — the id is minted by the write. */
+export function planClientUpGrant(home: string, request: ClientUpGrantRequest, options: ClientGrantOptions = {}): { ok: true; grant: ClientUpGrantRecord } | { ok: false; why: string } {
+  const now = options.now ?? new Date();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
+  const admitted = clientAdmission(home, request.clientId, request.entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  if (!CLIENT_PUBLIC_KEY_PATTERN.test(request.publicKey)) return refusal(`"${request.publicKey}" is not an Ed25519 public key: 64 lowercase hex`);
+  if (request.keyId !== keyIdOf(request.publicKey)) return refusal(`the key id "${request.keyId}" is not the public key's own (${keyIdOf(request.publicKey)})`);
+  const placement = clientKeyPlacementProblem(home, request.keyDir);
+  if (placement !== null) return refusal(placement);
+  const bound = clientUpBindingProblem(request.up);
+  if (bound !== null) return refusal(bound);
+  const ops = canonicalTeamOps(request.ops);
+  if (ops === null) return refusal(`a team grant carries up, down or both, not "${(request.ops ?? []).join(', ')}"`);
+  const expires = request.expires ?? new Date(nowMs + CLIENT_UP_EXPIRY_MAX_MS).toISOString();
+  const expiresMs = Date.parse(expires);
+  if (!Number.isFinite(expiresMs)) return refusal(`"${expires}" is not a readable expiry timestamp`);
+  if (expiresMs <= nowMs) return refusal(`the expiry ${expires} is not in the future: a client grant always expires`);
+  if (expiresMs > nowMs + CLIENT_UP_EXPIRY_MAX_MS) return refusal(`the expiry ${expires} is more than 90 days away: a ${teamGrantLabel(ops)} is durable but finite, at most 90 days`);
+  return {
+    ok: true,
+    grant: {
+      grantId: '',
+      clientId: request.clientId,
+      entity: request.entity,
+      publicKey: request.publicKey,
+      keyId: request.keyId,
+      keyDir: canonical(request.keyDir),
+      issued: now.toISOString(),
+      expires,
+      vocabulary: CLIENT_UP_VOCABULARY_VERSION,
+      ops,
+      up: {
+        project: request.up.project,
+        teamId: request.up.teamId,
+        root: request.up.root,
+        fingerprints: { sections: { ...request.up.fingerprints.sections }, seats: { ...request.up.fingerprints.seats } },
+      },
+    },
+  };
+}
+
+/** Writes one owner-signed up grant under a fresh random id, created with O_EXCL. */
+export function writeClientUpGrant(
+  home: string,
+  request: ClientUpGrantRequest,
+  options: ClientGrantOptions = {},
+): { ok: true; grant: ClientUpGrantRecord; path: string } | { ok: false; why: string } {
+  const plan = planClientUpGrant(home, request, options);
+  if (!plan.ok) return plan;
+  return publishTeamGrant(home, plan.grant, options);
+}
+
+/** Signs and publishes one planned team grant (vocabulary 4 or 5) under a fresh random id. */
+function publishTeamGrant(home: string, plan: ClientUpGrantRecord, options: ClientGrantOptions): { ok: true; grant: ClientUpGrantRecord; path: string } | { ok: false; why: string } {
+  const folder = clientGrantsFolder(home);
+  try {
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+  } catch {
+    return refusal(`the grants folder "${folder}" cannot be created`);
+  }
+  const key = options.key ?? keyOf(home);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const grant: ClientUpGrantRecord = { ...plan, grantId: clientGrantId() };
+    const disk = onDiskUpGrant(grant);
+    const signature = signDomain(CLIENT_GRANT_DOMAIN, grantPayload(grant.grantId, disk), key);
+    const path = clientGrantPath(home, grant.grantId);
+    const published = publishExclusive(folder, `${grant.grantId}.json`, `${JSON.stringify({ client_grant: disk, signature }, null, 2)}\n`);
+    if (published === 'written') return { ok: true, grant, path };
+    if (published === 'exists') continue;
+    return refusal(`the ${plan.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION ? 'bundle' : 'up'} grant could not be published in "${folder}"`);
+  }
+  return refusal('a fresh grant id could not be found; nothing was written');
+}
+
+function clientUpGrantFrom(record: unknown, key: KeyObject): { grant: ClientUpGrantRecord; signature: string } | null {
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return null;
+  const envelope = record as Record<string, unknown>;
+  const keys = Object.keys(envelope).sort();
+  if (keys.length !== 2 || keys[0] !== 'client_grant' || keys[1] !== 'signature') return null;
+  const raw = envelope.client_grant;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const fields = raw as Record<string, unknown>;
+  if (fields.vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION) return bundleGrantFrom(envelope, fields, key);
+  if (fields.vocabulary !== CLIENT_UP_VOCABULARY_VERSION) return null;
+  // The ops are exactly what a request writes: known, once each, in canonical order. Anything else
+  // is not a record this build wrote, and the binding's key follows from them.
+  if (!Array.isArray(fields.allowed_ops) || fields.allowed_ops.some((op) => typeof op !== 'string')) return null;
+  const listed = fields.allowed_ops as string[];
+  const ops = canonicalTeamOps(listed);
+  if (ops === null || listed.length === 0 || ops.join(',') !== listed.join(',')) return null;
+  const bindingKey = bindingKeyOf(ops);
+  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'allowed_ops', 'issued', 'expires', 'vocabulary', bindingKey];
+  if (Object.keys(fields).length !== known.length || Object.keys(fields).some((name) => !known.includes(name))) return null;
+  if (typeof fields.grant_id !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.grant_id)) return null;
+  if (typeof fields.client_id !== 'string' || !CLIENT_WORD_PATTERN.test(fields.client_id)) return null;
+  if (typeof fields.entity !== 'string' || !CLIENT_WORD_PATTERN.test(fields.entity)) return null;
+  if (typeof fields.public_key !== 'string' || !CLIENT_PUBLIC_KEY_PATTERN.test(fields.public_key)) return null;
+  if (typeof fields.key_id !== 'string' || fields.key_id !== keyIdOf(fields.public_key)) return null;
+  if (typeof fields.key_dir !== 'string' || !isAbsolute(fields.key_dir)) return null;
+  if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
+  if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
+  if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
+  if (Date.parse(fields.expires) > Date.parse(fields.issued) + CLIENT_UP_EXPIRY_MAX_MS) return null;
+  const up = fields[bindingKey];
+  if (up === null || typeof up !== 'object' || Array.isArray(up)) return null;
+  const upFields = up as Record<string, unknown>;
+  if (Object.keys(upFields).sort().join(',') !== 'fingerprints,project,root,team_id') return null;
+  const prints = upFields.fingerprints;
+  if (prints === null || typeof prints !== 'object' || Array.isArray(prints)) return null;
+  if (Object.keys(prints).sort().join(',') !== 'seats,sections') return null;
+  const binding: ClientUpBinding = {
+    project: upFields.project as string,
+    teamId: upFields.team_id as string,
+    root: upFields.root as string,
+    fingerprints: prints as Fingerprints,
+  };
+  if (clientUpBindingProblem(binding) !== null) return null;
+  if (typeof envelope.signature !== 'string') return null;
+  if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw as Json), envelope.signature, key)) return null;
+  return {
+    grant: {
+      grantId: fields.grant_id,
+      clientId: fields.client_id,
+      entity: fields.entity,
+      publicKey: fields.public_key,
+      keyId: fields.key_id,
+      keyDir: fields.key_dir,
+      issued: fields.issued,
+      expires: fields.expires,
+      vocabulary: CLIENT_UP_VOCABULARY_VERSION,
+      ops,
+      up: {
+        project: binding.project,
+        teamId: binding.teamId,
+        root: binding.root,
+        fingerprints: { sections: { ...binding.fingerprints.sections }, seats: { ...binding.fingerprints.seats } },
+      },
+    },
+    signature: envelope.signature,
+  };
+}
+
+/** Whether a parsed record is of the up vocabulary, before its signature is judged (for the
+ *  wording of a refusal only: nothing is admitted on this). */
+function claimsUpVocabulary(parsed: unknown): boolean {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const grant = (parsed as { client_grant?: unknown }).client_grant;
+  if (grant === null || typeof grant !== 'object' || Array.isArray(grant)) return false;
+  return (grant as { vocabulary?: unknown }).vocabulary === CLIENT_UP_VOCABULARY_VERSION;
+}
+
+/** Whether a parsed record is of the bundle vocabulary (for the wording of a refusal only). */
+function claimsBundleVocabulary(parsed: unknown): boolean {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const grant = (parsed as { client_grant?: unknown }).client_grant;
+  return grant !== null && typeof grant === 'object' && !Array.isArray(grant) && (grant as { vocabulary?: unknown }).vocabulary === CLIENT_BUNDLE_VOCABULARY_VERSION;
+}
+
+/** Whether the file at `path` claims to be a bundle grant. It judges nothing: the route it is sent
+ *  down verifies the record whole, and says why when it does not. */
+export function claimsBundleGrantFile(path: string): boolean {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > 1_000_000) return false;
+    return claimsBundleVocabulary(JSON.parse(readFileSync(path, 'utf8')));
+  } catch {
+    return false;
+  }
+}
+
+/** The ops a vocabulary-5 file names, for the wording of a refusal only. */
+function claimedBundleOps(parsed: unknown): string[] {
+  const grant = (parsed as { client_grant?: { allowed_ops?: unknown } }).client_grant;
+  return Array.isArray(grant?.allowed_ops) ? (grant.allowed_ops as unknown[]).filter((op): op is string => typeof op === 'string') : [];
+}
+
+/** The ops a vocabulary-4 file names, for the wording of a refusal only. */
+function claimedTeamOps(parsed: unknown): ClientTeamOp[] {
+  const grant = (parsed as { client_grant?: { allowed_ops?: unknown } }).client_grant;
+  const named = Array.isArray(grant?.allowed_ops) ? (grant.allowed_ops as unknown[]).filter((op): op is string => typeof op === 'string') : [];
+  return canonicalTeamOps(named) ?? ['up'];
+}
+
+/** The bundle that would carry an op: `operator` for the ones that act, `observer` for the ones that read. */
+export function bundleForOp(op: string): BundleName {
+  return op === 'send' || op === 'up' || op === 'down' ? 'operator' : 'observer';
+}
+
+function opGrantNoun(op: BundleOp, article: boolean): string {
+  if (op === 'up' || op === 'down') return article ? teamGrantLabelWithArticle([op]) : teamGrantLabel([op]);
+  return `${article ? 'a ' : ''}grant that carries ${op}`;
+}
+
+/** The request that asks for a grant carrying `op`: the one-op form for up and down, a bundle for the rest. */
+function opRequestCommand(op: BundleOp, input: { clientId: string; entity: string; keyDir: string; project: string } | null): string {
+  if (op === 'up' || op === 'down') return input === null ? upRequestCommand(null).replace('--up', teamOpFlags([op])) : upRequestCommand({ ...input, ops: [op] });
+  const bundle = bundleForOp(op);
+  return input === null ? `team grant --client <client-id> --entity <entity> --public-key <client.pub> --team <team> --bundle ${bundle} --request` : upRequestCommand({ ...input, bundle });
+}
+
+/** One verified owner-signed up grant from a file, or the reason it is not one. A send, messages
+ *  or master grant is named for what it is, with the command that asks for an up grant. */
+export function readClientUpGrantFile(home: string, path: string, op: BundleOp = 'up'): ClientUpGrantRead {
+  const state = keyState(home);
+  if (state.kind !== 'key') return refusal('the owner signing key is absent or unreadable: no client grant can verify');
+  let text: string;
+  try {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return refusal(`the grant file "${path}" is a symbolic link; a client grant is a plain file`);
+    if (!stat.isFile()) return refusal(`the grant file "${path}" is not a regular file`);
+    if (process.getuid !== undefined && stat.uid !== process.getuid()) return refusal(`the grant file "${path}" belongs to another user`);
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return refusal(`the grant file "${path}" cannot be read`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return refusal(`the grant file "${path}" is not whole JSON`);
+  }
+  const up = clientUpGrantFrom(parsed, state.key);
+  if (up === null) {
+    const other = clientGrantFrom(parsed, state.key);
+    if (other !== null) {
+      return refusal(`the grant file "${path}" is not ${opGrantNoun(op, true)} (it admits ${other.grant.allowedOps.join(', ')}); the owner requests one with ${opRequestCommand(op, { clientId: other.grant.clientId, entity: other.grant.entity, keyDir: other.grant.keyDir, project: '<team>' })}`);
+    }
+    return refusal(`the grant file "${path}" is not a verified owner-signed ${opGrantNoun(op, false)}; the owner requests one with ${opRequestCommand(op, null)}`);
+  }
+  const admitted = clientAdmission(home, up.grant.clientId, up.grant.entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  return { ok: true, grant: up.grant, signature: up.signature };
+}
+
+/** The verified up grant for `grantId` from the canonical store, or the reason it is not there. */
+export function readClientUpGrant(home: string, grantId: string): ClientUpGrantRead {
+  if (!CLIENT_GRANT_ID_PATTERN.test(grantId)) return refusal(`"${grantId}" is not a client grant id`);
+  return readClientUpGrantFile(home, clientGrantPath(home, grantId));
+}
+
+/** The up grant in force at `now`: the canonical store's own record for the presented id (a
+ *  detached copy is never a bearer token), unexpired and with no appended revocation. Read fresh
+ *  by every use; call inside {@link withClientGrantLock} when it guards a side effect. */
+export function activeClientUpGrant(
+  home: string,
+  presented: { grant: ClientUpGrantRecord; signature: string },
+  now: Date = new Date(),
+): { ok: true; grant: ClientUpGrantRecord } | { ok: false; why: string; kind: 'expired' | 'revoked' | 'other' } {
+  const other = (why: string) => ({ ok: false as const, why, kind: 'other' as const });
+  const canonicalRead = readClientUpGrant(home, presented.grant.grantId);
+  if (!canonicalRead.ok) return other(canonicalRead.why);
+  if (canonicalRead.signature !== presented.signature || canonicalRead.grant.grantId !== presented.grant.grantId) {
+    return other(`the presented grant is not the canonical record for ${presented.grant.grantId} (signature differs)`);
+  }
+  const grant = canonicalRead.grant;
+  const expiresMs = Date.parse(grant.expires);
+  if (!Number.isFinite(expiresMs)) return other(`the grant ${grant.grantId} has no readable expiry`);
+  if (expiresMs <= now.getTime()) return { ok: false, why: `the ${grantLabelOf(grant)} ${grant.grantId} expired at ${grant.expires}`, kind: 'expired' };
+  const revocation = clientRevocations(home, grant.grantId);
+  if (!revocation.ok) return other(revocation.why);
+  if (revocation.records[0] !== undefined) return { ok: false, why: `the ${grantLabelOf(grant)} ${grant.grantId} was revoked at ${revocation.records[0].at}`, kind: 'revoked' };
+  return { ok: true, grant };
+}
+
+// ---- bundle grants -------------------------------------------------------------------------
+//
+// A bundle grant (vocabulary 5) is a named, fixed list of commands grouped in one owner-signed
+// grant for ONE team at ONE folder: `observer` (read-only) or `operator` (observer, plus `send` to
+// the granted seats, `up` and `down`). One Touch ID covers the whole list. It complements the
+// per-command grants above, which stay valid, readable and unchanged; a grant is never widened in
+// place, and an older build refuses vocabulary 5 whole (it reads only 1 to 4).
+//
+// The record carries the EXPLICIT op list the owner signed (`allowed_ops`) and the bundle's name as
+// a display label (`bundle`). Only the list decides, so a command added to a bundle in a later
+// build never widens a grant signed before. The commands that change who may do what (grant,
+// revoke, init, policy, add, remove, …) are structurally ineligible (`bundle-ops.ts`): the decoder
+// refuses a record that lists one, even one carrying a valid owner signature.
+//
+// The binding is one team (name, registry id from its real root, the real root), the entity whose
+// policy governs the grant, the client's key, and the expiry. The fingerprints of the team file
+// are signed only when `up` is an op, and only `up` checks them: a file edit does not end a
+// grant's status, send or down.
+
+/** The vocabulary of a bundle grant. */
+export const CLIENT_BUNDLE_VOCABULARY_VERSION = 5;
+
+export type ClientBundleGrantRequest = {
+  clientId: string;
+  entity: string;
+  publicKey: string;
+  keyId: string;
+  keyDir: string;
+  bundle: BundleName;
+  /** The bundle as expanded at the request: the explicit ops the owner signs. */
+  ops: readonly string[];
+  /** The seats `send` may reach; required with `send`, refused without it. */
+  seats?: readonly string[];
+  /** Absent means the bundle's default days; past its cap is refused. */
+  expires?: string;
+  /** The binding. `fingerprints` is read only when `up` is an op. */
+  up: ClientUpBinding;
+  /** The policy-resolved specs in force; the release defaults when absent. The ops must sit inside
+   *  the bundle's, and the expiry inside its days. */
+  specs?: BundleSpecs;
+};
+
+const EMPTY_FINGERPRINTS: Fingerprints = { sections: {}, seats: {} };
+
+/** The problem with a bundle binding's shape, or null. The fingerprints are checked only for `up`. */
+export function clientBundleBindingProblem(binding: ClientUpBinding, ops: readonly string[]): string | null {
+  if (ops.includes('up')) return clientUpBindingProblem(binding);
+  return clientUpBindingProblem({ ...binding, fingerprints: { sections: {}, seats: { '-': '0'.repeat(64) } } });
+}
+
+function onDiskBundleGrant(grant: ClientUpGrantRecord): Record<string, Json> {
+  const team: Record<string, Json> = { project: grant.up.project, team_id: grant.up.teamId, root: grant.up.root };
+  if (grant.ops.includes('up')) team.fingerprints = { sections: { ...grant.up.fingerprints.sections }, seats: { ...grant.up.fingerprints.seats } };
+  return {
+    grant_id: grant.grantId,
+    client_id: grant.clientId,
+    entity: grant.entity,
+    public_key: grant.publicKey,
+    key_id: grant.keyId,
+    key_dir: grant.keyDir,
+    bundle: grant.bundle ?? 'operator',
+    allowed_ops: [...grant.ops],
+    seats: [...(grant.seats ?? [])],
+    issued: grant.issued,
+    expires: grant.expires,
+    vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+    team,
+  };
+}
+
+/** The seats a bundle's `send` may be signed for: the seats the entity admits this client, the team
+ *  file's own `clients:` list (when the owner approved it) and never the operator or a human seat. */
+export function bundleSeatsAdmitted(home: string, root: string, clientId: string, entity: string): { ok: true; seats: readonly string[] } | { ok: false; why: string } {
+  const admitted = clientAdmission(home, clientId, entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  const allowed = clientSeatsAt(root, home, clientId, admitted.seats);
+  if (!allowed.ok) return refusal(allowed.why);
+  return { ok: true, seats: allowed.seats };
+}
+
+/** Validates one bundle request and builds the record a write signs: the id is minted by the write. */
+export function planClientBundleGrant(home: string, request: ClientBundleGrantRequest, options: ClientGrantOptions = {}): { ok: true; grant: ClientUpGrantRecord } | { ok: false; why: string } {
+  const now = options.now ?? new Date();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
+  if (!isBundleName(request.bundle)) return refusal(`"${String(request.bundle)}" is not a bundle: observer or operator`);
+  for (const op of request.ops) {
+    if (isForbiddenBundleCommand(op)) return refusal(`"${op}" can never be in a bundle: it changes who may do what, and only the owner does that`);
+  }
+  const ops = canonicalBundleOps(request.ops);
+  if (ops === null) return refusal(`a bundle carries only ${BUNDLE_ELIGIBLE_OPS.join(', ')}, not "${request.ops.join(', ')}"`);
+  if (new Set(request.ops).size !== request.ops.length) return refusal('a bundle names an op twice');
+  const spec = request.specs?.[request.bundle];
+  if (spec !== undefined) {
+    const outside = ops.filter((op) => !spec.ops.includes(op));
+    if (outside.length > 0) return refusal(`the policy in force no longer lets the ${request.bundle} bundle carry ${outside.join(', ')}; ask again for the bundle as it is now`);
+  }
+  const admitted = clientAdmission(home, request.clientId, request.entity);
+  if (!admitted.ok) return refusal(admitted.why);
+  if (!CLIENT_PUBLIC_KEY_PATTERN.test(request.publicKey)) return refusal(`"${request.publicKey}" is not an Ed25519 public key: 64 lowercase hex`);
+  if (request.keyId !== keyIdOf(request.publicKey)) return refusal(`the key id "${request.keyId}" is not the public key's own (${keyIdOf(request.publicKey)})`);
+  const placement = clientKeyPlacementProblem(home, request.keyDir);
+  if (placement !== null) return refusal(placement);
+  const bound = clientBundleBindingProblem(request.up, ops);
+  if (bound !== null) return refusal(bound);
+  // The seats `send` reaches: signed explicitly, each one still admitted now.
+  const seats = [...(request.seats ?? [])];
+  if (ops.includes('send')) {
+    if (seats.length === 0) return refusal('a bundle with send names the seats it may send to: --seat <seat>[,<seat>]');
+    if (new Set(seats).size !== seats.length) return refusal('a bundle names a seat twice');
+    const allowed = bundleSeatsAdmitted(home, request.up.root, request.clientId, request.entity);
+    if (!allowed.ok) return refusal(allowed.why);
+    let roster: string[];
+    try {
+      const record = readTeams(home)[request.up.teamId];
+      if (record === undefined) return refusal(`team "${request.up.project}" is not in the registry: a bundle with send reaches seats the registry names`);
+      roster = record.roster.map((entry) => entry.seat);
+    } catch {
+      return refusal('the team registry cannot be read');
+    }
+    for (const name of seats) {
+      if (!SEAT_NAME.test(name)) return refusal(`"${name}" is not a seat name`);
+      if (!allowed.seats.includes(name)) return refusal(`the team does not let client ${request.clientId} address "${name}" (it may address ${allowed.seats.join(', ') || 'none'})`);
+      if (!roster.includes(name)) return refusal(`team "${request.up.project}" has no seat "${name}" on its roster`);
+    }
+  } else if (seats.length > 0) {
+    return refusal(`seats name where send goes, and this ${request.bundle} bundle does not carry send`);
+  }
+  const days = Math.min(spec?.expiryDays ?? BUNDLE_HARD_MAX_DAYS, BUNDLE_HARD_MAX_DAYS);
+  const capMs = days * 24 * 60 * 60 * 1000;
+  const expires = request.expires ?? new Date(nowMs + capMs).toISOString();
+  const expiresMs = Date.parse(expires);
+  if (!Number.isFinite(expiresMs)) return refusal(`"${expires}" is not a readable expiry timestamp`);
+  if (expiresMs <= nowMs) return refusal(`the expiry ${expires} is not in the future: a client grant always expires`);
+  if (expiresMs > nowMs + capMs) return refusal(`the expiry ${expires} is more than ${String(days)} days away: a ${request.bundle} bundle lasts at most ${String(days)} days here`);
+  return {
+    ok: true,
+    grant: {
+      grantId: '',
+      clientId: request.clientId,
+      entity: request.entity,
+      publicKey: request.publicKey,
+      keyId: request.keyId,
+      keyDir: canonical(request.keyDir),
+      issued: now.toISOString(),
+      expires,
+      vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+      bundle: request.bundle,
+      ops,
+      seats,
+      up: {
+        project: request.up.project,
+        teamId: request.up.teamId,
+        root: request.up.root,
+        fingerprints: ops.includes('up') ? { sections: { ...request.up.fingerprints.sections }, seats: { ...request.up.fingerprints.seats } } : { sections: {}, seats: {} },
+      },
+    },
+  };
+}
+
+/** Writes one owner-signed bundle grant under a fresh random id, created with O_EXCL. */
+export function writeClientBundleGrant(
+  home: string,
+  request: ClientBundleGrantRequest,
+  options: ClientGrantOptions = {},
+): { ok: true; grant: ClientUpGrantRecord; path: string } | { ok: false; why: string } {
+  const plan = planClientBundleGrant(home, request, options);
+  if (!plan.ok) return plan;
+  return publishTeamGrant(home, plan.grant, options);
+}
+
+/** Decodes a vocabulary-5 record. A record that is not exactly what a build writes is not a grant,
+ *  and an op that can never be in a bundle makes the whole record nothing, signed or not. */
+function bundleGrantFrom(envelope: Record<string, unknown>, fields: Record<string, unknown>, key: KeyObject): { grant: ClientUpGrantRecord; signature: string } | null {
+  const raw = envelope.client_grant as Json;
+  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'bundle', 'allowed_ops', 'seats', 'issued', 'expires', 'vocabulary', 'team'];
+  if (Object.keys(fields).length !== known.length || Object.keys(fields).some((name) => !known.includes(name))) return null;
+  if (typeof fields.grant_id !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.grant_id)) return null;
+  if (typeof fields.client_id !== 'string' || !CLIENT_WORD_PATTERN.test(fields.client_id)) return null;
+  if (typeof fields.entity !== 'string' || !CLIENT_WORD_PATTERN.test(fields.entity)) return null;
+  if (typeof fields.public_key !== 'string' || !CLIENT_PUBLIC_KEY_PATTERN.test(fields.public_key)) return null;
+  if (typeof fields.key_id !== 'string' || fields.key_id !== keyIdOf(fields.public_key)) return null;
+  if (typeof fields.key_dir !== 'string' || !isAbsolute(fields.key_dir)) return null;
+  if (!isBundleName(fields.bundle)) return null;
+  // The explicit ops decide: known, none forbidden, each once, in canonical order.
+  if (!Array.isArray(fields.allowed_ops) || fields.allowed_ops.some((op) => typeof op !== 'string')) return null;
+  const listed = fields.allowed_ops as string[];
+  if (listed.some((op) => isForbiddenBundleCommand(op))) return null;
+  const ops = canonicalBundleOps(listed);
+  if (ops === null || ops.join(',') !== listed.join(',')) return null;
+  if (!Array.isArray(fields.seats) || fields.seats.some((name) => typeof name !== 'string' || !SEAT_NAME.test(name))) return null;
+  const seats = fields.seats as string[];
+  if (new Set(seats).size !== seats.length) return null;
+  if (ops.includes('send') ? seats.length === 0 : seats.length > 0) return null;
+  if (typeof fields.issued !== 'string' || !Number.isFinite(Date.parse(fields.issued))) return null;
+  if (typeof fields.expires !== 'string' || !Number.isFinite(Date.parse(fields.expires))) return null;
+  if (Date.parse(fields.expires) <= Date.parse(fields.issued)) return null;
+  if (Date.parse(fields.expires) > Date.parse(fields.issued) + BUNDLE_HARD_MAX_DAYS * 24 * 60 * 60 * 1000) return null;
+  const team = fields.team;
+  if (team === null || typeof team !== 'object' || Array.isArray(team)) return null;
+  const teamFields = team as Record<string, unknown>;
+  const withPrints = ops.includes('up');
+  if (Object.keys(teamFields).sort().join(',') !== (withPrints ? 'fingerprints,project,root,team_id' : 'project,root,team_id')) return null;
+  let fingerprints: Fingerprints = { sections: {}, seats: {} };
+  if (withPrints) {
+    const prints = teamFields.fingerprints;
+    if (prints === null || typeof prints !== 'object' || Array.isArray(prints)) return null;
+    if (Object.keys(prints).sort().join(',') !== 'seats,sections') return null;
+    fingerprints = prints as Fingerprints;
+  }
+  const binding: ClientUpBinding = { project: teamFields.project as string, teamId: teamFields.team_id as string, root: teamFields.root as string, fingerprints };
+  if (clientBundleBindingProblem(binding, ops) !== null) return null;
+  if (typeof envelope.signature !== 'string') return null;
+  if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw), envelope.signature, key)) return null;
+  return {
+    grant: {
+      grantId: fields.grant_id,
+      clientId: fields.client_id,
+      entity: fields.entity,
+      publicKey: fields.public_key,
+      keyId: fields.key_id,
+      keyDir: fields.key_dir,
+      issued: fields.issued,
+      expires: fields.expires,
+      vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION,
+      bundle: fields.bundle,
+      ops,
+      seats,
+      up: {
+        project: binding.project,
+        teamId: binding.teamId,
+        root: binding.root,
+        fingerprints: withPrints ? { sections: { ...fingerprints.sections }, seats: { ...fingerprints.seats } } : { sections: {}, seats: {} },
+      },
+    },
+    signature: envelope.signature,
+  };
+}
+
 // ---- shared helpers ------------------------------------------------------------------------
 
 function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantRecord; signature: string } | null {
@@ -1017,17 +1930,24 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
   const raw = envelope.client_grant;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const fields = raw as Record<string, unknown>;
-  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'team_id', 'recipient_id', 'recipient_seat', 'allowed_ops', 'allowed_roles', 'issued', 'expires', 'vocabulary'];
+  const known = ['grant_id', 'client_id', 'entity', 'public_key', 'key_id', 'key_dir', 'team_id', 'recipient_id', 'recipient_seat', 'team', 'allowed_ops', 'allowed_roles', 'issued', 'expires', 'vocabulary', 'grant_scope', 'issued_by'];
   if (Object.keys(fields).some((key) => !known.includes(key))) return null;
   if (typeof fields.grant_id !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.grant_id)) return null;
-  if (fields.client_id !== CLIENT_SLICE_CLIENT_ID) return null;
-  if (fields.entity !== CLIENT_SLICE_ENTITY) return null;
+  // Which clients and entities are admitted is the entities file's word, checked by the reader
+  // (`clientAdmission`) once the signature holds; here only the shape is held.
+  if (typeof fields.client_id !== 'string' || !CLIENT_WORD_PATTERN.test(fields.client_id)) return null;
+  if (typeof fields.entity !== 'string' || !CLIENT_WORD_PATTERN.test(fields.entity)) return null;
   if (typeof fields.public_key !== 'string' || !CLIENT_PUBLIC_KEY_PATTERN.test(fields.public_key)) return null;
   if (typeof fields.key_id !== 'string' || fields.key_id !== keyIdOf(fields.public_key)) return null;
   if (typeof fields.key_dir !== 'string' || !isAbsolute(fields.key_dir)) return null;
   if (typeof fields.team_id !== 'string' || !CLIENT_TEAM_ID_PATTERN.test(fields.team_id)) return null;
   if (typeof fields.recipient_id !== 'string' || !CLIENT_AGENT_ID_PATTERN.test(fields.recipient_id)) return null;
-  if (fields.recipient_seat !== CLIENT_SLICE_SEAT) return null;
+  // The seat is signed; which seats a client may address is the team file's `clients:` word,
+  // checked again by the resolver at every use. Here only its shape is held.
+  if (typeof fields.recipient_seat !== 'string' || !SEAT_NAME.test(fields.recipient_seat) || fields.recipient_seat.length > 64) return null;
+  // `team` is optional and, when written, names another team of the entity; written equal to the
+  // entity it would be a second spelling of the absent field, so it is refused.
+  if (fields.team !== undefined && (typeof fields.team !== 'string' || !CLIENT_WORD_PATTERN.test(fields.team) || fields.team === fields.entity)) return null;
   if (!Array.isArray(fields.allowed_ops)) return null;
   const ops = fields.allowed_ops as unknown[];
   if (!Array.isArray(fields.allowed_roles) || fields.allowed_roles.length !== 1 || fields.allowed_roles[0] !== 'orchestrator') return null;
@@ -1045,7 +1965,27 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
   } else if (fields.vocabulary === CLIENT_INBOX_VOCABULARY_VERSION) {
     if (ops.length !== 2 || ops[0] !== 'send' || ops[1] !== 'messages') return null;
     allowedOps = ['send', 'messages'];
+  } else if (fields.vocabulary === CLIENT_MASTER_VOCABULARY_VERSION) {
+    // A master grant: exactly `send, grant` or `send, messages, grant`, with a whole scope.
+    const two = ops.length === 2 && ops[0] === 'send' && ops[1] === 'grant';
+    const three = ops.length === 3 && ops[0] === 'send' && ops[1] === 'messages' && ops[2] === 'grant';
+    if (!two && !three) return null;
+    allowedOps = two ? ['send', 'grant'] : ['send', 'messages', 'grant'];
   } else return null;
+  // The scope is present on a master grant and nowhere else; `issued_by` never on a master, so a
+  // sub-grant can never itself carry `grant`.
+  let grantScope: ClientGrantScope | undefined;
+  if (fields.vocabulary === CLIENT_MASTER_VOCABULARY_VERSION) {
+    const scope = fields.grant_scope;
+    if (scope === null || typeof scope !== 'object' || Array.isArray(scope)) return null;
+    const scopeKeys = Object.keys(scope).sort();
+    if (scopeKeys.join(',') !== 'entities,projects,teams') return null;
+    const candidate = scope as ClientGrantScope;
+    if (clientGrantScopeProblem(candidate) !== null) return null;
+    grantScope = { entities: [...candidate.entities], projects: [...candidate.projects], teams: [...candidate.teams] };
+    if (fields.issued_by !== undefined) return null;
+  } else if (fields.grant_scope !== undefined) return null;
+  if (fields.issued_by !== undefined && (typeof fields.issued_by !== 'string' || !CLIENT_GRANT_ID_PATTERN.test(fields.issued_by) || fields.issued_by === fields.grant_id)) return null;
   if (typeof envelope.signature !== 'string') return null;
   if (!verifyDomain(CLIENT_GRANT_DOMAIN, grantPayload(fields.grant_id, raw as Json), envelope.signature, key)) return null;
   return {
@@ -1059,11 +1999,14 @@ function clientGrantFrom(record: unknown, key: KeyObject): { grant: ClientGrantR
       teamId: fields.team_id,
       recipientId: fields.recipient_id,
       recipientSeat: fields.recipient_seat,
+      ...(typeof fields.team === 'string' ? { team: fields.team } : {}),
       allowedOps,
       allowedRoles: ['orchestrator'],
       issued: fields.issued,
       expires: fields.expires,
-      vocabulary: fields.vocabulary as 1 | 2,
+      vocabulary: fields.vocabulary as 1 | 2 | 3,
+      ...(grantScope !== undefined ? { grantScope } : {}),
+      ...(typeof fields.issued_by === 'string' ? { issuedBy: fields.issued_by } : {}),
     },
     signature: envelope.signature,
   };

@@ -22,6 +22,8 @@ export interface Ctx {
   fs?: FsReader;
   /** The project root, when the caller knows it: trust containment is checked against it. */
   rootDir?: string;
+  /** The workspace mode a file that writes none works in: the resolved `workspace-mode` policy. */
+  workspaceMode?: 'worktree' | 'shared';
 }
 
 /** A seat the file marks as its lead — `leads: true` — and the line the mark stands on. */

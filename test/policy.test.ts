@@ -1486,7 +1486,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       expect(await runPolicy(['--file', '.agents/team.yaml'], io1, { home: fx.home, now: () => NOW })).toBe(0);
       expect(io1.out).not.toMatch(/^\s*board\s+-\s+default/m);
       expect(io1.out).not.toMatch(/^\s*review-terms\s+-\s+default/m);
-      expect(io1.out).toContain('  not set: board, review-terms\n');
+      expect(io1.out).toContain('  not set: board, review-terms, vault-root\n');
 
       const jsonIo1 = testIo(fx.root, { kind: 'owner' });
       expect(await runPolicy(['--file', '.agents/team.yaml', '--json'], jsonIo1, { home: fx.home, now: () => NOW })).toBe(0);
@@ -1511,7 +1511,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       const io2 = testIo(fx.root, { kind: 'owner' });
       expect(await runPolicy(['--file', '.agents/team.yaml'], io2, { home: fx.home, now: () => NOW })).toBe(0);
       expect(io2.out).toMatch(/board\s+https:\/\/board\.floor\/beacon\s+project\s+owner\s+-\s+advised/);
-      expect(io2.out).toContain('  not set: review-terms\n');
+      expect(io2.out).toContain('  not set: review-terms, vault-root\n');
     } finally {
       fx.cleanup();
     }

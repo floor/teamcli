@@ -50,6 +50,7 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   answer: 'types an answer into a live herdr pane dialog',
   client: 'writes an Ed25519 client key pair into an owner folder and reads no project state',
   'development-mode': 'reads or writes the machine development-mode record, which is an owner setting with no registered output schema',
+  'owner-seat': 'status reads the owner seat; setup, profile and serve create keys, prompt for Touch ID or start a local page, with no registered output schema',
   broker: 'starts a long-running local credential broker server on .agents/broker.sock and reads macOS Keychain',
   bus: 'starts a long-running local event bus server on .agents/bus.sock',
   daemon: 'starts the one machine daemon, and installs or removes its user service unit through the system service manager',

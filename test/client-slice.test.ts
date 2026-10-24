@@ -435,10 +435,10 @@ describe('client grant and key records', () => {
     const base = { publicKey: f.grant.publicKey, keyId: f.grant.keyId, keyDir: f.keyDir };
     const otherClient = writeClientGrant(f.home, { ...base, clientId: 'other-bot', entity: 'floor' }, { now: NOW, key: f.ownerKey });
     expect(otherClient.ok).toBe(false);
-    if (!otherClient.ok) expect(otherClient.why).toContain('one client principal');
+    if (!otherClient.ok) expect(otherClient.why).toContain('declares no client "other-bot"');
     const otherEntity = writeClientGrant(f.home, { ...base, clientId: CLIENT_ID, entity: 'teamcli' }, { now: NOW, key: f.ownerKey });
     expect(otherEntity.ok).toBe(false);
-    if (!otherEntity.ok) expect(otherEntity.why).toContain('one entity');
+    if (!otherEntity.ok) expect(otherEntity.why).toContain('entity "teamcli" declares no client "grok-bot"');
   });
 
   test('the signed coordinator binding cannot be edited on the stored file', () => {
@@ -579,6 +579,68 @@ describe('client send', () => {
     expect(resolved.ok).toBe(false);
     if (resolved.ok) return;
     expect(resolved.why).toContain(`not recorded on team "${TEAM_ID}"`);
+  });
+
+  test('a --team grant addresses <seat>@<team>: orchestrator@teamcli is admitted, orchestrator@floor refused', async () => {
+    const f = fixture('team');
+    const teamcliRoot = join(f.base, 'teamcli');
+    mkdirSync(teamcliRoot, { recursive: true });
+    const agamemnon = registerAgent(f.home, {
+      name: 'orchestrator',
+      signing: { model: 'M', version: '1', role: 'orchestrator' },
+      lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
+      reach: { team: OTHER_TEAM_ID, seat: 'orchestrator', session: 'teamcli', pane: 'w2:p1', address: join(f.base, 'y.sock') },
+      mcp: [], skills: [], lifecycle: 'running', by: 'test',
+    });
+    const teams = join(f.home, '.config', 'team', 'teams.yaml');
+    const text = readFileSync(teams, 'utf8');
+    const at = text.indexOf(`"${OTHER_TEAM_ID}":`);
+    writeFileSync(teams, text.slice(0, at) + text.slice(at).replace(`agent: ${f.grant.recipientId}`, `agent: ${agamemnon.id}`));
+    writeFileSync(join(f.home, '.config', 'team', 'entities.yaml'), `floor:\n  roots:\n    - ${f.teamRoot}\n    - ${teamcliRoot}\n`);
+    const pair = newClientKeyPair();
+    const keyDir = join(clientKeyDir(f.home, CLIENT_ID), '..', 'grok-bot-teamcli');
+    const keys = writeClientKeyFiles(keyDir, pair);
+    if (!keys.ok) throw new Error(keys.why);
+    const issued = writeClientGrant(
+      f.home,
+      { clientId: CLIENT_ID, entity: 'floor', team: 'teamcli', publicKey: pair.publicKey, keyId: pair.keyId, keyDir },
+      { now: NOW, key: f.ownerKey },
+    );
+    if (!issued.ok) throw new Error(issued.why);
+    expect(issued.grant.team).toBe('teamcli');
+    expect(issued.grant.teamId).toBe(OTHER_TEAM_ID);
+    expect(issued.grant.recipientId).toBe(agamemnon.id);
+    expect(JSON.parse(readFileSync(issued.path, 'utf8')).client_grant.team).toBe('teamcli');
+    const ok = resolveClientTarget(f.home, 'orchestrator@teamcli', issued.grant);
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.target.recipientId).toBe(agamemnon.id);
+    const floor = resolveClientTarget(f.home, 'orchestrator@floor', issued.grant);
+    expect(floor.ok).toBe(false);
+    if (!floor.ok) expect(floor.why).toContain('addresses only orchestrator@teamcli');
+    const io = capture(f);
+    const words = ['--client', issued.path, '--key', join(keyDir, 'client.key'), 'orchestrator@teamcli', 'hello'];
+    expect(await sendClient(f, words, io.io, { sendId: 'drop-t' })).toBe(0);
+    expect(io.out()).toContain('sent: orchestrator@teamcli (drop drop-t)');
+    expect(existsSync(join(teamcliRoot, '.agents', 'send-drops', 'teamcli', 'orchestrator', 'drop-t'))).toBe(true);
+    const refused = capture(f);
+    expect(await sendClient(f, [...words.slice(0, 4), 'orchestrator@floor', 'hello'], refused.io, { sendId: 'drop-u' })).toBe(1);
+    // The legacy grant, with no team field, still reaches the floor orchestrator.
+    expect(JSON.parse(readFileSync(f.grantPath, 'utf8')).client_grant.team).toBeUndefined();
+    const legacy = resolveClientTarget(f.home, 'orchestrator@floor', f.grant);
+    expect(legacy.ok).toBe(true);
+    if (legacy.ok) expect(legacy.target.teamId).toBe(TEAM_ID);
+    expect(resolveClientTarget(f.home, 'orchestrator@teamcli', f.grant).ok).toBe(false);
+  });
+
+  test('a stored team field equal to the entity, or edited onto a legacy grant, does not verify', () => {
+    const f = fixture('team-tamper');
+    for (const team of ['floor', 'teamcli']) {
+      const record = JSON.parse(readFileSync(f.grantPath, 'utf8')) as { client_grant: Record<string, unknown>; signature: string };
+      record.client_grant.team = team;
+      const copy = join(f.base, `team-${team}.json`);
+      writeFileSync(copy, JSON.stringify(record));
+      expect(readClientGrantFile(f.home, copy).ok).toBe(false);
+    }
   });
 
   test('an owner caller on a TTY still writes the client drop, never an owner send', async () => {

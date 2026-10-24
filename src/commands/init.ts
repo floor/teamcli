@@ -18,6 +18,10 @@ import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
+import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { ruleRelaxed } from '../security/profile.ts';
+import { admitTeamCreate, approveTeamCreate, createTeamCreateRequest, listApprovalModes, listTeamCreateRules, revokeTeamCreateRule, setApprovalMode } from '../client/team-create.ts';
+import { assertionFile } from '../client-cli.ts';
 
 // What git must never pick up: the file and the runtime files beside it — the start files of
 // the services included: the socket and its lock, the lock's takeover claim (a killed
@@ -174,6 +178,13 @@ export const init: Command = (argv, io) => runInit(argv, io, undefined, undefine
 export default init;
 
 export const USAGE = `Usage: team init [--restore] [--json]
+       team init --request [--json]
+       team init --execute <request-id> [--json]
+       team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
+       team init --approvals [--json]
+       team init --revoke-approval <rule-id> [--json]
+       team init --approval-mode <none|always-rule|per-action> --scope <folder> [--signer <name>] [--assertion <file>] [--json]
+       team init --approval-modes [--json]
 
 Exits 0 when the team file is written or restored, 1 when init is refused, 2 when the invocation can't be read or this folder is not a git repository.
 `;
@@ -187,13 +198,14 @@ export async function runInit(
   io: Io,
   home?: string,
   readStanding?: (root: string) => Standing,
-  sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date; registryHome?: string } = doctorSources,
+  sources: Pick<DoctorSources, 'loggedIn'> & { now?: () => Date; registryHome?: string; ownerSeatStore?: OwnerSeatKeyStore } = doctorSources,
 ): Promise<number> {
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, [], ['restore', 'json']);
-  if (args.error || args.rest.length) {
+  const args = readArgs(argv, ['execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope'], ['restore', 'json', 'request', 'approvals', 'approval-modes']);
+  const approving = args.values['approve-as-owner-seat'] !== undefined;
+  if (args.error || (args.rest.length && !(approving && args.rest.length === 1))) {
     refuse(io, json, 'init', {
       id: 'init.invocation',
       message: args.error ?? `unexpected "${args.rest[0]}"`,
@@ -203,17 +215,92 @@ export async function runInit(
     // exit: init.invocation
     return 2;
   }
+  // Owner-seat approval of a team creation (src/client/team-create.ts). Each of these forms runs
+  // without the owner terminal: the authority is an owner signer's signature, never the caller.
+  const actionHome = home ?? homedir();
+  const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
+  const now = sources.now?.() ?? new Date();
+  const actionRefusal = (message: string) => refuse(io, json, 'init', { id: 'init.approval-refused', message, repair: null });
+  const actionDone = (status: 'requested' | 'answered', summary: string, extra: Record<string, unknown>) => {
+    if (json) writeJson(io, 'team.init', { format: 1 as const, dry_run: false, status, action_summary: summary, file: TEAM_FILE, restored: false, ...extra } as never);
+    else io.stdout(`${summary}\n${Object.entries(extra).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')}\n`);
+  };
+  let actionOutcome: 'done' | 'refused' | null = null;
+  if (args.flags.has('request')) {
+    const root = findRoot(io.cwd);
+    if (root === null) actionRefusal('not inside a git repository');
+    else if (existsSync(join(root, TEAM_FILE))) actionRefusal(`${TEAM_FILE} exists already`);
+    else {
+      const made = createTeamCreateRequest(actionHome, root, git(root, 'rev-parse', 'HEAD'), now);
+      if (!made.ok) actionRefusal(made.why);
+      else actionDone('requested', `team init: request recorded`, { request_id: made.record.request_id, text: made.text, ...(made.inbox !== null ? { inbox: made.inbox } : {}) });
+      actionOutcome = made.ok ? 'done' : 'refused';
+    }
+    actionOutcome ??= 'refused';
+  } else if (approving) {
+    const assertion = assertionFile(args.values.assertion, io.cwd);
+    const answered = approveTeamCreate(actionHome, args.values['approve-as-owner-seat']!, args.rest[0]!, store, now, {
+      ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
+      ...(assertion !== undefined ? { assertion } : {}),
+    });
+    if (!answered.ok) actionRefusal(answered.why);
+    else actionDone('answered', `team init: owner seat answered ${answered.choice}`, { request_id: args.values['approve-as-owner-seat']!, ...(answered.ruleId !== undefined ? { rule_id: answered.ruleId } : {}) });
+    actionOutcome = answered.ok ? 'done' : 'refused';
+  } else if (args.flags.has('approvals')) {
+    const listed = listTeamCreateRules(actionHome, store, now);
+    actionDone('answered', 'team init: team-create approval rules', { rules: listed.rules, ignored: listed.ignored });
+    actionOutcome = 'done';
+  } else if (args.values['approval-mode'] !== undefined) {
+    // Signed once by an owner signer at setup; never by the requester at action time.
+    const assertion = assertionFile(args.values.assertion, io.cwd);
+    const scope = args.values.scope;
+    const set = scope === undefined
+      ? { ok: false as const, why: '--approval-mode needs --scope <folder>' }
+      : setApprovalMode(actionHome, 'team-create', args.values['approval-mode'], resolve(io.cwd, scope), store, now, {
+        ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
+        ...(assertion !== undefined ? { assertion } : {}),
+      });
+    if (!set.ok) actionRefusal(set.why);
+    else actionDone('answered', `team init: approval mode for team-create is ${args.values['approval-mode']}`, { ...(set.modeId !== undefined ? { mode_id: set.modeId } : {}), revoked: set.revoked });
+    actionOutcome = set.ok ? 'done' : 'refused';
+  } else if (args.flags.has('approval-modes')) {
+    const listed = listApprovalModes(actionHome, store, now);
+    actionDone('answered', 'team init: approval modes', { modes: listed.modes, ignored: listed.ignored });
+    actionOutcome = 'done';
+  } else if (args.values['revoke-approval'] !== undefined) {
+    const revoked = revokeTeamCreateRule(actionHome, args.values['revoke-approval']);
+    if (!revoked.ok) actionRefusal(revoked.why);
+    else actionDone('answered', 'team init: approval rule revoked', { rule_id: args.values['revoke-approval'] });
+    actionOutcome = revoked.ok ? 'done' : 'refused';
+  }
+  let seatApproved = false;
+  if (actionOutcome === null && args.values.execute !== undefined) {
+    const root = findRoot(io.cwd);
+    const admitted = root === null ? { ok: false as const, why: 'not inside a git repository' } : admitTeamCreate(actionHome, args.values.execute, root, store, now);
+    if (!admitted.ok) {
+      actionRefusal(admitted.why);
+      actionOutcome = 'refused';
+    } else seatApproved = true;
+  }
+  if (actionOutcome === 'done') {
+    // exit: init.approval
+    return 0;
+  }
+  if (actionOutcome === 'refused') {
+    // exit: init.approval-refused
+    return 1;
+  }
   const caller = callerOf(io);
   let foundRoot: string | null | undefined;
   const rootOf = () => (foundRoot === undefined ? (foundRoot = findRoot(io.cwd)) : foundRoot);
-  const createGranted =
+  const createGranted = seatApproved || (
     !isOwner(caller) &&
     !args.flags.has('restore') &&
     readEntityCreateGrants(home).length > 0 &&
     (() => {
       const candidateRoot = rootOf();
       return candidateRoot !== null && entityGrantAdmits(candidateRoot, io, { home, now: sources.now?.(), cwd: io.cwd });
-    })();
+    })());
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none.
   const detached = detachedRefusal(caller);
@@ -252,7 +339,8 @@ export async function runInit(
   const notes: string[] = [];
   if (!isOwner(caller) && !createGranted) {
     const ownerLine = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}${devModeExpiryNote(dev)}`;
-    const folded = devModeCallerGate(dev, ownerLine);
+    const folded = devModeCallerGate(dev, ownerLine)
+      ?? (ruleRelaxed(actionHome, 'gate.owner-terminal', store, { now, what: `init by ${describeCaller(caller)}` }) ? `owner terminal gate relaxed by the owner-signed security profile (rule gate.owner-terminal); this call is ${describeCaller(caller)}` : null);
     if (folded === null) {
       refuse(io, json, 'init', {
         id: 'init.not-owner',

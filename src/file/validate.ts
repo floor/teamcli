@@ -18,7 +18,7 @@ export { defaultBudgets } from './sections/budgets.ts';
 
 // Validates the text of a team file. Every problem is collected, each with its line.
 // `root` is the project root when the caller knows it: trust entries are then checked against it.
-export function validateTeamFile(text: string, options: { home?: string; fs?: FsReader; root?: string } = {}): ValidateResult {
+export function validateTeamFile(text: string, options: { home?: string; fs?: FsReader; root?: string; workspaceMode?: 'worktree' | 'shared' } = {}): ValidateResult {
   let root: YamlNode;
   try {
     root = parseYaml(text);
@@ -30,7 +30,7 @@ export function validateTeamFile(text: string, options: { home?: string; fs?: Fs
   const secrets = findSecrets(root, options.fs);
   check.problems.push(...secrets.refused);
   check.warnings.push(...secrets.warned);
-  const team = readTeam(root, check, options.home, options.fs, options.root);
+  const team = readTeam(root, check, options.home, options.fs, options.root, options.workspaceMode);
   if (check.problems.length || !team) {
     return { ok: false, errors: check.problems.sort((a, b) => a.line - b.line) };
   }
@@ -47,7 +47,7 @@ export function validateTeamFile(text: string, options: { home?: string; fs?: Fs
   };
 }
 
-function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, rootDir?: string): TeamFile | null {
+function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, rootDir?: string, workspaceMode?: 'worktree' | 'shared'): TeamFile | null {
   if (root.kind !== 'map') {
     check.fail(root.line, 'the file must be a map of fields, starting with "format: 1"');
     return null;
@@ -55,7 +55,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
   // `watch.checks` names a line inside `watch`, not a top-level key, so it is no field of the file.
   const top = check.fields(root, 'the file', SECTIONS.filter((section) => !section.name.includes('.')).map((section) => section.key ?? section.name));
 
-  const ctx: Ctx = { check, root, top, broken: new Set(), leads: [], values: new Map(), home, fs, rootDir };
+  const ctx: Ctx = { check, root, top, broken: new Set(), leads: [], values: new Map(), home, fs, rootDir, ...(workspaceMode !== undefined ? { workspaceMode } : {}) };
 
   // One wave over the list at a time: a section runs once every section it reads (`after`) has
   // run, so the code moved into the modules reports in the order it reported when it lived here.
@@ -106,6 +106,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     tasks: valueOf<TeamFile['tasks']>(ctx, 'tasks'),
     tempo: valueOf<TeamFile['tempo']>(ctx, 'tempo'),
     installer: valueOf<string | null>(ctx, 'installer'),
+    clients: valueOf<TeamFile['clients']>(ctx, 'clients'),
     grant: valueOf<TeamFile['grant']>(ctx, 'grant'),
     delegates: valueOf<TeamFile['delegates']>(ctx, 'delegates'),
     seats: seats as Seat[],

@@ -44,7 +44,9 @@
       "type": "string",
       "enum": [
         "wrote",
-        "restored"
+        "restored",
+        "requested",
+        "answered"
       ]
     },
     "action_summary": {
@@ -110,6 +112,31 @@
     },
     "restored": {
       "type": "boolean"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "text": {
+      "type": "string"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "rule_id": {
+      "type": "string"
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "ignored": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "notes": {
       "type": "array",

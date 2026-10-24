@@ -17,6 +17,7 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 ## Synopsis
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
+    team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]
 
 ## Flags
 
@@ -27,6 +28,9 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it; a seat this run asks and cannot stop is closed in the same run |
 | `--session` | `<name>` | the herdr session to stop, instead of `team.session`; the owner's alone — a delegate is refused it by the gate |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone — a delegate is refused it by the gate |
+| `--client` | `<grant-file>` | the client form: an owner-signed down grant for one team, see [A client's down grant](#a-clients-down-grant) |
+| `--key` | `<client-key>` | the client's private key file, which proves the client holds the key the grant names; required with `--client`, refused without it |
+| `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--json` | — | one `team.down` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -38,6 +42,61 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 | a run with no terminal | nothing, including `--dry-run`: ``team down: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | stop the other seats; never the orchestrator's or the operator's own seat |
 | the approved delegate, when the file's `delegates` section names it | stop the whole team, the orchestrator's and the operator's seats included; never `--abandon`, `--session` or `--file` |
+| a client with no terminal that holds an owner-signed down grant for this team | stop the whole team the grant names, with `--client`; never `--abandon`, `--session` or `--file` |
+
+## A client's down grant
+
+A client with no terminal that the owner signed a down grant for (`team grant --client <id> --team
+<team> --down`, or `--up --down` for one record that carries both; see
+[team grant](grant.md#an-up-or-down-grant)) stops that one team with:
+
+    team down --client ~/.config/team/grants/cg_<24 hex>.json --key ~/.config/team-client/<id>/client.key
+
+Run it in the team's folder, or from anywhere with `--team <team>`. `--file`, `--session` and
+`--abandon` are the owner's and are refused with `--client`; the run is bound to the folder the
+owner signed. A folder of another team is refused; so is a team of the same name at another folder.
+Before any step the run verifies, and refuses with the reason and the owner's next step when any
+check fails:
+
+1. the grant file is the owner-signed record in the grants folder, byte for byte, and its ops
+   include `down` (a send grant is refused here, and so is an up-only grant, with the request that
+   would add `down`);
+2. it is not expired and not revoked;
+3. the key file proves identity: the key is the one the grant names;
+4. the team, its registry id and its real folder are the ones the grant binds, and the team's entity
+   is still compatible with the grant's.
+
+**A changed team file does not block `down`.** The up grant binds the fingerprints of the team file
+the owner approved, so a new seat needs a new signature before the client can launch it. A stop is
+different: the team has to be stoppable after its file changed, so `down` never compares
+fingerprints. It also stays allowed when the folder's team file no longer loads, as long as the run
+is made in the signed folder or names the team; the run's own file read then says what is wrong.
+The identity checks above are never relaxed.
+
+Then it runs as the owner's own stop of the whole team, with no terminal: it never prompts, and
+closes the same seats the owner's `team down` would, the orchestrator's and the operator's seats
+included. It reaches no other session, file, team or command, and it cannot abandon a seat.
+`--dry-run` verifies the grant and prints the plan, and writes nothing. A team that is already
+stopped answers `nothing to stop`, as for the owner.
+
+A real run writes one line to the team's own log (`.agents/team.log`) once the grant verified:
+
+    client-down-authorized: grant <cg_id> client <client-id> team <project> root <root> request <rid>
+
+A refusal after the client's key proved identity writes `client-down-refused: grant <cg_id>:
+<reason>`. A refusal before it (a wrong key, an unreadable grant) writes nothing, so a stranger
+cannot fill the log. A run re-reads the grant under its lock before the first step, so a revocation
+in the middle of a run ends it before anything is closed.
+
+The `down.detached` refusal of a run with no terminal is unchanged for every caller that does not
+present a grant; `--client` is the only way a caller with no terminal passes it. The grant is for
+one team: a client that launched several teams needs a grant for each of them today.
+
+
+A bundle grant that carries `down` (`--bundle operator`, see
+[Client grant bundles](../concepts/client-grant-bundles.md)) runs the same `team down --client`:
+the folder, registry id and project name are checked, the team file is not, and the audit line is
+`client-down-authorized`. An `observer` bundle does not carry `down` and is refused.
 
 ## Output and exit codes
 
@@ -47,6 +106,7 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 | a seat was left running — busy, blocked, at its own exit question, on an unreadable screen | its `  skip` line, and the last line naming it | 0 |
 | there was nothing to stop | `session <session> is not running: nothing to stop` | 0 |
 | `--dry-run` | the plan; `dry run: nothing was run` | the refusal's own exit, else 0 |
+| the down grant, or the client run it admits, does not verify (`down.client-refused`) | `team down: <reason and the owner's next step>`; nothing ran | 1 |
 | the run was refused, or a step was held | `team down: <reason>` for a refusal; a held step ends on its own line instead, `<seat>: left out: <reason>` | 1 |
 | the invocation, the team file or herdr can't be read | `team down: <problem>` and the usage | 2 |
 

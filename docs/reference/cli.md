@@ -717,6 +717,7 @@ Hidden: no
 Usage:
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
+    team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]
 
 ### Who may run it
 
@@ -727,11 +728,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--abandon` | no | no | no |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `--wait` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -807,7 +811,25 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> [--expires <ISO>] [--inbox] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> --request [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
+    team grant --execute <request-id> [--json]
+    team grant --answer <request-id> <oui|always|non> [--json]
+    team grant --deny <request-id> [--json]
+    team grant --add-owner-seat --team <team> --signer <name> [--entity <entity>] [--json]
+    team grant --add-owner-signer --signer <name> --type <mac-keystore|webauthn> [--signer-public-key <hex>] [--credential-id <id>] [--rp-id <id>] [--json]
+    team grant --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--at <ISO>] [--json]
+    team grant --owner-seat-inbox [--json]
+    team grant --approvals [--json]
+    team grant --revoke-approval <rule-id> [--json]
+    team grant --client-request --via <master-grant-file> --key <client-key> --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO>] [--inbox] [--json]
 
 ### Who may run it
 
@@ -817,17 +839,48 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--add-owner-seat` | no | no | no |
+| `--add-owner-signer` | no | no | no |
+| `--allow-grant` | no | no | no |
+| `--answer` | yes | no | no |
+| `--approvals` | no | no | no |
+| `--approve` | yes | no | no |
+| `--approve-as-owner-seat` | yes | no | no |
+| `--assertion` | yes | no | no |
+| `--at` | yes | no | no |
+| `--bundle` | yes | no | no |
 | `--capabilities` | yes | no | no |
 | `--client` | yes | no | no |
+| `--client-request` | no | no | no |
+| `--code` | yes | no | no |
+| `--credential-id` | yes | no | no |
+| `--deny` | yes | no | no |
+| `--down` | no | no | no |
 | `--dry-run` | no | no | no |
 | `--entity` | yes | no | no |
+| `--execute` | yes | no | no |
 | `--expires` | yes | no | no |
+| `--grant-entity` | yes | no | no |
+| `--grant-project` | yes | no | no |
+| `--grant-team` | yes | no | no |
 | `--help` | no | no | no |
 | `--inbox` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--name` | yes | no | no |
+| `--owner-seat-inbox` | no | no | no |
 | `--public-key` | yes | no | no |
+| `--request` | no | no | no |
+| `--revoke-approval` | yes | no | no |
+| `--rp-id` | yes | no | no |
 | `--scope` | yes | no | no |
+| `--seat` | yes | no | no |
+| `--signer` | yes | no | no |
+| `--signer-public-key` | yes | no | no |
+| `--team` | yes | no | no |
+| `--type` | yes | no | no |
+| `--up` | no | no | no |
+| `--via` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -836,6 +889,7 @@ Usage:
 | --- | --- | --- |
 | `seat` | yes | no |
 | `seat\|@team` | yes | no |
+| `oui\|always\|non` | yes | no |
 
 ## `help`
 
@@ -893,6 +947,13 @@ Hidden: no
 Usage:
 
     team init [--restore] [--json]
+    team init --request [--json]
+    team init --execute <request-id> [--json]
+    team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
+    team init --approvals [--json]
+    team init --revoke-approval <rule-id> [--json]
+    team init --approval-mode <none|always-rule|per-action> --scope <folder> [--signer <name>] [--assertion <file>] [--json]
+    team init --approval-modes [--json]
 
 ### Who may run it
 
@@ -902,14 +963,26 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval-mode` | yes | no | no |
+| `--approval-modes` | no | no | no |
+| `--approvals` | no | no | no |
+| `--approve-as-owner-seat` | yes | no | no |
+| `--assertion` | yes | no | no |
+| `--execute` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--request` | no | no | no |
 | `--restore` | no | no | no |
+| `--revoke-approval` | yes | no | no |
+| `--scope` | yes | no | no |
+| `--signer` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
 
-None.
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `oui\|always\|non` | yes | no |
 
 ## `issues`
 
@@ -1148,6 +1221,139 @@ Usage:
 
 None.
 
+## `owner-seat`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat [--json]
+    team owner-seat status [--json]
+    team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
+    team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
+    team owner-seat serve [--port <port>]
+
+### Who may run it
+
+`any-caller` — it reads the owner seat and the security profile; it changes nothing
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `profile`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat profile <strict|relaxed|dev> [--days <1-30>] [--reason <text>] [--signer <name>]
+
+#### Who may run it
+
+`any-caller` — an agent may propose a security profile; it counts only once signed by an owner-seat signer (Touch ID or passkey), with an expiry, and is audited
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--days` | yes | no | no |
+| `--help` | no | no | no |
+| `--reason` | yes | no | no |
+| `--signer` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `strict\|relaxed\|dev` | no | no |
+
+### `serve`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat serve [--port <port>]
+
+#### Who may run it
+
+`any-caller` — it serves the owner page on 127.0.0.1 behind a per-run token; every act on it needs an owner-device passkey or Touch ID signature
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--port` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `setup`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat setup --team <team> --signer <name> [--entity <entity>] [--owner-signers <a,b>] [--grant-emission <value>] [--policy-entity <entity>]
+
+#### Who may run it
+
+`any-caller` — an agent may start it, but nothing is registered until the owner confirms with Touch ID on the Secure Enclave key it creates; the owner-device signature is the authority
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--entity` | yes | no | no |
+| `--grant-emission` | yes | no | no |
+| `--help` | no | no | no |
+| `--owner-signers` | yes | no | no |
+| `--policy-entity` | yes | no | no |
+| `--signer` | yes | no | no |
+| `--team` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `status`
+
+Hidden: no
+
+Usage:
+
+    team owner-seat status [--json]
+
+#### Who may run it
+
+`any-caller` — it reads the owner seat and the security profile; it changes nothing
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `pause`
 
 Hidden: no
@@ -1223,6 +1429,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--owner-device` | no | no | yes |
 | `--seat` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2376,6 +2583,7 @@ Hidden: no
 Usage:
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+    team status --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 ### Who may run it
 
@@ -2386,11 +2594,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
+| `--client` | yes | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--project` | yes | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2572,6 +2783,7 @@ Hidden: no
 Usage:
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
+    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]
 
 ### Who may run it
 
@@ -2581,12 +2793,15 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |
+| `--team` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

@@ -8,7 +8,25 @@
 
 import { createHash, createPrivateKey, type KeyObject } from 'node:crypto';
 import { randomBytes } from 'node:crypto';
-import { CLIENT_GRANT_ID_PATTERN, CLIENT_SLICE_CLIENT_ID, CLIENT_SLICE_ENTITY, CLIENT_SLICE_SEAT, canonicalClientGrant, clientRevocations, publicKeyObject, readClientGrantFile, readClientPrivateKey, type ClientGrantRecord } from './records.ts';
+import {
+  CLIENT_EXPIRY_MAX_MS,
+  CLIENT_GRANT_ID_PATTERN,
+  CLIENT_MASTER_VOCABULARY_VERSION,
+  CLIENT_PUBLIC_KEY_PATTERN,
+  activeClientGrant,
+  canonicalClientGrant,
+  clientAddressOf,
+  clientAdmission,
+  clientGrantScopeAdmits,
+  clientMasterRevocation,
+  clientRevocations,
+  publicKeyObject,
+  readClientGrantFile,
+  readClientPrivateKey,
+  resolveEntityCoordinator,
+  type ClientGrantRecord,
+} from './records.ts';
+import { ofTeam } from '../registry/projects.ts';
 import { signDomain, verifyDomain, type Json } from '../store/keys.ts';
 
 /** The domain tag a client send request signature carries. */
@@ -161,12 +179,8 @@ export function verifyClientRequest(input: {
   const presented = readClientGrantFile(input.home, input.grantFile);
   if (!presented.ok) return { ok: false, why: presented.why };
   const grant = presented.grant;
-  if (grant.clientId !== CLIENT_SLICE_CLIENT_ID) {
-    return { ok: false, why: `this build admits one client principal, "${CLIENT_SLICE_CLIENT_ID}"` };
-  }
-  if (grant.entity !== CLIENT_SLICE_ENTITY) {
-    return { ok: false, why: `this build admits one entity, "${CLIENT_SLICE_ENTITY}"` };
-  }
+  const admitted = clientAdmission(input.home, grant.clientId, grant.entity);
+  if (!admitted.ok) return { ok: false, why: admitted.why };
   if (!grant.allowedOps.includes('send')) return { ok: false, why: `the grant ${grant.grantId} does not admit send` };
   if (grant.allowedRoles[0] !== 'orchestrator') {
     return { ok: false, why: `the grant ${grant.grantId} does not admit the orchestrator role` };
@@ -174,13 +188,13 @@ export function verifyClientRequest(input: {
   if (grant.entity !== input.target.entity) {
     return { ok: false, why: `the grant ${grant.grantId} is for entity "${grant.entity}", not "${input.target.entity}"` };
   }
-  if (input.target.recipientSeat.toLowerCase() !== CLIENT_SLICE_SEAT) {
-    return { ok: false, why: `a client grant sends only to ${CLIENT_SLICE_SEAT}@${CLIENT_SLICE_ENTITY}` };
+  if (input.target.recipientSeat !== grant.recipientSeat) {
+    return { ok: false, why: `a client grant sends only to ${clientAddressOf(grant)}` };
   }
   // The grant's signed recipient is the one the request may name: resolving some other agent now
   // does not change what the signature binds.
   if (input.target.recipientId !== grant.recipientId || input.target.recipientSeat !== grant.recipientSeat) {
-    return { ok: false, why: `the resolved ${CLIENT_SLICE_SEAT} is not the recipient the grant ${grant.grantId} signs` };
+    return { ok: false, why: `the resolved ${grant.recipientSeat} is not the recipient the grant ${grant.grantId} signs` };
   }
 
   const key = readClientPrivateKey(input.home, input.keyFile);
@@ -235,6 +249,8 @@ export function verifyClientRequest(input: {
   if (revocation.records[0] !== undefined) {
     return { ok: false, why: `the grant ${grant.grantId} was revoked at ${revocation.records[0].at}` };
   }
+  const masterRevoked = clientMasterRevocation(input.home, grant);
+  if (masterRevoked !== null) return { ok: false, why: masterRevoked };
 
   return { ok: true, grant, request, signature };
 }
@@ -260,12 +276,8 @@ export function verifyClientRead(input: {
   const presented = readClientGrantFile(input.home, input.grantFile);
   if (!presented.ok) return { ok: false, why: presented.why, kind: 'refused' };
   const grant = presented.grant;
-  if (grant.clientId !== CLIENT_SLICE_CLIENT_ID) {
-    return { ok: false, why: `this build admits one client principal, "${CLIENT_SLICE_CLIENT_ID}"`, kind: 'refused' };
-  }
-  if (grant.entity !== CLIENT_SLICE_ENTITY) {
-    return { ok: false, why: `this build admits one entity, "${CLIENT_SLICE_ENTITY}"`, kind: 'refused' };
-  }
+  const admitted = clientAdmission(input.home, grant.clientId, grant.entity);
+  if (!admitted.ok) return { ok: false, why: admitted.why, kind: 'refused' };
   if (!grant.allowedOps.includes('messages')) {
     return {
       ok: false,
@@ -341,6 +353,174 @@ export function verifyClientRead(input: {
   if (revocation.records[0] !== undefined) {
     return { ok: false, why: `the grant ${grant.grantId} was revoked at ${revocation.records[0].at}`, kind: 'refused' };
   }
+  const masterRevoked = clientMasterRevocation(input.home, grant);
+  if (masterRevoked !== null) return { ok: false, why: masterRevoked, kind: 'refused' };
 
   return { ok: true, grant, request, signature };
+}
+
+// ---- sub-grant requests under a master grant ----------------------------------------------
+
+/** The domain tag a sub-grant request carries: never a send, a read or an owner signature. */
+export const CLIENT_GRANT_REQUEST_DOMAIN = 'team-client-grant-request-v1\n';
+
+/** One signed sub-grant request, exactly the fields the master key's signature covers. */
+export type ClientGrantIssueRequest = {
+  v: 1;
+  op: 'grant';
+  master_grant_id: string;
+  master_key_id: string;
+  client_id: string;
+  entity: string;
+  team: string | null;
+  seat: string | null;
+  public_key: string;
+  key_id: string;
+  key_dir: string;
+  expires: string | null;
+  inbox: boolean;
+  request_id: string;
+  issued_at: string;
+};
+
+export function clientGrantIssueRequestBody(request: ClientGrantIssueRequest): Json {
+  return { ...request };
+}
+
+export function signClientGrantIssueRequest(request: ClientGrantIssueRequest, privatePem: string): string {
+  return signDomain(CLIENT_GRANT_REQUEST_DOMAIN, clientGrantIssueRequestBody(request), createPrivateKey(privatePem));
+}
+
+export function clientGrantIssueRequestVerifies(request: ClientGrantIssueRequest, signature: string, publicKey: KeyObject): boolean {
+  return verifyDomain(CLIENT_GRANT_REQUEST_DOMAIN, clientGrantIssueRequestBody(request), signature, publicKey);
+}
+
+/** What an admitted request resolves to: the master in force and the sub-grant's exact expiry. */
+export type ClientGrantIssueAdmission =
+  | { ok: true; master: ClientGrantRecord; request: ClientGrantIssueRequest; signature: string; expires: string }
+  | { ok: false; why: string };
+
+/**
+ * Admits one signed sub-grant request against a presented master grant. Every invariant the owner
+ * set is checked here, in order: the signature verifies under the master's own app key; the master
+ * is a vocabulary-3 grant carrying `grant`, canonical, unexpired and unrevoked; the request names
+ * that master and its key; the requested ops stay inside the master's, minus `grant` (a sub-grant
+ * never carries `grant`); the target entity, team and project are inside the master's scope (an
+ * empty scope admits nothing); and the sub-grant's expiry is at most the master's — absent, it is
+ * clamped to the earlier of seven days and the master's expiry. Seat admission is the issuer's
+ * (`planClientGrant`), the same as on the owner path.
+ */
+export function admitClientGrantIssue(
+  home: string,
+  presented: { grant: ClientGrantRecord; signature: string },
+  request: ClientGrantIssueRequest,
+  signature: string,
+  now: Date,
+): ClientGrantIssueAdmission {
+  const master = presented.grant;
+  const publicKey = publicKeyObject(master.publicKey);
+  if (publicKey === null || !clientGrantIssueRequestVerifies(request, signature, publicKey)) {
+    return { ok: false, why: "the grant request signature does not verify under the master grant's app key" };
+  }
+  if (request.v !== 1 || request.op !== 'grant') return { ok: false, why: 'the grant request is not a version-1 grant request' };
+  if (request.master_grant_id !== master.grantId || request.master_key_id !== master.keyId) {
+    return { ok: false, why: `the grant request does not name the master grant ${master.grantId} and its key` };
+  }
+  if (master.vocabulary !== CLIENT_MASTER_VOCABULARY_VERSION || !master.allowedOps.includes('grant') || master.grantScope === undefined) {
+    return { ok: false, why: `the grant ${master.grantId} does not carry grant: only an owner-issued master grant issues sub-grants` };
+  }
+  const active = activeClientGrant(home, presented, now);
+  if (!active.ok) return { ok: false, why: active.why };
+  if (request.inbox && !master.allowedOps.includes('messages')) {
+    return { ok: false, why: `the master grant ${master.grantId} does not carry messages; a sub-grant never widens it with --inbox` };
+  }
+  if (!CLIENT_PUBLIC_KEY_PATTERN.test(request.public_key)) return { ok: false, why: 'the requested public key is not 64 hex' };
+  const team = request.team ?? request.entity;
+  const resolved = resolveEntityCoordinator(home, request.entity, {
+    clientId: request.client_id,
+    ...(request.team !== null && request.team !== request.entity ? { team: request.team } : {}),
+    ...(request.seat !== null ? { seat: request.seat } : {}),
+  });
+  if (!resolved.ok) return { ok: false, why: resolved.why };
+  let project: string;
+  try {
+    project = ofTeam(home, resolved.coordinator.teamId)?.id ?? team;
+  } catch {
+    return { ok: false, why: 'the project registry cannot be read' };
+  }
+  if (!clientGrantScopeAdmits(master, { entity: request.entity, team, project })) {
+    return { ok: false, why: `${request.seat ?? 'orchestrator'}@${team} (entity ${request.entity}, project ${project}) is outside the master grant ${master.grantId}'s scope` };
+  }
+  const masterExpires = Date.parse(master.expires);
+  const nowMs = now.getTime();
+  let expires: string;
+  if (request.expires === null) {
+    expires = new Date(Math.min(nowMs + CLIENT_EXPIRY_MAX_MS, masterExpires)).toISOString();
+  } else {
+    const wanted = Date.parse(request.expires);
+    if (!Number.isFinite(wanted)) return { ok: false, why: `"${request.expires}" is not a readable expiry timestamp` };
+    if (wanted > masterExpires) {
+      return { ok: false, why: `the expiry ${request.expires} is past the master grant's ${master.expires}: a sub-grant never outlives its master` };
+    }
+    expires = request.expires;
+  }
+  return { ok: true, master, request, signature, expires };
+}
+
+/**
+ * Builds, signs and admits one sub-grant request from the invocation: the master file verifies
+ * under the owner key; the key file passes its hygiene rules and is the master's own key; the
+ * request is signed with it and then admitted ({@link admitClientGrantIssue}).
+ */
+export function verifyClientGrantIssue(input: {
+  home: string;
+  masterFile: string;
+  keyFile: string;
+  clientId: string;
+  entity: string;
+  team: string | null;
+  seat: string | null;
+  publicKey: string;
+  keyId: string;
+  keyDir: string;
+  expires: string | null;
+  inbox: boolean;
+  now: Date;
+  requestId?: string;
+}): ClientGrantIssueAdmission {
+  const presented = readClientGrantFile(input.home, input.masterFile);
+  if (!presented.ok) return { ok: false, why: presented.why };
+  const master = presented.grant;
+  const key = readClientPrivateKey(input.home, input.keyFile);
+  if (!key.ok) return { ok: false, why: key.why };
+  if (key.publicKey !== master.publicKey || key.keyId !== master.keyId) {
+    return { ok: false, why: `the key file is not the app key the master grant ${master.grantId} names` };
+  }
+  const requestId = input.requestId ?? clientRequestId();
+  if (!CLIENT_REQUEST_ID_PATTERN.test(requestId)) return { ok: false, why: `"${requestId}" is not a request id` };
+  if (!CLIENT_GRANT_ID_PATTERN.test(master.grantId)) return { ok: false, why: `"${master.grantId}" is not a client grant id` };
+  const request: ClientGrantIssueRequest = {
+    v: 1,
+    op: 'grant',
+    master_grant_id: master.grantId,
+    master_key_id: master.keyId,
+    client_id: input.clientId,
+    entity: input.entity,
+    team: input.team,
+    seat: input.seat,
+    public_key: input.publicKey,
+    key_id: input.keyId,
+    key_dir: input.keyDir,
+    expires: input.expires,
+    inbox: input.inbox,
+    request_id: requestId,
+    issued_at: input.now.toISOString(),
+  };
+  let signature: string;
+  try {
+    signature = signClientGrantIssueRequest(request, key.privatePem);
+  } catch {
+    return { ok: false, why: 'the grant request could not be signed with the app key' };
+  }
+  return admitClientGrantIssue(input.home, presented, request, signature, input.now);
 }

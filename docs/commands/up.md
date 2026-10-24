@@ -43,6 +43,7 @@ only [`team brief rollout --apply`](brief.md) recovers that delivery at the clai
 ## Synopsis
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
+    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]
 
 ## Flags
 
@@ -52,6 +53,9 @@ only [`team brief rollout --apply`](brief.md) recovers that delivery at the clai
 | `--serial` | — | launches and waits on one seat at a time instead of concurrently |
 | `--session` | `<name>` | the herdr session to start, instead of `team.session`; the owner's alone |
 | `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--client` | `<grant-file>` | the client form: an owner-signed up grant for one team, see [A client's up grant](#a-clients-up-grant) |
+| `--key` | `<client-key>` | the client's private key file, which proves the client holds the key the grant names; required with `--client`, refused without it |
+| `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--json` | — | one `team.up` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -80,6 +84,56 @@ covered paths or one reached through a `..` segment or a symlink. A caller outsi
 registry record and is never admitted; where the team file's `grant` decides, that record
 decides instead. The record's shape, with one example: [team init](init.md).
 
+## A client's up grant
+
+A client with no terminal that the owner signed an up grant for (`team grant --client <id> --team
+<team> --up`, see [team grant](grant.md#an-up-or-down-grant)) brings up that one team with:
+
+    team up --client ~/.config/team/grants/cg_<24 hex>.json --key ~/.config/team-client/<id>/client.key
+
+Run it in the team's folder, or from anywhere with `--team <team>`. `--file` and `--session` are
+the owner's and are refused with `--client`; the run is bound to the folder the owner signed. A
+folder of another team is refused; so is a team of the same name at another folder. Before any
+step the run verifies, and refuses with the reason and the owner's next step when any check fails:
+
+1. the grant file is the owner-signed record in the grants folder, byte for byte, and is an up
+   grant (a send grant is refused here, and an up grant is refused by `team send`);
+2. it is not expired and not revoked;
+3. the key file proves identity: the key is the one the grant names;
+4. the team, its registry id and its real folder are the ones the grant binds;
+5. the team file still carries the fingerprints the owner signed. When it does not, the refusal
+   lists what changed (a seat added, a seat changed, an owner section changed) and says that the
+   owner re-signs with `team grant --client <id> --entity <entity> --public-key <file> --team
+   <team> --up --request` and answers on the owner seat; a comment or a prompt edit needs no new
+   signature.
+
+Then it runs as an owner launch with no terminal: it never prompts and never reads a pause. It
+still refuses every seat the signed team file does not declare, and it reaches no other session,
+file, team or command. It does not run `team approve` and it does not stamp a folder as trusted: a
+team the owner has not approved for this machine, or a folder-trust dialog, is handled as for any
+other launch without an owner at the terminal. The `--dry-run` form verifies the grant and prints
+the plan, and writes nothing.
+
+A real run writes one line to the team's own log (`.agents/team.log`) once the grant verified:
+
+    client-up-authorized: grant <cg_id> client <client-id> team <project> root <root> request <rid>
+
+A refusal after the client's key proved identity writes `client-up-refused: grant <cg_id>:
+<reason>`. A refusal before it (a wrong key, an unreadable grant) writes nothing, so a stranger
+cannot fill the log. A run under the lock re-reads the grant, so a revocation in the middle of a
+run ends it before the first step.
+
+The `up.detached` refusal of a run with no terminal is unchanged for every caller that does not
+present a grant; `--client` is the only way a caller with no terminal passes it.
+
+
+A bundle grant that carries `up` (`--bundle operator`, see
+[Client grant bundles](../concepts/client-grant-bundles.md)) runs the same `team up --client`, with
+the same checks and the same `up` rule about the team file: an `operator` bundle's `up` is refused
+after a seat or an owner section changed, until the owner re-signs. The audit line is the same
+(`client-up-authorized`). An `observer` bundle does not carry `up` and is refused with the request
+for an operator bundle.
+
 ## Output and exit codes
 
 Each pass ends with one restore summary, written even when all three counts are zero: `N seats
@@ -93,6 +147,7 @@ would not repair.
 | a caller the run does not admit | a real run: `deny`, and nothing else: no `team up:` prefix, no reason, no plan. A `--dry-run`: `! up would refuse: <the reason>`, `! to unblock: <a leads seat's own run, or the owner's>`, then the plan where the run reached one | 1 |
 | the run is refused | one `team up: <reason>` per reason, on stderr, before the first step | 1 |
 | a seat was left out, the server did not start, the watch did not start | the seats' records and the run's own lines | 1 |
+| the up grant, or the client run it admits, does not verify (`up.client-refused`) | `team up: <reason and the owner's next step>`; nothing ran | 1 |
 | the invocation can't be read | `team up: <problem>` and the usage | 2 |
 | the team file can't be read | `team up: line <n>: <message>` (`team up: <message>` when the problem names no line) | 2 |
 

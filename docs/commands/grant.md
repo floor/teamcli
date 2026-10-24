@@ -11,6 +11,12 @@ identity, an agent id for a seat or a team id for `@team`.
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> [--inbox] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> [--seat <seats>] [--expires <ISO>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator> --request [--seat <seats>] [--expires <ISO>] [--json]
 
 In the first form `<seat>` must name the file's orchestrator. The grant uses the file's session.
 `--scope` is a nonempty comma-separated list of distinct words: `up`, `down`, `init`, `reload`,
@@ -44,6 +50,88 @@ owner, seat or terminal authority. `--inbox` widens the vocabulary to `send` and
 same grant then admits the client's own read of its replies (`team messages --client`, see
 [`team messages`](messages.md)) as well as its sends. Without `--inbox` the grant is exactly the
 send-only grant earlier builds wrote, byte for byte, and a read presented under it is refused.
+
+## An up or down grant
+
+`--up`, `--down` or both make the third form a TeamCLI **team grant**: a durable, owner-signed record
+that lets one client with no terminal run [`team up`](up.md), [`team down`](down.md) or both for one
+team, at one folder, and nothing else. It is for a client that is not a seat and cannot take the
+owner's place at a terminal, such as a bot that brings its team's folder up and later stops it on
+request. The record lists what it admits in `allowed_ops`: `["up"]`, `["down"]` or `["up", "down"]`.
+One record can carry both, so the owner answers once.
+
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
+      --team docs --up --down --expires 2027-01-20T00:00:00Z --request
+
+`--team` is required and names the one team. The grant binds, in the owner's signature:
+
+- the team's project name, its registry id (the digest of its real root) and that real root, so a
+  copy of the team in another folder, or another team under the same name, is not the team signed;
+- the fingerprints of the team file the owner saw: every owner-only section and every seat's
+  entry. A comment or a prompt edit changes none of them; a new seat, a changed seat or a changed
+  owner section does. **Only `up` reads them.** A `down` run does not need the team file to be the
+  one the owner signed: stopping a team must stay possible after its file changed (a seat added,
+  an edit in progress, even a file that no longer loads). `down` still needs the folder, the
+  registry id and the project name to be the ones signed, and the team to still sit under the
+  entity; a team that was renamed, moved or given another entity is another team and is refused.
+
+The `--entity` is the policy and signer domain the grant is issued under, not the team's binding.
+A team that names no entity, or the same entity, may be bound; a team of another entity, an
+archived team, or a team whose root lies outside the roots its entity declares is refused.
+
+A team grant carries `up`, `down` or both, and nothing else. It never carries `send`, `messages` or
+`grant`, so `--seat`, `--inbox`, `--allow-grant` and `--client-request` are refused with it, a
+sub-grant can never carry `up` or `down`, and a team grant presented to `team send` or
+`team messages` is refused as the wrong kind of grant (as a send grant is refused by
+`team up --client` and `team down --client`). A grant never widens itself: an up-only grant is
+refused by `team down --client` with the request that would add `down` (`--up --down`), and a
+down-only grant is refused by `team up --client` the same way; the owner signs a new record. The
+record is bound to one team: there is no form of it for "every team this client launched" today.
+
+`--request` is the conversational form, and it works as for any client grant: the entity's
+`grant-emission` policy must be `conversational`, the request is written as a pending `gr_…`
+record, and the owner seat answers it with `team grant --approve-as-owner-seat <request-id> oui`
+(a Touch ID or passkey signature, never a terminal prompt of the client) and the owner then runs
+`team grant --execute <request-id>`. The approval prompt names the client, what it may run, the
+team and the folder. `always` is refused for a team grant: a standing rule would renew the grant
+without the owner seeing the team again. A request that carries `up` is bound to the team file it
+was made against: when the file changed between the request and `--execute`, execute refuses, the
+request is not spent, and the message says to ask again. A down-only request is not spent by a
+changed file, since `down` never reads its fingerprints.
+
+Without `--request` the owner at a terminal signs the same grant directly.
+
+`--expires` is an ISO timestamp. A team grant is meant to last: without `--expires` it expires
+ninety days after it is written, and ninety days is also the ceiling; it never carries an unlimited
+expiry. The ninety days is a constant of TeamCLI, like the seven-day ceiling of a send grant; no
+policy sets it. Ending it earlier is [`team revoke`](revoke.md) `<grant-id>`, from the owner's
+terminal, at any time; the client's next `team up --client` or `team down --client` is refused.
+
+An up-only record is exactly what the first build of the up grant wrote, byte for byte (its binding
+is stored under `up`). A record that carries `down` stores the same binding under `team`, so a
+build that knows only `up` refuses it whole instead of reading half of it.
+
+## A bundle grant
+
+`--bundle observer` or `--bundle operator` writes a **bundle grant**: one owner-signed record that
+carries a named, fixed list of commands for one team at one folder, so one signature covers them
+all. `observer` is read-only (`status`, `list`, `check`, `feed`, `messages`); `operator` is the
+observer plus `send` to the granted seats (`--seat`, a comma-separated list), `up` and `down`.
+
+    team grant --client grok-bot --entity floor --public-key ~/.config/team-client/grok-bot/client.pub \
+      --team docs --bundle operator --seat orchestrator --request
+
+The bundle is expanded at signing time into the explicit op list stored in `allowed_ops`; the
+bundle's name is a label and decides nothing, so a command added to a bundle later never widens a
+grant already signed. The owner's signature prompt reads, for example: "Grok Bot may, for team docs
+until 2027-01-21 09:00 UTC: see status, send to orchestrator, start (file 3f9a1c0b2d4e), stop. It
+cannot change permissions, add or remove seats, or create teams." Commands that change who may do
+what (`grant`, `revoke`, `init`, `policy`, `add`, `remove`, `daemon`, and the rest of the list in
+[Client grant bundles](../concepts/client-grant-bundles.md)) can never be in a bundle. `--bundle`
+refuses `--up`, `--down`, `--inbox`, `--allow-grant` and `--client-request`. As for `--up`, only `up`
+reads the team file's fingerprints; `always` is refused; `--expires` is capped by the `client-bundles`
+policy (ninety days at most, and by default); and [`team revoke`](revoke.md) `<grant-id>` ends the
+whole bundle. The per-command grants above are unchanged: this complements them.
 
 ## Who may run it
 

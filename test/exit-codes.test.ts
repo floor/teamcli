@@ -55,6 +55,7 @@ import { runGrant } from '../src/commands/grant.ts';
 import { runDelegate } from '../src/commands/delegate.ts';
 import { runAck } from '../src/commands/ack.ts';
 import { runDevelopmentMode } from '../src/commands/development-mode.ts';
+import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
@@ -1425,6 +1426,19 @@ scene('development-mode.invocation', async (place) => {
   );
 });
 
+scene('owner-seat.done', async (place) => {
+  const io = testIo(place.root, other);
+  return show({ code: await runOwnerSeat(['status'], io, { home: place.home }), out: io.out, err: io.err }, 'security profile: strict');
+});
+scene('owner-seat.refused', async (place) => {
+  const io = testIo(place.root, other);
+  return show({ code: await runOwnerSeat(['profile', 'relaxed'], io, { home: place.home }), out: io.out, err: io.err }, 'no owner seat is registered');
+});
+scene('owner-seat.invocation', async (place) => {
+  const io = testIo(place.root, other);
+  return show({ code: await runOwnerSeat(['profile', 'maybe'], io, { home: place.home }), out: io.out, err: io.err }, 'profile is strict, relaxed or dev');
+});
+
 scene('doctor.invocation', async (place) => {
   const io = testIo(place.root, owner);
   return show({ code: await runDoctor(['extra'], io, doctor(place.home)), out: io.out, err: io.err }, 'unexpected');
@@ -1485,6 +1499,7 @@ scene('down.caller', async (place) => {
   write(place, TEAM);
   return show(await down(place, [], other, downSources({ sessionRunning: () => true, agents: () => [] })), 'only the owner or `leads` stops the team');
 });
+scene('down.client-refused', async (place) => show(await down(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller, downSources()), 'no client grant can verify'));
 scene('down.file-owner', async (place) => {
   write(place, TWO);
   return show(await down(place, ['--file', '.agents/team.yaml'], other, downSources()), "--file is the owner's");
@@ -1667,6 +1682,8 @@ scene('init.refused', async (place) => show(
   'does not verify',
 ));
 scene('init.wrote', async (place) => show(await initial(place, []), 'Wrote'));
+scene('init.approval', async (place) => show(await initial(place, ['--approvals']), 'team-create approval rules'));
+scene('init.approval-refused', async (place) => show(await initial(place, ['--revoke-approval', 'nope']), 'is not a rule id'));
 scene('init.restored', async (place) => {
   approve(place, TEAM);
   rmSync(place.file);
@@ -2055,6 +2072,7 @@ scene('status.difference', async (place) => {
   return show(await status(place, [], statusSources(quiet)), 'is in the file and is not running');
 });
 scene('status.file-owner', async (place) => show(await status(place, ['--file', '.agents/team.yaml'], statusSources(quiet), other), "--file is the owner's"));
+scene('status.client-refused', async (place) => show(await status(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, other), 'no client grant can verify'));
 scene('status.session-owner', async (place) => show(await status(place, ['--session', 'team'], statusSources(quiet), other), "--session is the owner's"));
 scene('status.not-yours', async (place) => {
   // A caller that does not pass learns nothing, even when the target does not load: the answer is
@@ -2370,6 +2388,7 @@ scene('up.file-invalid', async (place) => {
   invalid(place);
   return show(await up(place, ['--file', 'team.yaml'], owner, upSources(place)), 'line');
 });
+scene('up.client-refused', async (place) => show(await up(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller, upSources(place)), 'no client grant can verify'));
 scene('up.dry-run', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--dry-run', '--file', place.file], owner, upSources(place)), 'dry run: nothing was run');
@@ -4747,7 +4766,7 @@ seats:
     });
     const io = testIo(place.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
     const code = await runReply([CLIENT_ROOT, 'the answer'], io, { home: world.home, now: () => NOW });
-    return show({ code, out: io.out, err: io.err }, 'client reply publication is not in this release');
+    return show({ code, out: io.out, err: io.err }, 'is send-only');
   } finally {
     rmSync(world.base, { recursive: true, force: true });
   }

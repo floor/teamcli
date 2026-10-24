@@ -1,6 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { relative, resolve } from 'node:path';
+import { auditClientOp } from '../client/bundles.ts';
+import { KEY_ISOLATION_LINE } from '../client/records.ts';
+import { verifyClientUp } from '../client/up-grant.ts';
 import { budgetsInForceOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { overridesInForceOf, type OverrideForce } from '../profiles/overrides.ts';
@@ -10,6 +13,9 @@ import { recall } from '../budgets/readings.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive } from '../dev_mode.ts';
+import { existsSync } from 'node:fs';
+import { ownerSeatHelperPath, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
+import { readSecurityProfile, securityProfileLine, securityProfilePath } from '../security/profile.ts';
 import { developmentModeNote, readDevelopmentMode } from '../development_mode.ts';
 import { greenNotes, idleWorkNotes, readPendingGreen } from '../idle_work.ts';
 import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_work.ts';
@@ -94,6 +100,8 @@ export type StatusSources = {
   /** The machine daemon's one health reading, probed once per run at this boundary. Absent in a
    *  test that does not stand one in, so its scenes read no socket. */
   daemonHealth?(home: string): Promise<DaemonHealth>;
+  /** The owner-seat credential store that confirms the security profile's signer; the system helper by default. */
+  ownerSeatStore?: OwnerSeatKeyStore;
 };
 
 /**
@@ -243,22 +251,39 @@ export interface StatusJson {
 }
 
 export const USAGE = `Usage: team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]
+       team status --client <grant-file> --key <client-key> [--team <team>] [--json]
+
+The --client form is for a client with no terminal that the owner signed a bundle grant carrying status for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle observer --request): it reads that one team, as signed, and nothing else. It changes nothing and never prompts.
 
 Exits 0 when the session agrees with the file (or the project is listed), 1 when it differs or is refused, 2 when the invocation, team file, or herdr can't be read.
 `;
 
+/** The invocation problems the client form owns, or null: its grant and its key come together, and
+ *  it reads the one team its grant names, so nothing that aims elsewhere rides with it. */
+function clientInvocationProblem(args: ReturnType<typeof readArgs>): string | null {
+  const client = args.values.client !== undefined;
+  if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
+  if (!client && args.values.key !== undefined) return '--key belongs to the --client form: team status --client <grant-file> --key <client-key-file>';
+  if (!client && args.values.team !== undefined) return '--team belongs to the --client form: team status --client <grant-file> --key <client-key-file> --team <team>';
+  if (client && (args.values.file !== undefined || args.values.session !== undefined || args.values.project !== undefined || args.flags.has('all'))) {
+    return '--client reads the one team its grant names: --file, --session, --project and --all are the owner\'s and take no --client';
+  }
+  return null;
+}
+
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
   const out = cleanedIo(io);
-  const args = readArgs(argv, ['session', 'file', 'project'], ['all', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'project', 'client', 'key', 'team'], ['all', 'json']);
   const json = hasJsonFlag(argv);
   // `--project` reads the project level instead of one team: the project's teams, from the
   // registry, wherever the run stands — no team file and no caller gate, the way `team projects`
   // reads. `--session` and `--file` name one team's readings and do not apply beside it.
   const beside = args.values.project !== undefined && (args.values.session !== undefined || args.values.file !== undefined);
-  if (args.error || args.rest.length || beside) {
+  const clientProblem = args.error === undefined && args.rest.length === 0 ? clientInvocationProblem(args) : null;
+  if (args.error || args.rest.length || beside || clientProblem !== null) {
     const why = args.error ?? (args.rest.length
       ? `unexpected "${args.rest[0]}"`
-      : '--project reads the project; --session and --file name one team');
+      : clientProblem ?? '--project reads the project; --session and --file name one team');
     if (json) {
       writeJsonError(io, 'status.invocation', plainText(why), null);
     } else {
@@ -266,6 +291,37 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     }
     // exit: status.invocation
     return 2;
+  }
+  // The client form: a bundle grant the owner signed for ONE team at ONE folder, proven by the
+  // client's own key. It is verified whole, before any file is read, and then the run reads that
+  // folder alone and writes nothing but its audit line. It is the read gate's second door, never a
+  // second gate: every other caller goes through the gates below, unchanged.
+  let clientRead = false;
+  if (args.values.client !== undefined) {
+    if (!json) out.stderr(`${KEY_ISOLATION_LINE}\n`);
+    const at = sources.now();
+    const verified = verifyClientUp({
+      home: sources.home ?? homedir(),
+      grantFile: resolve(io.cwd, args.values.client),
+      keyFile: resolve(io.cwd, args.values.key!),
+      cwd: io.cwd,
+      ...(args.values.team !== undefined ? { team: args.values.team } : {}),
+      now: at,
+      op: 'status',
+    });
+    if (!verified.ok) {
+      const named = verified.identified;
+      if (named !== null) auditClientOp(named.up.root, 'status', named.clientId, 'refused', `grant ${named.grantId}: ${verified.why}`, at);
+      if (json) writeJsonError(io, 'status.client-refused', plainText(verified.why), null);
+      else out.stderr(`team status: ${plainText(verified.why)}\n`);
+      // exit: status.client-refused
+      return 1;
+    }
+    auditClientOp(verified.root, 'status', verified.grant.clientId, 'authorized', `grant ${verified.grant.grantId} client ${verified.grant.clientId} team ${verified.grant.up.project} root ${verified.root} request ${verified.requestId}`, at);
+    clientRead = true;
+    // The folder is the grant's, whatever the caller's: from here every read is of that team.
+    io = { ...io, cwd: verified.root };
+    if (!json) out.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, until ${verified.grant.expires}\n`);
   }
   if (args.values.project !== undefined) {
     return projectReport(args.values.project, out, io, sources, json);
@@ -275,7 +331,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // `currentTeam` finds `.agents/team.yaml` in their folder. The one write on this path is the
   // `last_valid` copy, and only the owner's run keeps it.
   const walked = walkCaller(io);
-  const owner = isOwner(walked);
+  // A client run is never the owner's, whatever terminal it stands in.
+  const owner = !clientRead && isOwner(walked);
   if (args.values.file !== undefined) {
     const refusal = fileOwnerRefusal(io, args.values.file);
     if (refusal !== undefined) {
@@ -301,7 +358,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
 
   const current = currentTeam(io.cwd, owner ? args.values.file : undefined, sources.now(), sources.home, owner);
   if (!owner) {
-    const read = current.ok && mayReadTeam(current, io, sources);
+    const read = current.ok && (clientRead || mayReadTeam(current, io, sources));
     // A create-grant admits the seat whose own registry record it names to the read, for a team
     // whose root is under the granted paths: the same record `init` and `up` consult. It buys the
     // read alone — `--file` and `--session` above stay the owner's, and this run keeps no
@@ -455,6 +512,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   const machineMode = sources.home !== undefined ? readDevelopmentMode(sources.home) : null;
   const machineNote = machineMode === null ? null : developmentModeNote(machineMode);
   if (machineNote !== null) comparison.notes.push(machineNote);
+  // The owner-signed security profile: a relaxed one is said loudly on every status; a record that
+  // does not verify is said too (strict then applies). No record, no line: strict is the default.
+  if (sources.home !== undefined && existsSync(securityProfilePath(sources.home))) {
+    comparison.notes.push(securityProfileLine(readSecurityProfile(sources.home, sources.ownerSeatStore ?? systemOwnerSeatKeyStore(ownerSeatHelperPath(sources.home)), now)));
+  }
   // Idle with work and ready-but-uninstalled slices: one read each, notes only, no exit change.
   // The snapshot always exists once the watch provides one (the default local queue counts as a
   // source); the green read keeps a corrupt journal a named refusal rather than an empty list.
