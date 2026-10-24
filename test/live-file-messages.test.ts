@@ -24,9 +24,9 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // sentence is held under: internal names, none of them printed as a sentence.
   { literal: /^approval$/, why: "the check's own name, and the key it reports under" },
   { literal: /^approval:\$\{approvalReason\}$/, why: 'a told-set key: the case is said once, and the key itself is never printed' },
-  // The watch's drifting case: the file changed since the record was written. The note is the
-  // watch's own, and the record it names is the one the live file is held against.
-  { literal: /^the file has changed since the last approval: /, why: "the watch's note for a file edited since the record was written" },
+  // The check's handed-in case: a caller that hands in a difference gets this note. Nothing in
+  // production hands one in — the watch hands `[]` or `null` — and the check keeps the case.
+  { literal: /^the file has changed since the last approval: /, why: "the approval check's handed-in case: the watch hands it [] or null, so nothing shows it" },
   // The record's own budget checks: a check's file that no longer hashes to what was recorded,
   // or that changed after it. The watch runs the record's checks, so this is not the file's case.
   { literal: /^the check for .* is unapproved; that account reads unknown$/, why: "a check whose file no longer hashes to the record's digest" },

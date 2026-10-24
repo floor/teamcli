@@ -146,7 +146,10 @@ export type TeamObservation = {
   paneModels: ReadonlyMap<string, PaneModelReading>;
   // The seats that count as the team's workers (not the leads, not parked), and their idle flag.
   workers: { idle: boolean }[];
-  // How the file differs from the last approval: [] none, null never approved, undefined unlooked.
+  // The differences a caller hands the approval check: [] none, null none in force, undefined
+  // unlooked — only a non-empty list is reported. Nothing compares the file against a record any
+  // more: the live file is the record, and the watch, the check's only production caller, hands
+  // [] or null.
   approval: string[] | null | undefined;
   // The one-line case when no verified approval is in force and the record says why — a legacy
   // record, or one the verification refused. The watch itself has said it; the check stays silent.
