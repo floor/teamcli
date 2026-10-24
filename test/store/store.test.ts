@@ -27,6 +27,10 @@ import {
   type Approval,
 } from '../../src/store/store.ts';
 
+// A stored copy is signed over its canonical team record, so it must be a team file.
+const TEAM = readFileSync(join(import.meta.dir, '..', 'fixtures', 'example.yaml'), 'utf8');
+const TEAM_B = TEAM.replace('Run the tests your change touches', 'Run the tests your change affects');
+
 let home: string;
 
 beforeEach(() => {
@@ -76,16 +80,16 @@ describe('an approval', () => {
 
   test('is read back with the approved copy, and fills the ledger', () => {
     const store = storePath('acme-web', home, home);
-    writeApproval(store, { approval: approval(home), file: 'format: 1\n' }, [opus, sol], home);
+    writeApproval(store, { approval: approval(home), file: TEAM }, [opus, sol], home);
     // The read-back carries the signing: a generation, and the signature over it.
-    expect(readApproval(store)).toMatchObject({ approval: approval(home), file: 'format: 1\n', generation: 1 });
+    expect(readApproval(store)).toMatchObject({ approval: approval(home), file: TEAM, generation: 1 });
     expect(typeof readApproval(store)?.signature).toBe('string');
     expect(readLedger(store)).toEqual([opus, sol]);
   });
 
   test('leaves no temporary file, and is private to the user', () => {
     const store = storePath('acme-web', home, home);
-    writeApproval(store, { approval: approval(home), file: 'format: 1\n' }, [opus], home);
+    writeApproval(store, { approval: approval(home), file: TEAM }, [opus], home);
     expect(readdirSync(store).sort()).toEqual(['approval.json', 'approved.yaml', 'ledger.json']);
     expect(statSync(store).mode & 0o777).toBe(0o700);
     expect(statSync(join(store, 'approval.json')).mode & 0o777).toBe(0o600);
@@ -93,10 +97,10 @@ describe('an approval', () => {
 
   test('a second approval keeps the seats the team has had', () => {
     const store = storePath('acme-web', home, home);
-    writeApproval(store, { approval: approval(home), file: 'a\n' }, [opus], home);
-    writeApproval(store, { approval: approval(home), file: 'b\n' }, [sol], home);
+    writeApproval(store, { approval: approval(home), file: TEAM }, [opus], home);
+    writeApproval(store, { approval: approval(home), file: TEAM_B }, [sol], home);
     expect(readLedger(store)).toEqual([opus, sol]);
-    expect(readApproval(store)?.file).toBe('b\n');
+    expect(readApproval(store)?.file).toBe(TEAM_B);
   });
 
   test('a record of another format is refused', () => {
@@ -109,13 +113,13 @@ describe('an approval', () => {
 
   test('the approved text is in the record itself: one write, never half an approval', () => {
     const store = storePath('acme-web', home, home);
-    writeApproval(store, { approval: approval(home), file: 'approved\n' }, [opus], home);
+    writeApproval(store, { approval: approval(home), file: TEAM }, [opus], home);
     writeFileSync(join(store, 'approved.yaml'), 'edited by hand\n');
-    expect(readApproval(store)?.file).toBe('approved\n');
-    expect(approvedCopy(home, home)).toBe('approved\n');
+    expect(readApproval(store)?.file).toBe(TEAM);
+    expect(approvedCopy(home, home)).toBe(TEAM);
     expect(JSON.parse(readFileSync(join(store, 'approval.json'), 'utf8'))).toMatchObject({
       format: 2,
-      file: 'approved\n',
+      file: TEAM,
     });
   });
 
@@ -152,9 +156,9 @@ describe('the approved copy, from the root alone', () => {
     const root = join(home, 'acme-web');
     mkdirSync(root);
     const store = storePath('acme-web', root, home);
-    writeApproval(store, { approval: approval(root), file: 'format: 1\n' }, [opus], home);
+    writeApproval(store, { approval: approval(root), file: TEAM }, [opus], home);
     expect(findStore(root, home)).toBe(store);
-    expect(approvedCopy(root, home)).toBe('format: 1\n');
+    expect(approvedCopy(root, home)).toBe(TEAM);
     expect(approvedCopy(home, home)).toBeNull();
   });
 });

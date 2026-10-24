@@ -6,6 +6,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { TEMPOS, type Tempo } from '../file/sections/tempo.ts';
 import { writeTeamFile } from '../file/write.ts';
+import { approvedRecordOf } from '../store/store.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 
@@ -78,7 +79,9 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
   } else {
     const team = { project: loaded.team.project, session: loaded.team.session };
     const next = setTempo(loaded.text, word);
-    if (next === loaded.text) {
+    // Same is decided on the canonical team record an approval signs, not on the text.
+    const before = approvedRecordOf(loaded.text);
+    if (next === loaded.text || (before !== null && before === approvedRecordOf(next))) {
       summary(io, json, team, word, 'same');
       // exit: tempo.unchanged
       return 0;

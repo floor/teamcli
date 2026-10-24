@@ -1,0 +1,11 @@
+{
+  "seats": [{ "name": "b", "line": 9, "role": "lead" }, { "role": "worker", "name": "a", "line": 12 }],
+  "project": "acme-web",
+  "format": 1,
+  "nested": { "z": [3, 1, 2], "a": { "y": null, "x": true, "w": false } },
+  "numbers": { "int": 3, "float": 3.0, "half": 0.5, "big": 1e21, "neg": -2 },
+  "text": "Agent: {display} · {role}\n\"quoted\"\t\u0001",
+  "ünicode": "café",
+  "é": "e-acute key",
+  "emoji": "😀"
+}
