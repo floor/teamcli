@@ -18,12 +18,27 @@ admitted by the reply rule even between two seats no earlier rule pairs. The rul
 thread, not the invitation: it admits a reply on any open thread, and a thread is open until it
 is closed or the clock or the cap ends it.
 
-A record a client wrote is not answered in this release. A record carrying `from_client` is
-refused with `reply.client-refused` before any grant is read or any client inbox is created, and
-an answer to it writes nothing: client reply publication is not in 0.5.3. `--close` on such a
-record still writes only the own-seat close sidecar. The client's own read and ack path
-in [team messages](messages.md) is retained and is separate from seat reply publication. A seat's
-replies, its receipts, and `--close` are unchanged.
+A record a client wrote is answered on the client's own thread. A record carrying `from_client` is
+the client's opening record, and only that record is answered: the reply's `to` is
+`client:<client id>`, its `to_id` is null, and its `to_client` names the client and the grant that
+opened the thread. The record is written into the client's inbox,
+`<root>/.agents/send-drops/<session>/.clients/<client id>/`, and a signed `replied` receipt goes
+beside the opening record in the answering seat's folder. The thread's age and cap count the
+verified replies in that inbox too.
+
+The pair is admitted by the thread's originating grant, read from the canonical grants folder by
+the id the opening record carries — never by scanning for another grant, and never by a later
+grant. The grant must be active when the reply is written, must carry the `--inbox` vocabulary
+(`send` and `messages`), and must still bind the recipient the opening record names: the
+registry's coordinator team, seat and agent id, the same checkout and the same session. A changed
+binding, a revoked or expired grant, a send-only grant, the owner, or any other seat is refused,
+and nothing is written. A thread opened under a send-only grant is not reauthorized by a new one:
+the client starts a new thread under a `--inbox` grant. The reply runs under the grant lock and
+then the seat lock, in that order, so a revocation that wins the grant lock is seen before the
+record is written. Under both locks the reply rechecks the thread and the binding before it signs:
+the verified client inbox and the close sidecars are read again with a fresh clock, and the
+grant's team, checkout, session, seat and agent are resolved again; a thread that closed, aged out
+or reached its cap during the wait, or a binding that changed, is refused and nothing is written. A client reply writes no project message-history line.
 
 A thread ends in three ways. `team reply <id> --close` writes a signed close sidecar beside the
 record it answers, `<id>.closed.json` — a thread's close is the addressee's own act, and it
@@ -66,10 +81,9 @@ Reads the team file, the caller's placement, the message key, and the record the
 the records and close sidecars of its thread. Writes one signed record,
 `.agents/send-drops/<session>/<seat>/<id>` (mode 0600), into the answered sender's folder, and a
 signed `replied` receipt beside the answered record (`<id>.replied.json`); a `--close` writes the
-signed close sidecar `<id>.closed.json` beside it instead. A record carrying `from_client` is
-refused as a reply and writes nothing: no client inbox record, no `replied` receipt, no history
-line. `--close` on it still writes the signed close sidecar beside it. The
-seat's folder and the reply's
+signed close sidecar `<id>.closed.json` beside it instead. A reply on a client thread is the one
+exception to the destination: its record goes into the client's own inbox folder, and no history
+line is appended. The seat's folder and the reply's
 record are each written under the seat's lock (`<state dir>/seat-locks/<session>/<seat>`), so two
 commands never write into one folder at once. It writes one line to `.agents/team.log`, and
 appends the reply to the project's message history ([team feed](feed.md)); when the reply record
@@ -88,8 +102,9 @@ record through this same path. A record the owner sent is answered at its entity
 `floor` entity answers `orchestrator@floor` when it declares none. The reply is written into that
 endpoint seat's own folder, and the receipt stays beside the answered record; an entity that
 declares no endpoint, or an endpoint the registry cannot resolve, is refused and nothing is
-written. A record carrying `from_client` cannot be answered in this release for any caller; an
-answer writes nothing, while `--close` remains available.
+written. A client thread is answered by its recipient
+seat alone, on its own pane and session, and only while the registry still names that seat and
+agent for the grant's team; the owner and every other seat are refused.
 
 ## Output and exit codes
 
@@ -99,9 +114,10 @@ then the outcome line. A refused run prints its line on stderr and has none.
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | replied | `<seat>: replied` on stdout — the seat the reply went to | 0 |
+| replied to a client | `client:<client id>: replied` on stdout | 0 |
 | closed | `<thread>: closed` on stdout | 0 |
 | refused | `team reply: <reason>` on stderr | 1 |
-| a client record not answered | `team reply: <reason>` on stderr — client reply publication is not in this release | 1 |
+| a client thread refused | `team reply: <reason>` on stderr — the thread's grant, placement or binding does not admit the reply | 1 |
 | configuration | `team reply: <team-file problem>` on stderr | 2 |
 | usage | `team reply: <problem>` and the usage on stderr | 2 |
 
@@ -120,7 +136,7 @@ Refusals name what stopped them, and nothing is written:
     team reply: record <id> is addressed to <seat>, not to <caller>
     team reply: record <id> was sent by the owner, and the owner's reply endpoint is missing (<why>); nothing was written
     team reply: record <id> was sent by the owner, and the owner's reply endpoint <target> cannot be resolved: <reason>; nothing was written
-    team reply: client reply publication is not in this release: a client thread is read, not answered; nothing was written
+    team reply: the thread's grant <grant id> is send-only; only a grant with send and messages opens a client thread a seat may answer. ...; nothing was written
     team reply: the thread <thread> is already closed; nothing was written
     team reply: the thread <thread> ended: no record on it for 72h; nothing was written
     team reply: the thread <thread> ended at its 50-record cap; nothing was written
