@@ -22,7 +22,8 @@ import { callerLabel, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchS
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { noteLaunchedPane } from '../file/launched-file.ts';
-import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
@@ -390,7 +391,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   const walked = walkCaller(io);
   const detached = detachedRefusal(walked, { who: 'the owner or a seat of this team', where: 'a terminal outside herdr or its own pane' });
 
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     // `team register` takes no `--file`, so the no-repository refusal must not offer one.
     const said = loaded.errors

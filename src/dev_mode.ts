@@ -45,7 +45,8 @@ import type { TeamFile } from './file/types.ts';
 import type { Io } from './io.ts';
 import { logLine } from './log.ts';
 import { callerOf, callerVerdict, logTag, standingOf, walkCaller, type Caller } from './caller.ts';
-import { loadTeamFile, findRoot } from './file/load.ts';
+import { findRoot } from './file/load.ts';
+import { readTeamConfig } from './file/team-config.ts';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import {
   DEV_MODE_OPERATIONS,
@@ -308,9 +309,9 @@ function roleElsewhere(
     if (!holds(record.root, options.root)) continue;
     const placed = callerOf(io, record.session);
     if (placed.kind !== 'seat' || placed.session !== record.session) continue;
-    let loaded: ReturnType<typeof loadTeamFile>;
+    let loaded: ReturnType<typeof readTeamConfig>;
     try {
-      loaded = loadTeamFile(record.root, { home: options.home });
+      loaded = readTeamConfig(record.root, { home: options.home });
     } catch {
       continue;
     }
@@ -412,9 +413,9 @@ export function devModeOwnerLiftAtCwd(
       if (!early.on) return null;
     }
   }
-  let loaded: ReturnType<typeof loadTeamFile>;
+  let loaded: ReturnType<typeof readTeamConfig>;
   try {
-    loaded = loadTeamFile(io.cwd, { ...(options.home !== undefined ? { home: options.home } : {}) });
+    loaded = readTeamConfig(io.cwd, { ...(options.home !== undefined ? { home: options.home } : {}) });
   } catch {
     return null;
   }

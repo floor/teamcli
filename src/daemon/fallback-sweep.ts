@@ -13,7 +13,7 @@
 // recorded, so it has no verified seat to pass and must not invent one: the event's sender is the
 // tag fixed in the marker at its first fact, and `noteTransport` — the transport path — still
 // requires a full context with the verified caller.
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { escalateDue, type EscalationReport } from '../send/fallback-events.ts';
 
@@ -54,7 +54,7 @@ export function sweepFallbackEscalations(input: {
   for (const given of input.roots) {
     let entry: SweepRoot;
     if (typeof given === 'string') {
-      const loaded = loadTeamFile(given, { home: input.home });
+      const loaded = readTeamConfig(given, { home: input.home });
       if (!loaded.ok) {
         roots.push({
           root: given,

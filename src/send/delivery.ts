@@ -11,7 +11,7 @@
 // `delivery_order` and `human` in the file's place. runSend resolves `host.delivery` when a
 // caller hands a chain in — tests do — and this reading otherwise.
 import type { SeatOverrides } from '../config/apply.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cliWatcher } from '../launch/cli-hook.ts';
 import type { PolicySourceRead } from '../policy/resolve.ts';
@@ -62,7 +62,7 @@ export function deliveryChainOf(input: {
   let file = input.file;
   if (!file) {
     try {
-      const loaded = loadTeamFile(input.root, { home: input.home });
+      const loaded = readTeamConfig(input.root, { home: input.home });
       if (loaded.ok) file = loaded.team;
     } catch {
       // A file that cannot even be read declares nothing, as one that does not validate does.

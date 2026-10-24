@@ -11,7 +11,8 @@
 // not an authenticity one, and the page says so. Nothing starts or restarts the broker.
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
-import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isNoRepository, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import type { Command, Io } from '../io.ts';
 import { realFetch, type Fetch } from '../release/http.ts';
@@ -92,7 +93,7 @@ export async function runBroker(argv: string[], io: Io, sources: BrokerSources =
   // beside it). A folder that is neither is the no-repository refusal — `team broker` takes no
   // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
   // own exit.
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const problem = loaded.errors[0];
     const message = problem?.message ?? 'the team file can\'t be read';

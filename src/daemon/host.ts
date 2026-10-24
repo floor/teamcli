@@ -24,7 +24,7 @@ import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { paneProcesses } from '../herdr.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
@@ -582,7 +582,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     let loaded;
     try {
-      loaded = loadTeamFile(dirname(teamFile), { file: teamFile, home });
+      loaded = readTeamConfig(dirname(teamFile), { file: teamFile, home });
     } catch (error) {
       return nextInternal(`the route's team file could not be read: ${plainText(error instanceof Error ? error.message : String(error))}`);
     }
@@ -708,7 +708,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
     const watch: EndpointWatch = { status, sendSocket: null, busSocket: null };
     watched.push(watch);
-    const loaded = loadTeamFile(rootArg, { home });
+    const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
       status.why = loaded.errors[0]?.message ?? 'the team file cannot be read';
       roots.push(status);

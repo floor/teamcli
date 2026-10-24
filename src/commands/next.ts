@@ -19,7 +19,8 @@ import {
   noPaneRefusal,
   standingOf,
 } from '../caller.ts';
-import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isNoRepository, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { DaemonNextInput, DaemonNextOutcome } from '../daemon/next-client.ts';
 import type { Command, Io } from '../io.ts';
@@ -110,7 +111,7 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
   // beside it). A folder that is neither is the no-repository refusal — `team next` takes no
   // `--file`, so the shared sentence must not offer one — and any other unreadable file keeps its
   // own exit.
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const problem = loaded.errors[0];
     const message = problem?.message ?? 'the team file can\'t be read';

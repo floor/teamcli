@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
-import { loadTeamFile, TEAM_FILE } from '../file/load.ts';
+import { TEAM_FILE } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { LoadResult, Problem } from '../file/types.ts';
 import {
   machineUsage,
@@ -136,7 +137,7 @@ export async function runUsage(argv: string[], io: Io, sources: UsageSources): P
   let loaded: LoadResult | null = null;
   let loadError: unknown = null;
   try {
-    loaded = loadTeamFile(io.cwd, { home: sources.home });
+    loaded = readTeamConfig(io.cwd, { home: sources.home });
   } catch (error) {
     loadError = error;
   }

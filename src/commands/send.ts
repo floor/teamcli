@@ -9,7 +9,8 @@ import { runClientSend } from '../client/send.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
-import { loadTeamFile, NOT_A_REPO } from '../file/load.ts';
+import { NOT_A_REPO } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
@@ -464,7 +465,7 @@ type Aim = {
   cross: boolean;
 };
 
-type TeamLoad = ReturnType<typeof loadTeamFile>;
+type TeamLoad = ReturnType<typeof readTeamConfig>;
 type LoadedTeam = Extract<TeamLoad, { ok: true }>;
 
 /** Both halves of `team send` share these before a message exists: the team file, the caller's
@@ -512,7 +513,7 @@ function needsTeam(spec: string): string {
  * no team to resolve in and is refused with `needsTeam`'s sentence.
  */
 function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
     if (noTeamFolder(loaded.errors)) {
       const parsed = parseSpec(seatName);
@@ -573,7 +574,7 @@ function homeless(io: Io, host: SendHost, seatName: string): Prologue | Ended {
     if (resolved.kind === 'configuration') return { ended: 'configuration', message: resolved.error };
     return { ended: 'refused', dir: null, who: 'owner', reason: resolved.error };
   }
-  const loaded = loadTeamFile(resolved.team.root, { home: host.home });
+  const loaded = readTeamConfig(resolved.team.root, { home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     const why = `${seatName}: the team "${resolved.team.project}" has a registry record, but its team file cannot be read (${resolved.team.root})`;
@@ -825,7 +826,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // walked, nothing is typed and nothing is written down. The dry run reports the real run's
   // refusal, and the check stands above every other delivery refusal, since none of them can
   // make a stopped seat take a message.
-  const receiving = to.cross ? loadTeamFile(to.root, { home: host.home }) : loaded;
+  const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
   // The registry's signing model is the running seat's authority. A pane whose live status
@@ -2159,7 +2160,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   // A stopped seat takes no record either: the same file read and the same refusal as a real
   // send, before a dry run or a history line exists. `--record` reaches here before the
   // delivery path's own check.
-  const receiving = to.cross ? loadTeamFile(to.root, { home: host.home }) : loaded;
+  const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
   const msgId = randomUUID();
@@ -2230,7 +2231,7 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
   if (args.rest.length > 0) return usage(io, '--confirm takes the id the handoff printed and no message', report);
   if (!PENDING_ID.test(id)) return usage(io, `--confirm takes the id a native handoff printed (got "${id}")`, report);
 
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, message || 'the team file cannot be read', report);
@@ -3246,7 +3247,7 @@ export async function walkBriefDelivery(input: {
   }
   let file: TeamFile | undefined;
   try {
-    const loaded = loadTeamFile(input.root, { home: input.host.home });
+    const loaded = readTeamConfig(input.root, { home: input.host.home });
     if (loaded.ok) file = loaded.team;
   } catch {
     // A file that cannot even be read declares nothing, as one that does not validate does.
@@ -3400,7 +3401,7 @@ type SeatRow = { name: string; nickname: string | null; cli: string; role: strin
 /** `--list`: the file's seats and its entity's other teams' seats, nothing sent and no caller
  *  check. Exit 0, always. */
 function listSeats(io: Io, host: SendHost, report: Report): number {
-  const loaded = loadTeamFile(io.cwd, { home: host.home });
+  const loaded = readTeamConfig(io.cwd, { home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, message || 'the team file cannot be read', report);
@@ -4139,7 +4140,7 @@ function admitRecordsOf(home: string, team: TeamFile, teamId: string, target: Ta
     // the record `admitSend` asks for. The caller's team is overlaid above already.
     const receivingId = target.agent.reach.team;
     if (receivingId !== teamId) {
-      const receiving = loadTeamFile(target.team.root, { home });
+      const receiving = readTeamConfig(target.team.root, { home });
       if (receiving.ok) overlayTeam(home, records, receiving.team, receivingId);
     }
   }

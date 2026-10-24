@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { readState, updateState } from '../state.ts';
-import { loadTeamFile } from './load.ts';
+import { readTeamConfig } from './team-config.ts';
 import type { Deprecation, Problem, TeamFile } from './types.ts';
 import { validateTeamFile } from './validate.ts';
 
@@ -36,7 +36,7 @@ export function currentTeam(
    *  session's recorded lobby. Absent reads the file's own. */
   session?: string,
 ): Current {
-  const loaded = loadTeamFile(cwd, {
+  const loaded = readTeamConfig(cwd, {
     ...(file ? { file } : {}),
     ...(home ? { home } : {}),
     ...(session !== undefined ? { session } : {}),

@@ -13,7 +13,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
@@ -239,7 +239,7 @@ export async function runMcpServe(
   if (options.epoch !== undefined && !isBriefEpoch(options.epoch)) {
     return refuse(`--epoch ${JSON.stringify(options.epoch)} is not a runtime epoch`);
   }
-  const loaded = loadTeamFile(io.cwd, { ...(options.file === undefined ? {} : { file: options.file }), home: host.home });
+  const loaded = readTeamConfig(io.cwd, { ...(options.file === undefined ? {} : { file: options.file }), home: host.home });
   if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
   const team = loaded.team;
   const session = options.session ?? team.session;

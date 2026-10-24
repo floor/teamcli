@@ -1,5 +1,5 @@
 import { readArgs } from '../args.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { formatTable, pluralCount, ttyStyle, writeJson, writeJsonError } from '../output/index.ts';
@@ -80,7 +80,7 @@ export async function runRelease(argv: string[], io: Io, fetcher: Fetch, keyRead
   // load and the path resolution are shared with `team commits check --file` (loadTeamFile); the argument
   // parsers are separate, and a table test holds the two to the same classification. Nothing else
   // is read from the repository.
-  const loaded = loadTeamFile(io.cwd, { file: args.values.file, checkOnly: true });
+  const loaded = readTeamConfig(io.cwd, { file: args.values.file, checkOnly: true });
   if (!loaded.ok) {
     const first = loaded.errors[0] as { line: number; message: string };
     const where = [loaded.path, first.line > 0 ? `line ${first.line}` : ''].filter(Boolean).join(', ');

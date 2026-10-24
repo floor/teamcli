@@ -29,7 +29,7 @@ import { dirname, join } from 'node:path';
 import { stage as relayStage } from '../../packages/relay/index.js';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import type { TeamFile } from '../file/types.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
@@ -455,7 +455,7 @@ type PresenceState = { dir: string } | { why: string };
  *  hardcoded `.agents`: a plain-folder team keeps its state beside its own file. */
 function resolvePresenceStateDir(root: string, home: string): PresenceState {
   try {
-    const loaded = loadTeamFile(root, { home });
+    const loaded = readTeamConfig(root, { home });
     if (!loaded.ok) return { why: loaded.errors[0]?.message ?? 'the team file could not be read' };
     return { dir: dirname(loaded.path) };
   } catch (error) {

@@ -21,7 +21,7 @@ import { homedir } from 'node:os';
 import type { AuthorityEditOptions, AuthorityEditResult } from '../authority-edit.ts';
 import { describeCaller, isOwner, walkCaller } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { grantsDir } from '../grant.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
@@ -85,7 +85,7 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
 
   const home = options.home ?? homedir();
   try {
-    const loaded = loadTeamFile(io.cwd, { home });
+    const loaded = readTeamConfig(io.cwd, { home });
     if (!loaded.ok) {
       const msg = loaded.errors[0]?.message ?? 'the team file cannot be read';
       if (json) {
@@ -194,7 +194,7 @@ export function runStandingRevoke(rawIo: Io, edit: StandingRevokeEdit, options: 
 
   const home = options.home ?? homedir();
   try {
-    const loaded = loadTeamFile(io.cwd, { home });
+    const loaded = readTeamConfig(io.cwd, { home });
     if (!loaded.ok) {
       const msg = loaded.errors[0]?.message ?? 'the team file cannot be read';
       if (json) {

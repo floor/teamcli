@@ -23,7 +23,8 @@ import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import { renameSeat } from '../file/lines.ts';
-import { findRoot, loadTeamFile } from '../file/load.ts';
+import { findRoot } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { nicknameProblem } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
@@ -464,7 +465,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const launched = args.values.file ? undefined : launchedTeamFile(io, home);
-  const loaded = loadTeamFile(io.cwd, {
+  const loaded = readTeamConfig(io.cwd, {
     ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}),
     home,
   });

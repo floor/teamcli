@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
 import { fillInboxPlace, profileFor, type InboxPlace } from '../profiles/profile.ts';
 import { readState } from '../state.ts';
@@ -108,7 +108,7 @@ export function registerInbox(input: {
   // The launch's own team file when it names one; otherwise the folder's, read the way the
   // server itself reads it. A folder with no team file makes the server refuse, so nothing is
   // registered there: the seat stays on its drop and typed legs.
-  const loaded = input.file === undefined ? loadTeamFile(folder) : loadTeamFile(folder, { file: input.file });
+  const loaded = input.file === undefined ? readTeamConfig(folder) : readTeamConfig(folder, { file: input.file });
   if (!loaded.ok) {
     return { ok: false, reason: input.file === undefined ? 'no team file could be read from its folder' : 'the team file its launch read could not be read' };
   }

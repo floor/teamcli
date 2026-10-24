@@ -17,7 +17,7 @@ import { lstatSync, mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { callerOf, describeCaller } from '../caller.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
 import { validLockName } from './name.ts';
@@ -127,7 +127,7 @@ export function resolveIdentity(io: Io, sources: LockHome): { ok: true; identity
   const by = plainLine(describeCaller(callerOf(io))).trim();
   let loaded;
   try {
-    loaded = loadTeamFile(io.cwd, { home: sources.home });
+    loaded = readTeamConfig(io.cwd, { home: sources.home });
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }

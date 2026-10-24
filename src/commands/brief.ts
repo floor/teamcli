@@ -20,7 +20,8 @@ import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import type { Current } from '../file/current.ts';
-import { isParseError, loadTeamFile } from '../file/load.ts';
+import { isParseError } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { mintBriefIncarnation } from '../launch/brief-id.ts';
 import {
@@ -369,7 +370,7 @@ export async function runBrief(argv: string[], io: Io, sources: BriefSources = r
   // until the gate has answered, and a run that does not pass learns nothing of the file.
   const file = owner ? args.values.file : undefined;
   const aimedSession = owner ? args.values.session : undefined;
-  const loaded = loadTeamFile(io.cwd, {
+  const loaded = readTeamConfig(io.cwd, {
     ...(file === undefined ? {} : { file }),
     home: sources.home,
     ...(aimedSession === undefined ? {} : { session: aimedSession }),

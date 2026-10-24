@@ -11,7 +11,7 @@
 // widened: a public team draws no recipe from a private one.
 
 import { resolve } from 'node:path';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { modelRuleAllows, parseModelRuleValue, type ModelRuleEntry } from '../policy/model-rule.ts';
 import { normalizePolicyName } from '../policy/types.ts';
@@ -135,7 +135,7 @@ export function listModelRuleBreaches(input: RuleInput): RuleLookup {
     const root = resolve(record.root);
     if (known.has(root)) continue;
     known.add(root);
-    const loaded = loadTeamFile(record.root, { home: input.home });
+    const loaded = readTeamConfig(record.root, { home: input.home });
     if (!loaded.ok) {
       ignored.push({
         root: record.root,

@@ -7,7 +7,7 @@
 // session's run lock for the whole pass and hands it to `runUp` through its internal seam, so a
 // concurrent manual `team up` refuses rather than launching over the sweep.
 import { dirname } from 'node:path';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { SessionState } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import type { Caller } from '../caller.ts';
@@ -96,9 +96,9 @@ export async function runRestoreSweepForRoute(input: RestoreSweepInput): Promise
     home: input.home,
     ...(input.now ? { now: input.now } : {}),
   };
-  let loaded: ReturnType<typeof loadTeamFile>;
+  let loaded: ReturnType<typeof readTeamConfig>;
   try {
-    loaded = loadTeamFile(input.root, { file: input.teamFile, home: sources.home });
+    loaded = readTeamConfig(input.root, { file: input.teamFile, home: sources.home });
   } catch (error) {
     return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }

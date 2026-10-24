@@ -5,7 +5,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fromTeamFile, type CheckConfig } from './config.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Problem } from '../file/types.ts';
 import { readLedger, storePath } from '../store/store.ts';
 
@@ -16,7 +16,7 @@ export type LoadConfig = (
 
 /** The file's rules, with the ledger of this machine's store when the owner has approved a file here. */
 export function loadConfig(cwd: string, file?: string, home: string = homedir()): ReturnType<LoadConfig> {
-  const loaded = loadTeamFile(cwd, { file, home, checkOnly: true });
+  const loaded = readTeamConfig(cwd, { file, home, checkOnly: true });
   if (!loaded.ok) return loaded;
   const store = storePath(loaded.team.project, loaded.root, home);
   const ledgerFile = join(store, 'ledger.json');

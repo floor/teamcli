@@ -6,7 +6,8 @@ import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
-import { TEAM_FILE, findRoot, loadTeamFile } from '../file/load.ts';
+import { TEAM_FILE, findRoot } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { entityGrantAdmits, isSameOrInside, readEntityCreateGrants } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
@@ -317,7 +318,7 @@ export async function runInit(
   // set to exactly `1` keeps its behaviour.
   const root = rootOf();
   const place = root ?? io.cwd;
-  const standingFile = loadTeamFile(io.cwd, { ...(home !== undefined ? { home } : {}) });
+  const standingFile = readTeamConfig(io.cwd, { ...(home !== undefined ? { home } : {}) });
   const dev = resolveDevMode('init', io, {
     ...(home !== undefined ? { home } : {}),
     entity: home !== undefined ? declaredEntity(home, place) : null,
@@ -444,7 +445,7 @@ export async function runInit(
   // one a test hands in. A caller that names neither leaves the machine's registry alone.
   const registryHome = sources.registryHome ?? home;
   if (registryHome !== undefined) {
-    const written = loadTeamFile(root, { home: registryHome, checkOnly: true });
+    const written = readTeamConfig(root, { home: registryHome, checkOnly: true });
     if (written.ok) {
       const unrecorded = noteTeam(registryHome, root, written.team, 'defined', describeCaller(caller));
       if (unrecorded) {

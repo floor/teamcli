@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
 import { hasJsonFlag, pluralCount, refuse, writeJson, writeJsonError } from '../output/index.ts';
@@ -77,11 +77,11 @@ function sortFindings(findings: readonly Finding[]): Finding[] {
 }
 
 function resolveTeamRoles(cwd: string, workflowFile: string): string[] {
-  const fromCwd = loadTeamFile(cwd, { checkOnly: true });
+  const fromCwd = readTeamConfig(cwd, { checkOnly: true });
   if (fromCwd.ok) {
     return [...new Set(fromCwd.team.seats.map((seat) => seat.role))];
   }
-  const fromFileDir = loadTeamFile(dirname(workflowFile), { checkOnly: true });
+  const fromFileDir = readTeamConfig(dirname(workflowFile), { checkOnly: true });
   if (fromFileDir.ok) {
     return [...new Set(fromFileDir.team.seats.map((seat) => seat.role))];
   }

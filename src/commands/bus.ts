@@ -8,7 +8,8 @@ import { readArgs } from '../args.ts';
 import { startBus } from '../bus/server.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
-import { isNoRepository, loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { isNoRepository, withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { eventThresholdsInForce } from '../policy/index.ts';
 import { stopped } from './broker.ts';
@@ -56,7 +57,7 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
   // beside it). A folder that is neither is the no-repository refusal — `team bus` takes no
   // `--file`, so the shared sentence must not offer one. The refusal's own exit is unchanged:
   // `bus.configuration` is the id a configuration that cannot be read has always answered with.
-  const loaded = loadTeamFile(io.cwd, { home: sources.home });
+  const loaded = readTeamConfig(io.cwd, { home: sources.home });
   if (!loaded.ok) {
     const problem = loaded.errors[0];
     if (problem !== undefined && isNoRepository(problem)) {

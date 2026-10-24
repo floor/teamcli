@@ -5,7 +5,7 @@ import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { canonicalLanding, folderOf, listFolder } from '../file/landing.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile } from '../file/launched-file.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentRename, agentStatus, paneForeground, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey as herdrSendKey, typeText, type PaneProcesses } from '../herdr.ts';
@@ -156,7 +156,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   if (args.values.session !== undefined) {
     const walked = walkCaller(io);
     if (!isOwner(walked)) {
-      const local = loadTeamFile(io.cwd, { home: host.home });
+      const local = readTeamConfig(io.cwd, { home: host.home });
       return refuse(
         io,
         json,
@@ -173,7 +173,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     }
   }
   const launched = args.values.file ? undefined : launchedTeamFile(io, host.home);
-  const loaded = loadTeamFile(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: host.home });
+  const loaded = readTeamConfig(io.cwd, { ...(args.values.file ?? launched ? { file: args.values.file ?? launched } : {}), home: host.home });
   if (!loaded.ok) {
     const message = loaded.errors.map((problem) => (problem.line ? `line ${problem.line}: ${problem.message}` : problem.message)).join('; ');
     return configuration(io, json, message || 'the team file cannot be read');

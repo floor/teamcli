@@ -10,7 +10,8 @@ import { checkCommands, type ApprovedCheck } from '../budgets/checks.ts';
 import { parseOutput, runCommand, type CheckReading } from '../budgets/run.ts';
 import { shownTeamFile } from '../check/team.ts';
 import { canonicalLanding as showLanding } from '../file/landing.ts';
-import { isParseError, loadTeamFile } from '../file/load.ts';
+import { isParseError } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { migrationText } from '../file/migrate.ts';
 import { canonicalLanding, insideTrust, isLegacyTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
@@ -851,7 +852,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
   } catch {
     // Tests may supply a proxy that throws on any read to prove no source was touched before validation.
   }
-  const loaded = loadTeamFile(io.cwd, {
+  const loaded = readTeamConfig(io.cwd, {
     ...(args.values.file ? { file: args.values.file } : {}),
     ...(home ? { home } : {}),
     // The session this run addresses: the placement check reads that session's recorded lobby.

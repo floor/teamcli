@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { canonical } from '../approve/fingerprint.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { LockBusyError, readState, type State, withLock } from '../state.ts';
 import {
   isWatchEpoch,
@@ -83,9 +83,9 @@ export function verifyWatchAuthority(input: WatchAuthorityInput): WatchActorVerd
   if (!Number.isFinite(now.getTime())) return refuse('the clock cannot be read');
   if (!isWatchEpoch(input.epoch)) return refuse('this host holds no watch epoch');
 
-  let loaded: ReturnType<typeof loadTeamFile>;
+  let loaded: ReturnType<typeof readTeamConfig>;
   try {
-    loaded = loadTeamFile(realpathSync(input.root));
+    loaded = readTeamConfig(realpathSync(input.root));
   } catch {
     return refuse('the team root cannot be read');
   }

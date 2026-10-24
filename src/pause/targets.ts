@@ -5,7 +5,8 @@
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { currentTeam } from '../file/current.ts';
-import { loadTeamFile, withoutFileOffer } from '../file/load.ts';
+import { withoutFileOffer } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { plainText } from '../launch/plain.ts';
@@ -60,7 +61,7 @@ export function resolveTargets(options: {
       return { ok: false, kind: 'team', message: `"${plainText(options.key)}" names more than one team on this machine; name one by its id` };
     }
     const record = found[0] as (typeof found)[number];
-    const loaded = loadTeamFile(record.root, { home });
+    const loaded = readTeamConfig(record.root, { home });
     if (!loaded.ok) {
       return { ok: false, kind: 'file', message: `${record.project}: ${problemsOf(loaded)}` };
     }
@@ -79,7 +80,7 @@ export function resolveTargets(options: {
     const targets: PauseTarget[] = [];
     const skipped: string[] = [];
     for (const [, record] of records) {
-      const loaded = loadTeamFile(record.root, { home });
+      const loaded = readTeamConfig(record.root, { home });
       if (!loaded.ok) {
         skipped.push(`${record.project}: ${problemsOf(loaded)}`);
         continue;

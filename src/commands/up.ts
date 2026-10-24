@@ -14,7 +14,8 @@ import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, l
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
-import { TEAM_FILE, loadTeamFile } from '../file/load.ts';
+import { TEAM_FILE } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
@@ -215,7 +216,7 @@ function sameFile(a: string, b: string): boolean {
 /** Whether a flagless watch started in `start` would read `flagged`. The decision is that load,
  *  not the shape of the path: the same function the watch runs, with no `--file`. */
 export function watchWouldRead(start: string, flagged: string, home?: string): boolean {
-  const found = loadTeamFile(start, home ? { home } : {});
+  const found = readTeamConfig(start, home ? { home } : {});
   return found.ok && sameFile(found.path, flagged);
 }
 
@@ -1056,7 +1057,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
   // or the token. The refusal is one sentence, on the dry run and the real run.
   const detached = clientUp !== null ? undefined : detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
-  const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : loadTeamFile(io.cwd, { home: sources.home });
+  const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : readTeamConfig(io.cwd, { home: sources.home });
   // Dev mode, as the default live file's chain states it: this folder's own file is the caller's
   // place, never a file the caller names. The aimed branch below decides before that file is
   // mounted, so it reads this verdict; the run's own, after the load, is the one every later
@@ -1217,7 +1218,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     delegateTeam ??
     (defaultLoad !== null && !args.values.file
       ? defaultLoad
-      : loadTeamFile(io.cwd, {
+      : readTeamConfig(io.cwd, {
           ...(args.values.file ? { file: args.values.file } : {}),
           home: sources.home,
           // The session this run addresses: the placement check reads that session's recorded
