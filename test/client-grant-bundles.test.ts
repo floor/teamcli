@@ -665,7 +665,7 @@ describe('the operator runs status, send, up and down from one grant, and the ob
 
     const status = await clientStatus(w, g.path, w.grok.keyPath);
     expect(statusRead(status), status.err + status.out).toBe(true);
-    expect(status.err).toContain('key isolation: not enforced');
+    expect(status.err).toContain('key isolation: enforced against team panes');
     expect(status.log).toContain(`client-status-authorized: grant ${g.grantId} client grok-bot team docs`);
 
     const sent = await clientSend(w, g.path, w.grok.keyPath, 'orchestrator@docs', 'hello from the client');

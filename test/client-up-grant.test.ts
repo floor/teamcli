@@ -260,7 +260,7 @@ describe('request, owner-seat answer, execute, then the client brings the team u
     expect(Date.parse(record.expires) - Date.parse(record.issued)).toBe(90 * DAY);
 
     const run = await clientUp(w, g.path, w.grok.keyPath);
-    expect(run.err).toContain('key isolation: not enforced');
+    expect(run.err).toContain('key isolation: enforced against team panes');
     expect(run.code, run.err + run.out).toBe(0);
     expect(run.workspaces.map((one) => one.label)).toContain('lead');
     expect(run.workspaces.map((one) => one.label)).toContain('worker');
