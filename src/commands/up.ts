@@ -820,7 +820,7 @@ function seatPlan(
         ...planned,
         stage: 'ready',
         ...(listed ? { pane: listed.pane, workspace: listed.workspace } : {}),
-        ...restartNote(team, seat.name, recorded, home, root, session),
+        ...restartNote(team, seat.name, recorded, home, root, session, seat.cwd),
       };
     }
     return planned;
@@ -858,12 +858,13 @@ function restoredDetail(
 }
 
 function restartNote(
-  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby'>,
+  team: Pick<TeamFile, 'orchestrator' | 'operator' | 'entity' | 'lobby' | 'trust'>,
   name: string,
   recorded: SeatState,
   home: string,
   root: string,
   session: string,
+  declaredCwd: string = '.',
 ): { restartNote: string } | Record<string, never> {
   const fix = relaunchRepair(team, name, 'plain');
   // The identity a launch predating the record could not write is `team register`'s to write:
@@ -874,6 +875,8 @@ function restartNote(
   // is. Every other seat still outside the lobby is told how to move.
   if (recorded.start_cwd && recorded.start_cwd !== lobbyOf(home, root, { ...team, session })) {
     if (isLeadSeat(team, name) && recorded.start_cwd === root) return {};
+    // A migrated file starts a non-lead seat in its explicit cwd: that start is its home too.
+    if (!isLeadSeat(team, name) && declaredCwd !== '.' && isMigratedTrust(team.trust) && recorded.start_cwd === resolve(root, declaredCwd)) return {};
     return { restartNote: `a relaunch moves it into the lobby: ${fix}` };
   }
   return {};

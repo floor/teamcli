@@ -17,8 +17,10 @@ started from the beginning. A stopped session the state does not record is refus
 (`session <name> is stopped`); that line names no herdr command. A recorded session that does
 not clear is refused too (`session <name> is stopped and did not clear`).
 
-Every seat, shared and worktree-mode alike, starts in the team's lobby, with one exception: a
-lead, the seat the file names orchestrator or operator, starts in the project folder itself. The
+Every seat, shared and worktree-mode alike, starts in the team's lobby, with two exceptions: a
+lead, the seat the file names orchestrator or operator, starts in the project folder itself, and
+any other seat whose `cwd` the file sets (anything but the default `.`) starts in that folder,
+resolved against the project folder, with no lobby involved. The
 team's lobby is the file's `lobby:`, else the lobby the registry recorded for this session, else
 `<home>/.config/team/lobbies/<entity>` for a team that names `entity:`, else the machine-global
 `~/.config/team/lobby`. Before creating anything, `team` verifies the
@@ -67,7 +69,7 @@ heartbeat; and, under the session's `briefs`, each seat's general-brief claim â€
 delivery time, incarnation, runtime epoch, sha256, attempt, stage and the ids it superseded), each
 seat's general-brief record under `.agents/send-drops/<session>/<seat>/`,
 `.agents/team.log`, the team's lobby folder (made if absent; every seat but a lead
-starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
+or a seat with its own `cwd` starts in it), and, through herdr: the server, one workspace per seat at each seat's launch, and one
 workspace and pane for the watch. A real run holds the session mutator lock
 (`<state dir>/seat-locks/<session>/.run`), the one lock `up`, `add`, `down` and `remove` share, from
 before its first effect to its end â€” its first effect being the make of an absent lobby, itself

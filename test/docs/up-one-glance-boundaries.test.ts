@@ -16,9 +16,10 @@ const INTERNAL = '../../docs/internal/up.md';
 const NOW = new Date('2026-10-15T05:00:00.000Z');
 
 // The placement promise: which seats start where. The old intro said it in two sentences, the
-// condensed one in a clause — either way the promise itself may not be softened or dropped.
+// condensed one in a clause — either way the promise itself may not be softened or dropped. A seat
+// that names its own `cwd` starts there, not in the lobby; the lobby is the default.
 const PLACEMENT =
-  "A fresh launch of the orchestrator or the operator starts in the project folder; every other seat starts in the team's lobby.";
+  "A fresh launch of the orchestrator or the operator starts in the project folder; every other seat starts in the folder its `cwd` names when the file sets one (resolved against the project folder, and never inside a protected checkout), else in the team's lobby.";
 
 // The no-touch promise: a seat already there is left alone. The old page made it three claims
 // (not closed, not moved, nothing typed); the cut folds them into one clause that must keep all
