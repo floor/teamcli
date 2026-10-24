@@ -12,6 +12,7 @@ import { readTeams } from '../registry/teams.ts';
 import { logLine } from '../log.ts';
 import { BUNDLE_OP_ROUTES, DEVELOPER_ONLY_OPS, MANAGER_ONLY_OPS, bundleSpecsFrom, defaultBundleSpecs, parseBundlePolicy, type BundleName, type BundleOp, type BundleSpecs } from './bundle-ops.ts';
 import { bundleSeatsAdmitted, withClientGrantLock, type ClientUpGrantRecord } from './records.ts';
+import { projectIdOfTeamId } from './grant-duration.ts';
 import { claimClientRequest } from './replay.ts';
 import { verifyClientUp } from './up-grant.ts';
 import { CLIENT_REQUEST_ID_PATTERN } from './verify.ts';
@@ -57,11 +58,7 @@ export function expandBundle(
 
 /** The project id the registry records for a team, or null (a team no project names is its own). */
 export function projectIdOfTeam(home: string, teamId: string): string | null {
-  try {
-    return readTeams(home)[teamId]?.projectId ?? null;
-  } catch {
-    return null;
-  }
+  return projectIdOfTeamId(home, teamId);
 }
 
 /** `grok-bot` as a person reads it: `Grok Bot`. */
@@ -128,12 +125,13 @@ export const MANAGER_CANNOT_LINE = "It cannot change permissions, grant or revok
 export const DEVELOPER_CANNOT_LINE = "It cannot change permissions, grant, revoke or delegate access, change policy or settings, answer for the owner, run the daemon, bus or broker, register or create teams or keys, touch a human's seat or the orchestrator's seat; a seat it adds or removes is the owner's to approve.";
 
 /** `2027-01-21 09:00 UTC`: the expiry as the card reads it, with its zone. */
-function cardTime(iso: string): string {
+function cardTime(iso: string | null): string {
+  if (iso === null) return 'revoked (no end date)';
   return `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
 /** The text the owner reads at signing, one plain sentence per grant, built from the EXPLICIT ops. */
-export function bundleCard(input: { clientId: string; project: string; ops: readonly BundleOp[]; seats: readonly string[]; expires: string; fileFingerprint?: string | null }): string {
+export function bundleCard(input: { clientId: string; project: string; ops: readonly BundleOp[]; seats: readonly string[]; expires: string | null; fileFingerprint?: string | null }): string {
   const what = input.ops.map((op) => OP_PHRASES[op](input.seats, input.fileFingerprint ?? null)).join(', ');
   const developed = input.ops.some((op) => (DEVELOPER_ONLY_OPS as readonly string[]).includes(op));
   const managed = developed || input.ops.some((op) => (MANAGER_ONLY_OPS as readonly string[]).includes(op));

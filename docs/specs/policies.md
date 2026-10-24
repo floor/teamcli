@@ -78,6 +78,7 @@ Kinds, allowed levels, release defaults and tightness directions, from `POLICY_C
 | `shared-checkout-hygiene` | advised | project, team | `on` | on | — |
 | `seat-numbering` | advised | entity, project, team | from the settings fallback | unordered: a lower level chooses | width 1–4 digits or `auto`, plus separator, as one canonical string |
 | `pane-conduct` | advised | entity, project, team | `on` | on | — |
+| `client-grant-max-duration` | enforced | entity, project | `send=7d;up=90d;bundle=90d` (the limits it replaced) | a shorter cap, per kind; `none` (no end date) is the loosest | how long a new client grant may last; a bare value names every kind, `send=30d;up=none;bundle=90d` names each; `1d` to `3650d` or `none`; set at the entity (`entities.yaml`) or the project (`projects.yaml`), never lower; an unreadable chain refuses a new grant; see [How long a client grant lasts](../concepts/client-grant-duration.md) |
 | `board` | advised | project | `''` | equal | a tracker pointer |
 | `review-terms` | advised | project | `''` | equal | — |
 
@@ -139,6 +140,7 @@ Rows for the fourteen names in force at the tag (in-tool table), one line per en
 - `shared-checkout-hygiene` | the shared checkout's hygiene rules | 0.5.0 | `src/policy/types.ts` | advised; on is tighter
 - `seat-numbering` | the width and separator of a seat's number | 0.5.0 | `src/policy/types.ts` | advised; a lower level chooses
 - `pane-conduct` | the pane conduct rules | 0.5.0 | `src/policy/types.ts` | advised; on is tighter
+- `client-grant-max-duration` | the longest a new client grant may last, per kind (send, up/down, bundle), up to `none` (no end date) | not yet released | `src/policy/types.ts`, `src/client/duration-policy.ts` | enforced; entity and project level; default `send=7d;up=90d;bundle=90d`; shorter is tighter, `none` is loosest
 - `board` | the team's tracker pointer | 0.5.0 | `src/policy/types.ts` | advised; project level
 - `review-terms` | the terms a review runs under | 0.5.0 | `src/policy/types.ts` | advised; project level
 

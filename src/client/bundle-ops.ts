@@ -283,20 +283,32 @@ export const MANAGER_DEFAULT_OPS: readonly BundleOp[] = [...MANAGER_ELIGIBLE_OPS
 /** What the `developer` bundle expands to unless a policy says otherwise: every op it may ever carry. */
 export const DEVELOPER_DEFAULT_OPS: readonly BundleOp[] = [...DEVELOPER_ELIGIBLE_OPS];
 
-/** The longest a bundle grant may last, whatever a policy says: ninety days, the cap the one-op
- *  `up` grant already has. A policy shortens it; nothing lengthens it. */
-export const BUNDLE_HARD_MAX_DAYS = 90;
+/** How long a bundle grant lasts by default, and the most the `client-bundles` policy may write
+ *  after `@` (1 to 90 days): ninety days, the same as the one-op `up` grant. It is no longer the
+ *  ceiling of a grant: how long a NEW bundle may last is the `client-grant-max-duration` policy's
+ *  `bundle` cap, which defaults to these ninety days and which the owner may raise or set to `none`.
+ *  `@<days>d` in `client-bundles` only shortens, below that cap. */
+export const BUNDLE_DEFAULT_DAYS = 90;
+
+/** The old name of {@link BUNDLE_DEFAULT_DAYS}, kept so a caller that read it as the release default still does. */
+export const BUNDLE_HARD_MAX_DAYS = BUNDLE_DEFAULT_DAYS;
 
 /** One bundle's policy values: the ops it expands to, and the days a grant of it lasts (the default
  *  when `--expires` is absent, and the cap). */
-export type BundleSpec = { ops: BundleOp[]; expiryDays: number };
+export type BundleSpec = {
+  ops: BundleOp[];
+  expiryDays: number;
+  /** True when the `client-bundles` policy wrote `@<days>d` for this bundle: then the days also
+   *  bound the grant (a narrowing); otherwise they are only the default length. */
+  expiryExplicit?: boolean;
+};
 
 /** The release defaults, used where no policy says otherwise. */
 export const DEFAULT_BUNDLE_SPECS: Readonly<Record<BundleName, BundleSpec>> = {
-  observer: { ops: [...OBSERVER_DEFAULT_OPS], expiryDays: BUNDLE_HARD_MAX_DAYS },
-  operator: { ops: [...OPERATOR_DEFAULT_OPS], expiryDays: BUNDLE_HARD_MAX_DAYS },
-  manager: { ops: [...MANAGER_DEFAULT_OPS], expiryDays: BUNDLE_HARD_MAX_DAYS },
-  developer: { ops: [...DEVELOPER_DEFAULT_OPS], expiryDays: BUNDLE_HARD_MAX_DAYS },
+  observer: { ops: [...OBSERVER_DEFAULT_OPS], expiryDays: BUNDLE_DEFAULT_DAYS },
+  operator: { ops: [...OPERATOR_DEFAULT_OPS], expiryDays: BUNDLE_DEFAULT_DAYS },
+  manager: { ops: [...MANAGER_DEFAULT_OPS], expiryDays: BUNDLE_DEFAULT_DAYS },
+  developer: { ops: [...DEVELOPER_DEFAULT_OPS], expiryDays: BUNDLE_DEFAULT_DAYS },
 };
 
 export type BundleSpecs = Record<BundleName, BundleSpec>;
@@ -337,7 +349,7 @@ export function parseBundlePolicy(text: string): { ok: true; specs: Partial<Reco
     let expiryDays: number | undefined;
     if (match[3] !== undefined) {
       expiryDays = Number.parseInt(match[3], 10);
-      if (expiryDays < 1 || expiryDays > BUNDLE_HARD_MAX_DAYS) return { ok: false, why: `${String(expiryDays)} days is out of range: 1 to ${String(BUNDLE_HARD_MAX_DAYS)}` };
+      if (expiryDays < 1 || expiryDays > BUNDLE_DEFAULT_DAYS) return { ok: false, why: `${String(expiryDays)} days is out of range: 1 to ${String(BUNDLE_DEFAULT_DAYS)} (a longer bundle is the client-grant-max-duration policy's bundle cap, with --expires)` };
     }
     specs[name] = { ops, ...(expiryDays !== undefined ? { expiryDays } : {}) };
   }
@@ -349,7 +361,7 @@ export function bundleSpecsFrom(named: Partial<Record<BundleName, { ops: BundleO
   const base = defaultBundleSpecs();
   for (const name of BUNDLE_NAMES) {
     const over = named[name];
-    if (over !== undefined) base[name] = { ops: [...over.ops], expiryDays: over.expiryDays ?? base[name].expiryDays };
+    if (over !== undefined) base[name] = { ops: [...over.ops], expiryDays: over.expiryDays ?? base[name].expiryDays, ...(over.expiryDays !== undefined ? { expiryExplicit: true } : {}) };
   }
   return base;
 }

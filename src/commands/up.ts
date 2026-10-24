@@ -99,6 +99,7 @@ import { watchIdentity, watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
+import { expiryPhrase } from '../client/duration-policy.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
@@ -1036,7 +1037,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     clientUp = { grant: verified.grant, signature: verified.signature, requestId: verified.requestId };
     // The folder is the grant's, whatever the caller's: from here every read is of that team.
     io = { ...io, cwd: verified.root };
-    stderrLine(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, until ${verified.grant.expires}\n`);
+    stderrLine(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
   // §RFC0007: a caller the ordinary rule refuses is judged by the delegate gate against the
   // DEFAULT live file of this cwd, read with no flag — before any `--file` or `--session` is

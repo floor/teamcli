@@ -68,7 +68,7 @@ Vocabulary 5 for `observer` and `operator`, vocabulary 6 for `manager`, vocabula
 
 The ops are expanded at signing time. A command added to a bundle in a later build, or a policy
 loosened later, never widens a grant already signed. A grant is never widened in place: the owner
-signs a new one. An older build reads vocabularies 1 to 4 only and refuses a bundle whole; this build reads 1 to 7, and a vocabulary 5 record that lists a manager op, a vocabulary 6 record that lists a developer op, or a record whose vocabulary is not its bundle's, is nothing.
+signs a new one. An older build reads vocabularies 1 to 4 only and refuses a bundle whole, and refuses a bundle with no end date whole; this build reads 1 to 7, and a vocabulary 5 record that lists a manager op, a vocabulary 6 record that lists a developer op, or a record whose vocabulary is not its bundle's, is nothing.
 
 ## What can never be in a bundle
 
@@ -184,7 +184,11 @@ The bundles' ops and expiry are values of the `client-bundles` policy (entity an
 
     operator=status,send,up,down@30d;observer=status@90d;manager=status,restart,add,remove@30d;developer=status,pause,resume@30d
 
-A bundle left out keeps the release default (a policy narrows a bundle; it cannot switch one off); days default to ninety, the ceiling. A policy chooses
+A bundle left out keeps the release default (a policy narrows a bundle; it cannot switch one off); days default to ninety, and a policy's `@<days>d`
+(1 to 90) is both the default length and a bound that only shortens. How long a bundle may last at
+all is the `client-grant-max-duration` policy's `bundle` cap (ninety days unless the owner changes
+it; `none` allows `--expires never`), see [How long a client grant lasts](client-grant-duration.md).
+A policy chooses
 among eligible ops only (a forbidden command is a parse error); a lower level may only narrow.
 It is set like any enforced policy, at the entity or the project level (see [`team policy`](../commands/policy.md)). A policy chain that cannot be
 read or verified refuses a new bundle instead of falling back to defaults that may be looser.

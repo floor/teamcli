@@ -42,7 +42,9 @@ is written, so a revocation never overwrites a grant.
 A client grant id appends one owner-signed per-event revocation record into the same grants folder,
 beside the grant and every other revocation; nothing is deleted or rewritten. Each event covers the
 whole signed bytes it was made from, and a revocation record that cannot be read or verified fails
-closed — the client grant is treated as revoked, never as still valid. A client request is
+closed — the client grant is treated as revoked, never as still valid. This is the only way a client
+grant signed with no end date (`--expires never`, see [How long a client grant lasts](../concepts/client-grant-duration.md))
+ends; it is revocable like any other, and the revocation is read by the build that knows the grant. A client request is
 revalidated against the grant, its expiry and these events when it lands, so a revocation ends the
 client's access even for a request composed before it. A grant already revoked is an unchanged
 no-op.
