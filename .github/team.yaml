@@ -8,6 +8,8 @@ coordinator: claude-coordinator
 operator: claude-coordinator
 
 identity:
+  humans:
+    - drjones@floor.io   # the owner's own commits carry no Agent line
   since: 28f2fb56d5b4aaee51cd73e4b0a34b76dd65e803
   forbidden_public:
     - "\\bFLO-[0-9]+\\b"   # internal tracker ids: this repository's issues are #<number>
@@ -345,3 +347,21 @@ seats:
     version: "6"
     display: GPT Luna 6
     launch: codex
+
+  - role: builder
+    name: builder-grokbot
+    cli: grok
+    vendor: xai
+    model: GrokBot
+    version: "6.1"
+    display: GrokBot 6.1
+    launch: grok
+
+  - role: orchestrator
+    name: orchestrator-grokbot
+    cli: grok
+    vendor: xai
+    model: GrokBot
+    version: "6.1"
+    display: GrokBot 6.1
+    launch: grok
