@@ -17,21 +17,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    # The two systems the watch reads: Linux answers from /proc, macOS from its own commands.
-    # Linux runs on pull requests and pushes to main; macOS runs on pushes to main, nightly schedule
-    # and workflow_dispatch (the author and at least one reviewer run bun run ci on macOS locally before merge).
-    # Both run the same `bun run ci`, so neither path rots unseen.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+  # Pull requests: typecheck, one build (via pack), every fast check and the signature check
+  # in one job; the tests the diff can reach in parallel shards. See scripts/ci-select-tests.ts.
+  # Pushes to main (merge time), the nightly schedule and workflow_dispatch run the whole
+  # suite on Linux and macOS in the `full` job, so anything the selection misses is caught there.
+  checks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # `team check` reads the history
+          fetch-depth: 0   # `team check` reads the history; the PR test selection diffs against the base
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -39,23 +36,10 @@ jobs:
         with:
           node-version: 22.23.3
       - run: bun install --frozen-lockfile
-      # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
-      - run: bun run ci
-      # The team schema is generated from the section modules; this fails when one moved
-      # without the other. It rides in `bun run ci` too.
-      - run: bun run schema:check
-      - run: bun run contract:check
-
-      # The coverage matrix is generated; fail if the checked-in copy is not current.
-      - run: bun run coverage:check
-
-      # The embedded general seat brief is generated from the accepted source; CI holds no
-      # source checkout, so this checks that the text still hashes to its pinned value.
-      - run: bun run brief:check
-
-      # The release's tarball guard, on every pull request, so the real path is
+      - run: bun run typecheck
+      # The release's tarball guard, on every run, so the real path is
       # exercised before any tag. The filename and SHA256 come from the pack
-      # script's own JSON line, never a glob. The pack is stamped with the
+      # script's own JSON line, never a glob. The pack builds dist/ (the only build in this job) and is stamped with the
       # commit this run checked out: scripts/pack.ts refuses a dirty tree, an
       # uncommitted version or an unpinned compressor, and writes the full HEAD
       # SHA into the tarball's manifest. The gzip frame is fixed, so this SHA256
@@ -98,4 +82,136 @@ jobs:
             esac
           fi
 
+      - run: node dist/cli.js --version
+      # The checks `bun run ci` runs after its build, each once.
+      - run: bun run conformance
+      - run: bun run schema:check
+      - run: bun run contract:check
+      - run: bun run coverage:check
+      - run: bun run brief:check
+      - run: bun run public-names:check
       - run: bun run exit-codes:check
+      - run: bun run readme:check
+
+  pr-tests:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # `team check` reads the history; the PR test selection diffs against the base
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+      - run: bun install --frozen-lockfile
+      - name: Select the tests this diff can reach
+        id: select
+        env:
+          BASE: ${{ github.base_ref }}
+        run: bun scripts/ci-select-tests.ts --base "origin/$BASE" --github-output "$GITHUB_OUTPUT" > /dev/null
+      # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
+      - name: Run the selected tests (shard ${{ matrix.shard }} of 4)
+        env:
+          MODE: ${{ steps.select.outputs.mode }}
+          TESTS: ${{ steps.select.outputs.tests }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          if [ "$MODE" = full ]; then
+            TESTS="$(git ls-files -- 'test/*.test.ts' | tr '\n' ' ')"
+          fi
+          mine=""
+          i=0
+          for t in $TESTS; do
+            [ $((i % 4)) -eq "$SHARD" ] && mine="$mine $t"
+            i=$((i + 1))
+          done
+          if [ -z "$mine" ]; then echo "No tests in this shard."; exit 0; fi
+          echo "Shard $SHARD runs:$mine"
+          bun test $mine
+
+  full:
+    if: github.event_name != 'pull_request'
+    # The two systems the watch reads: Linux answers from /proc, macOS from its own commands.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # `team check` reads the history; the PR test selection diffs against the base
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.3
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # The release's tarball guard, on every run, so the real path is
+      # exercised before any tag. The filename and SHA256 come from the pack
+      # script's own JSON line, never a glob. The pack builds dist/ (the only build in this job) and is stamped with the
+      # commit this run checked out: scripts/pack.ts refuses a dirty tree, an
+      # uncommitted version or an unpinned compressor, and writes the full HEAD
+      # SHA into the tarball's manifest. The gzip frame is fixed, so this SHA256
+      # is the one a local pack of the same commit prints.
+      - name: Pack the tarball
+        id: pack
+        run: |
+          report="$(bun scripts/pack.ts --pack-destination .)"
+          printf '%s\n' "$report"
+          filename="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).tarball')"
+          sha256="$(printf '%s' "$report" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).sha256')"
+          test -f "$filename" || { echo "pack reported '$filename', which is not a file" >&2; exit 1; }
+          echo "tarball=$filename" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "Reproducible tarball SHA256: $sha256"
+            echo "Compressor: Node $(node --version), zlib $(node -p 'process.versions.zlib')"
+            echo "Tar builder: npm $(npm --version)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The tarball carries its source stamp and no internal ticket reference
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: bun scripts/check-pack.ts "$TARBALL" "$GITHUB_SHA"
+
+      - name: Every commit and the pull request body are signed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            printf '%s' "$BODY" | node dist/cli.js check "origin/$BASE..HEAD" --pr - --file .github/team.yaml
+          else
+            case "$BEFORE" in
+              *[!0]*) node dist/cli.js check "$BEFORE..HEAD" --file .github/team.yaml ;;
+              # A first push has no commit before it.
+              *) node dist/cli.js check HEAD --file .github/team.yaml ;;
+            esac
+          fi
+
+      - run: node dist/cli.js --version
+      # The checks `bun run ci` runs after its build, each once.
+      - run: bun run conformance
+      - run: bun run schema:check
+      - run: bun run contract:check
+      - run: bun run coverage:check
+      - run: bun run brief:check
+      - run: bun run public-names:check
+      - run: bun run exit-codes:check
+      - run: bun run readme:check
+      # The live-herdr tests skip themselves: TEAM_LIVE_UP is not set here.
+      - run: bun test
