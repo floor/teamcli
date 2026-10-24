@@ -1,10 +1,12 @@
 # Synthetic owner statement and inert request contract
 
-This is a **proposed wire v1**, based on the round-1 and round-2 fold rulings through docs
-`3c94748`, reconciled with draft 6 at `f99ef13`. Nothing here activates a command, enrolls a
-signer, authenticates a person, writes authority or supplies an execution permit. The frozen
-`18791ec` gate and `SIGN_METHOD_COMMANDS_ACTIVE = false` are unchanged. Existing receipts and
-their signatures are not migrated or reinterpreted.
+This is a **proposed wire v1**, aligned to the reviewed spec at docs `dcdb23d` (draft 7 text
+`8d067e1`, check 7 PASS `64654f7`, board ruling `423f745`). The wire layout remains a synthetic
+proposal; the reviewed policy rules govern its inert evaluator. Nothing here activates a
+command, enrolls a signer, authenticates a person, writes authority or supplies an execution
+permit. This library has no activation path. The frozen `18791ec` gate and its false activation
+flag remain preserved on the original branch. Existing receipts and their signatures are not
+migrated or reinterpreted.
 
 ## Modules and bytes
 
@@ -33,8 +35,10 @@ The payload has exactly these fields; missing or additional fields refuse:
 `standing_rule` has exactly `kind`, `scope`, `bounds`, `expires_at`; scope and bounds are plain
 JSON objects, including empty objects where appropriate. Its expiry is after statement time.
 It is mandatory for `always` and forbidden for `once` or `deny`. The gate's nonce exists before
-the payload. The challenge is SHA-256 of the **complete canonical payload**, nonce included,
-without a domain prefix. The payload contains neither its own challenge nor its own hash.
+the payload. `OwnerStatement` names that canonical payload in this v1 API; `OwnerTranscript`
+is its enclosing transcript. The challenge is SHA-256 of the **exact canonical payload**,
+nonce included, without a domain prefix; the transcript/envelope is never hashed in its place.
+The payload contains neither its own challenge nor its own hash.
 
 The synthetic transcript is exactly `{ format: "team-owner-transcript-v1",
 scheme: "synthetic-ed25519", statement, challenge, signature }`. Its single signature covers
@@ -83,12 +87,17 @@ words, including the Kernel's administrative names, `delegate`, `revoke`, `init`
 `policy`, `approve`, `approval-policy`, and non-null `grant_scope`, require fresh high assurance.
 This is a proposed parameter projection; production command projections have not been wired.
 Team creation always requires fresh high assurance. Approval-policy names, including
-`sign-method`, `owner-signers`, and the approvals policy family, do too. An ordinary policy
+`sign-method`, `owner-signers`, and the entire approvals policy family, do too: `approval-methods`
+(superseded), `approval-min-assurance`, `approval-always-allowed`, `owner-signer-mode`,
+`approval-rule-ttl`, and **`grant-emission`** are protected. A `grant-emission` change is
+grant-of-grant and never uses the plain-policy path, `none` or `always`. An ordinary policy
 change is class `policy`, with the policy name in `payload.name`.
 
 Authority writes and self-requests never admit `none`. Ordinary publish/spend/go and ordinary
 non-approval policy changes can use it with no floor and verified policy evidence. Fresh-high
-acts and self-requests never admit `always`. Other always answers require current permission,
+acts and self-requests never admit `always`. **GO also refuses `always`** until the reviewed
+spec's section 4.2 coordinated replacement exists; this evaluator has no flag to bypass that
+restriction. Other always answers require current permission,
 an exact operation-kind match and the host's current scope/bounds/TTL containment check; a
 policy rule must additionally name the exact policy in `scope.policy_name`. This slice verifies
 fresh always answers; it does not install or automatically match standing rules.
@@ -126,6 +135,14 @@ and claims the injected request id; it approves nothing. The records are disjoin
 | `approval` | owner GO only | `run_id` copied from required `act.payload.run_id`, request, transcript list or terminal placement |
 | `approval-answer` | other owner-proof classes | request and transcript list or terminal placement; no run id |
 | `policy-approval` | policy-authorized `none` only | request, verified policy reference, synthetic tool signature; no run id |
+
+These types serve cases rather than a one-to-one mapping of proof methods: `approval-answer`
+serves fresh owner answers and, when implemented, standing-rule auto-approvals; `policy-approval`
+serves policy-derived approvals; GO's `approval` remains the workflow amendment's own record.
+Standing-rule matching/auto-approval is **not implemented** here. A future auto-approval must
+name its rule and omit `taken` and `attestation`, with no claim of a fresh device proof. `none`
+already omits both fields. This documentation does not add a standing-auto route, widen a GO
+consumer, or present these in-memory records as ledger entries.
 
 `evaluateInertNone` requires the host's current policy verification callback and synthetic tool
 key. Its result decision is the record sentinel `policy`, never a signable owner choice or

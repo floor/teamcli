@@ -125,11 +125,11 @@ export function validOwnerStatement(raw: unknown): raw is OwnerStatement {
   }
 }
 
-/** The nonce is already a payload field. The challenge is SHA-256 of the complete canonical
- * payload WITHOUT a domain prefix; it is never inserted back into the signed payload. */
-export function ownerStatementChallenge(statement: OwnerStatement): string {
-  if (!validOwnerStatement(statement)) throw new Error('owner-wire.invalid-statement');
-  return ownerValueHash(statement);
+/** OwnerStatement is the v1 canonical PAYLOAD, not its enclosing OwnerTranscript. Hash that
+ * exact payload, nonce included, WITHOUT a domain prefix, transcript or self-hash field. */
+export function ownerStatementChallenge(payload: OwnerStatement): string {
+  if (!validOwnerStatement(payload)) throw new Error('owner-wire.invalid-statement');
+  return ownerValueHash(payload);
 }
 function signatureInput(statement: OwnerStatement): Buffer {
   return Buffer.concat([Buffer.from(OWNER_STATEMENT_DOMAIN, 'utf8'), Buffer.from(ownerStatementChallenge(statement), 'hex')]);

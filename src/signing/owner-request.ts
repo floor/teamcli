@@ -53,7 +53,7 @@ export type OwnerActionRequirements = {
 
 const ADMIN_WORDS = new Set<string>([...TEAM_GRANT_FORBIDDEN, 'delegate', 'revoke', 'init', 'signer', 'policy', 'approve', 'approval-policy']);
 const APPROVAL_POLICIES = new Set(['sign-method', 'owner-signers', 'approval-methods', 'approval-min-assurance',
-  'approval-always-allowed', 'owner-signer-mode', 'approval-rule-ttl']);
+  'approval-always-allowed', 'owner-signer-mode', 'approval-rule-ttl', 'grant-emission']);
 function words(raw: unknown): string[] {
   if (!Array.isArray(raw) || raw.some((word) => typeof word !== 'string' || word === '' || word.trim() !== word)) throw new Error('owner-request.invalid-authority-words');
   return raw as string[];
@@ -87,7 +87,9 @@ export function ownerActionRequirements(act: OwnerAct, selfRequest: boolean): Ow
   const freshHigh = act.operation === 'team-create' || grantOfGrant;
   return { class: act.class, authorityWrite, grantOfGrant, freshHigh,
     noneAllowed: !authorityWrite && !freshHigh && !selfRequest,
-    alwaysAllowed: !freshHigh && !selfRequest };
+    // The GO record still requires the owner's own act until the coordinated replacement
+    // in the reviewed spec's section 4.2 lands; a policy preference cannot enable always.
+    alwaysAllowed: !freshHigh && !selfRequest && act.class !== 'go' };
 }
 
 export function validOwnerAct(raw: unknown): raw is OwnerAct {
