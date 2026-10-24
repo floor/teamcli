@@ -147,7 +147,7 @@ test('a typed send queued on a held seat lock is typed once when the seat is fre
   const said: string[] = [];
   await retryHeldDrops(scene(made, one, said));
 
-  expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+  expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
   expect(one.enters).toBe(1);
   expect(readPending(dir)).toEqual([]);
   // A later pass finds no marker: the trigger is never typed a second time.

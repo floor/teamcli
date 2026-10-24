@@ -147,7 +147,8 @@ test('a held socket frame writes no receipt, and the one watch retry still comes
 
   const due = book();
   await wakeUnreadDrops(sceneOf(one, due, new Date(NOW.getTime() + (N + 1) * 1000)), { unreadAfter: N });
-  const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+  // The retry types the message-display line, its summary the held note's first line.
+  const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'the held note' }) as string;
   expect(due.typed).toEqual([line]);
   expect(due.enters).toBe(1);
   expect(existsSync(wakePath(drops, record.id))).toBe(true);

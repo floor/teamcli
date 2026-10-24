@@ -949,7 +949,7 @@ describe('the watch seam', () => {
     expect(code).toBe(0);
     // The guard is narrow: with nothing to dispatch and a truthful clock, the mail ring is the
     // one typed path left, and it types.
-    expect(typed.some((line) => line.includes('Team: run team drops --read --seat deepseek-acme-2'))).toBe(true);
+    expect(typed.some((line) => line.includes('Message from owner (owner@acme-web): read this and report'))).toBe(true);
   });
 
   /** The same team file with its source moved to a tracker. Its records exist only in the

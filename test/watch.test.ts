@@ -9,6 +9,7 @@ import { runStatus } from '../src/commands/status.ts';
 import { listUnacked, plantMessage, plantRecord, type MessagePayload } from '../src/commands/messages.ts';
 import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
+import { readTriggerLine } from '../src/send/native.ts';
 import { findRoot } from '../src/file/load.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -21,14 +22,18 @@ import type { Machine } from '../src/watch/machine.ts';
 import { watchLabel } from '../src/watch/pane.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { newMemory, NUDGE_TEXT, pass, ringText } from '../src/watch/pass.ts';
+import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
 
-// The ring line is the receiver's own: this fixture's team session is `acme-web`, and each
-// scene's seat is the one its record names.
-const ringFor = (seat: string): string => ringText(seat, 'acme-web');
+// The ring line is the receiver's own: this fixture's team session is `acme-web`, each scene's
+// seat is the one its record names, and a waiting drop record's sender is the planted `lead`.
+const ringFor = (seat: string): string => readTriggerLine(seat, 'acme-web', {
+  seat: 'lead',
+  team: 'acme-web',
+  body: 'the message body itself',
+}) as string;
 const RING_TEXT = ringFor('deepseek-acme');
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8')
@@ -2066,25 +2071,28 @@ describe('team watch', () => {
   test('--no-nudge types no ring and presses no Enter; the record stays', async () => {
     // The older `--no-nudge` test already has a report waiting, so the nudge branch runs and the
     // ring branch does not. This pass has no report: the ring would be the only typed line.
-    const body = 'the message body itself';
+    const body = 'the message body itself\nthis second line stays in the record';
     const at = dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file, '--no-nudge'], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
     expect(typed).toEqual([]);
     expect(io.out).toContain(`ring not typed (--no-nudge): ${ringFor('claude-operator-acme')}`);
+    // The logged line carries the body's first content line as its summary; the rest stays in
+    // the record and is never printed.
     expect(io.out).not.toContain(body);
     expect(existsSync(at)).toBe(true);
     expect(existsSync(`${at}.read.json`)).toBe(false);
   });
 
   test('an unacked record rings the idle seat with the wake line and not the body', async () => {
-    const body = 'the message body itself';
+    const body = 'the message body itself\nthis second line stays in the record';
     const at = dropWaiting('claude-operator-acme', body, '2026-10-03T13:00:00.000Z');
     const io = testIo(dir, { kind: 'owner' });
     await runWatch(['--file', file], io, sources(1, { home: join(dir, 'home'), live: () => live() }));
-    // The line is the receiving seat's own: its name and the session its mailbox was read for.
+    // The line names the record's sender and carries the body's first content line; the rest of
+    // the body stays in the record.
     expect(typed).toEqual([
-      'w0:p1 Team: run team drops --read --seat claude-operator-acme --session acme-web',
+      `w0:p1 ${ringFor('claude-operator-acme')}`,
       'w0:p1 <enter>',
     ]);
     expect(typed.join('\n')).not.toContain(body);

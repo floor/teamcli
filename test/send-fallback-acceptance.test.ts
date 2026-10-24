@@ -125,7 +125,7 @@ test('a refused socket frame falls through with the same record and message id',
   expect(readFileSync(join(dir, id), 'utf8')).toContain(id);
   expect(dials).toHaveLength(1);
   expect(dials[0]).toContain(id);
-  const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+  const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
   expect(pane.typed).toEqual([trigger]);
 
   // The one history line names the socket refusal and the route that took the send.
@@ -236,7 +236,7 @@ test('a held socket frame falls through to the typed route with the same record 
   const id = records[0] as string;
   expect(dials).toHaveLength(1);
   expect(dials[0]).toContain(id);
-  const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string;
+  const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
   expect(pane.typed).toEqual([trigger]);
 
   const recipient: CanonicalRecipient = { team: 'acme', seat: 'lead', toId: null, session: 'acme', root: made.root };

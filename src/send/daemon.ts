@@ -37,7 +37,8 @@ import { logLine } from '../log.ts';
 import { claimBindingIn, receiptHeld } from '../mcp/inbox.ts';
 import { profileFor } from '../profiles/index.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
+import { messageSummaryOf, renderMessageDisplay } from '../settings/message-display.ts';
+import { messageDisplayInForce } from '../settings/message-display-policy.ts';
 import { readState, type SessionState } from '../state.ts';
 import { storePath } from '../store/store.ts';
 import { classify, readScreen } from '../watch/screen.ts';
@@ -121,6 +122,17 @@ export type DaemonSendRequest = {
    *  to. The history line keeps both beside `to`, the seat. */
   spec?: string;
   resolved?: string;
+  /** The sender's registry id, when the caller's record carries one: the wake's readable name is
+   *  resolved from it, the same way a record read from disk is. */
+  from_id?: string | null;
+  /** The sender's one-line subject (`--subject`): a display field, never the summary. */
+  subject?: string;
+  /** The `message-display` header's sender name, as the caller resolved it (the seat's nickname,
+   *  or its seat name). Absent, the daemon reads the team file's nickname, then the seat name. */
+  name?: string;
+  /** The receiving team's `message-display` template as the caller read it; absent, the daemon
+   *  resolves it from the chain, and a chain that cannot be read leaves the shipped template. */
+  template?: string;
 };
 
 export type DaemonRequest =
@@ -943,6 +955,32 @@ async function nativeHoldOf(
   return verdict.idle ? null : `${verdict.reason}: ${verdict.why}`;
 }
 
+/** The display words a daemon-delivered message opens with: the template the caller read, or the
+ *  receiving chain's; the caller's sender name, or the team file's nickname, or the seat name.
+ *  The summary is the body's first content line, and the id never enters it. */
+function displayOf(
+  request: Pick<DaemonSendRequest, 'from' | 'name' | 'template' | 'subject'>,
+  team: TeamFile,
+  root: string,
+  host: DaemonHost,
+  body: string,
+): { name: string; template: string; header: string } {
+  const template = request.template
+    ?? messageDisplayInForce({ home: host.home, root, team, now: host.now() });
+  const declared = team.seats.find((seat) => seat.name === request.from);
+  const name = request.name ?? declared?.nickname ?? request.from;
+  const header = renderMessageDisplay(template, {
+    name,
+    seat: request.from,
+    team: team.project,
+    ...(request.subject === undefined ? {} : { subject: request.subject }),
+    summary: messageSummaryOf(body),
+    age: '0s',
+    id: '',
+  });
+  return { name, template, header };
+}
+
 async function executeQueuedSend(
   dir: string,
   root: string,
@@ -1016,7 +1054,10 @@ async function executeQueuedSend(
         detail: `${seatName} runs ${configured.cli}: this build confirms that a native CLI submitted and does not carry its reply; nothing was sent`,
       };
     }
-    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs);
+    // The socket frame opens with the same display header the typed wake does, then the signed
+    // record's full body; a person-pane seat gets neither a reply line nor a read hint.
+    const display = displayOf(request, team, root, host, body);
+    return executeSocketSend(dir, root, who, from, team, seatName, body, msgId, request.timeout_s ?? 120, waitMs, pollMs, host, alive, sentAs, display.header, configured.human === true);
   }
 
   const found = findSeatAgent(host, team.session, seatName);
@@ -1125,10 +1166,18 @@ async function executeQueuedSend(
   // The wake names the sender from the send's own record: the caller seat the daemon was asked
   // to deliver for, and the team it runs under. Nothing in the body decides the name. The drop is
   // already written, so a wake that cannot carry the name is refused as held with the drop kept
-  // and named, never typed nameless. The team's sender-line policy supplies the words around the
-  // two names; one that cannot be read leaves the shipped format, never an unnamed line.
-  const format = senderLineFormatInForce({ home: host.home, root, team, now: host.now() });
-  const trigger = triggerLine(candidateDropPath, { seat: from, team: team.project, format });
+  // and named, never typed nameless. The team's `message-display` policy supplies the header; one
+  // that cannot be read leaves the shipped template, never a hollow line.
+  const display = displayOf(request, team, root, host, body);
+  const trigger = triggerLine(candidateDropPath, {
+    seat: from,
+    team: team.project,
+    template: display.template,
+    name: display.name,
+    body,
+    ageMs: 0,
+    ...(request.subject === undefined ? {} : { subject: request.subject }),
+  });
   if (trigger === null) {
     return recordHeld(`${seatName}: the trigger would exceed ${String(TRIGGER_MAX)} characters; nothing was typed`);
   }
@@ -1441,6 +1490,10 @@ async function executeSocketSend(
   alive: (pid: number) => boolean,
   /** The address as written, when it was a form: every history line carries it beside the seat. */
   sentAs: Pick<HistoryEntry, 'spec' | 'resolved' | 'from_team'>,
+  /** The rendered `message-display` header the frame opens with; empty, the body alone. */
+  header = '',
+  /** True for a person-pane seat: no reply line and no read hint. */
+  personPane = false,
 ): Promise<DaemonSendResponse> {
   // While SOCKET_SEND is off, the daemon serves no waited send: the frame the reply would ride
   // is one this build does not write, and a caller asking for one anyway — an older CLI — is
@@ -1484,10 +1537,11 @@ async function executeSocketSend(
   }
   // Send to outcome is measured from here: the socket send and, for --wait, the reply's wait.
   const startedAt = Date.now();
-  // The reply line rides every frame, built from the sender the request carries and the team
-  // this daemon serves; with no team there is no address, and the frame is not dialed.
+  // The reply line rides every agent seat's frame, built from the sender the request carries and
+  // the team this daemon serves; with no team there is no address, and the frame is not dialed.
+  // A person-pane seat has no reply line.
   const sendingTeam = sentAs.from_team;
-  if (sendingTeam === undefined) {
+  if (sendingTeam === undefined && !personPane) {
     return {
       v: 1,
       ok: false,
@@ -1497,8 +1551,10 @@ async function executeSocketSend(
       detail: `${seatName}: the sending team is not known, so the frame carries no reply address; nothing was sent`,
     };
   }
-  const reply = frameReplyFor(host.home, root, from, sendingTeam);
-  if ('missing' in reply) {
+  const reply = personPane || sendingTeam === undefined
+    ? null
+    : frameReplyFor(host.home, root, from, sendingTeam);
+  if (reply !== null && 'missing' in reply) {
     return {
       v: 1,
       ok: false,
@@ -1508,7 +1564,8 @@ async function executeSocketSend(
       detail: `${seatName}: ${reply.missing}; nothing was sent`,
     };
   }
-  const frame = frameFor(body, msgId, reply.line);
+  const content = header === '' ? body : `${header}\n\n${body}`;
+  const frame = frameFor(content, msgId, reply === null ? null : reply.line);
   if (frame.length > FRAME_LIMIT) {
     return {
       v: 1,

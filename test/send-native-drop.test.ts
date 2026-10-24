@@ -79,7 +79,7 @@ test('the pane is given the drop path only once that file holds the whole body',
     const path = join(drops, names[0] as string);
     // The typed trigger is the seat's own drop read: the line's receipt is the read the send
     // watches for, so the record's path no longer has to fit inside the typed line.
-    expect(text).toBe(readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme' }) as string);
+    expect(text).toBe(readTriggerLine('native', 'acme', { seat: 'owner', team: 'acme', body }) as string);
     expect(recordBody(path)).toBe(filed(body));
     expect(statSync(path).mode & 0o777).toBe(0o600);
     seen = true;

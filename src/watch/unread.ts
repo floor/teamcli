@@ -54,8 +54,7 @@ import { dropMessage, readTriggerLine } from '../send/native.ts';
 import { pendingDropPath } from '../send/pending.ts';
 import { readRecord, signRecord, verifyRecord, type RecordPayload, type StatusContext } from '../send/record.ts';
 import { markTaken } from '../send/taken.ts';
-import { wakeSender } from '../send/wake.ts';
-import { senderLineFormatInForce } from '../settings/sender-line-policy.ts';
+import { wakeTrigger } from '../send/wake.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { RetryScene } from './retry.ts';
 import { readScreen } from './screen.ts';
@@ -75,7 +74,12 @@ export type UnreadWindow = { unreadAfter: number };
 
 /** The wake is typing, so `--no-nudge` leaves it out; the report is a mailbox record and runs
  *  either way. */
-export type UnreadOptions = UnreadWindow & { noNudge?: boolean };
+export type UnreadOptions = UnreadWindow & {
+  noNudge?: boolean;
+  /** Messages this pass already typed a wake line for — the ring a seat's idle prompt took.
+   *  The unread wake types the same line, so one pass never puts it in front of a seat twice. */
+  skip?: ReadonlySet<string>;
+};
 
 /** Rewrites a reservation with what it was seen to become. This is a record update, never the
  *  reservation itself: the marker was linked into place before the effect, and a failed update
@@ -207,8 +211,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
   if (options.noNudge === true) return;
   const key = messageKeyState(home);
   if (key.kind !== 'key') return;
-  // The receiving team's sender-line format is the same for every seat this pass wakes.
-  const format = senderLineFormatInForce({ home, root: scene.root, team: scene.team, now: scene.now });
+  // The receiving team's `message-display` template is the same for every seat this pass wakes.
   const nowMs = scene.now.getTime();
   for (const seat of scene.team.seats) {
     // A person's drop is read by a person, and nothing is typed into a human's pane.
@@ -222,7 +225,8 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     if (scene.nativeHeld?.has(seat.name) === true) continue;
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
-    const due = listUnread(dropDir, context, home).filter((message) => dueForWake(dropDir, message, nowMs, options));
+    const due = listUnread(dropDir, context, home)
+      .filter((message) => !options.skip?.has(message.id) && dueForWake(dropDir, message, nowMs, options));
     if (due.length === 0) continue;
     const agents = scene.live.agents.filter((agent) => agent.name === seat.name);
     const found = agents.length === 1 ? agents[0]?.pane : undefined;
@@ -251,12 +255,12 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
       const audited = wakeable.map((message) => ({ message, payload: payloadOf(dropDir, message.id, home) }))
         .find((one) => one.payload !== null);
       if (audited === undefined || audited.payload === null) continue;
-      // The wake's first line names the sender the signed record carries, resolved through this
+      // The wake's header names the sender the signed record carries, resolved through this
       // home's registries. A sender that cannot be pinned is not typed nameless: the message
       // stays unread, its reservations are never taken, and the report pass says why.
-      const sender = wakeSender(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team });
+      const sender = wakeTrigger(audited.payload, home, { root: scene.root, session: scene.session, team: scene.team }, scene.now);
       if (sender === null) continue;
-      const line = readTriggerLine(seat.name, scene.session, { ...sender, format });
+      const line = readTriggerLine(seat.name, scene.session, sender);
       if (line === null) continue;
       // The reservations go down before the line is typed. A crash after Enter can leave no other
       // trace, so the marker is what makes the wake single-writer: one that is already there is an

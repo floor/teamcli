@@ -190,6 +190,8 @@ export type PendingNative = {
   fallback?: readonly PendingNativeFallbackLeg[];
   /** The whole body the sender was told to send, sender header and nonce included. */
   body: string;
+  /** The sender's own subject (`--subject`), when the send wrote one: a display field only. */
+  subject?: string;
   /** The thread the message belongs to: the first message's id. Absent on a record written
    *  before the thread spine; such a record's thread is its own id. */
   thread?: string;
