@@ -229,7 +229,7 @@ function readDeclarations(root: string, home: string): DeclaredTeam {
   if (!existsSync(join(root, '.agents', 'team.yaml'))) return { kind: 'absent' };
   let loaded: ReturnType<typeof loadTeamFile>;
   try {
-    loaded = loadTeamFile(root, { home, checkOnly: true });
+    loaded = loadTeamFile(root, { file: join(root, '.agents', 'team.yaml'), home, checkOnly: true });
   } catch {
     return { kind: 'unreadable' };
   }
