@@ -224,7 +224,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   if (args.values.client !== undefined) {
     if (!wantsJson) io.stderr(`${KEY_ISOLATION_LINE}\n`);
     const at = sources.now();
-    const verified = verifyClientForm({ home: sources.home, now: at }, { op: 'add', values: args.values, cwd: io.cwd });
+    const verified = verifyClientForm({ home: sources.home, now: at, io }, { op: 'add', values: args.values, cwd: io.cwd });
     if (!verified.ok) {
       if (!args.flags.has('dry-run')) auditClientRefusal('add', verified.named, verified.why, at);
       return clientRefused(plainText(verified.why));

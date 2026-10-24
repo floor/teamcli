@@ -1,5 +1,6 @@
 // The client pane guard: a client key is the client's, never a seat's. Every client invocation
-// (`team send --client`, `team messages --client`, `team client keygen`) is placed by the same parent-process walk the
+// (`team send --client`, `team messages --client`, `team client keygen`, and every
+// grant-verified form such as `team up --client` or `team down --client`) is placed by the same parent-process walk the
 // owner gates use (`walkCaller`), never by an environment variable, and a caller that runs inside
 // a herdr pane — a seat, or any process a seat started — is refused before the grant or the key
 // is opened. The walk guards against a mistaken agent, not a hostile one: every seat runs as the
@@ -33,7 +34,7 @@ export type ClientPaneVerdict =
 /** Whether this client invocation may go on. */
 export function clientPaneGuard(
   io: Io,
-  command: 'send' | 'messages' | 'client keygen',
+  command: string,
   home: string = homedir(),
 ): ClientPaneVerdict {
   const caller = walkCaller(io);

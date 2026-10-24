@@ -17,6 +17,7 @@
 // The run is then the grant's folder alone and never the owner's: the command passes no owner gate
 // by this, it opens its own second door for the verified run, exactly as `team down --client` does.
 
+import type { Io } from '../io.ts';
 import { resolve } from 'node:path';
 import type { BundleOp } from './bundle-ops.ts';
 import { auditClientOp } from './bundles.ts';
@@ -43,7 +44,7 @@ export function clientFormProblem(values: Readonly<Record<string, string | undef
 /** Verifies one client invocation of `op` end to end. `cwd` is where the caller stands (the grant
  *  names its folder, so it is only checked against a mix-up). */
 export function verifyClientForm(
-  host: { home: string; now: Date },
+  host: { home: string; now: Date; io: Io },
   input: { op: BundleOp; values: Readonly<Record<string, string | undefined>>; cwd: string },
 ): { ok: true; run: ClientRun } | { ok: false; why: string; named: ClientUpGrantRecord | null } {
   const verified = verifyClientUp({
@@ -54,6 +55,7 @@ export function verifyClientForm(
     ...(input.values.team !== undefined ? { team: input.values.team } : {}),
     now: host.now,
     op: input.op,
+    io: host.io,
   });
   if (!verified.ok) return { ok: false, why: verified.why, named: verified.identified };
   return { ok: true, run: { grant: verified.grant, signature: verified.signature, requestId: verified.requestId, root: verified.root } };
@@ -63,7 +65,7 @@ export function verifyClientForm(
  *  verified for `op` (see `verifyClientForm`), and a refusal of a client the key identified goes on the
  *  team's own log. `ok: false` carries the sentence to print. */
 export function enterClientForm(
-  host: { home: string; now: Date },
+  host: { home: string; now: Date; io: Io },
   input: { op: BundleOp; values: Readonly<Record<string, string | undefined>>; cwd: string },
 ): { ok: true; run: ClientRun } | { ok: false; why: string } {
   const verified = verifyClientForm(host, input);

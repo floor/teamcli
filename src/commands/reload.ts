@@ -193,7 +193,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   if (args.values.client !== undefined) {
     if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
     const at = sources.now ? sources.now() : new Date();
-    const verified = verifyClientForm({ home: sources.home ?? homedir(), now: at }, { op: 'reload', values: args.values, cwd: io.cwd });
+    const verified = verifyClientForm({ home: sources.home ?? homedir(), now: at, io }, { op: 'reload', values: args.values, cwd: io.cwd });
     if (!verified.ok) {
       auditClientRefusal('reload', verified.named, verified.why, at);
       return clientRefused(io, json, verified.why);

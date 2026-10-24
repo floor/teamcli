@@ -457,7 +457,7 @@ export async function runSeats(argv: string[], io: Io, sources: SeatsSources = r
     if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
     const at = sources.now();
     const home = sources.home ?? homedir();
-    const verified = verifyClientForm({ home, now: at }, { op: 'seats', values: args.values, cwd: io.cwd });
+    const verified = verifyClientForm({ home, now: at, io }, { op: 'seats', values: args.values, cwd: io.cwd });
     const stood = verified.ok ? authorizeClientRun(home, verified.run, 'seats', at) : null;
     if (!verified.ok || stood !== null) {
       const why = verified.ok ? stood! : verified.why;

@@ -219,7 +219,7 @@ export function sendWithBundle(
         const now = host.now();
         const requestId = input.requestId;
         if (requestId !== undefined && !CLIENT_REQUEST_ID_PATTERN.test(requestId)) return { ok: false as const, why: `"${requestId}" is not a request id` };
-        const verified = verifyClientUp({ home: host.home, grantFile: input.grantFile, keyFile: input.keyFile, cwd: input.cwd, now, op: 'send' });
+        const verified = verifyClientUp({ home: host.home, grantFile: input.grantFile, keyFile: input.keyFile, cwd: input.cwd, now, op: 'send', io: null }); // send.ts ran the pane guard
         if (!verified.ok) {
           if (verified.identified !== null) auditClientOp(verified.identified.up.root, 'send', verified.identified.clientId, 'refused', `grant ${verified.identified.grantId}: ${verified.why}`, now);
           return { ok: false as const, why: verified.why };

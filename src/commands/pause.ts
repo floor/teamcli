@@ -87,7 +87,7 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
   let clientRun: ClientRun | null = null;
   if (args.values.client !== undefined) {
     if (!json) io.stderr(`${KEY_ISOLATION_LINE}\n`);
-    const entered = enterClientForm({ home: sources.home ?? homedir(), now }, { op: 'pause', values: args.values, cwd: io.cwd });
+    const entered = enterClientForm({ home: sources.home ?? homedir(), now, io }, { op: 'pause', values: args.values, cwd: io.cwd });
     if (!entered.ok) return clientRefused(out, json, entered.why);
     clientRun = entered.run;
     // The folder is the grant's, whatever the caller's: from here every read is of that team.

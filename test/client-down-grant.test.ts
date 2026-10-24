@@ -254,7 +254,7 @@ async function clientDown(w: World, grantPath: string, keyPath: string, extra: s
 }
 
 const verifyAs = (w: World, grantPath: string, op: 'up' | 'down', at: { now?: Date; cwd?: string } = {}) =>
-  verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.grok.keyPath, cwd: at.cwd ?? w.docs, now: at.now ?? new Date(), op });
+  verifyClientUp({ home: w.home, grantFile: grantPath, keyFile: w.grok.keyPath, cwd: at.cwd ?? w.docs, now: at.now ?? new Date(), op, io: null });
 
 describe('request, owner-seat answer, execute, then the client stops the team', () => {
   test('a down grant binds one team and its folder, and the client stops it with no terminal and no prompt', async () => {

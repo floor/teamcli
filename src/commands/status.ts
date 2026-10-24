@@ -309,7 +309,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       ...(args.values.team !== undefined ? { team: args.values.team } : {}),
       now: at,
       op: 'status',
-    });
+
+      io,    });
     if (!verified.ok) {
       const named = verified.identified;
       if (named !== null) auditClientOp(named.up.root, 'status', named.clientId, 'refused', `grant ${named.grantId}: ${verified.why}`, at);

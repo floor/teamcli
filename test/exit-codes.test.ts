@@ -2078,7 +2078,7 @@ scene('status.difference', async (place) => {
   return show(await status(place, [], statusSources(quiet)), 'is in the file and is not running');
 });
 scene('status.file-owner', async (place) => show(await status(place, ['--file', '.agents/team.yaml'], statusSources(quiet), other), "--file is the owner's"));
-scene('status.client-refused', async (place) => show(await status(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, other), 'no client grant can verify'));
+scene('status.client-refused', async (place) => show(await status(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, detachedCaller), 'no client grant can verify'));
 scene('status.session-owner', async (place) => show(await status(place, ['--session', 'team'], statusSources(quiet), other), "--session is the owner's"));
 scene('status.not-yours', async (place) => {
   // A caller that does not pass learns nothing, even when the target does not load: the answer is
@@ -2138,7 +2138,7 @@ async function seats(place: Place, argv: string[], sources: SeatsSources, caller
 }
 
 scene('seats.invocation', async (place) => show(await seats(place, ['extra'], statusSources(quiet)), 'unexpected'));
-scene('seats.client-refused', async (place) => show(await seats(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, other), 'no client grant can verify'));
+scene('seats.client-refused', async (place) => show(await seats(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], { ...statusSources(quiet), home: place.home }, detachedCaller), 'no client grant can verify'));
 scene('seats.not-a-repo', async (place) => show(await seats(place, [], statusSources(quiet)), 'not inside a git repository'), false);
 scene('seats.file', async (place) => show(await seats(place, ['--file', 'missing.yaml'], statusSources(quiet)), 'no team file'));
 scene('seats.file-invalid', async (place) => {
@@ -2331,7 +2331,7 @@ function tamperedSeatSetting(place: Place): void {
     return { code: await runSeat([...argv], io, sources), out: io.out, err: io.err };
   }
   scene('seat.invocation', async (place) => show(await seatRun(place, []), 'a seat name is required'));
-  scene('seat.client-refused', async (place) => show(await seatRun(place, ['lead', '--client', 'missing-grant.json', '--key', 'missing.key'], other, { ...statusSources(quiet), home: place.home }), 'no client grant can verify'));
+  scene('seat.client-refused', async (place) => show(await seatRun(place, ['lead', '--client', 'missing-grant.json', '--key', 'missing.key'], detachedCaller, { ...statusSources(quiet), home: place.home }), 'no client grant can verify'));
   scene('seat.file-owner', async (place) => show(await seatRun(place, ['lead', '--file', '.agents/team.yaml'], other), "--file is the owner's"));
   scene('seat.session-owner', async (place) => show(await seatRun(place, ['lead', '--session', 'acme'], other), "--session is the owner's"));
   scene('seat.not-a-repo', async (place) => show(await seatRun(place, ['lead']), 'not inside a git repository'), false);
