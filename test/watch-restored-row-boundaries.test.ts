@@ -110,7 +110,7 @@ describe('the restored row of the watch page', () => {
       return pass({ team: team(), watch: team().watch, state, live: seen, machine: fine, now: 0, memory, processes: { 'w3:p1': { shell: 500, foreground: [501] } } }).reports.map((report) => report.text);
     };
     const restored = 'deepseek-acme is no longer the process team launched (its session was restored, or its CLI was restarted)';
-    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team remove deepseek-acme --keep, then team add deepseek-acme';
+    const launcher = 'deepseek-acme: its launch line starts a launcher, and the process in its pane is not the one team launched — team restart deepseek-acme';
     // Another session under an unlaunched program: the mismatch the page describes, reported —
     // and a launch line that names a launcher (this seat's is `team-deepseek`) is still said
     // beside it, in the order the check pushes them.
