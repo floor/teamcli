@@ -33,11 +33,16 @@ export const CLIENT_FORM_OPTIONS = ['client', 'key', 'team'] as const;
 
 /** The invocation problems every client form shares, or null. `usage` is the form's own spelling
  *  (`team seats --client <grant-file> --key <client-key-file>`), so each sentence says what to type. */
-export function clientFormProblem(values: Readonly<Record<string, string | undefined>>, usage: string): string | null {
+export function clientFormProblem(
+  values: Readonly<Record<string, string | undefined>>,
+  usage: string,
+  /** The command owns `--team` outside the client form too (pause and resume name a team with it). */
+  options: { ownTeam?: boolean } = {},
+): string | null {
   const client = values.client !== undefined;
   if (client && values.key === undefined) return '--client needs --key <client-key-file>';
   if (!client && values.key !== undefined) return `--key belongs to the --client form: ${usage}`;
-  if (!client && values.team !== undefined) return `--team belongs to the --client form: ${usage} --team <team>`;
+  if (!client && options.ownTeam !== true && values.team !== undefined) return `--team belongs to the --client form: ${usage} --team <team>`;
   return null;
 }
 

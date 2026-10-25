@@ -171,7 +171,7 @@ function teamTarget(key: string, home: string): TargetResult {
     return { ok: false, kind: 'team', message: `"${plainText(key)}" names more than one team on this machine; name one by its id` };
   }
   const record = found[0] as (typeof found)[number];
-  const loaded = loadTeamFile(record.root, { home });
+  const loaded = readTeamConfig(record.root, { home });
   if (!loaded.ok) {
     return { ok: false, kind: 'file', message: `${record.project}: ${problemsOf(loaded)}` };
   }

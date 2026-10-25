@@ -66,7 +66,7 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
   const json = hasJsonFlag(argv);
   const args = readArgs(argv, ['reason', 'seat', 'client', 'key', 'team'], ['all', 'json']);
   if (args.error) return invocation(out, args.error, json);
-  const clientProblem = clientFormProblem(args.values, 'team pause --client <grant-file> --key <client-key-file>')
+  const clientProblem = clientFormProblem(args.values, 'team pause --client <grant-file> --key <client-key-file>', { ownTeam: true })
     ?? (args.values.client !== undefined && (args.rest.length > 0 || args.flags.has('all'))
       ? '--client pauses the one team its grant names: <team> and --all are the owner\'s and take no --client'
       : null);

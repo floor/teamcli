@@ -66,7 +66,7 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
   const json = hasJsonFlag(argv);
   const args = readArgs(argv, ['seat', 'client', 'key', 'team'], ['all', 'json']);
   if (args.error) return invocation(out, args.error, json);
-  const clientProblem = clientFormProblem(args.values, 'team resume --client <grant-file> --key <client-key-file>')
+  const clientProblem = clientFormProblem(args.values, 'team resume --client <grant-file> --key <client-key-file>', { ownTeam: true })
     ?? (args.values.client !== undefined && (args.rest.length > 0 || args.flags.has('all'))
       ? '--client resumes the one team its grant names: <team> and --all are the owner\'s and take no --client'
       : null);

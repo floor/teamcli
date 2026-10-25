@@ -93,7 +93,7 @@ its own seat. The operator's lever is `team hold`, not a pause.
 | `<team>` | a registered team's id, project or session name; without it, the team file of the current folder |
 | `<seat>` | a seat the current folder's team declares; pauses that seat alone |
 | `--seat <seat>` | the explicit seat form: the named seat of the current folder's team |
-| `--team <team>` | the explicit team-wide form, even when a declared seat has that name |
+| `--team <team>` | the explicit team-wide form, even when a declared seat has that name; with `--client`, the team the grant is for, so the run can be made from outside its folder |
 | `--reason <text>` | the line stored as the pause's reason |
 | `--all` | every registered team; a team whose file does not load is named on `stderr` and left as it is; refused with `--seat`, `--team` and `--json` |
 | `--client <grant-file>` | the client form: an owner-signed developer bundle grant that carries `pause`, see [A client's pause](#a-clients-pause) |

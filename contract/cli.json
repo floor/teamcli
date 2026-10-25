@@ -2530,6 +2530,12 @@
         },
         {
           "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--team",
           "repeatable": false,
           "takesValue": true
@@ -2545,14 +2551,14 @@
       "name": "pause",
       "positionals": [
         {
-          "name": "team",
+          "name": "name",
           "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team pause [<team>] [--reason <text>] [--all] [--json]",
+        "team pause [<name>] [--seat <seat>] [--team <team>] [--reason <text>] [--all] [--json]",
         "team pause --client <grant-file> --key <client-key> [--team <team>] [--reason <text>] [--json]"
       ],
       "who": {
@@ -3884,6 +3890,12 @@
         },
         {
           "hidden": false,
+          "name": "--seat",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--team",
           "repeatable": false,
           "takesValue": true
@@ -3899,14 +3911,14 @@
       "name": "resume",
       "positionals": [
         {
-          "name": "team",
+          "name": "name",
           "optional": true,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team resume [<team>] [--all] [--json]",
+        "team resume [<name>] [--seat <seat>] [--team <team>] [--all] [--json]",
         "team resume --client <grant-file> --key <client-key> [--team <team>] [--json]"
       ],
       "who": {
