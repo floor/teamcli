@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'bun:test';
-import { skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
+import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -76,3 +76,17 @@ test('a filtered run costs one test per scene', () => {
   expect(passes(one.output)).toBeGreaterThanOrEqual(5);
   expect(passes(one.output)).toBeLessThan(20);
 }, 300_000);
+
+test('TEAM_EXIT_PART deals every scene to exactly one part, and only part 0 leads', () => {
+  expect(scenePart(undefined)).toBeNull();
+  expect(scenePart('')).toBeNull();
+  expect(scenePart('1/4')).toEqual({ index: 1, count: 4 });
+  for (const bad of ['4/4', '1', 'a/b', '-1/4', '0/0']) expect(() => scenePart(bad)).toThrow('TEAM_EXIT_PART');
+  const parts = [0, 1, 2, 3].map((index) => ({ index, count: 4 }));
+  for (let position = 0; position < 50; position++) {
+    expect(parts.filter((part) => !outsidePart(part, position)).length).toBe(1);
+  }
+  expect(outsidePart(null, 7)).toBe(false);
+  expect(parts.map(leadPart)).toEqual([true, false, false, false]);
+  expect(leadPart(null)).toBe(true);
+});
