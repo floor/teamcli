@@ -156,8 +156,9 @@ describe('backward compatibility of the approval digest', () => {
   });
 
   test('adding entity changes the lobby trust and the derived session, and no other owner section', () => {
-    const plain = validateTeamFile(teamYaml());
-    const withEntity = validateTeamFile(teamYaml({ entity: 'floor', lobbyTrust: '~/.config/team/lobbies/floor' }));
+    // Both fixtures omit `session`, so it is the default the entity moves.
+    const plain = validateTeamFile(teamYaml().replace('session: acme\n', ''));
+    const withEntity = validateTeamFile(teamYaml({ entity: 'floor', lobbyTrust: '~/.config/team/lobbies/floor' }).replace('session: acme\n', ''));
     if (!plain.ok || !withEntity.ok) throw new Error('fixtures did not validate');
     const before = fingerprints(plain.team).sections;
     const after = fingerprints(withEntity.team).sections;

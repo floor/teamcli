@@ -840,7 +840,7 @@ seats:
     const io = await run(['new', 'select-width', '--kind', 'fix']);
     expect(io.code).toBe(0);
     expect(io.err).toBe(noNote);
-    expect(io.out).toBe('../worktrees/renamed/select-width\n');
+    expect(io.out).toBe('team renamed, session "floor-renamed"\nworktree select-width: created at ../worktrees/renamed/select-width\n');
     const state = readState(join(project, '.agents'));
     expect(Object.keys(state.sessions)).toEqual(['floor-renamed']);
     expect(state.sessions['floor-renamed']?.worktrees['select-width']?.branch).toBe('fix/select-width');
