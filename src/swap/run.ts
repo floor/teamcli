@@ -23,7 +23,7 @@ import { liveLeaseOf } from '../tasks/lease.ts';
 import { seatHasAssignedWorkOnDisk } from '../watch/status-events.ts';
 import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { finishSwap, handoverPath, needsHandover, noteHandover, queuedSwaps, swapDue } from './queue.ts';
-import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 /** What one observation says about a seat, in the words `swapDue` reads. `boundary` is the mark
  *  the watch makes itself: quiet, no turn, no dialog, no task lease, no assigned work on disk
@@ -461,9 +461,9 @@ function declareRecipe(path: string, name: string, fields: SeatModelFields, home
   try {
     text = readTeamText(path, where);
   } catch (error) {
-    return { ok: false, why: `the file cannot be read (${messageOf(error)})` };
+    return { ok: false, why: `${teamPlace(path, where, 'the file')} cannot be read (${messageOf(error)})` };
   }
-  if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in the file` };
+  if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in ${teamPlace(path, where, 'the file')}` };
   const written = writeTeamText(path, rewriteSeatModel(text, name, fields), where);
   if (!written.ok) return { ok: false, why: problemText(written.errors[0]) };
   return { ok: true };

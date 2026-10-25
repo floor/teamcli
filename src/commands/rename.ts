@@ -51,7 +51,7 @@ import {
 } from '../store/keys.ts';
 import { approvalStanding, storePath, type Standing } from '../store/store.ts';
 import { renameSeatLeases } from '../tasks/lease.ts';
-import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export const USAGE = `Usage: team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
        team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
@@ -596,7 +596,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   if (!validated.ok) {
     const first = validated.errors[0];
     io.stderr(
-      `team rename: ${first?.line ? `line ${first.line}: ` : ''}${first?.message ?? 'edited team file did not validate'}\n`,
+      `team rename: ${first?.line ? `line ${first.line}: ` : ''}${first?.message ?? `the edited team did not validate (${teamPlace(path, where)})`}\n`,
     );
     return 'invalid';
   }

@@ -13,7 +13,7 @@ import { writeJson, writeJsonError } from './output/index.ts';
 import { withLock } from './state.ts';
 import { approvedRecordOf } from './store/store.ts';
 import { parseYaml, type YamlNode } from './yaml.ts';
-import { readTeamText, teamTextTarget, writeTeamText } from './file/team-text.ts';
+import { readTeamText, teamPlace, teamTextTarget, writeTeamText } from './file/team-text.ts';
 
 export type AuthorityEdit =
   | { kind: 'grant'; seat: string; scope: string[] }
@@ -131,11 +131,11 @@ export async function runAuthorityEdit(
       const onFile = teamTextTarget(loaded.path, { home }).kind === 'file';
       if (onFile) requireRegularFile(loaded.path);
       if (readTeamText(loaded.path, { home }) !== loaded.text) {
-        throw new Error('the team file changed while checking; nothing written');
+        throw new Error(`${teamPlace(loaded.path, { home })} changed while checking; nothing written`);
       }
       if (onFile) requireAbsentTemporary(loaded.path);
       const wrote = writeTeamText(loaded.path, next, { home, command });
-      if (!wrote.ok) throw new Error(wrote.errors[0]?.message ?? 'the team file cannot be written');
+      if (!wrote.ok) throw new Error(wrote.errors[0]?.message ?? `${teamPlace(loaded.path, { home })} cannot be written`);
     });
   } catch (error) {
     const msg = message(error);

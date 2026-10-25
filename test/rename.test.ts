@@ -22,6 +22,7 @@ import type { TaskRecord } from '../src/tasks/adapter.ts';
 import { claimLocal, leasesDir, releaseLocal } from '../src/tasks/lease.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
+import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-17T20:00:00.000Z');
 const owner: Caller = { kind: 'owner' };
@@ -612,3 +613,19 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
   });
 });
 
+
+describe('under the registry source', () => {
+  test('a rename edits the registry record and leaves the file as it was', async () => {
+    const fx = makeFixture();
+    intoRegistry(fx.root, fx.home);
+    const io = testIo(fx.root, owner);
+    const code = await underRegistry(() => runRename(['builder-1', 'builder-01'], io, { home: fx.home, now: () => NOW }));
+    expect(code).toBe(0);
+    const record = storedTeam(fx.root, fx.home)!;
+    expect(record.edited_by).toBe('rename');
+    expect(record.text).toContain('name: builder-01');
+    expect(record.text).not.toContain('name: builder-1\n');
+    expect(readFileSync(fx.file, 'utf8')).toBe(BASE_YAML);
+    expect(realRegistryTouched()).toBe(false);
+  });
+});

@@ -432,6 +432,19 @@ export async function runInit(
       // exit: init.nothing
       return 1;
     }
+    // The stored copy is validated before anything is written: a copy that no longer validates
+    // (a newer validator, a copy approved under rules since changed) is refused, never restored.
+    const restoredCheck = validateTeamFile(copy);
+    if (!restoredCheck.ok) {
+      const first = restoredCheck.errors[0];
+      refuse(io, json, 'init', {
+        id: 'init.restore-invalid',
+        message: `nothing was restored: the stored copy doesn't validate: ${first?.line ? `line ${first.line}: ` : ''}${first?.message ?? 'invalid'}`,
+        repair: 'team init writes a skeleton',
+      });
+      // exit: init.restore-invalid
+      return 1;
+    }
     text = copy;
   } else {
     text = skeleton(basename(root), git(root, 'rev-parse', 'HEAD'), version(), root, firstLoggedInCli(sources));
@@ -449,8 +462,8 @@ export async function runInit(
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);
   if (target.kind === 'registry') {
-    // The text was validated above (the skeleton) or verified as an approval's copy (restore), so
-    // this write does not refuse; a failure here is a bug, said as one.
+    // The text was validated above, the skeleton or the restored copy alike, so this write does
+    // not refuse; a failure here is a bug, said as one.
     const wrote = writeTeamText(path, text, { home: target.home, command: 'init', create: true, ...(sources.now ? { now: sources.now } : {}) });
     if (!wrote.ok) throw new Error(`team init: the team doesn't validate: ${wrote.errors[0]?.message}`);
   } else {

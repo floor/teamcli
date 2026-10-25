@@ -115,6 +115,7 @@ import type { KeyReader } from '../src/release/keychain.ts';
 import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
 import { runImport } from '../src/commands/import.ts';
+import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
 import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
 
@@ -1696,6 +1697,18 @@ scene('init.refused', async (place) => show(
   await initial(place, ['--restore'], owner, place.home, () => ({ kind: 'refused', why: 'the stored record does not verify' })),
   'does not verify',
 ));
+scene('init.restore-invalid', async (place) => {
+  // A verified record whose stored copy no longer validates: refused, and nothing is written.
+  const copy = 'format: [\n';
+  write(place, TEAM);
+  const loaded = loadTeamFile(place.root, { file: place.file, home: place.home });
+  if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+  rmSync(place.file);
+  const standing = { kind: 'verified' as const, record: { approval: approvalOf(loaded.team, loaded.root, NOW), file: copy }, generation: 1, signedAt: NOW.toISOString() };
+  const ran = show(await initial(place, ['--restore'], owner, place.home, () => standing), "the stored copy doesn't validate");
+  expect(existsSync(place.file)).toBe(false);
+  return ran;
+});
 scene('init.wrote', async (place) => show(await initial(place, []), 'Wrote'));
 scene('init.approval', async (place) => show(await initial(place, ['--approvals']), 'team-create approval rules'));
 scene('init.approval-refused', async (place) => show(await initial(place, ['--revoke-approval', 'nope']), 'is not a rule id'));
@@ -6708,4 +6721,37 @@ test.each(wanted === null && leadPart(part) ? unreadForms : [])('$name fails the
     ? { files: row.files, contractText: canon([...contract.rows, ...row.extra]), page: render([...contract.rows, ...row.extra]) }
     : { files: row.files });
   expect(found.some((line) => line.includes(row.needle)), row.name).toBe(true);
+});
+
+// Phase 3: the same add and remove runs under `team-config.source: registry`, on a team moved into
+// the scene's own registry. The edit lands in the record, the file is left as it was, and the
+// machine's own registry folder is never written. Once per full run, with the whole-repo checks.
+leadTest('under the registry source, add writes the new seat into the registry record', async () => {
+  const place = layout(true);
+  approve(place, TWO);
+  const file = readFileSync(place.file, 'utf8');
+  intoRegistry(place.root, place.home);
+  const ran = await underRegistry(() => added(place, ['worker', '--file', place.file], owner, addSources(place, { launch: launching(IDLE) })));
+  show(ran, 'ready');
+  expect(ran.code).toBe(0);
+  const record = storedTeam(place.root, place.home)!;
+  expect(record.edited_by).toBe('add');
+  expect(record.text).not.toBe(file);
+  expect(readFileSync(place.file, 'utf8')).toBe(file);
+  expect(realRegistryTouched()).toBe(false);
+});
+
+leadTest('under the registry source, remove takes the seat out of the registry record', async () => {
+  const place = layout(true);
+  approve(place, TWO);
+  const file = readFileSync(place.file, 'utf8');
+  intoRegistry(place.root, place.home);
+  const ran = await underRegistry(() => removed(place, ['worker'], owner, downSources({ home: place.home })));
+  show(ran, 'removed worker');
+  expect(ran.code).toBe(0);
+  const record = storedTeam(place.root, place.home)!;
+  expect(record.edited_by).toBe('remove');
+  expect(record.text).not.toContain('name: worker');
+  expect(readFileSync(place.file, 'utf8')).toBe(file);
+  expect(realRegistryTouched()).toBe(false);
 });

@@ -75,7 +75,7 @@ one does.
 | --- | --- | --- |
 | a skeleton was written | `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team up.` | 0 |
 | the stored copy was restored | `Restored .agents/team.yaml from the copy this machine stored.` | 0 |
-| refused: not the owner, the file is tracked or already there, or there is nothing to restore | `team init: <reason>` | 1 |
+| refused: not the owner, the file is tracked or already there, there is nothing to restore, or the stored copy no longer validates | `team init: <reason>` | 1 |
 | it can't run: not inside a git repository, or a bad option | `team init: <problem>`, with the usage for a bad option | 2 |
 
 Every plain run prints the privacy paragraph after that line, a blank line between: `The team
