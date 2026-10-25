@@ -85,6 +85,8 @@ test('TEAM_EXIT_PART deals every scene to exactly one part, and only part 0 lead
   const parts = [0, 1, 2, 3].map((index) => ({ index, count: 4 }));
   for (let position = 0; position < 50; position++) {
     expect(parts.filter((part) => !outsidePart(part, position)).length).toBe(1);
+    expect(outsidePart(parts[0]!, position)).toBe(true);
+    expect(outsidePart({ index: 0, count: 1 }, position)).toBe(false);
   }
   expect(outsidePart(null, 7)).toBe(false);
   expect(parts.map(leadPart)).toEqual([true, false, false, false]);

@@ -28,9 +28,10 @@ export function unknownScenes(wanted: Set<string> | null, known: Iterable<string
 
 /**
  * `TEAM_EXIT_PART=<index>/<count>` splits one full run of the scenes over `count` processes, so
- * CI can spread `test/exit-codes.test.ts` across shards. Scenes are dealt by their position in
- * the contract (position % count === index): every scene runs in exactly one part. The checks
- * that read the whole repo, and the analyzer probes, run in part 0 only. Unset means one part.
+ * CI can spread `test/exit-codes.test.ts` across shards. Part 0 runs the checks that read the
+ * whole repo and the analyzer probes (about a third of the file's time) and no scene; the scenes
+ * are dealt over parts 1..count-1 by their position in the contract, so every scene runs in
+ * exactly one part. `0/1` (or unset) is one part that runs everything.
  * A malformed value is an error, never a silent full or empty run.
  */
 export type ScenePart = { index: number; count: number };
@@ -46,7 +47,8 @@ export function scenePart(raw: string | undefined): ScenePart | null {
 
 /** True when a part is set and the scene at `position` in the contract belongs to another part. */
 export function outsidePart(part: ScenePart | null, position: number): boolean {
-  return part !== null && position % part.count !== part.index;
+  if (part === null || part.count === 1) return false;
+  return part.index === 0 || position % (part.count - 1) !== part.index - 1;
 }
 
 /** True when this run carries the whole-repo checks and analyzer probes: no part, or part 0. */

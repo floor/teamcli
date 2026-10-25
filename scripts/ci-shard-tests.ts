@@ -27,7 +27,8 @@ export type Plan = { files: string[]; ms: number }[];
 
 /**
  * Files run as several parts, each in its own process with `TEAM_EXIT_PART=<i>/<n>` (see
- * test/exit-filter.ts): one unit `<file>#<i>/<n>` per part, each weighing 1/n of the file.
+ * test/exit-filter.ts): one unit `<file>#<i>/<n>` per part, weighing its own recorded time when
+ * the timings have one, else 1/n of the file.
  * exit-codes alone is ~44% of the suite; whole, it would set every PR's wall time.
  */
 export const SPLIT: Record<string, number> = { 'test/exit-codes.test.ts': 4 };
@@ -62,7 +63,8 @@ export function weights(files: string[], timings: Record<string, number>, size: 
   return new Map(
     files.map((u) => {
       const [f, part] = u.split('#') as [string, string | undefined];
-      return [u, part ? Math.round(one(f) / Number(part.split('/')[1])) : one(f)];
+      // A part's own recorded time first (part 0 carries the whole-repo checks), else 1/n of the file.
+      return [u, timings[u] ?? (part ? Math.round(one(f) / Number(part.split('/')[1])) : one(f))];
     }),
   );
 }
@@ -107,7 +109,9 @@ if (import.meta.main) {
   const get = (k: string) => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : undefined; };
   const record = get('--record');
   if (record !== undefined) {
-    const t = timingsFromLog(readFileSync(record, 'utf8'));
+    // A split file's per-part times come from pr-tests logs, not from `full`: keep the recorded ones.
+    const kept = Object.fromEntries(Object.entries(readTimings()).filter(([unit]) => unit.includes('#')));
+    const t = Object.fromEntries(Object.entries({ ...timingsFromLog(readFileSync(record, 'utf8')), ...kept }).sort(([a], [b]) => (a < b ? -1 : 1)));
     writeFileSync(TIMINGS, `${JSON.stringify(t, null, 0).replace(/,"/g, ',\n"').replace(/^\{/, '{\n').replace(/\}$/, '\n}')}\n`);
     console.error(`recorded ${Object.keys(t).length} files`);
     process.exit(0);
