@@ -17,7 +17,7 @@ import { basename, join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../../src/approve/approval.ts';
 import { legacySeatDigests } from '../../src/approve/fingerprint.ts';
 import { loadConfig } from '../../src/check/load.ts';
-import { runApprove } from '../../src/commands/approve.ts';
+import { runApprove } from '../../src/approve/command.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { testIo } from '../helpers.ts';
