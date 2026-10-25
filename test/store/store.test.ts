@@ -21,6 +21,7 @@ import { runApprove } from '../../src/approve/command.ts';
 import { runDoctor, type DoctorSources } from '../../src/commands/doctor.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import { testIo } from '../helpers.ts';
+import { writeTextSignedApproval } from '../helpers/text-signed-approval.ts';
 import {
   approvalStanding,
   approvedCopy,
@@ -179,7 +180,9 @@ describe('a project rename', () => {
 
   function approve(project: string, root: string, file: string) {
     const store = storePath(project, root, home);
-    writeApproval(store, { approval: approval(root), file }, [opus], home);
+    // These fixtures carry bare copies that are no team record; the text-signed compatibility
+    // record still verifies, and the scenes are about which store is read, not how it is signed.
+    writeTextSignedApproval(store, { approval: approval(root), file }, [opus], home);
     return store;
   }
 

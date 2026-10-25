@@ -19,6 +19,7 @@ import {
   writeApproval,
   type Approval,
 } from '../src/store/store.ts';
+import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
 
 let home: string;
 
@@ -49,7 +50,9 @@ function projectFile(root: string, project: string | null): string {
 
 function approve(project: string, root: string, file: string): string {
   const store = storePath(project, root, home);
-  writeApproval(store, { approval: approval(root), file }, [opus], home);
+  // These fixtures carry bare copies that are no team record; the text-signed compatibility
+  // record still verifies, and the scenes are about which store is read, not how it is signed.
+  writeTextSignedApproval(store, { approval: approval(root), file }, [opus], home);
   return store;
 }
 
