@@ -658,3 +658,15 @@ tempo: urgent
 - `relaxed` and `urgent` take effect on the next pass once a verified record of the file is in
   force; a file with no such record runs the default timings. A file that omits the key, and one
   that sets `normal`, leave every wait as written.
+
+## watch.queue_dir
+
+Optional directory containing one Markdown queue per seat, named `<seat>.md`. Set it to
+the team's notes/queue directory. A relative path starts at the project root; absolute
+paths and `~/` paths are also accepted. Omitting it disables queue reads.
+
+`team status` shows each queue's depth and the directory's `linear-backlog.md` — its unclaimed
+items, one that is unchecked and carries no `claimed:` or `done:` marker; `team watch` reports
+idle workers with empty queues, and the unclaimed items left in that backlog, after
+`watch.team_idle`. See [queue reports](commands/watch.md#queue-reports) for the task format and
+unknown readings.

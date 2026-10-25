@@ -255,6 +255,8 @@ export type TeamFile = {
     checks: string[];
     /** Text sent to each idle worker. Absent: the watch's report line. */
     nudge?: string;
+    /** Directory containing one Markdown queue per seat, relative to the project or absolute. */
+    queueDir?: string;
   };
   budgets: {
     staleAfter: number;

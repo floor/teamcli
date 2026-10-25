@@ -71,6 +71,7 @@ import type { Comparison, Difference, Live } from '../status/compare.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { readMachine, swapTotalProblem, type Machine } from '../watch/machine.ts';
 import { blindDifferences, renderSeatsTable, seatRegistryRows, type SeatRegistryRow } from './seats.ts';
+import { readBacklogDepth, readQueueDepths, type QueueDepths } from '../queues.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
 // What `status` reads from outside the file and the state, so tests can stand in for it.
@@ -216,7 +217,10 @@ export interface StatusJson {
      *  carries the dev mark — a registration dev mode admitted wrote it. */
     dev_mode?: boolean;
     start_cwd?: string;
+    queue_depth?: number | null;
   }>;
+  /** Present with the queue reading: unclaimed items in the queue directory's backlog file. */
+  queue_backlog?: number | null;
   notes: string[];
   /** The idle-with-work snapshot, when the watch provides one. */
   idle_work?: IdleWorkReport;
@@ -450,6 +454,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     })),
     continuityIds,
   );
+  const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
+  const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;
   const all = args.flags.has('all');
   // One probe of the machine daemon for the whole run: the line below, the document's `daemon`
   // field and the seats' presence qualification all come from the same snapshot, so they cannot
@@ -612,8 +618,10 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
           ...(found?.blind ? { blind: true as const } : {}),
           ...(extra?.dev_mode === true ? { dev_mode: true } : {}),
           ...(row.start_cwd ? { start_cwd: row.start_cwd } : {}),
+          ...(queues ? { queue_depth: queues[row.name] ?? null } : {}),
         };
       }),
+      ...(queues ? { queue_backlog: backlog } : {}),
       notes: comparison.notes,
       ...(idleWork !== undefined ? { idle_work: idleWork } : {}),
       ...(green?.kind === 'slices' ? { green_slices: green.slices } : {}),
@@ -631,7 +639,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     });
   } else {
     const style = ttyStyle(io);
-    const rendered = render(team, session, comparison, budgets, all ? registryRows : undefined, style, sources.home);
+    const rendered = render(team, session, comparison, budgets, all ? registryRows : undefined, style, sources.home, queues, backlog);
     if (style.enabled) {
       io.stdout(rendered);
     } else {
@@ -798,6 +806,8 @@ function render(
   registryRows?: SeatRegistryRow[],
   style: TtyStyle = ttyStyle(false),
   home?: string,
+  queues?: QueueDepths | null,
+  backlog?: number | null,
 ): string {
   const lines = [contextLine(team.project, session)];
   if (registryRows) {
@@ -819,6 +829,11 @@ function render(
         styleCell: (padded, _raw, _r, col, s) => (col === 1 ? s.styleState(padded) : padded),
       }),
     );
+  }
+  if (queues) {
+    lines.push('queues:');
+    for (const row of comparison.rows) lines.push(`  ${plainLine(row.name)}: ${queues[row.name] ?? 'unknown'}`);
+    lines.push(`  backlog: ${backlog === null || backlog === undefined ? 'unknown' : `${backlog} unclaimed`}`);
   }
   if (budgets.length) {
     lines.push('budgets:');

@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
+import { readBacklogDepth, readQueueDepths } from '../queues.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
@@ -901,6 +902,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           logLine(dir, 'watch', 'watch', `readings: ${readingsText(machine)}`, sources.now());
         }
         const machineAccounts = sources.home === undefined ? [] : machineAccountsOf(sources.home);
+        // The queue reading for the idle summary: reported to the log and the bus like any other
+        // report, never typed into the orchestrator's pane.
+        const queueDepths = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
+        const queueBacklog = queueDepths ? readBacklogDepth(team, root, sources.home) : null;
         // The entity's model rule, read once for this pass: the breach list `team check` prints,
         // narrowed to this team by name. The pass never reads the entity's files itself.
         const modelRule = modelRuleOfPass(team, root, sources.home);
@@ -920,6 +925,8 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             states: state.seats,
           }),
           team, state, live, machine, now, memory,
+          queueDepths,
+          queueBacklog,
           // The team's pause is the project's, not this session's: every watch of the project
           // stops nudging, and a foreign watch's notice is dropped where every other work drop
           // of that watch is.
