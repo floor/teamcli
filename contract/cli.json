@@ -1118,6 +1118,12 @@
         },
         {
           "hidden": false,
+          "name": "--jules",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--login",
           "repeatable": false,
           "takesValue": false
@@ -1140,7 +1146,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team doctor [--session <name>] [--file <path>] [--login] [--json]"
+        "team doctor [--session <name>] [--file <path>] [--login] [--jules] [--json]"
       ],
       "who": {
         "gate": "any-caller",

@@ -556,6 +556,7 @@ export const DOCTOR_OUTPUT_SCHEMA: CommandSchemaSpec = {
     project: { type: 'string', minLength: 1 },
     session: { type: 'string', minLength: 1 },
     login_only: { type: 'boolean' },
+    jules_only: { type: 'boolean' },
     findings: {
       type: 'array',
       items: {

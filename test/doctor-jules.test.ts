@@ -83,7 +83,7 @@ describe('the missing steps, one at a time', () => {
     expect(code).toBe(1);
     expect(out).toBe(
       "MISS  log in to Jules and link it to GitHub: `jules login` — the owner's step\n"
-      + '--    jules said: Error: 401 Unauthorized: sign in first\n'
+      + 'note  jules said: Error: 401 Unauthorized: sign in first\n'
       + 'team doctor: 1 missing, 0 warnings\n',
     );
     // One call: the repository is not asked about until the login answers.
@@ -104,7 +104,7 @@ describe('the missing steps, one at a time', () => {
   test('a line the CLI printed on standard output is repeated when standard error is empty', async () => {
     const { doctor } = sources({ answers: () => ({ status: 2, stdout: '\njules: the token expired\n', stderr: '' }) });
     const { out } = await run(doctor);
-    expect(out).toContain('--    jules said: jules: the token expired\n');
+    expect(out).toContain('note  jules said: jules: the token expired\n');
   });
 });
 
@@ -156,7 +156,7 @@ describe('the project repository', () => {
       expect(code).toBe(0);
       expect(out).toBe(
         'ok    jules: logged in, with GitHub linked\n'
-        + "--    the project's github repository was not read from the origin remote\n"
+        + "note  the project's github repository was not read from the origin remote\n"
         + 'team doctor: nothing missing, 0 warnings\n',
       );
     }
@@ -182,7 +182,7 @@ describe('the flag itself', () => {
     expect(code).toBe(2);
     expect(io.err).toBe(
       'team doctor: --login and --jules answer different questions; ask one at a time\n'
-      + 'Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules]\n',
+      + 'Usage: team doctor [--session <name>] [--file <path>] [--login] [--jules] [--json]\nExits 0 when nothing is missing, 1 when something is missing, 2 when the invocation or team file can\'t be read.\n',
     );
     expect(io.out).toBe('');
   });
