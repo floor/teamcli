@@ -23,6 +23,7 @@ const NOW = new Date('2026-10-17T11:00:00Z');
 function teamYaml(entity: string): string {
   return `format: 1
 project: acme
+session: acme
 entity: ${entity}
 coordinator: lead
 operator: lead

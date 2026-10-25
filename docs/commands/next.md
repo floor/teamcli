@@ -95,7 +95,7 @@ seats:
 
 ```console caller=claude-keeper
 $ team next ; echo "exit $?"
-team beacon, session "beacon"
+team beacon, session "lab-beacon"
 m1  the task title
 team next: claimed m1
 exit 0

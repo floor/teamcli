@@ -155,18 +155,20 @@ describe('backward compatibility of the approval digest', () => {
     expect(OWNER_SECTIONS).not.toContain('lobby');
   });
 
-  test('adding entity leaves every owner-section fingerprint unchanged', () => {
-    const plain = validateTeamFile(teamYaml());
-    const withEntity = validateTeamFile(teamYaml({ entity: 'floor', lobbyTrust: '~/.config/team/lobbies/floor' }));
+  test('adding entity changes the lobby trust and the derived session, and no other owner section', () => {
+    // Both fixtures omit `session`, so it is the default the entity moves.
+    const plain = validateTeamFile(teamYaml().replace('session: acme\n', ''));
+    const withEntity = validateTeamFile(teamYaml({ entity: 'floor', lobbyTrust: '~/.config/team/lobbies/floor' }).replace('session: acme\n', ''));
     if (!plain.ok || !withEntity.ok) throw new Error('fixtures did not validate');
     const before = fingerprints(plain.team).sections;
     const after = fingerprints(withEntity.team).sections;
-    // `trust` is an owner section and the two files list different lobbies there, so it differs;
-    // nothing else does, and no `entity`/`lobby` section is fingerprinted at all.
-    for (const name of OWNER_SECTIONS) {
-      if (name === 'trust') continue;
-      expect(after[name]).toBe(before[name]);
-    }
+    // Exactly two owner sections differ, and the two are the whole list. `trust` is the lobby the
+    // migration writes. `session` is the entity-aware default: neither fixture writes the key, and
+    // an omitted session is `<entity>-<project>`, so adding an entity moves the session — the file
+    // is no longer the one the owner approved, and the digest has to say so. Every other owner
+    // section is untouched, and no `entity`/`lobby` section is fingerprinted at all.
+    const changed = OWNER_SECTIONS.filter((name) => after[name] !== before[name]);
+    expect(changed.sort()).toEqual(['session', 'trust']);
     expect(after).not.toHaveProperty('entity');
     expect(after).not.toHaveProperty('lobby');
   });

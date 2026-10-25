@@ -112,7 +112,7 @@ import type { Machine } from '../src/watch/machine.ts';
 import { analyze, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
 import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
-import { skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
+import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
 import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
 
@@ -594,6 +594,13 @@ function spendReading(): Seen {
 // stays complete under a filter — the invariants below read it — and the filter only
 // narrows which scenes get a test registered.
 const wanted = wantedScenes(process.env.TEAM_EXIT_IDS);
+// CI's split of one full run over shards (`TEAM_EXIT_PART=i/n`): each scene runs in one part.
+const part = scenePart(process.env.TEAM_EXIT_PART);
+const scenePosition = new Map<string, number>();
+/** A scene this run leaves to a filter or to another part. */
+const skips = (id: string): boolean => skipsScene(wanted, id) || outsidePart(part, scenePosition.get(id) ?? 0);
+/** Whole-repo checks and analyzer probes: once per full run, in part 0. */
+const leadTest: typeof test = ((...args: Parameters<typeof test>) => (leadPart(part) ? test(...args) : undefined)) as typeof test;
 const scenes = new Map<string, Scene>();
 const bare = new Set<string>();
 function scene(id: string, run: Scene, repo = true): void {
@@ -1642,7 +1649,8 @@ scene('down.legacy', async (place) => {
 scene('down.refused', async (place) => {
   approve(place, TEAM);
   editApproval(place, (record) => {
-    record.file = `${String(record.file)}\n`;
+    // A change of meaning: the signature covers the canonical record, so layout alone would verify.
+    record.file = String(record.file).replace('project: acme', 'project: acme-changed');
   });
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,
@@ -6092,6 +6100,7 @@ seats:
 const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
 
 const contract = loadContract();
+contract.rows.forEach((row, index) => scenePosition.set(row.id, index));
 if (wanted !== null) {
   const runnable = [...wanted].filter((id) => scenes.has(id)).length;
   console.error(
@@ -6100,7 +6109,7 @@ if (wanted !== null) {
 }
 for (const row of contract.rows) {
   if (defensive.has(row.id)) continue;
-  if (skipsScene(wanted, row.id)) continue;
+  if (skips(row.id)) continue;
   test(row.id, async () => {
     const run = scenes.get(row.id);
     expect(run, row.id).toBeDefined();
@@ -6146,7 +6155,7 @@ for (const command of ['up', 'down', 'add', 'register'] as const) {
     const all = refusalIds(command);
     expect(all.length).toBeGreaterThan(0);
     // A local filter narrows which refusals this run proves; CI runs every one of them.
-    const ids = all.filter((id) => !skipsScene(wanted, id));
+    const ids = all.filter((id) => !skips(id));
     if (ids.length === 0) return;
     const drySite = analyze().sites.find((site) => site.ids.includes(`${command}.dry-run`));
     expect(drySite?.codes).toEqual([0]);
@@ -6189,17 +6198,17 @@ for (const command of ['up', 'down', 'add', 'register'] as const) {
   }, 120_000);
 }
 
-test('every listed outcome has a run', () => {
+leadTest('every listed outcome has a run', () => {
   const ids = contract.rows.map((row) => row.id);
   expect(ids.filter((id) => !scenes.has(id) && !defensive.has(id))).toEqual([]);
   expect(scenes.size + defensive.size).toBe(ids.length);
 });
 
-test('the filter names only ids the contract has', () => {
+leadTest('the filter names only ids the contract has', () => {
   expect(unknownScenes(wanted, contract.rows.map((row) => row.id)), 'TEAM_EXIT_IDS names an id with no contract row').toEqual([]);
 });
 
-test('the exit-code check is clean', () => {
+leadTest('the exit-code check is clean', () => {
   expect(problems()).toEqual([]);
 });
 
@@ -6207,7 +6216,7 @@ test('the exit-code check is clean', () => {
 // filtered local run (`TEAM_EXIT_IDS`) skips them — a feature diff cannot change what they feed
 // the analyzer — and CI runs every one of them. The checks above read this repo and always run.
 const analyzerTest = (name: string, fn: () => void): void => {
-  if (wanted === null) test(name, fn);
+  if (wanted === null && leadPart(part)) test(name, fn);
 };
 
 analyzerTest('a new return that reuses a code fails the check', () => {
@@ -6635,7 +6644,7 @@ const unreadForms: { name: string; files: Map<string, string>; needle: string; e
 ];
 
 // The unreadable-form fixtures are analyzer probes too, skipped under a filter for the reason above.
-test.each(wanted === null ? unreadForms : [])('$name fails the check', (row) => {
+test.each(wanted === null && leadPart(part) ? unreadForms : [])('$name fails the check', (row) => {
   const found = problems(row.extra
     ? { files: row.files, contractText: canon([...contract.rows, ...row.extra]), page: render([...contract.rows, ...row.extra]) }
     : { files: row.files });

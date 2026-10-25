@@ -111,11 +111,11 @@ state.calls = 0;
 state.placedCalls = 0;
 const plan: Record<string, { failAt: number; failure: string }> = {
   // declaredSeat's check of the restored text
-  'add.not-restored': { failAt: 2, failure: 'edited text rejected' },
+  'add.not-restored': { failAt: 3, failure: 'edited text rejected' },
   // the prepared-edit check, after the seat was accepted
-  'add.prepared': { failAt: 3, failure: 'the prepared edit does not validate' },
+  'add.prepared': { failAt: 4, failure: 'the prepared edit does not validate' },
   // writeTeamFile's check, after the prepared edit validates
-  'add.locked': { failAt: 4, failure: 'the locked edit does not validate' },
+  'add.locked': { failAt: 5, failure: 'the locked edit does not validate' },
   // approve's second read of the text load just accepted
   'approve.revalidate': { failAt: 2, failure: 'the file does not validate' },
   'approve.placed': { failAt: 0, failure: '' },

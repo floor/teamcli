@@ -44,6 +44,7 @@ const NOW = new Date('2026-10-17T12:00:00Z');
 
 const TEAM_YAML = `format: 1
 project: beacon
+session: beacon
 entity: floor
 operator: lead
 workspace:

@@ -17,7 +17,9 @@ import {
 } from '../src/budgets/run.ts';
 import type { BudgetAccount, TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
-import { storePath, writeApproval } from '../src/store/store.ts';
+import { storePath } from '../src/store/store.ts';
+// The stored copy is not what these tests read: a text-signed record lets it be a stub.
+import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
 
 const NOW = 1_700_000_000_000;
 const MIN = 60_000;
@@ -267,7 +269,7 @@ describe('runChecks, end to end', () => {
     const file = valid(`${minimal}budgets:\n  accounts:\n    deepseek: { kind: spend, floor: 5 USD, check: ${command} }\n`);
     const resolved = resolveChecks(file, dir, '');
     if (!resolved.ok) throw new Error('the check did not resolve');
-    const approve = (checks: Record<string, ApprovedCheck>) => writeApproval(storePath(file.project, dir, home), {
+    const approve = (checks: Record<string, ApprovedCheck>) => writeTextSignedApproval(storePath(file.project, dir, home), {
       approval: approvalOf(file, dir, new Date(NOW), checks),
       file: 'format: 1\n',
     }, [], home);
@@ -297,7 +299,7 @@ describe('runChecks, end to end', () => {
     const file = valid(`${minimal}budgets:\n  accounts:\n    deepseek: { kind: spend, floor: 5 USD, check: ${command} }\n`);
     const resolved = resolveChecks(file, dir, '');
     if (!resolved.ok) throw new Error('the check did not resolve');
-    writeApproval(storePath(file.project, dir, home), {
+    writeTextSignedApproval(storePath(file.project, dir, home), {
       approval: approvalOf(file, dir, new Date(NOW), resolved.checks),
       file: 'format: 1\n',
     }, [], home);

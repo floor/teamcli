@@ -266,7 +266,7 @@ export function approvalDifferencesOf(
   standing: Extract<Standing, { kind: 'verified' }>,
   team: TeamFile,
 ): string[] {
-  return compare(approvedFingerprints(standing.record), fingerprints(team)).map(describe);
+  return compare(approvedFingerprints(standing.record), fingerprints(team), team).map(describe);
 }
 
 /**

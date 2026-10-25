@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `register`, `client`, `init`) stay out of every bundle. The other developer ops are listed in the grant and
   admit nothing until their route is wired. See [Client grant bundles](docs/concepts/client-grant-bundles.md#the-developer-bundle).
 
+### Fixed
+
+- A team file's `clients:` section added or edited after the last approval is honoured as the live file writes it while the approval standing is verified, like `watch` and `budgets`; an unverified standing falls back to the default seats. It was refused since `team approve` was removed.
+
 ## [0.5.3] - 2026-10-21
 
 0.5.3 is the event-driven send release: a message to another seat is delivered by the first
@@ -84,6 +88,14 @@ whose running model has drifted is held rather than delivered.
   until its next start.
 
 ### Changed
+
+- **Behavior change: the default session is `<entity>-<project>`.** A team file that names an
+  `entity` and omits `session:` now runs in the herdr session `<entity>-<project>` instead of the
+  project name alone, so two entities' teams of the same project no longer share one session. A
+  file without an entity keeps the project name, and `session:` still overrides the default per
+  team. `session` is an owner section, so an affected team must be approved again: `team status`
+  and `team approve` name the move as `` `session` changed: "web" ->
+  "acme-web" `` and say to approve again, or to set `session: web` to keep the old one.
 
 - **Admission is bound to the declared roster.** A caller reaches the targets the team file
   declares: the owner any agent; an orchestrator another orchestrator of its own team or

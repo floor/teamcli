@@ -30,6 +30,11 @@ function teamYaml(project: string, session: string | null = project): string {
   return text.replace(`session: ${project}`, `session: ${session}`);
 }
 
+/** The file with an `entity` line, for the default session's other half. */
+function withEntity(text: string, project: string, entity: string): string {
+  return text.replace(`project: ${project}\n`, `project: ${project}\nentity: ${entity}\n`);
+}
+
 function writeTeam(dir: string, text: string): void {
   mkdirSync(join(dir, '.agents'), { recursive: true });
   writeFileSync(join(dir, '.agents', 'team.yaml'), text);
@@ -68,7 +73,7 @@ function found(project: string, root: string): FoundTeam {
   return { project, root, seats: 1, unreadable: false };
 }
 
-test('an omitted session is the project name, and an empty session names it without validating', () => {
+test('an omitted session is the project name when the file names no entity, and an empty session names it without validating', () => {
   withFixture((base) => {
     const omitted = join(base, 'omitted');
     writeTeam(omitted, teamYaml('acme', null));
@@ -88,6 +93,30 @@ test('an omitted session is the project name, and an empty session names it with
     const deep = bury(hole, 40);
     writeTeam(deep, teamYaml('acme'));
     expect(findTeam('other', sessionAt(base, 'other-reg', [{ identity_cwd: deep }]), base)).toBeNull();
+  });
+});
+
+test('an omitted session with an entity is the entity and the project name joined, and the bare project name steps past', () => {
+  withFixture((base) => {
+    const proj = join(base, 'proj');
+    writeTeam(proj, withEntity(teamYaml('acme', null), 'acme', 'floor'));
+    const reg = sessionAt(base, 'reg', [{ identity_cwd: proj }]);
+    expect(findTeam('floor-acme', reg, base)).toEqual(found('acme', proj));
+    expect(findTeam('acme', reg, base)).toBeNull();
+  });
+});
+
+test('a renamed project moves the default session with it: the new name claims the file, the old one steps past', () => {
+  withFixture((base) => {
+    const proj = join(base, 'proj');
+    writeTeam(proj, withEntity(teamYaml('acme', null), 'acme', 'floor'));
+    const before = sessionAt(base, 'before', [{ identity_cwd: proj }]);
+    expect(findTeam('floor-acme', before, base)).toEqual(found('acme', proj));
+
+    writeTeam(proj, withEntity(teamYaml('renamed', null), 'renamed', 'floor'));
+    const after = sessionAt(base, 'after', [{ identity_cwd: proj }]);
+    expect(findTeam('floor-renamed', after, base)).toEqual(found('renamed', proj));
+    expect(findTeam('floor-acme', after, base)).toBeNull();
   });
 });
 

@@ -1,0 +1,1 @@
+{"emoji":"😀","format":1,"nested":{"a":{"w":false,"x":true,"y":null},"z":[3,1,2]},"numbers":{"big":1e+21,"float":3,"half":0.5,"int":3,"neg":-2},"project":"acme-web","seats":[{"name":"b","role":"lead"},{"name":"a","role":"worker"}],"text":"Agent: {display} · {role}\n\"quoted\"\t\u0001","é":"e-acute key","ünicode":"café"}

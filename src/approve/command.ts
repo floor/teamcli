@@ -18,7 +18,7 @@ import { grantGate, logGranted } from '../grant.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { OVERRIDE_CHANGED, overrideFile } from '../profiles/overrides.ts';
-import { approvalStanding, LEGACY_LINE, readApproval, storePath, writeApproval, type Ceilings } from '../store/store.ts';
+import { approvalStanding, approvedRecordOf, LEGACY_LINE, readApproval, storePath, writeApproval, type Ceilings } from '../store/store.ts';
 import { keyFingerprint, keyOf, keyRefusal, keyState, recordedGeneration } from '../store/keys.ts';
 
 // What a read of the terminal found: a canonical-mode line is queued (`waiting`), nothing is
@@ -281,7 +281,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     );
   } else {
     const changes = [
-      ...compare(approvedFingerprints(previous), fingerprints(team)).map(describe),
+      ...compare(approvedFingerprints(previous), fingerprints(team), team).map(describe),
       ...checkDrift(previous.approval.checks, resolved.checks),
       // A record that does not verify is not an approval: this one is needed whatever the diff says.
       ...(standing.kind === 'legacy' ? ['the record predates signed records'] : []),
@@ -290,6 +290,9 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
     const lines = formatDiff(previous.file, text);
     if (lines.length === 0)
       io.stdout(`${path}: the same text as the copy approved on ${previous.approval.approvedAt}.\n\n`);
+    else if (approvedRecordOf(previous.file) !== null && approvedRecordOf(previous.file) === approvedRecordOf(text))
+      // The signature covers the canonical record: a reordered or reformatted file is the same record.
+      io.stdout(`${path}: the same record as the copy approved on ${previous.approval.approvedAt}; only its layout changed.\n\n`);
     else {
       io.stdout(`${path}: against the copy approved on ${previous.approval.approvedAt}:\n\n`);
       io.stdout(`${lines.map((line) => `  ${line}`).join('\n')}\n\n`);
@@ -531,7 +534,7 @@ export async function runApprove(argv: string[], io: Io, sources: ApproveSources
   const changed =
     (delegatedPane === undefined && grantedSeat === undefined) || previous === null
       ? undefined
-      : compare(approvedFingerprints(previous), fingerprints(team)).map(describe).join('; ');
+      : compare(approvedFingerprints(previous), fingerprints(team), team).map(describe).join('; ');
   if (grantedSeat !== undefined) return writeApproved(caller, undefined, changed, grantedSeat);
   return delegatedPane === undefined ? writeApproved(caller) : writeApproved(caller, delegatedPane, changed);
 }

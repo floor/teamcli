@@ -13,6 +13,7 @@ import { readState, updateState, emptySession } from '../../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { gitEnv, testIo, type TestIo } from '../helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
+import { writeTextSignedApproval } from '../helpers/text-signed-approval.ts';
 
 let base: string;
 let project: string;
@@ -774,7 +775,7 @@ seats:
   test('a stored copy that is an older format does not block the live file', async () => {
     const loaded = loadTeamFile(project);
     if (!loaded.ok) throw new Error('the team file must load');
-    writeApproval(
+    writeTextSignedApproval(
       storePath(loaded.team.project, loaded.root, home),
       { approval: approvalOf(loaded.team, loaded.root), file: 'format: 0\n' },
       loaded.team.seats,
@@ -789,7 +790,7 @@ seats:
   test('a stored copy that is empty does not block the live file', async () => {
     const loaded = loadTeamFile(project);
     if (!loaded.ok) throw new Error('the team file must load');
-    writeApproval(
+    writeTextSignedApproval(
       storePath(loaded.team.project, loaded.root, home),
       { approval: approvalOf(loaded.team, loaded.root), file: '' },
       loaded.team.seats,
@@ -825,6 +826,25 @@ seats:
     expect(io.code).toBe(0);
     expect(io.err).toBe('');
     expect(io.out).toBe('team renamed, session "acme"\nworktree select-width: created at ../worktrees/renamed/select-width\n');
+    expect(existsSync(join(base, 'worktrees', 'renamed', 'select-width', 'README.md'))).toBe(true);
+  });
+
+  test('with the session omitted, a rename moves the session too: the state lands under the new name', async () => {
+    // The file names an entity and no session, so the session is `<entity>-<project>`: renaming the
+    // project renames the session, and the live file is the record, so `{repo}` and the state both
+    // follow it.
+    const wide = teamText()
+      .replace('  - ../worktrees/acme/*\n', '  - ../worktrees/*\n')
+      .replace('project: acme\n', 'project: acme\nentity: floor\n');
+    approve(wide);
+    edit(wide.replace('project: acme\n', 'project: renamed\n'));
+    const io = await run(['new', 'select-width', '--kind', 'fix']);
+    expect(io.code).toBe(0);
+    expect(io.err).toBe(noNote);
+    expect(io.out).toBe('team renamed, session "floor-renamed"\nworktree select-width: created at ../worktrees/renamed/select-width\n');
+    const state = readState(join(project, '.agents'));
+    expect(Object.keys(state.sessions)).toEqual(['floor-renamed']);
+    expect(state.sessions['floor-renamed']?.worktrees['select-width']?.branch).toBe('fix/select-width');
     expect(existsSync(join(base, 'worktrees', 'renamed', 'select-width', 'README.md'))).toBe(true);
   });
 

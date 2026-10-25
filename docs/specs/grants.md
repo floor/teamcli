@@ -120,7 +120,7 @@ Owner-only section (`src/file/sections/grant.ts`): the orchestrator seat's stand
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
-| `session` | string | yes | — | 0.5.0 | The file's own session: the session key, or the project name when that key is omitted |
+| `session` | string | yes | — | 0.5.0 | The file's own session: the session key, or `<entity>-<project>` when that key is omitted and an entity is named (the project name alone when none is) |
 | `seat` | string | yes | — | 0.5.0 | The orchestrator seat's name, the one `coordinator:` or `leads: true` resolves |
 | `scope` | string[] | yes | — | 0.5.0 | Non-empty, distinct, order kept, from `up`, `down`, `approve`, `init`, `reload`, `swap` |
 
@@ -171,7 +171,7 @@ A client grant (`team grant --client <client-id> --entity <entity> --public-key 
       <client-id>:
         seats: [orchestrator, <other-seat>]
   ```
-- **Per team**, the target team's approved team file may replace that list for a client in its own `clients:` section (an owner section: honoured only while the owner's approval of it is in force; the operator and `human: true` seats are never admitted).
+- **Per team**, the target team's approved team file may replace that list for a client in its own `clients:` section (the live file is the record: honoured as written while the team's approval standing is verified, and the default seats apply when it is not; the operator and `human: true` seats are never admitted).
 - **At issuance**, `team grant --client … [--team <team>] [--seat <seat>]` signs the target team (`team`, with its registry id `team_id` and the seat's agent id `recipient_id`) and seat (`recipient_seat`) into the grant; the seat must be in the admitted list. Without `--team` the team is the entity's coordinator team (the team named like the entity) and the grant carries no `team` field, byte-shape unchanged; without `--seat` the seat is `orchestrator`.
 - **At send**, the address must equal the grant's signed `<seat>@<team>` (`<seat>@<entity>` for a grant with no `team`), so `orchestrator@teamcli` and `orchestrator@floor` are distinct grants to distinct agents, and the seat is checked again against the configured list at every use (issuance, decode, send). An empty list, an unknown or human-typed seat, and a client the entity does not declare are refused.
 
