@@ -185,7 +185,7 @@ Restored .agents/team.yaml from an archive. The archive is beacon's, taken at ~/
 
 The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or
-receives one and approves it themselves.
+receives one and uses it as their own.
 exit 0
 ```
 

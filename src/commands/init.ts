@@ -462,8 +462,8 @@ export async function runInit(
       return 1;
     }
     text = copy;
-    what = 'restored the approved copy';
-    first = `Restored ${TEAM_FILE} from the copy you last approved on this machine.\n`;
+    what = 'restored the copy this machine stored';
+    first = `Restored ${TEAM_FILE} from the copy this machine stored.\n`;
   } else if (fromArchive !== undefined) {
     // The archive's own team file, checked against the archive's manifest before anything else
     // is done: the sha256 it records is the file's, and the file validates. It is written
