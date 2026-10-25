@@ -36,6 +36,10 @@ export type StoredTeamConfig = {
   imported_at: string;
   /** `migrate` for the one-time move, `import` for a later replacement. */
   imported_by: 'migrate' | 'import';
+  /** The last editing command that replaced the definition after the import (phase 3), and when.
+   *  Absent until a writer edits the registry's record. */
+  edited_by?: string;
+  edited_at?: string;
 };
 
 export class TeamConfigStoreError extends Error {

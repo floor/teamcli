@@ -7,13 +7,13 @@ import { findRoot, withoutFileOffer } from './file/load.ts';
 import { readTeamConfig } from './file/team-config.ts';
 import type { TeamFile } from './file/types.ts';
 import { validateTeamFile } from './file/validate.ts';
-import { writeTeamFile } from './file/write.ts';
 import { cleanedIo, type Io } from './io.ts';
 import { plainText } from './launch/plain.ts';
 import { writeJson, writeJsonError } from './output/index.ts';
 import { withLock } from './state.ts';
 import { approvedRecordOf } from './store/store.ts';
 import { parseYaml, type YamlNode } from './yaml.ts';
+import { readTeamText, teamTextTarget, writeTeamText } from './file/team-text.ts';
 
 export type AuthorityEdit =
   | { kind: 'grant'; seat: string; scope: string[] }
@@ -126,12 +126,15 @@ export async function runAuthorityEdit(
   try {
     withLock(dirname(loaded.path), () => {
       options.beforeWrite?.();
-      requireRegularFile(loaded.path);
-      if (readFileSync(loaded.path, 'utf8') !== loaded.text) {
+      // Under the registry the record is the text: no file is read or written, so the file's own
+      // guards (a regular file, no stray temporary) do not apply; the changed-while-checking guard does.
+      const onFile = teamTextTarget(loaded.path, { home }).kind === 'file';
+      if (onFile) requireRegularFile(loaded.path);
+      if (readTeamText(loaded.path, { home }) !== loaded.text) {
         throw new Error('the team file changed while checking; nothing written');
       }
-      requireAbsentTemporary(loaded.path);
-      const wrote = writeTeamFile(loaded.path, next);
+      if (onFile) requireAbsentTemporary(loaded.path);
+      const wrote = writeTeamText(loaded.path, next, { home, command });
       if (!wrote.ok) throw new Error(wrote.errors[0]?.message ?? 'the team file cannot be written');
     });
   } catch (error) {

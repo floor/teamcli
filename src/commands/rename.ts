@@ -28,7 +28,6 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { nicknameProblem } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
-import { writeTeamFile } from '../file/write.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { agentRename } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
@@ -52,6 +51,7 @@ import {
 } from '../store/keys.ts';
 import { approvalStanding, storePath, type Standing } from '../store/store.ts';
 import { renameSeatLeases } from '../tasks/lease.ts';
+import { readTeamText, writeTeamText } from '../file/team-text.ts';
 
 export const USAGE = `Usage: team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
        team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
@@ -586,7 +586,8 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const standing = (sources.standing ?? ((at) => approvalStanding(at, home)))(root);
-  const originalText = readFileSync(path, 'utf8');
+  const where = { home, command: 'rename' };
+  const originalText = readTeamText(path, where);
   let nextText = originalText;
   for (const { from, to } of renames) {
     nextText = renameSeat(nextText, from, to);
@@ -601,7 +602,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
   }
 
   const priorState = readState(dir);
-  writeTeamFile(path, nextText);
+  writeTeamText(path, nextText, where);
   recordSeatRenameOf(standing, validated.team, root, renames, home);
 
   const stateMoved = renameSeatInState(dir, renames);

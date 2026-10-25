@@ -11,7 +11,6 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { entitiesPath } from '../entities.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { writeTeamFile } from '../file/write.ts';
 import { grantsDir } from '../grant.ts';
 import { logLine } from '../log.ts';
 import { agentsDir, getAgent, updateAgent } from '../registry/agents.ts';
@@ -37,6 +36,7 @@ import {
   type PolicyLevel,
   type PolicyValue,
 } from './types.ts';
+import { readTeamText, writeTeamText } from '../file/team-text.ts';
 
 export type PolicyChainInput = {
   home?: string;
@@ -869,7 +869,7 @@ export function writePolicySet(
         at: now.toISOString(),
       });
     } else if (request.level === 'team') {
-      writeTeamPolicyEntry(request.teamRoot!, signedPolicy.name, diskEntry);
+      writeTeamPolicyEntry(request.teamRoot!, signedPolicy.name, diskEntry, home);
     } else {
       writeSeatPolicyEntry(home, request.target, signedPolicy.name, diskEntry);
     }
@@ -926,7 +926,7 @@ export function writePolicyUnset(
     } else if (request.level === 'project') {
       writeProjectPolicyEntry(home, request.target, plan.name, null, {});
     } else if (request.level === 'team') {
-      writeTeamPolicyEntry(request.teamRoot!, plan.name, null);
+      writeTeamPolicyEntry(request.teamRoot!, plan.name, null, home);
     } else {
       writeSeatPolicyEntry(home, request.target, plan.name, null);
     }
@@ -1067,9 +1067,11 @@ function writeTeamPolicyEntry(
   teamRoot: string,
   policyName: string,
   entry: Record<string, YamlValue> | null,
+  home: string,
 ): void {
   const path = join(teamRoot, '.agents', 'team.yaml');
-  const text = readFileSync(path, 'utf8');
+  const where = { home, command: 'policy' };
+  const text = readTeamText(path, where);
   const parsed = parseYaml(text);
   if (parsed.kind !== 'map') throw new Error(`${path}: the team file must be a map`);
   const rootVal = toValue(parsed);
@@ -1102,7 +1104,7 @@ function writeTeamPolicyEntry(
     const after = lines.slice(end).join('');
     nextText = bom + before + replacement + after;
   }
-  const wrote = writeTeamFile(path, nextText);
+  const wrote = writeTeamText(path, nextText, where);
   if (!wrote.ok) {
     throw new Error(wrote.errors[0]?.message ?? `${path}: cannot write team file`);
   }

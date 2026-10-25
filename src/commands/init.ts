@@ -23,6 +23,8 @@ import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner
 import { ruleRelaxed } from '../security/profile.ts';
 import { admitTeamCreate, approveTeamCreate, createTeamCreateRequest, listApprovalModes, listTeamCreateRules, revokeTeamCreateRule, setApprovalMode } from '../client/team-create.ts';
 import { assertionFile } from '../client-cli.ts';
+import { teamTextTarget, writeTeamText } from '../file/team-text.ts';
+import { readStoredTeamConfig, teamConfigRecordPath } from '../registry/team-config-store.ts';
 
 // What git must never pick up: the file and the runtime files beside it — the start files of
 // the services included: the socket and its lock, the lock's takeover claim (a killed
@@ -373,11 +375,19 @@ export async function runInit(
     // exit: init.tracked
     return 1;
   }
-  if (existsSync(path)) {
-    exclude(root);
+  // Under `team-config.source: registry` the new team is the registry's record, and no file is
+  // written; a team the registry already holds is the same refusal as a file that exists.
+  const target = teamTextTarget(path, { ...(home !== undefined ? { home } : {}), create: true });
+  const held = target.kind === 'registry'
+    ? readStoredTeamConfig(target.home, target.id) !== null
+    : existsSync(path);
+  if (held) {
+    if (target.kind === 'file') exclude(root);
     refuse(io, json, 'init', {
       id: 'init.exists',
-      message: `${TEAM_FILE} exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.`,
+      message: target.kind === 'registry'
+        ? `the registry already holds this team (${teamConfigRecordPath(target.home, target.id)}); it is left as it is. Edit it with the team's commands, or replace it with team import.`
+        : `${TEAM_FILE} exists already; it is left as it is. Its lines in .git/info/exclude were checked, and added where missing.`,
       repair: null,
     });
     // exit: init.exists
@@ -438,9 +448,17 @@ export async function runInit(
   }
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);
-  writeFileSync(path, text, { flag: 'wx' });
+  if (target.kind === 'registry') {
+    // The text was validated above (the skeleton) or verified as an approval's copy (restore), so
+    // this write does not refuse; a failure here is a bug, said as one.
+    const wrote = writeTeamText(path, text, { home: target.home, command: 'init', create: true, ...(sources.now ? { now: sources.now } : {}) });
+    if (!wrote.ok) throw new Error(`team init: the team doesn't validate: ${wrote.errors[0]?.message}`);
+  } else {
+    writeFileSync(path, text, { flag: 'wx' });
+  }
   const what = args.flags.has('restore') ? 'restored the copy this machine stored' : 'wrote a skeleton';
-  logLine(dirname(path), 'init', describeCaller(caller), `${what} as ${TEAM_FILE}; excluded ${pluralCount(added.length, 'path')}`);
+  const into = target.kind === 'registry' ? 'into the registry' : `as ${TEAM_FILE}`;
+  logLine(dirname(path), 'init', describeCaller(caller), `${what} ${into}; excluded ${pluralCount(added.length, 'path')}`);
   // The registry is where the user-level state lives: the home the shipped command names, or the
   // one a test hands in. A caller that names neither leaves the machine's registry alone.
   const registryHome = sources.registryHome ?? home;

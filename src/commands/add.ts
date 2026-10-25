@@ -32,7 +32,6 @@ import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel, validateTeamFile } from '../file/validate.ts';
-import { writeTeamFile } from '../file/write.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbyRefusal, type LobbySeen } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
 import {
@@ -70,6 +69,7 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
+import { readTeamText, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
   home: string;
@@ -520,7 +520,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
 
   const recorded = readState(dir).sessions[session] ?? emptySession();
 
-  const original = readFileSync(path, 'utf8');
+  const original = readTeamText(path, { home: sources.home ?? homedir() });
   const asked = args.rest[0] ?? '';
   const built = temporary
     ? temporarySeat(args.values, original, team, recorded, agents, root, team.workspace.base, sources.home, sources.now())
@@ -1035,8 +1035,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (delegatePane !== null) logDelegated(dir, delegatePane, 'add', sources.now());
     if (built.edited !== original) {
       const written = withLock(dir, () => {
-        if (readFileSync(path, 'utf8') !== original) return { kind: 'changed' as const };
-        const wrote = writeTeamFile(path, built.edited);
+        const where = { home: sources.home ?? homedir(), command: 'add' };
+        if (readTeamText(path, where) !== original) return { kind: 'changed' as const };
+        const wrote = writeTeamText(path, built.edited, where);
         return wrote.ok ? { kind: 'ok' as const } : { kind: 'invalid' as const, errors: wrote.errors };
       });
       if (written.kind === 'changed') {

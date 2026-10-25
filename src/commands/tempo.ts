@@ -5,10 +5,10 @@ import { NOT_A_REPO, withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { TEMPOS, type Tempo } from '../file/sections/tempo.ts';
-import { writeTeamFile } from '../file/write.ts';
 import { approvedRecordOf } from '../store/store.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { writeTeamText } from '../file/team-text.ts';
 
 export const USAGE = `Usage: team tempo <word> [--json]
 
@@ -86,7 +86,7 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
       // exit: tempo.unchanged
       return 0;
     }
-    const wrote = writeTeamFile(loaded.path, next);
+    const wrote = writeTeamText(loaded.path, next, { home: sources.home ?? homedir(), command: 'tempo' });
     if (wrote.ok) {
       summary(io, json, team, word, 'set');
       // exit: tempo.set
