@@ -30,6 +30,7 @@ import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
 import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
+import { leftoverDifferences } from '../file/team-config.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -411,6 +412,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...labelDifferences(team, state, live),
     ...rosterDifferences(team, state, live, root, sources.home),
     ...registryDifferences(team, root, sources.home),
+    // A team file left beside a registry team that says something else: never silent.
+    ...leftoverDifferences(current.leftover),
     ...deliveryOrderDifferences(team, root, sources.home),
     ...policyChecked.differences,
     ...modelRule.differences,
@@ -1398,7 +1401,8 @@ function leadSiblings(team: TeamFile, root: string, home: string, teamIds: strin
     if (siblingRoot === undefined) continue;
     let loaded: LoadResult;
     try {
-      loaded = readTeamConfig(siblingRoot, { file: join(siblingRoot, TEAM_FILE), home, checkOnly: true });
+      // The sibling as its own source holds it: the registry's record, or its file in file mode.
+      loaded = readTeamConfig(siblingRoot, { home, checkOnly: true });
     } catch {
       // A file that cannot be read at all (permissions, a broken link) is a sibling the check
       // cannot see: not counted, and not a reason for this team's check to fail.

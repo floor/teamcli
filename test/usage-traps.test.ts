@@ -21,6 +21,8 @@ type Traps = {
 test('usage opens no CLI session file, no CLI credential, and runs nothing but the resolver', async () => {
   const proc = Bun.spawn(['bun', 'test/usage-traps-run.ts'], {
     cwd: new URL('..', import.meta.url).pathname,
+    // The runner is a plain script, outside the suite preload: it keeps the file source here.
+    env: { ...process.env, TEAM_CONFIG_SOURCE: 'file' },
     stdout: 'pipe',
     stderr: 'pipe',
   });

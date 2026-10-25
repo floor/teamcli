@@ -158,6 +158,7 @@ function world(): World {
       env: {
         HOME: home,
         PATH: process.env.PATH ?? '/usr/bin:/bin',
+        TEAM_CONFIG_SOURCE: 'file',
         TMPDIR: process.env.TMPDIR ?? tmpdir(),
         // The spawned runtime would otherwise fill the synthetic HOME with its own transpiler
         // cache; disabled, the home snapshot sees only writes the command itself makes.

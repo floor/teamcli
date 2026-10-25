@@ -154,6 +154,18 @@ export function loadTeamFile(cwd: string, options: { file?: string; home?: strin
   } catch {
     return { ok: false, path, errors: [{ line: 0, message: `the team file at ${path} could not be read`, unreadable: true }] };
   }
+  return loadTeamText(text, root, path, options);
+}
+
+// Validates a team's text as the file reader does once it has read it: the same validation, the
+// same placement problems, the same result. The registry source (src/file/team-config.ts) hands
+// the text it stores here, so a team read from the registry is checked exactly as a file is.
+export function loadTeamText(
+  text: string,
+  root: string,
+  path: string,
+  options: { home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {},
+): LoadResult {
   const result = validateWithWorkspaceMode(text, root, options);
   if (!result.ok) return { ...result, path };
   if (options.checkOnly) return { ...result, root, path, text };

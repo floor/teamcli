@@ -26,6 +26,7 @@ import { hostedWatchNotes } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
 import { currentTeam } from '../file/current.ts';
+import { leftoverDifferences } from '../file/team-config.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
@@ -558,6 +559,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   comparison.differences = orderAndAnnotateDifferences([
     ...comparison.differences,
     ...protectedCheckouts(team, root, sources),
+    // A team file left beside a registry team that says something else: never silent.
+    ...leftoverDifferences(current.leftover),
     // `approve` is gone: a machine that never approved this file is the ordinary case now, not a
     // difference, and the reading exits 0 for it. A legacy record and one the verification refused
     // still say what they are — as rows, or under dev mode as the quiet notes above.
