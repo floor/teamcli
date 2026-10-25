@@ -157,22 +157,38 @@ function seatDigest(seat: Record<string, unknown>, free: Set<string>): string {
   return digest(fields);
 }
 
+/**
+ * The session a team was approved under, when the only reason it moved is the default: the file
+ * names an entity, its session resolves to `<entity>-<project>`, and the approval recorded the
+ * old default, the project name alone. Null otherwise.
+ */
+export function sessionDefaultMove(approvedDigest: string | undefined, team: Approvable): { from: string; to: string } | null {
+  const { project, entity, session } = team as { project?: unknown; entity?: unknown; session?: unknown };
+  if (typeof project !== 'string' || typeof entity !== 'string' || !entity) return null;
+  if (session !== `${entity}-${project}`) return null;
+  if (approvedDigest !== digest(sectionOf(team, 'session')) && approvedDigest === digest(project)) return { from: project, to: session };
+  return null;
+}
+
 export type Difference =
-  { kind: 'section'; name: string } | { kind: 'seat-changed'; name: string } | { kind: 'seat-new'; name: string };
+  { kind: 'section'; name: string; moved?: { from: string; to: string } } | { kind: 'seat-changed'; name: string } | { kind: 'seat-new'; name: string };
 
 /**
  * What in the file the owner has not approved. The file passes when every
  * section matches and every seat in it matches an approved seat: a seat taken
  * out needs no new approval. Parking or stopping one does.
  */
-export function compare(approved: Fingerprints, current: Fingerprints): Difference[] {
+export function compare(approved: Fingerprints, current: Fingerprints, team?: Approvable): Difference[] {
   const differences: Difference[] = [];
   for (const name of OWNER_SECTIONS) {
     // A record with no fingerprint for a section is read by `approvedFingerprints`, from the copy
     // it stored. What reaches here without one is a record whose copy is gone: it turned nothing
     // off, so `watch.checks` reads as the empty list, and a missing `watch` is a difference.
     const before = approved.sections[name] ?? (name === 'watch.checks' ? digest([]) : undefined);
-    if (before !== current.sections[name]) differences.push({ kind: 'section', name });
+    if (before !== current.sections[name]) {
+      const moved = name === 'session' && team ? sessionDefaultMove(before, team) : null;
+      differences.push(moved ? { kind: 'section', name, moved } : { kind: 'section', name });
+    }
   }
   for (const [name, fingerprint] of Object.entries(current.seats)) {
     if (!Object.hasOwn(approved.seats, name)) differences.push({ kind: 'seat-new', name });
@@ -190,6 +206,10 @@ export const WATCH_CHECKS_CHANGED = '`watch.checks` changed';
 
 /** One line per difference, as `status`, `doctor` and the refusals print it. */
 export function describe(difference: Difference): string {
+  if (difference.kind === 'section' && difference.moved) {
+    const { from, to } = difference.moved;
+    return `\`session\` changed: "${from}" -> "${to}", the new default session (<entity>-<project>); approve the file again, or set \`session: ${from}\` to keep the old one`;
+  }
   if (difference.kind === 'section') return `\`${difference.name}\` changed`;
   if (difference.kind === 'seat-new') return `seat ${difference.name} is not in the last approval`;
   return `seat ${difference.name} changed`;

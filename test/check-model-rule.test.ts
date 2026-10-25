@@ -28,6 +28,7 @@ const WORKER = 'w2:p1';
 
 const TEAM = `format: 1
 project: beacon
+session: beacon
 entity: lab
 coordinator: keeper
 operator: keeper

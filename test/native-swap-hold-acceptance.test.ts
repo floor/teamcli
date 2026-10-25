@@ -64,6 +64,7 @@ const lobbyOf = (): string => join(home, '.config', 'team', 'lobbies', 'lab');
 
 const TEAM = (rootPath: string, lobby: string): string => `format: 1
 project: acme
+session: acme
 entity: lab
 operator: lead
 coordinator: lead

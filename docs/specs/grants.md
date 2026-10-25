@@ -120,7 +120,7 @@ Owner-only section (`src/file/sections/grant.ts`): the orchestrator seat's stand
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
-| `session` | string | yes | — | 0.5.0 | The file's own session: the session key, or the project name when that key is omitted |
+| `session` | string | yes | — | 0.5.0 | The file's own session: the session key, or `<entity>-<project>` when that key is omitted and an entity is named (the project name alone when none is) |
 | `seat` | string | yes | — | 0.5.0 | The orchestrator seat's name, the one `coordinator:` or `leads: true` resolves |
 | `scope` | string[] | yes | — | 0.5.0 | Non-empty, distinct, order kept, from `up`, `down`, `approve`, `init`, `reload`, `swap` |
 

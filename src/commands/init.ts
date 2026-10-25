@@ -120,7 +120,7 @@ export function skeleton(project: string, head: string | null, teamVersion = ver
 format: 1
 project: ${project}
 # visibility: public          # public | private: whether forbidden_public applies
-# session: ${project}          # the herdr session; never "default"
+# session: ${project}          # the herdr session; default <entity>-<project>, never "default"
 ${padded('operator: orchestrator', '# the seat the watch reports to')}
 
 # identity:

@@ -29,6 +29,7 @@ const CODEX_IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', imp
 
 const TEAM = `format: 1
 project: acme
+session: acme
 entity: lab
 operator: lead
 workspace:

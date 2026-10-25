@@ -50,10 +50,14 @@ const SEAT = (role: string, name: string, leads = false) => `  - role: ${role}
     launch: claude --model claude-opus-5-5${leads ? '\n    leads: true' : ''}
 `;
 
+// These tests are about grants, so the team names its session: with the session omitted and an
+// entity set, the session follows the entity (`<entity>-<project>`), and every expectation here
+// reads the session under the project's own name.
 function teamFile(project: string, trust: string[]): string {
   return `format: 1
 project: ${project}
 entity: beacon
+session: ${project}
 operator: orchestrator
 trust:
 ${trust.map((entry) => `  - ${entry}`).join('\n')}

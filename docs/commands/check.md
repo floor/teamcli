@@ -267,7 +267,7 @@ housekeeping of a role word written the 0.3.5/0.4 way):
 
 ```console
 $ team check ; echo "exit $?"
-team beacon, session "beacon"
+team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
@@ -283,7 +283,7 @@ $ team policy set entity model-rule '*=!anthropic' ; echo "exit $?"
 policy: set model-rule=*=!anthropic at entity (lab)
 exit 0
 $ team check ; echo "exit $?"
-team beacon, session "beacon"
+team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route

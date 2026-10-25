@@ -38,14 +38,17 @@ function scalar(map: YamlNode, key: string): string | null {
   return entry.value.value;
 }
 
-/** `project` and `session` as the file writes them. An omitted session is the project name, the
- *  file's own default. Null when those two cannot be read, so the file is not claimed for a session. */
+/** `project`, `entity` and `session` as the file writes them. An omitted session is the entity and
+ *  the project name joined with `-`, the project name alone when the file names no entity: the
+ *  section's own default, kept in step with it. Null when those cannot be read, so the file is not
+ *  claimed for a session. */
 function declared(text: string): { project: string; session: string } | null {
   try {
     const node = parseYaml(text);
     const project = scalar(node, 'project');
     if (!project) return null;
-    return { project, session: scalar(node, 'session') ?? project };
+    const entity = scalar(node, 'entity');
+    return { project, session: scalar(node, 'session') ?? (entity ? `${entity}-${project}` : project) };
   } catch {
     return null;
   }

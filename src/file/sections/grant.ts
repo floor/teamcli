@@ -26,7 +26,7 @@ export const grant: Section = {
       session: {
         type: 'string',
         minLength: 1,
-        $comment: 'the file\'s own session: the session key, or the project name when that key is omitted',
+        $comment: 'the file\'s own session: the session key, or <entity>-<project> when that key is omitted and an entity is named, the project name alone when it is not',
       },
       seat: {
         type: 'string',

@@ -58,11 +58,15 @@ const SEAT = (role: string, name: string, leads = false) => `  - role: ${role}
     launch: claude --model claude-opus-5-5${leads ? '\n    leads: true' : ''}
 `;
 
+// These tests are about grants, so the team names its session: with the session omitted and an
+// entity set, the session follows the entity (`<entity>-<project>`), and every expectation here
+// reads the session under the project's own name.
 function fiveSeatTeam(project: string, root: string, home: string): string {
   const lobby = join(home, '.config', 'team', 'lobbies', 'beacon');
   return `format: 1
 project: ${project}
 entity: beacon
+session: ${project}
 operator: orchestrator
 trust:
   - ${lobby}
