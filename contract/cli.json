@@ -1761,6 +1761,51 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "import",
+      "positionals": [
+        {
+          "name": "file",
+          "optional": true,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team import [<file>] [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "the team's configuration is the owner's: making a file its registry record is the owner's act, from a terminal outside herdr"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--approval-mode",
           "repeatable": false,
           "takesValue": true
@@ -2219,6 +2264,45 @@
       "who": {
         "gate": "seat-record",
         "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "migrate",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team migrate [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "why": "the team's configuration is the owner's: moving it into the registry is the owner's act, from a terminal outside herdr"
       }
     },
     {

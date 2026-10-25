@@ -1767,6 +1767,48 @@
     },
     {
       "code": 0,
+      "command": "import",
+      "id": "import.done",
+      "meaning": "the registry holds the file, or would with --dry-run",
+      "trigger": "team import"
+    },
+    {
+      "code": 1,
+      "command": "import",
+      "id": "import.detached",
+      "meaning": "the owner-only act was run with no terminal",
+      "trigger": "team import"
+    },
+    {
+      "code": 1,
+      "command": "import",
+      "id": "import.not-owner",
+      "meaning": "the caller is not the owner",
+      "trigger": "team import"
+    },
+    {
+      "code": 2,
+      "command": "import",
+      "id": "import.invalid",
+      "meaning": "the team file is missing or does not validate",
+      "trigger": "team import missing.yaml"
+    },
+    {
+      "code": 2,
+      "command": "import",
+      "id": "import.invocation",
+      "meaning": "the invocation does not parse",
+      "trigger": "team import a b"
+    },
+    {
+      "code": 2,
+      "command": "import",
+      "id": "import.round-trip",
+      "meaning": "the team read back from the registry differs from the file",
+      "trigger": "team import"
+    },
+    {
+      "code": 0,
       "command": "init",
       "id": "init.approval",
       "meaning": "an owner-seat team request was recorded, answered, listed or revoked",
@@ -2163,6 +2205,62 @@
       "id": "messages.not-a-repo",
       "meaning": "not inside a git repository",
       "trigger": "team messages"
+    },
+    {
+      "code": 0,
+      "command": "migrate",
+      "id": "migrate.done",
+      "meaning": "the team is in the registry, or would be with --dry-run",
+      "trigger": "team migrate"
+    },
+    {
+      "code": 1,
+      "command": "migrate",
+      "id": "migrate.already-migrated",
+      "meaning": "the team was already moved to the registry; team import replaces the record",
+      "trigger": "team migrate"
+    },
+    {
+      "code": 1,
+      "command": "migrate",
+      "id": "migrate.detached",
+      "meaning": "the owner-only act was run with no terminal",
+      "trigger": "team migrate"
+    },
+    {
+      "code": 1,
+      "command": "migrate",
+      "id": "migrate.not-owner",
+      "meaning": "the caller is not the owner",
+      "trigger": "team migrate"
+    },
+    {
+      "code": 2,
+      "command": "migrate",
+      "id": "migrate.invalid",
+      "meaning": "the team file is missing or does not validate",
+      "trigger": "team migrate"
+    },
+    {
+      "code": 2,
+      "command": "migrate",
+      "id": "migrate.invocation",
+      "meaning": "the invocation does not parse",
+      "trigger": "team migrate extra"
+    },
+    {
+      "code": 2,
+      "command": "migrate",
+      "id": "migrate.registry",
+      "meaning": "the registry record that exists cannot be read",
+      "trigger": "team migrate"
+    },
+    {
+      "code": 2,
+      "command": "migrate",
+      "id": "migrate.round-trip",
+      "meaning": "the team read back from the registry differs from the file",
+      "trigger": "team migrate"
     },
     {
       "code": 0,

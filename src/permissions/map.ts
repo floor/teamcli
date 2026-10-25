@@ -360,6 +360,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-read',
       why: 'the view and `--rule` read is the team\'s: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; `queue`, `now` and `cancel` have their own rows, and `--run` changes the team through the same verdict they call',
     },
+    import: {
+      kind: 'owner-only',
+      why: 'the team\'s configuration is the owner\'s: making a file its registry record is the owner\'s act, from a terminal outside herdr',
+    },
+    migrate: {
+      kind: 'owner-only',
+      why: 'the team\'s configuration is the owner\'s: moving it into the registry is the owner\'s act, from a terminal outside herdr',
+    },
     tempo: {
       kind: 'owner-only',
       why: 'the tempo word is the owner\'s, from a terminal outside herdr',

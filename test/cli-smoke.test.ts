@@ -59,6 +59,8 @@ export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   resume: 'clears pause state for one or more teams',
   raise: "writes one signed owner mailbox record and one event, and rings the owner's notification",
   init: 'writes .agents/team.yaml and registers the project on disk',
+  import: "writes this team's configuration record into the registry (~/.config/team/team-config)",
+  migrate: "moves this team's .agents/team.yaml into the registry once (~/.config/team/team-config)",
   lock: 'mutates project lock state to acquire a named lock',
   next: 'claims the next open task and writes a local lease at .agents/leases/<id>.json',
   register: 'mutates .agents/state.json to bind a live pane to a seat',

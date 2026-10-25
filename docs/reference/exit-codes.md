@@ -258,6 +258,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `hold.until` | `hold` | 1 | --until is not a clock or an instant | `team hold "freeze deploys" --until tomorrow` |
 | `hold.file` | `hold` | 2 | the team file can't be read | `team hold "freeze deploys"` |
 | `hold.invocation` | `hold` | 2 | the invocation can't be read | `team hold` |
+| `import.done` | `import` | 0 | the registry holds the file, or would with --dry-run | `team import` |
+| `import.detached` | `import` | 1 | the owner-only act was run with no terminal | `team import` |
+| `import.not-owner` | `import` | 1 | the caller is not the owner | `team import` |
+| `import.invalid` | `import` | 2 | the team file is missing or does not validate | `team import missing.yaml` |
+| `import.invocation` | `import` | 2 | the invocation does not parse | `team import a b` |
+| `import.round-trip` | `import` | 2 | the team read back from the registry differs from the file | `team import` |
 | `init.approval` | `init` | 0 | an owner-seat team request was recorded, answered, listed or revoked | `team init --request` |
 | `init.restored` | `init` | 0 | the approved copy was restored | `team init --restore` |
 | `init.wrote` | `init` | 0 | a skeleton was written | `team init` |
@@ -315,6 +321,14 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.client-usage` | `messages` | 2 | the client invocation can't be read | `team messages --client client-grant.json` |
 | `messages.invocation` | `messages` | 2 | the invocation can't be read | `team messages extra` |
 | `messages.not-a-repo` | `messages` | 2 | not inside a git repository | `team messages` |
+| `migrate.done` | `migrate` | 0 | the team is in the registry, or would be with --dry-run | `team migrate` |
+| `migrate.already-migrated` | `migrate` | 1 | the team was already moved to the registry; team import replaces the record | `team migrate` |
+| `migrate.detached` | `migrate` | 1 | the owner-only act was run with no terminal | `team migrate` |
+| `migrate.not-owner` | `migrate` | 1 | the caller is not the owner | `team migrate` |
+| `migrate.invalid` | `migrate` | 2 | the team file is missing or does not validate | `team migrate` |
+| `migrate.invocation` | `migrate` | 2 | the invocation does not parse | `team migrate extra` |
+| `migrate.registry` | `migrate` | 2 | the registry record that exists cannot be read | `team migrate` |
+| `migrate.round-trip` | `migrate` | 2 | the team read back from the registry differs from the file | `team migrate` |
 | `next.none` | `next` | 0 | nothing to take or to release | `team next` |
 | `next.released` | `next` | 0 | the caller's lease was released | `team next --release` |
 | `next.taken` | `next` | 0 | a record was claimed, or the caller's live lease was renewed | `team next` |

@@ -114,6 +114,8 @@ import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
 import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
 import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/world.ts';
+import { runImport } from '../src/commands/import.ts';
+import { runMigrate } from '../src/commands/migrate.ts';
 import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
@@ -6097,7 +6099,64 @@ seats:
   });
 }
 
-const defensive = new Set(['add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
+async function imported(place: Place, mode: 'migrate' | 'import', argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  // The registry lives under the scene's own home, never the machine's.
+  const run = mode === 'migrate' ? runMigrate : runImport;
+  return { code: await run(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+function corruptTeamRecord(place: Place): void {
+  const dir = join(place.home, '.config', 'team', 'team-config');
+  for (const name of readdirSync(dir)) writeFileSync(join(dir, name), '{ not json\n');
+}
+
+scene('migrate.done', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'migrate', []), 'read back and verified');
+});
+scene('migrate.already-migrated', async (place) => {
+  write(place, TEAM);
+  await imported(place, 'migrate', []);
+  return show(await imported(place, 'migrate', []), 'team import');
+});
+scene('migrate.detached', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'migrate', [], detachedCaller), 'migrate');
+});
+scene('migrate.not-owner', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'migrate', [], other), 'only the owner runs migrate');
+});
+scene('migrate.invalid', async (place) => {
+  writeFileSync(join(place.root, '.agents', 'team.yaml'), 'format: [\n');
+  return show(await imported(place, 'migrate', []), 'team.yaml');
+});
+scene('migrate.invocation', async (place) => show(await imported(place, 'migrate', ['extra']), 'unexpected "extra"'));
+scene('migrate.registry', async (place) => {
+  write(place, TEAM);
+  await imported(place, 'migrate', []);
+  corruptTeamRecord(place);
+  return show(await imported(place, 'migrate', []), 'migrate');
+});
+scene('import.done', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'import', []), 'read back and verified');
+});
+scene('import.detached', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'import', [], detachedCaller), 'import');
+});
+scene('import.not-owner', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'import', [], other), 'only the owner runs import');
+});
+scene('import.invalid', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'import', ['missing.yaml']), 'missing.yaml');
+});
+scene('import.invocation', async (place) => show(await imported(place, 'import', ['a', 'b']), 'unexpected "b"'));
+
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));
