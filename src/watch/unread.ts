@@ -74,7 +74,12 @@ export type UnreadWindow = { unreadAfter: number };
 
 /** The wake is typing, so `--no-nudge` leaves it out; the report is a mailbox record and runs
  *  either way. */
-export type UnreadOptions = UnreadWindow & { noNudge?: boolean };
+export type UnreadOptions = UnreadWindow & {
+  noNudge?: boolean;
+  /** Seats this pass already rang with their message-display line: the ring and the unread wake
+   *  now type the same line, so a seat rung this pass is not woken a second time. */
+  rung?: ReadonlySet<string>;
+};
 
 /** Rewrites a reservation with what it was seen to become. This is a record update, never the
  *  reservation itself: the marker was linked into place before the effect, and a failed update
@@ -218,6 +223,7 @@ export async function wakeUnreadDrops(scene: RetryScene, options: UnreadOptions)
     // or a projection this pass cannot trust. The message stays unread and the later report
     // still speaks; no reservation is taken and nothing is typed.
     if (scene.nativeHeld?.has(seat.name) === true) continue;
+    if (options.rung?.has(seat.name) === true) continue;
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const context: StatusContext = { to: seat.name, root: scene.root, session: scene.session };
     const due = listUnread(dropDir, context, home).filter((message) => dueForWake(dropDir, message, nowMs, options));

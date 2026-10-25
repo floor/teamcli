@@ -206,7 +206,7 @@ test('the watch does not ring for a socket-delivered record, and rings for it on
   // The control: without the receipt the same scene types the wake line for the same record.
   unlinkSync(join(drops, `${id}.read.json`));
   await wakeUnreadDrops(scene, { unreadAfter: 600 });
-  expect(pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme' }) as string]);
+  expect(pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'a note' }) as string]);
 });
 
 test('a held socket frame writes no receipt, and the record waits for the watch retry', async () => {

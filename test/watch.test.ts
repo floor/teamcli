@@ -28,9 +28,9 @@ import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './he
 import { assertJsonErrorShape } from './helpers/output.ts';
 
 // The ring line is the receiver's own: this fixture's team session is `acme-web`, each scene's
-// seat is the one its record names, and the waiting record's sender is the planted `harness`.
+// seat is the one its record names, and the waiting record's sender is the planted record's `lead`.
 const ringFor = (seat: string): string => readTriggerLine(seat, 'acme-web', {
-  seat: 'harness',
+  seat: 'lead',
   team: 'acme-web',
   body: 'the message body itself',
 }) as string;

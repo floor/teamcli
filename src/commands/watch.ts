@@ -1104,6 +1104,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           })
           : new Set<string>();
         const ring = result.ring;
+        const rung = new Set<string>();
         if (ring && delivered.size === 0 && !suppressed.has(ring.to) && hosted === undefined && paceVerified && sources.home !== undefined) {
           if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${ring.text}`, false);
           // A read that landed since the pass read the mailbox is the seat's own word: the signed
@@ -1112,12 +1113,15 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           else if (promotedReads.has(`${ring.to}\n${ring.id}`)
             || !listUnacked(root, team.session, sources.home).some((one) => one.id === ring.id && one.to === ring.to)) {
             say(`ring not typed: message ${ring.id} is already read`, false);
-          } else await deliver({
-            pane: ring.pane,
-            text: ring.text,
-            cli: ring.cli,
-            ring: { to: ring.to },
-          }, team, session, sources, memory, say, tell, told);
+          } else {
+            await deliver({
+              pane: ring.pane,
+              text: ring.text,
+              cli: ring.cli,
+              ring: { to: ring.to },
+            }, team, session, sources, memory, say, tell, told);
+            rung.add(ring.to);
+          }
         }
         // An inbox send the seat's client has read since the last pass is promoted here: the
         // receipt is that client's own word, and the history records `delivered (read)` once. It
@@ -1149,7 +1153,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // `--no-nudge` leaves it out.
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
-            { unreadAfter: inForce.unreadAfter, ...(args.flags.has('no-nudge') || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
+            { unreadAfter: inForce.unreadAfter, rung, ...(args.flags.has('no-nudge') || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
