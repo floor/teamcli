@@ -215,6 +215,75 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--abandon",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--file",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--keep-running",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--out",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--session",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--wait",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "archive",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]"
+      ],
+      "who": {
+        "gate": "owner-or-leads",
+        "why": "`stop` first, as `down`, then a move of the team's own state; `--out` stays the owner's"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--ask",
           "repeatable": false,
           "takesValue": true
@@ -1842,6 +1911,12 @@
         },
         {
           "hidden": false,
+          "name": "--from-archive",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -1900,7 +1975,7 @@
       ],
       "subcommands": [],
       "usage": [
-        "team init [--restore] [--json]",
+        "team init [--restore] [--from-archive <folder>] [--json]",
         "team init --request [--json]",
         "team init --execute <request-id> [--json]",
         "team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]",

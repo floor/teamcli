@@ -462,7 +462,7 @@ describe('team init --from-archive', () => {
     expect(io.out).toContain(`The archive is acme-web's, taken at ${root} on ${ARCHIVED_AT.toISOString()} by owner.`);
     expect(io.out).toContain('It also holds team.state.json and send-drops (2 files); a restore writes the team file alone.');
     expect(io.out).toContain('private to this clone');
-    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toMatch(/ init \[owner\] restored the team file from the archive .* written with teamcli \d+\.\d+\.\d+ as \.agents\/team\.yaml/);
+    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toMatch(/ init \[owner\] restored the team file from the archive .* written with teamcli \d+\.\d+\.\d+\S* as \.agents\/team\.yaml/);
     // The restored file is private like any other: excluded, never staged.
     expect(git(project, 'status', '--porcelain')).toBe('');
   });
@@ -550,7 +550,7 @@ describe('team init --from-archive', () => {
     const dir = archiveOf({ home, text: exampleText() });
     const io = testIo(project, { kind: 'seat', name: 'worker', pane: 'w1:p1' });
     expect(await runInit(['--from-archive', dir], io, home)).toBe(1);
-    expect(io.err).toBe('team init: only the owner runs init, from a terminal outside herdr; this call is worker\n');
+    expect(io.err).toBe('team init: only the owner runs this, from a terminal outside herdr; this call is worker\n');
     expect(existsSync(join(project, '.agents'))).toBe(false);
   });
 });

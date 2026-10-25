@@ -12,7 +12,7 @@ and nothing else in the archive is restored: the state and the queues stay where
 
 ## Synopsis
 
-    team init [--restore | --from-archive <folder>] [--json]
+    team init [--restore] [--from-archive <folder>] [--json]
 
 ## Flags
 

@@ -181,7 +181,7 @@ export function exclude(root: string): string[] {
 export const init: Command = (argv, io) => runInit(argv, io, undefined, undefined, { ...doctorSources, registryHome: homedir() });
 export default init;
 
-export const USAGE = `Usage: team init [--restore | --from-archive <folder>] [--json]
+export const USAGE = `Usage: team init [--restore] [--from-archive <folder>] [--json]
        team init --request [--json]
        team init --execute <request-id> [--json]
        team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]

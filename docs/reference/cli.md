@@ -126,6 +126,36 @@ Literal: `trust`
 | --- | --- | --- |
 | `seat` | no | no |
 
+## `archive`
+
+Hidden: no
+
+Usage:
+
+    team archive [--out <folder>] [--keep-running] [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>]
+
+### Who may run it
+
+`owner-or-leads` — `stop` first, as `down`, then a move of the team's own state; `--out` stays the owner's
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--abandon` | no | no | no |
+| `--dry-run` | no | no | no |
+| `--file` | yes | no | no |
+| `--help` | no | no | no |
+| `--keep-running` | no | no | no |
+| `--out` | yes | no | no |
+| `--session` | yes | no | no |
+| `--wait` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `ask-show`
 
 Hidden: no
@@ -983,7 +1013,7 @@ Hidden: no
 
 Usage:
 
-    team init [--restore] [--json]
+    team init [--restore] [--from-archive <folder>] [--json]
     team init --request [--json]
     team init --execute <request-id> [--json]
     team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
@@ -1006,6 +1036,7 @@ Usage:
 | `--approve-as-owner-seat` | yes | no | no |
 | `--assertion` | yes | no | no |
 | `--execute` | yes | no | no |
+| `--from-archive` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--request` | no | no | no |

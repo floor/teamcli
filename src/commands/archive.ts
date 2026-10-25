@@ -13,7 +13,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
-import { loadTeamFile } from '../file/load.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { STATE_FILE } from '../state.ts';
@@ -239,7 +239,7 @@ export async function runArchive(argv: string[], io: Io, sources: DownSources = 
     // exit: archive.out-owner
     return 1;
   }
-  const loaded = loadTeamFile(io.cwd, { file: args.values.file, home });
+  const loaded = readTeamConfig(io.cwd, { file: args.values.file, home });
   if (!loaded.ok) {
     for (const problem of loaded.errors) {
       io.stderr(`team archive: ${problem.line ? `line ${problem.line}: ` : ''}${problem.message}\n`);
