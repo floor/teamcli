@@ -159,13 +159,22 @@ describe('client grants address the configured seats only', () => {
     }
   });
 
-  test('an unapproved or edited clients section is refused, never read as the default', () => {
+  test('an unverified standing falls back to the default seats, fail-closed', () => {
     const unapproved = world('unapproved', ZEUS, { approve: false });
     const a = unapproved.issue();
-    expect(a.ok).toBe(false);
-    if (!a.ok) expect(a.why).toContain('not the one the owner approved');
+    expect(a.ok).toBe(true);
+    if (a.ok) expect(a.grant.recipientSeat).toBe('orchestrator');
+    const zeus = unapproved.issue('zeus');
+    expect(zeus.ok).toBe(false);
+    if (!zeus.ok) expect(zeus.why).toContain('does not list "zeus"');
+  });
+
+  test('a verified standing honours a clients section edited since the last approval', () => {
     const edited = world('edited', ZEUS, { approved: teamText('') });
-    expect(edited.issue('zeus').ok).toBe(false);
+    const zeus = edited.issue('zeus');
+    expect(zeus.ok).toBe(true);
+    if (zeus.ok) expect(zeus.grant.recipientSeat).toBe('zeus');
+    for (const name of ['steward', 'pat']) expect(edited.issue(name).ok).toBe(false);
   });
 
   test('a send re-checks the list: a grant issued before the seat was removed stops resolving', () => {

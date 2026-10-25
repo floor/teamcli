@@ -23,8 +23,8 @@ import { declaredEntityClients, declaredRoots } from '../entities.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
-import { approvalDifferences } from '../approve/approval.ts';
 import type { Fingerprints } from '../approve/fingerprint.ts';
+import { approvalStanding } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
@@ -1244,9 +1244,11 @@ function publishExclusive(folder: string, name: string, content: string): 'writt
 /**
  * The seats one client may address on the team at `root`, from its file's `clients:` section.
  * A file with no section for the client yields the default (the orchestrator), so a team that
- * writes nothing behaves as before. A section that names the client is honoured only while the
- * owner's approval of it is in force: an unapproved or changed `clients:` is refused, never read
- * as the default. `refused` names the operator and human seats, which no list admits.
+ * writes nothing behaves as before. The live file is the record, as for `watch` and `budgets`: a
+ * verified approval standing honours `clients:` as the file writes it, edits since the last
+ * approval included; a standing that is not verified (never approved, legacy, or refused) falls
+ * back to the default seats, fail-closed. `refused` names the operator and human seats, which no
+ * list admits. The grant itself still needs the owner seat's approval.
  */
 export function clientSeatsAt(
   root: string,
@@ -1262,15 +1264,13 @@ export function clientSeatsAt(
   const operator = team.operator === team.orchestrator ? [] : [team.operator];
   const refused = [...operator, ...team.seats.filter((seat) => seat.human === true).map((seat) => seat.name)];
   if (team.clients === null || team.clients === undefined) return { ok: true, seats: base.filter((seat) => !refused.includes(seat)), refused };
-  let differences: string[] | null;
+  let verified: boolean;
   try {
-    differences = approvalDifferences(team, root, home);
+    verified = approvalStanding(root, home).kind === 'verified';
   } catch {
-    differences = null;
+    verified = false;
   }
-  if (differences === null || differences.includes('`clients` changed')) {
-    return { ok: false, why: 'the team file\'s `clients:` section is not the one the owner approved' };
-  }
+  if (!verified) return { ok: true, seats: base.filter((seat) => !refused.includes(seat)), refused };
   const listed = team.clients[clientId];
   if (listed === undefined) return { ok: true, seats: base.filter((seat) => !refused.includes(seat)), refused };
   return { ok: true, seats: listed.seats.filter((seat) => !refused.includes(seat)), refused };
