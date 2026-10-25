@@ -239,7 +239,7 @@ describe('the sending paths never dial while the socket is off', () => {
     expect(host.frames).toEqual([]);
     expect(host.typed.length).toBe(1);
     expect(host.typed[0]?.pane).toBe('pane-lead');
-    expect(host.typed[0]?.text).toContain(' and do that.');
+    expect(host.typed[0]?.text).toMatch(/(Read it at|read) \S+\/drops\/acme\/lead\/\S+/);
   });
 });
 
