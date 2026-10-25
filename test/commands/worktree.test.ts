@@ -13,6 +13,7 @@ import { readState, updateState, emptySession } from '../../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../../src/store/store.ts';
 import { gitEnv, testIo, type TestIo } from '../helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from '../helpers/output.ts';
+import { writeTextSignedApproval } from '../helpers/text-signed-approval.ts';
 
 let base: string;
 let project: string;
@@ -774,7 +775,7 @@ seats:
   test('a stored copy that is an older format does not block the live file', async () => {
     const loaded = loadTeamFile(project);
     if (!loaded.ok) throw new Error('the team file must load');
-    writeApproval(
+    writeTextSignedApproval(
       storePath(loaded.team.project, loaded.root, home),
       { approval: approvalOf(loaded.team, loaded.root), file: 'format: 0\n' },
       loaded.team.seats,
@@ -789,7 +790,7 @@ seats:
   test('a stored copy that is empty does not block the live file', async () => {
     const loaded = loadTeamFile(project);
     if (!loaded.ok) throw new Error('the team file must load');
-    writeApproval(
+    writeTextSignedApproval(
       storePath(loaded.team.project, loaded.root, home),
       { approval: approvalOf(loaded.team, loaded.root), file: '' },
       loaded.team.seats,

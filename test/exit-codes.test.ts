@@ -1642,7 +1642,8 @@ scene('down.legacy', async (place) => {
 scene('down.refused', async (place) => {
   approve(place, TEAM);
   editApproval(place, (record) => {
-    record.file = `${String(record.file)}\n`;
+    // A change of meaning: the signature covers the canonical record, so layout alone would verify.
+    record.file = String(record.file).replace('project: acme', 'project: acme-changed');
   });
   return show(await down(place, [], owner, downSources({
     sessionRunning: () => true, agents: () => [agent('lead')], home: place.home,

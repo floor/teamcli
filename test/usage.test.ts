@@ -35,6 +35,7 @@ import {
 import { emptySession, updateState } from '../src/state.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { gitEnv, testIo } from './helpers.ts';
+import { writeTextSignedApproval } from './helpers/text-signed-approval.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 
@@ -1085,7 +1086,7 @@ describe('team usage', () => {
       { at: ':154 the record cannot be read', refuse: () => write({ format: 3 }) },
       { at: ':166 the key is missing', refuse: () => rmSync(keyFile, { force: true }) },
       { at: ':169 the key cannot be read', refuse: () => writeFileSync(keyFile, 'not a key at all') },
-      { at: ':182 the signature does not verify', refuse: () => write({ ...read(), file: `${text}\n# changed after signing\n` }) },
+      { at: ':182 the signature does not verify', refuse: () => write({ ...read(), file: text.replace(/^project: .*$/m, 'project: changed-after-signing') }) },
       { at: ':185 another project root', refuse: () => {
         const checked = validateTeamFile(text, { home, root });
         if (!checked.ok) throw new Error('the fixture does not validate');
@@ -1594,7 +1595,8 @@ describe('team usage', () => {
     // of that precondition shows.
     const invalid = 'not a team file: [';
     expect(validateTeamFile(invalid).ok).toBe(false);
-    writeApproval(storePath('acme', root, home), { approval: approvalOf(checked.team, root, NOW), file: invalid }, [], home);
+    // Only a record signed over the text (the compatibility path) can carry a copy that is not a team file.
+    writeTextSignedApproval(storePath('acme', root, home), { approval: approvalOf(checked.team, root, NOW), file: invalid }, [], home);
     expect(approvalStanding(root, home).kind).toBe('verified');
     updateState(join(root, '.agents'), (state) => {
       state.budgets = {

@@ -3,7 +3,9 @@ import { mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFi
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Fingerprints } from '../approve/fingerprint.ts';
-import { bumpGeneration, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signPayload, verifyPayload, type Json } from './keys.ts';
+import { canonicalRecord, teamRecordOf } from '../file/canonical-record.ts';
+import { validateTeamFile } from '../file/validate.ts';
+import { bumpGeneration, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
 
 /**
  * The user-level store: what must survive the project folder and stay out of
@@ -110,7 +112,40 @@ export type Standing =
   | { kind: 'none' }
   | { kind: 'legacy' }
   | { kind: 'refused'; why: string }
-  | { kind: 'verified'; record: ApprovalRecord; generation: number; signedAt: string };
+  | { kind: 'verified'; record: ApprovalRecord; generation: number; signedAt: string; signedOver?: SignedOver };
+
+/**
+ * What the record's signature covers. `record`: the canonical team record
+ * (`team-record-c14n-v1`), the form every approval this version writes is signed over.
+ * Optional only so a hand-built standing need not name it; `approvalStanding` always does.
+ * `text`: the stored file text, the form approvals written before the canonical record were
+ * signed over; still verified (same key, its own domain), never written again.
+ */
+export type SignedOver = 'record' | 'text';
+
+/** The domain of a signature over the canonical team record. `team-approval-v1` stays the text form's. */
+export const RECORD_DOMAIN = 'team-approval-v2\n';
+
+/**
+ * The canonical team record of a stored copy's text, or null when the text does not validate
+ * or has no canonical form. The signature covers this, so a stored copy whose keys were
+ * reordered or reformatted still verifies, and a copy whose meaning changed does not.
+ */
+export function approvedRecordOf(file: string): string | null {
+  try {
+    const checked = validateTeamFile(file);
+    if (!checked.ok) return null;
+    return canonicalRecord(teamRecordOf(checked.team as unknown as Record<string, unknown> & { seats: object[] }));
+  } catch {
+    return null;
+  }
+}
+
+/** The bytes a record-form signature covers: `payloadOf` with the canonical record in place of the text. */
+export function recordPayloadOf(approval: Approval, record: string, generation: number): Json {
+  const { file: _text, ...rest } = payloadOf(approval, '', generation) as { [key: string]: Json };
+  return { ...rest, record };
+}
 
 function sameRoot(a: string, b: string): boolean {
   const real = (path: string) => {
@@ -179,8 +214,18 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
     return { kind: 'refused', why: `${key.why} — no record verifies until it is back` };
   }
   let valid: boolean;
+  let signedOver: SignedOver = 'record';
   try {
-    valid = verifyPayload(payloadOf(record.approval, record.file, generation), signature, key.key);
+    // The canonical record first: what this version signs. The stored text must still parse to
+    // the record that was signed; a copy that does not validate verifies as nothing here.
+    const canonical = approvedRecordOf(record.file);
+    valid = canonical !== null && verifyDomain(RECORD_DOMAIN, recordPayloadOf(record.approval, canonical, generation), signature, key.key);
+    if (!valid) {
+      // Compatibility: a record signed over the file text before the canonical record existed.
+      // Same key, its own domain; anything else still refuses.
+      valid = verifyPayload(payloadOf(record.approval, record.file, generation), signature, key.key);
+      signedOver = 'text';
+    }
   } catch {
     // Belt and braces: the shape check below already refuses what the canonical
     // encoder refuses (a signed number outside the safe range), and this catch
@@ -203,7 +248,7 @@ export function approvalStanding(root: string, home: string = homedir()): Standi
       ? { kind: 'refused', why: `the record is approval #${generation} but #${recorded.generation} is recorded: an approval was interrupted or an older record was replayed` }
       : { kind: 'refused', why: `the record is approval #${generation} but only #${recorded.generation} is recorded: the key folder was rolled back` };
   }
-  return { kind: 'verified', record: frozen(record), generation, signedAt: recorded.at };
+  return { kind: 'verified', record: frozen(record), generation, signedAt: recorded.at, signedOver };
 }
 
 function frozen<T>(value: T): T {
@@ -404,8 +449,12 @@ export function writeApproval(
   now: Date = new Date(),
 ): number {
   const key = keyOf(home);
+  // Signed over the canonical team record, never the text: a file whose keys are reordered
+  // signs the same bytes. A text with no canonical record is not signed at all.
+  const canonical = approvedRecordOf(record.file);
+  if (canonical === null) throw new Error('the copy to approve is not a team record; nothing signed');
   const generation = bumpGeneration(record.approval.root, home, now);
-  const signature = signPayload(payloadOf(record.approval, record.file, generation), key);
+  const signature = signDomain(RECORD_DOMAIN, recordPayloadOf(record.approval, canonical, generation), key);
   mkdirSync(store, { recursive: true, mode: 0o700 });
   writeAtomic(join(store, LEDGER), `${JSON.stringify(mergeLedger(readLedger(store), seats), null, 2)}\n`);
   writeAtomic(join(store, APPROVAL), `${JSON.stringify({ ...record.approval, file: record.file, generation, signature }, null, 2)}\n`);
