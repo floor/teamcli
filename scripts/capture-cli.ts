@@ -534,6 +534,7 @@ function runStages(options: Options, profile: NonNullable<ReturnType<typeof prof
       if (options.stages.includes('exit')) {
         const idle = waitForKind(pane, session, options.cli, 'idle', settle(30));
         if (idle === null) throw new Error('exit: the composer did not return to idle before the exit text');
+        if (profile.exit === null) throw new Error('exit: the profile declares no exit text');
         if (!typeText(pane, profile.exit, session)) throw new Error('exit: pane send-text failed');
         if (!pressEnter(pane, session)) throw new Error('exit: the Enter for the exit text failed');
         const deadline = settle(profile.exitTimeout);

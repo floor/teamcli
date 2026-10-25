@@ -41,6 +41,8 @@ trailing padding as the read drew it, and each file ends with the pane read's on
 - `exit question`: not produced. One ctrl+c at the table returns the shell without a question.
   After the shell returns, herdr's visible rows still hold the TUI frame, so a later read is
   the same idle screen and there is no separate capture to take.
+- `unknown`: not produced. There is no exit screen to capture: one ctrl+c at the table returns
+  the shell, and herdr's visible rows still hold the idle table (see `exit question`).
 - `vendor notice`, `provider error`, `rate limit`: not produced. The TUI draws none of these;
   a failed remote session is a row or card state, and the one screen the CLI does draw for a
   failure is the logged-out table.

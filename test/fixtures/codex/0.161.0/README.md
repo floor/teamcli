@@ -79,6 +79,7 @@ The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` 
 
 ## Not produced
 
-`question`: Codex 0.161.0 asks none in its composer — the approval dialog above is the
-only question it draws — and the profile declares no question stage. `exit question`:
-0.161.0 ends on `/exit` with no question; the profile declares no exit confirm.
+- `question`: not produced. Codex 0.161.0 asks none in its composer — the approval dialog
+  above is the only question it draws — and the profile declares no question stage.
+- `exit question`: not produced. 0.161.0 ends on `/exit` with no question; the profile
+  declares no exit confirm.

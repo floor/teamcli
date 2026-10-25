@@ -1702,6 +1702,13 @@
       "provenance": "capture"
     },
     {
+      "file": "cursor/2026.10.14/unsent.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "cursor/2026.10.16/exit.txt",
       "cli": "cursor",
       "classify": "unknown",
