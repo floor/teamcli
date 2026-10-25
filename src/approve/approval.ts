@@ -281,6 +281,18 @@ export function approvalDifferences(team: TeamFile, root: string, home: string =
 }
 
 /**
+ * The default-session move, as the one note `team check` prints: a verified record approved
+ * under the old default (the project name alone) for a file whose session is now
+ * `<entity>-<project>`. The same line the approval's own comparison names. Empty otherwise.
+ */
+export function sessionDefaultMoveNotes(standing: Standing, team: TeamFile): string[] {
+  if (standing.kind !== 'verified') return [];
+  return compare(approvedFingerprints(standing.record), fingerprints(team), team)
+    .filter((difference) => difference.kind === 'section' && difference.moved !== undefined)
+    .map(describe);
+}
+
+/**
  * The watch values in force. The live file is the record: a verified standing runs the watch
  * section as the file writes it, tempo included, and a file that changed since the last
  * approval is not held back. A standing that is not verified — never approved, legacy, or a
