@@ -101,6 +101,7 @@ afterEach(() => {
 function teamText(root: string, home: string): string {
   return `format: 1
 project: vega
+session: vega
 entity: lab
 visibility: public
 operator: lead

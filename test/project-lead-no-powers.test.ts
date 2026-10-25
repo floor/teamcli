@@ -50,6 +50,7 @@ ${extra}    label: ${name}
  *  its lead seat carries the capability the record projects onto its roster line. */
 const LEAD_TEAM = `format: 1
 project: acacia
+session: acacia
 entity: floor
 in_project: oak
 project_lead: true
@@ -68,6 +69,7 @@ ${SEAT('coordinator', 'lead-a', '    leads: true\n')}${SEAT('builder', 'builder-
 /** The other team of the same project: no claim, and its own lead. */
 const PLAIN_TEAM = `format: 1
 project: birch
+session: birch
 entity: floor
 in_project: oak
 coordinator: lead-b
