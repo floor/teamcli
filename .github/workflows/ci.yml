@@ -123,19 +123,28 @@ jobs:
           MODE: ${{ steps.select.outputs.mode }}
           TESTS: ${{ steps.select.outputs.tests }}
           SHARD: ${{ matrix.shard }}
+        # Duration-weighted split (scripts/ci-shard-tests.ts, timings in scripts/ci-test-timings.json):
+        # a unit is a file, or `<file>#<i>/<n>`, part i of a file split with TEAM_EXIT_PART.
         run: |
-          if [ "$MODE" = full ]; then
-            TESTS="$(git ls-files -- 'test/*.test.ts' | tr '\n' ' ')"
-          fi
-          mine=""
-          i=0
-          for t in $TESTS; do
-            [ $((i % 4)) -eq "$SHARD" ] && mine="$mine $t"
-            i=$((i + 1))
-          done
+          bun scripts/ci-shard-tests.ts --plan --shards 4 > /dev/null
+          mine="$(bun scripts/ci-shard-tests.ts --shard "$SHARD" --shards 4)"
           if [ -z "$mine" ]; then echo "No tests in this shard."; exit 0; fi
-          echo "Shard $SHARD runs:$mine"
-          bun test $mine
+          echo "Shard $SHARD runs: $mine"
+          files=""
+          parts=""
+          for t in $mine; do
+            case "$t" in
+              *#*) parts="$parts $t" ;;
+              *) files="$files $t" ;;
+            esac
+          done
+          status=0
+          if [ -n "$files" ]; then bun test $files || status=1; fi
+          for p in $parts; do
+            echo "Part ${p#*#} of ${p%%#*}"
+            TEAM_EXIT_PART="${p#*#}" bun test "./${p%%#*}" || status=1
+          done
+          exit $status
 
   full:
     if: github.event_name != 'pull_request'
