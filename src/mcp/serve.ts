@@ -118,7 +118,14 @@ export type RestartHooks = {
  *  would end the client's session as if the fresh server had taken over. */
 export function restartSelf(hooks: RestartHooks = {}): void {
   const start = hooks.spawnChild ?? spawn;
-  const exit = hooks.exit ?? ((code: number) => process.exit(code));
+  const exit = hooks.exit ?? ((code: number): void => {
+    if (code === 0) {
+      // exit: team.mcp-serve-handed-over
+      process.exit(0);
+    }
+    // exit: team.mcp-serve-restart-failed
+    process.exit(1);
+  });
   const say = hooks.say ?? ((line: string) => process.stderr.write(line));
   const { command, entry } = selfRunner();
   let child: ChildProcess;

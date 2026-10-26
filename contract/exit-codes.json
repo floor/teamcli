@@ -4834,6 +4834,13 @@
     {
       "code": 0,
       "command": "team",
+      "id": "team.mcp-serve-handed-over",
+      "meaning": "a stale inbox server started its fresh replacement on the same stdio and left",
+      "trigger": "team mcp serve"
+    },
+    {
+      "code": 0,
+      "command": "team",
       "id": "team.presence-hook-ignored",
       "meaning": "a notification other than the measured permission prompt was ignored and nothing was staged",
       "trigger": "team presence-hook --event human-wait --notification permission_prompt"
@@ -4858,6 +4865,13 @@
       "id": "team.command-threw",
       "meaning": "a command threw",
       "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.mcp-serve-restart-failed",
+      "meaning": "a stale inbox server could not start its fresh replacement, said why and left",
+      "trigger": "team mcp serve"
     },
     {
       "code": 1,

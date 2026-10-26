@@ -696,10 +696,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.invocation` | `swap` | 2 | the invocation can't be read | `team swap queue` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
+| `team.mcp-serve-handed-over` | `team` | 0 | a stale inbox server started its fresh replacement on the same stdio and left | `team mcp serve` |
 | `team.presence-hook-ignored` | `team` | 0 | a notification other than the measured permission prompt was ignored and nothing was staged | `team presence-hook --event human-wait --notification permission_prompt` |
 | `team.presence-hook-staged` | `team` | 0 | the presence event was staged | `team presence-hook --event turn-end` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
+| `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
