@@ -6398,7 +6398,9 @@ for (const command of ['up', 'down', 'add', 'register'] as const) {
         rmSync(realPlace.base, { recursive: true, force: true });
       }
     }
-  }, 120_000);
+    // Every refusal of the command runs twice, each in a fresh git checkout: `add` has taken 72s
+    // to 106s on the hosted runners, so 120s left no margin and a slow runner timed it out.
+  }, 300_000);
 }
 
 leadTest('every listed outcome has a run', () => {
