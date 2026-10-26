@@ -26,7 +26,7 @@ import { hostedWatchNotes } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
 import { currentTeam } from '../file/current.ts';
-import { leftoverDifferences } from '../file/team-config.ts';
+import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { isParseError } from '../file/load.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
@@ -549,6 +549,8 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     swaps: Object.keys(whole.swaps ?? {}),
   });
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
+  const leftoverLine = leftoverNote(current.leftover);
+  if (leftoverLine !== null) comparison.notes.push(leftoverLine);
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
   if (green !== null) comparison.notes.push(...greenNotes(green));
   if (health !== null) {

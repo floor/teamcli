@@ -1143,11 +1143,102 @@
       "trigger": "team config keys"
     },
     {
+      "code": 0,
+      "command": "config",
+      "id": "config.unchanged",
+      "meaning": "the edit changes nothing; nothing was written",
+      "trigger": "team config set project acme"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.value",
+      "meaning": "the value at the path is printed",
+      "trigger": "team config get project"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.written",
+      "meaning": "the change validated and was written",
+      "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.detached",
+      "meaning": "an edit was run with no terminal",
+      "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.invalid",
+      "meaning": "the changed record does not validate; nothing was written",
+      "trigger": "team config set seats.lead.cli nope"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.no-value",
+      "meaning": "the path holds nothing in the record",
+      "trigger": "team config get watch.missing"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.not-owner",
+      "meaning": "an edit was run by a caller that is not the owner",
+      "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.path",
+      "meaning": "the path cannot be set (a value on the way, or no such list item); nothing was written",
+      "trigger": "team config set seats.ghost.cli claude"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.editor",
+      "meaning": "the editor exited non-zero; nothing was written",
+      "trigger": "team config edit"
+    },
+    {
       "code": 2,
       "command": "config",
       "id": "config.invocation",
       "meaning": "the invocation is not one of the command's forms",
       "trigger": "team config"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.no-record",
+      "meaning": "the team's record could not be read for an edit",
+      "trigger": "team config get project"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.no-team",
+      "meaning": "no team is found for this folder to read or edit",
+      "trigger": "team config get project"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.unreadable",
+      "meaning": "the team's record cannot be read",
+      "trigger": "team config get project"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.usage",
+      "meaning": "a get, set, unset or edit invocation is not one of its forms, or the path does not parse",
+      "trigger": "team config set watch"
     },
     {
       "code": 0,
@@ -2322,14 +2413,14 @@
       "code": 0,
       "command": "migrate",
       "id": "migrate.done",
-      "meaning": "the team is in the registry, or would be with --dry-run",
+      "meaning": "the team is in the registry (or would be, with --dry-run), and its team file was moved to the Trash, renamed, kept with --keep-file, or already gone",
       "trigger": "team migrate"
     },
     {
       "code": 1,
       "command": "migrate",
       "id": "migrate.already-migrated",
-      "meaning": "the team was already moved to the registry; team import replaces the record",
+      "meaning": "the registry already holds the team and the file left beside it says something else; team import replaces the record",
       "trigger": "team migrate"
     },
     {

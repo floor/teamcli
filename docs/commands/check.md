@@ -166,6 +166,14 @@ stands. Everything else keeps its advice — a model drift's relaunch, a blind s
 pane — because those are decisions, not writes the file settles, and `--repair` never starts,
 stops or relaunches a seat.
 
+## A leftover team file
+
+When the team is in the registry and a `.agents/team.yaml` is still in the project, the run
+prints one note — `.agents/team.yaml is still in this project, and is no longer read (the team is
+in the registry): run team migrate to move it to the Trash` — and neither refuses nor counts it.
+A leftover that says something else than the registry is a difference, with `team import` as the
+repair.
+
 ## Synopsis
 
     team check [--session <name>] [--file <path>] [--repair] [--json]

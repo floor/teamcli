@@ -15,7 +15,8 @@ import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { TEAM_FILE } from '../file/load.ts';
-import { readTeamConfig } from '../file/team-config.ts';
+import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
+import { importForUp } from '../file/team-import.ts';
 import { migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
@@ -1058,6 +1059,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
   // or the token. The refusal is one sentence, on the dry run and the real run.
   const detached = clientUp !== null ? undefined : detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
+  // The owner's run on a team still only in its file imports it first, with a notice
+  // (docs/commands/up.md): moving to the registry never stands between the owner and a launch.
+  const imported = clientUp === null && detached === undefined && walked.kind === 'owner' && !args.values.file
+    ? importForUp(io.cwd, sources.home, dry, sources.now?.() ?? new Date())
+    : null;
+  if (imported !== null) {
+    if (dry && !json) out.stdout(`${imported}\n`);
+    else stderrLine(`team up: ${imported}\n`);
+  }
   const defaultLoad = mayLaunchSeats(walked) || detached !== undefined ? null : readTeamConfig(io.cwd, { home: sources.home });
   // Dev mode, as the default live file's chain states it: this folder's own file is the caller's
   // place, never a file the caller names. The aimed branch below decides before that file is
@@ -1251,6 +1261,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     return 2;
   }
   const { team, root } = loaded;
+  const leftover = imported === null ? leftoverNote(loaded.leftover) : null;
+  if (leftover !== null) {
+    if (dry && !json) out.stdout(`${leftover}\n`);
+    else stderrLine(`team up: ${leftover}\n`);
+  }
   // Owner-only targets are honoured only when no gate decided: a delegated run is the default
   // file's own session, and an aimed run by anyone but the owner has already returned above.
   const session = verdict !== null ? team.session : (args.values.session ?? team.session);

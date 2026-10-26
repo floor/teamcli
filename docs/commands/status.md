@@ -97,6 +97,14 @@ where one was started on purpose. With more than one watched route, each line en
 `… (<root>)`, so a failed route still reads beside a good one. These lines are notes: never a
 difference, never in a total, never an exit.
 
+## A leftover team file
+
+When the team is in the registry and a `.agents/team.yaml` is still in the project, the run
+prints one note — `.agents/team.yaml is still in this project, and is no longer read (the team is
+in the registry): run team migrate to move it to the Trash` — and neither refuses nor counts it.
+A leftover that says something else than the registry is a difference, with `team import` as the
+repair.
+
 ## Synopsis
 
     team status [--session <name>] [--file <path>] [--project <name>] [--all] [--json]

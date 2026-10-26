@@ -720,6 +720,72 @@
               "takesValue": false
             },
             {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "edit",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team config edit"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "get",
+          "positionals": [
+            {
+              "name": "path",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team config get <path> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "it prints one value of the team's record and changes nothing, as reading the team file did"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
               "hidden": false,
               "name": "--json",
               "repeatable": false,
@@ -747,16 +813,91 @@
           ],
           "who": {
             "gate": "any-caller",
-            "why": "the listing is the command's only verb and reads the registry only: no team file, seat or terminal is read"
+            "why": "the listing reads the settings registry only: no team, seat or terminal is read"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "set",
+          "positionals": [
+            {
+              "name": "path",
+              "optional": false,
+              "repeatable": false
+            },
+            {
+              "name": "value",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team config set <path> <value>"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "unset",
+          "positionals": [
+            {
+              "name": "path",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team config unset <path>"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "why": "the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr"
           }
         }
       ],
       "usage": [
-        "team config keys [<level>] [--json]"
+        "team config keys [<level>] [--json]",
+        "team config get <path> [--json]",
+        "team config set <path> <value>",
+        "team config unset <path>",
+        "team config edit"
       ],
       "who": {
         "gate": "any-caller",
-        "why": "it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read"
+        "why": "with no subcommand it only prints its usage; each subcommand carries its own gate: keys and get read and change nothing, set, unset and edit are the owner's"
       }
     },
     {
@@ -2368,6 +2509,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--keep-file",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -2379,7 +2526,7 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team migrate [--dry-run] [--json]"
+        "team migrate [--keep-file] [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",

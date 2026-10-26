@@ -192,3 +192,10 @@ export function leftoverDifferences(leftover: { path: string; matches: boolean }
     repair: 'team import',
   }];
 }
+
+/** The one line `team up`, `team check` and `team status` print for a leftover file that says what
+ *  the registry says: a note, never a refusal, naming the command that retires it. */
+export function leftoverNote(leftover: { path: string; matches: boolean } | undefined): string | null {
+  if (leftover === undefined || !leftover.matches) return null;
+  return `${TEAM_FILE} is still in this project, and is no longer read (the team is in the registry): run \`team migrate\` to move it to the Trash`;
+}

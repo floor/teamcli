@@ -1,5 +1,42 @@
 # team config
 
+Two things: the team's own record, read and edited with `get`, `set`, `unset` and `edit` — what
+`.agents/team.yaml` used to hold, before [`team migrate`](migrate.md) moved it into the registry —
+and the settings registry, printed with `keys`.
+
+## The team's record: get, set, unset, edit
+
+    team config get <path> [--json]
+    team config set <path> <value>
+    team config unset <path>
+    team config edit
+
+`<path>` is dotted keys into the record. Under a list, a segment names the item by its `name`, or
+by its index: `project`, `watch.unread_after`, `seats.lead.model`, `seats.0.cli`. `<value>` is
+read as YAML — a number, `true`, a one-line `[list]` or `{map}` — and otherwise as text.
+`edit` opens the record as YAML in `$VISUAL` (else `$EDITOR`, else `vi`), and writes it back when
+the editor exits 0 and the edited text validates.
+
+Every write is validated by the team-file validator (the schema at `schema/team.schema.json` and
+the rules behind it) before it is stored, and refused whole when it does not validate: nothing is
+written. An `edit` that does not validate is kept in its temporary file, and the refusal names it.
+`set` and `unset` rewrite the record's text, so its comments are not kept; `edit` edits the text
+itself and keeps them. A record the registry holds is written there (`edited_by: config <verb>`);
+on the legacy `file` source the team file is written instead.
+
+Writes are the owner's, from a terminal outside herdr, as editing the file was; `get` is any
+caller's. A change to an owner section leaves the approval stale exactly as a hand edit of the
+file did — the approval is compared by canonical record — and the run names what the approval no
+longer covers: `the approval no longer covers: …; approve the team again with the owner seat`.
+
+| Outcome | Exit |
+| --- | --- |
+| a value printed, a change written, or nothing to change | 0 |
+| the path holds nothing (`get`), cannot be set, the caller is not the owner, or the change does not validate | 1 |
+| a bad invocation, no team found, a record that cannot be read, or the editor failed | 2 |
+
+## The settings registry: keys
+
 The settings registry: which settings TeamCLI knows, the levels each may be set at, what each
 accepts, its release default, the policy that governs it, and when a change takes effect. The
 command reads the registry and the filesystem does not answer it; it is the reference a `team

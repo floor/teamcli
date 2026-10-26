@@ -420,10 +420,14 @@ Hidden: no
 Usage:
 
     team config keys [<level>] [--json]
+    team config get <path> [--json]
+    team config set <path> <value>
+    team config unset <path>
+    team config edit
 
 ### Who may run it
 
-`any-caller` — it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read
+`any-caller` — with no subcommand it only prints its usage; each subcommand carries its own gate: keys and get read and change nothing, set, unset and edit are the owner's
 
 ### Flags
 
@@ -436,6 +440,55 @@ Usage:
 
 None.
 
+### `edit`
+
+Hidden: no
+
+Usage:
+
+    team config edit
+
+#### Who may run it
+
+`owner-only` — the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `get`
+
+Hidden: no
+
+Usage:
+
+    team config get <path> [--json]
+
+#### Who may run it
+
+`any-caller` — it prints one value of the team's record and changes nothing, as reading the team file did
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | no | no |
+
 ### `keys`
 
 Hidden: no
@@ -446,7 +499,7 @@ Usage:
 
 #### Who may run it
 
-`any-caller` — the listing is the command's only verb and reads the registry only: no team file, seat or terminal is read
+`any-caller` — the listing reads the settings registry only: no team, seat or terminal is read
 
 #### Flags
 
@@ -461,6 +514,57 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `level` | yes | no |
+
+### `set`
+
+Hidden: no
+
+Usage:
+
+    team config set <path> <value>
+
+#### Who may run it
+
+`owner-only` — the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | no | no |
+| `value` | no | no |
+
+### `unset`
+
+Hidden: no
+
+Usage:
+
+    team config unset <path>
+
+#### Who may run it
+
+`owner-only` — the team's record is the owner's: editing it is the owner's act, as editing the team file was, from a terminal outside herdr
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `path` | no | no |
 
 ## `conformance-adapter`
 
@@ -1269,7 +1373,7 @@ Hidden: no
 
 Usage:
 
-    team migrate [--dry-run] [--json]
+    team migrate [--keep-file] [--dry-run] [--json]
 
 ### Who may run it
 
@@ -1282,6 +1386,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--keep-file` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
