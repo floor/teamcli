@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { Fingerprints } from '../approve/fingerprint.ts';
 import { canonicalRecord, teamRecordOf } from '../file/canonical-record.ts';
 import { validateTeamFile } from '../file/validate.ts';
+import { parseYaml } from '../yaml.ts';
 import { bumpGeneration, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
 
 /**
@@ -82,11 +83,64 @@ export function storePath(project: string, root: string, home: string = homedir(
 }
 
 /**
- * The store of the project at this root, found without its file: the folder
- * whose name ends with the root's hash. Null when the owner approved nothing
- * for this root on this machine.
+ * The store of the project at this root. The current project is the `project:`
+ * of `.agents/team.yaml` when that file is real; a link is not followed. That
+ * project's folder is the store when it holds an approval. Another folder for
+ * the same root is never read in its place: `otherMatchingStores` names it, and
+ * nothing deletes it. When the current project has no approval and exactly one
+ * folder for this root does, that folder is the store — a rename that has not
+ * been approved again leaves the approval in force. Several approvals, and none
+ * of them the current project's, is no store: nothing is guessed. Null when
+ * this root has no approval on this machine.
  */
 export function findStore(root: string, home: string = homedir()): string | null {
+  return locateStores(root, home).store;
+}
+
+/** Folder names of approvals for this root that `findStore` does not read. Named, never deleted. */
+export function otherMatchingStores(root: string, home: string = homedir()): string[] {
+  return locateStores(root, home).others;
+}
+
+/** The sentence `approve` and `doctor` print for one other store. The name is the folder's own. */
+export function otherStoreNote(name: string): string {
+  return `another approval store matches this project root and was left in place: ${name}`;
+}
+
+/** The current project's name, from a real team file. A link is not a project. */
+function projectAt(root: string): string | null {
+  const agents = join(root, '.agents');
+  try {
+    const stat = lstatSync(agents);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const file = join(agents, 'team.yaml');
+  try {
+    const stat = lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) return null;
+  } catch {
+    return null;
+  }
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const node = parseYaml(text);
+    if (node.kind !== 'map') return null;
+    const entry = node.entries.find((item) => item.key === 'project');
+    if (!entry || entry.value.kind !== 'scalar' || typeof entry.value.value !== 'string' || entry.value.value === '') return null;
+    return entry.value.value;
+  } catch {
+    return null;
+  }
+}
+
+function matchingNames(root: string, home: string): string[] | null {
   const suffix = `-${rootHash(root)}`;
   let names: string[];
   try {
@@ -94,8 +148,31 @@ export function findStore(root: string, home: string = homedir()): string | null
   } catch {
     return null;
   }
-  const name = names.sort().find((candidate) => candidate.endsWith(suffix));
-  return name === undefined ? null : join(storesFolder(home), name);
+  return names.filter((candidate) => candidate.endsWith(suffix)).sort();
+}
+
+function locateStores(root: string, home: string): { store: string | null; others: string[] } {
+  const names = matchingNames(root, home);
+  if (names === null || names.length === 0) return { store: null, others: [] };
+  const folder = storesFolder(home);
+  const project = projectAt(root);
+  const expected = project === null ? null : basename(storePath(project, root, home));
+  const approved = names.filter((name) => existsSync(join(folder, name, APPROVAL)));
+  if (expected !== null && approved.includes(expected)) {
+    return { store: join(folder, expected), others: approved.filter((name) => name !== expected) };
+  }
+  // One approval, under the previous name or with no team file to name a current
+  // project: it is the store. A folder that only holds a ledger is not one.
+  if (approved.length === 1) {
+    const only = approved[0] as string;
+    return { store: join(folder, only), others: [] };
+  }
+  if (approved.length > 1) return { store: null, others: approved };
+  if (names.length === 1) {
+    const only = names[0] as string;
+    return { store: join(folder, only), others: [] };
+  }
+  return { store: null, others: [] };
 }
 
 /** The repair every refused record names, and the one a legacy record names. */

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
@@ -78,40 +78,52 @@ function team(source: string) {
   return result.team;
 }
 
-function approveAsV012(text: string, seats: Record<string, string>, file: string = text) {
+function approveAsV012(text: string, seats: Record<string, string>, file: string = text, root: string = home) {
   const parsed = team(text);
-  const approval = approvalOf(parsed, home);
+  const approval = approvalOf(parsed, root);
   approval.fingerprints = { ...approval.fingerprints, seats };
   // v0.1.2 signed the stored text; that record still verifies on the compatibility path.
-  writeTextSignedApproval(storePath(parsed.project, home, home), { approval, file }, parsed.seats, home);
+  writeTextSignedApproval(storePath(parsed.project, root, home), { approval, file }, parsed.seats, home);
+}
+
+// Two projects written on one root, with no team file to name the current one, are not one
+// approval. The reader does not pick a folder by name order, so each file here is its own root.
+function rootFor(name: string): string {
+  const root = join(home, name);
+  mkdirSync(root);
+  return root;
 }
 
 describe('an approval written by v0.1.2', () => {
   test('a file that omits label, approved then, still matches', () => {
     for (const file of ['team.yaml', 'example.yaml'] as const) {
       const text = read(file);
-      approveAsV012(text, V012[file]);
-      expect(approvalDifferences(team(text), home, home)).toEqual([]);
+      const root = rootFor(file);
+      approveAsV012(text, V012[file], text, root);
+      expect(approvalDifferences(team(text), root, home)).toEqual([]);
     }
   });
 
   test('editing a seat model after that approval is drift for that seat', () => {
+    const oneRoot = rootFor('one');
     const one = read('team.yaml');
-    approveAsV012(one, V012['team.yaml']);
+    approveAsV012(one, V012['team.yaml'], one, oneRoot);
     const edited = one.replace('model: GLM', 'model: GLM Next');
-    expect(approvalDifferences(team(edited), home, home)).toEqual(['seat glm-implementer changed']);
+    expect(approvalDifferences(team(edited), oneRoot, home)).toEqual(['seat glm-implementer changed']);
 
+    const twoRoot = rootFor('two');
     const two = read('example.yaml');
-    approveAsV012(two, V012['example.yaml']);
+    approveAsV012(two, V012['example.yaml'], two, twoRoot);
     const next = two.replace('model: Grok', 'model: Grok Next');
-    expect(approvalDifferences(team(next), home, home)).toEqual(['seat grok-acme changed']);
+    expect(approvalDifferences(team(next), twoRoot, home)).toEqual(['seat grok-acme changed']);
   });
 
   test('the same file approved by v0.1.1 still matches', () => {
     for (const file of ['team.yaml', 'example.yaml'] as const) {
       const text = read(file);
-      approveAsV012(text, V012[`v0.1.1:${file}`]);
-      expect(approvalDifferences(team(text), home, home)).toEqual([]);
+      const root = rootFor(`v011-${file}`);
+      approveAsV012(text, V012[`v0.1.1:${file}`], text, root);
+      expect(approvalDifferences(team(text), root, home)).toEqual([]);
     }
   });
 
