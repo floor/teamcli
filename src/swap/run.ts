@@ -13,7 +13,6 @@ import { ceilingsOf } from '../approve/approval.ts';
 import { performRestart, type ReadBack, type RestartSources } from '../commands/restart.ts';
 import { hasSeat, rewriteSeatModel, type SeatModelFields } from '../file/lines.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
-import { writeTeamFile } from '../file/write.ts';
 import type { Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { herdrUnreliable, supportsSessionResume } from '../profiles/profile.ts';
@@ -24,6 +23,7 @@ import { liveLeaseOf } from '../tasks/lease.ts';
 import { seatHasAssignedWorkOnDisk } from '../watch/status-events.ts';
 import { nativeAllowsTyping, prefetchPresence, presenceSeatOf, presenceVerdict } from '../watch/presence.ts';
 import { finishSwap, handoverPath, needsHandover, noteHandover, queuedSwaps, swapDue } from './queue.ts';
+import { readTeamText, writeTeamText } from '../file/team-text.ts';
 
 /** What one observation says about a seat, in the words `swapDue` reads. `boundary` is the mark
  *  the watch makes itself: quiet, no turn, no dialog, no task lease, no assigned work on disk
@@ -315,7 +315,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
     dry: false,
     ...(resume === undefined ? {} : { resume }),
     ...(handover === undefined ? {} : { handover }),
-    declare: () => declareRecipe(input.path, name, fields),
+    declare: () => declareRecipe(input.path, name, fields, home),
     now: input.now,
     sources,
   });
@@ -455,15 +455,16 @@ export function seatOf(declared: Seat, swap: QueuedSwap): Seat {
  * written is said, never re-added. A failure is the caller's abort: nothing is launched from a
  * file the run could not rewrite (the ruling of 2026-10-19).
  */
-function declareRecipe(path: string, name: string, fields: SeatModelFields): { ok: true } | { ok: false; why: string } {
+function declareRecipe(path: string, name: string, fields: SeatModelFields, home: string): { ok: true } | { ok: false; why: string } {
+  const where = { home, command: 'swap' };
   let text: string;
   try {
-    text = readFileSync(path, 'utf8');
+    text = readTeamText(path, where);
   } catch (error) {
     return { ok: false, why: `the file cannot be read (${messageOf(error)})` };
   }
   if (!hasSeat(text, name)) return { ok: false, why: `${name} is no longer in the file` };
-  const written = writeTeamFile(path, rewriteSeatModel(text, name, fields));
+  const written = writeTeamText(path, rewriteSeatModel(text, name, fields), where);
   if (!written.ok) return { ok: false, why: problemText(written.errors[0]) };
   return { ok: true };
 }

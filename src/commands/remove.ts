@@ -18,7 +18,6 @@ import { markStopped, takeOut } from '../file/lines.ts';
 import type { Problem, Seat } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
-import { writeTeamFile } from '../file/write.ts';
 import { agentRename, paneForeground, paneForegroundCwd } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
@@ -38,6 +37,7 @@ import { resetCliHookState } from '../launch/cli-hook.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { plainText } from '../launch/plain.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { readTeamText, writeTeamText } from '../file/team-text.ts';
 
 export type RemoveSources = DownSources & {
   /** Foreground process names in the pane, or null when the pane can't be read. */
@@ -141,8 +141,8 @@ export function leftoverName(name: string): boolean {
 }
 
 /** The file edit `remove` would write, or null when that edit is valid or changes nothing. */
-function editProblems(path: string, name: string, keep: boolean): Problem[] | null {
-  const text = readFileSync(path, 'utf8');
+function editProblems(path: string, name: string, keep: boolean, home: string): Problem[] | null {
+  const text = readTeamText(path, { home });
   const next = keep ? markStopped(text, name) : takeOut(text, name);
   if (next === text) return null;
   const parsed = validateTeamFile(next);
@@ -656,7 +656,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // An edit that will not validate is refused before the seat is stopped. Stopping first would
   // end the live session and then report that nothing was written.
   if (!temporary && !swap) {
-    const ahead = editProblems(path, name, args.flags.has('keep'));
+    const ahead = editProblems(path, name, args.flags.has('keep'), sources.home ?? homedir());
     if (ahead) {
       refuse(io, json, 'remove', {
         id: 'remove.edit',
@@ -756,10 +756,11 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
     let rewrote: string | null = null;
     if (!temporary && !swap) {
       const refused = withLock(dir, () => {
-        const text = readFileSync(path, 'utf8');
+        const where = { home: sources.home ?? homedir(), command: 'remove' };
+        const text = readTeamText(path, where);
         const next = args.flags.has('keep') ? markStopped(text, name) : takeOut(text, name);
         if (next === text) return null;
-        const wrote = writeTeamFile(path, next);
+        const wrote = writeTeamText(path, next, where);
         if (!wrote.ok) return wrote.errors;
         rewrote = next;
         if (args.flags.has('keep')) kept = next;
