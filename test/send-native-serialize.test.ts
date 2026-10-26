@@ -63,6 +63,8 @@ test('an overlapping send leaves the first drop whole and writes no second body'
   expect(afterRecords).toEqual(duringRecords);
   expect(afterRecords.map((name) => recordBody(join(drops, name))).sort()).toEqual([filed('ALPHA-ONE'), filed('BETA-TWO')]);
   expect(typed.length).toBe(1);
-  expect(typed[0]).not.toContain('ALPHA-ONE');
+  // The display line carries the body's first line as its summary by design; the drop it names
+  // is still the whole body, and the overlapping body reaches neither.
+  expect(typed[0]).toBe('Message from owner (owner@acme): ALPHA-ONE Read it with: team drops --read.');
   expect(typed[0]).not.toContain('BETA-TWO');
 });

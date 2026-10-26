@@ -20,6 +20,11 @@ import {
   SWAP_WAIT_SECONDS,
   type DeliveryLeg,
 } from '../settings/inherit.ts';
+import {
+  MESSAGE_DISPLAY_DEFAULT,
+  messageDisplayValueProblem,
+  parseMessageDisplayValue,
+} from '../settings/message-display.ts';
 import { ownerReplyToValueProblem, parseOwnerReplyToValue } from '../settings/owner-reply.ts';
 import { parseSenderLineValue, senderLineValueProblem } from '../settings/sender-line.ts';
 import { EVENT_THRESHOLDS } from './events.ts';
@@ -101,6 +106,7 @@ export const ENFORCED_POLICY_NAMES = [
   'delivery-escalation',
   'brief-transport',
   'sender-line',
+  'message-display',
   'event-thread-ttl-seconds',
   'event-thread-cap',
   'event-retention-days',
@@ -167,6 +173,7 @@ export const POLICY_NAME_ALIASES: Readonly<Record<string, CataloguePolicyName>> 
   delivery_escalation: 'delivery-escalation',
   brief_transport: 'brief-transport',
   sender_line: 'sender-line',
+  message_display: 'message-display',
   daemon_broker: 'daemon.broker',
   'daemon-broker': 'daemon.broker',
   development_mode: 'development-mode',
@@ -771,6 +778,21 @@ export const POLICY_CATALOGUE: Readonly<Record<CataloguePolicyName, PolicySpec<a
     gateLifting: false,
     parseValue: parseSenderLineValue,
     valueProblem: senderLineValueProblem,
+    isWithin: () => true,
+  },
+  // The header a message wake opens with: the sender, the address and a short summary. The
+  // template is display only — the signed record is what a seat reads. It is set at entity or
+  // team (no project or seat level), holds only the fixed slots, and is refused at save with an
+  // unknown slot named. The read hint is appended by the caller and the template cannot remove
+  // it; the socket frame's reply line is outside the template too.
+  'message-display': {
+    name: 'message-display',
+    kind: 'enforced',
+    levels: ['entity', 'team'],
+    defaultValue: MESSAGE_DISPLAY_DEFAULT,
+    gateLifting: false,
+    parseValue: parseMessageDisplayValue,
+    valueProblem: messageDisplayValueProblem,
     isWithin: () => true,
   },
   // The event thresholds (`src/policy/events.ts`) are enforced numbers the owner sets one field

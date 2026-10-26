@@ -68,6 +68,9 @@ export type RecordPayload = {
   rule: string;
   /** The first message's id; a first message is its own thread's id. */
   thread: string;
+  /** The sender's own subject (`--subject`), when the send wrote one: a display field only, and
+   *  never the summary — that is the body's first content line. */
+  subject?: string;
   /** The id of the record this one answers, on a reply only. */
   in_reply_to?: string;
   /** A general seat brief's delivery: the delivered body's sha256 and the lifetime it belongs
@@ -169,6 +172,7 @@ export function recordPayloadOf(value: unknown): RecordPayload | null {
   }
   if (value.from_id === undefined || value.to_id === undefined) return null;
   if (value.in_reply_to !== undefined && !nonEmpty(value.in_reply_to)) return null;
+  if (value.subject !== undefined && !nonEmpty(value.subject)) return null;
   // A brief's record carries both binding fields or neither: a record with only one is not one
   // this version wrote, and an ordinary message carries neither.
   const brief = value.brief_sha256 !== undefined || value.incarnation !== undefined;
@@ -191,6 +195,7 @@ export function recordPayloadOf(value: unknown): RecordPayload | null {
     thread: value.thread as string,
   };
   if (value.in_reply_to !== undefined) payload.in_reply_to = value.in_reply_to as string;
+  if (value.subject !== undefined) payload.subject = value.subject as string;
   // A record is one side of a client exchange, never both: the writer and the addressee are
   // different principals, and a payload claiming both is not one this version writes. The two
   // maps have exactly the same strict shape.

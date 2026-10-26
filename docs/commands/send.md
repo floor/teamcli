@@ -2,7 +2,7 @@
 
 Writes one message to one seat. A plain send writes the message whole as one signed record, mode
 0600, by renaming a temporary file into place, and — on the typed leg — types one short trigger
-line that names that record. The record is the message: it carries the body, the sender, the
+line that announces the message. The record is the message: it carries the body, the sender, the
 rule that admitted the send, and the thread it belongs to, and its name is the send's id.
 A record waiting in a seat's folder is answered with [team reply](reply.md), which writes the
 answer as a record on the same thread and cites the record it answers.
@@ -95,10 +95,12 @@ records it `unavailable`. The native leg is a call the sender's own process make
 from the owner, or from a sender whose own file does not declare `cli: claude-code`, records it
 `unavailable` too; a sender whose own file does declare it gets [the native
 handoff](#the-native-channel) instead — one pending record, the exact target, the body and the
-`--confirm` line — and makes the call itself. The typed leg types `Run team drops --read --seat <seat> --session
-<session> and do that.` — the seat's own drop read, whose first act is the signed read receipt
-beside the drop — and a receipt that verifies inside the window is `delivered (read)`, the one
-word that line earns. Without one, a typed send ends `sent (unconfirmed)` when the line has left
+`--confirm` line — and makes the call itself. The typed leg types the rendered
+`message-display` header and the fixed hint `Read it with: team drops --read.` — one printable
+line of at most 80 characters, asking for the seat's own drop read, whose first act is the
+signed read receipt beside the drop — and a receipt that verifies inside the window is
+`delivered (read)`, the one word that line earns. Without one, a typed send ends `sent
+(unconfirmed)` when the line has left
 the seat's input box after that one trigger line and Enter — either herdr reported the seat
 `working` (or `done` or `blocked`, and not the status read before Enter), or the transcript shows
 the drop being read (a CLI's status can lag while it works) — and the pane was not a dialog this
@@ -186,9 +188,9 @@ route](route.md) answers the address and the rule beside it.
 
 ## Synopsis
 
-    team send <target> <message> [--wait] [--timeout <s>] [--json] [--dry-run]
-    team send <target> --file <path> [--wait] [--timeout <s>] [--json] [--dry-run]
-    team send <target> --brief <path> [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
+    team send <target> --brief <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
     team send --confirm <id> [--json] [--dry-run]
     team send --record <seat> --channel native --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel native --ms <N> --file <path> [--json] [--dry-run]
@@ -208,7 +210,12 @@ folder is a pointer, not a brief: the send warns on stderr, naming the pointer a
 the brief itself — with `--brief <file>` or its text in the body — and still sends exactly what
 it was given. A prose body that merely mentions such a path draws no warning. A multiline body
 that looks like terminal output — two or more lines starting with a check mark or a bracketed
-number — is warned about on stderr and sent unchanged. `--brief` reads
+number — is warned about on stderr and sent unchanged. `--subject <text>` writes one display
+line beside the body: it fills the `{subject}` slot of the `message-display` template ([the
+message-display wake line](#the-message-display-wake-line)) and never stands in for `{summary}`,
+which is always the body's own first content line. The subject is sanitised like every other
+display field, a blank word is no subject at all, and it is not part of the body the receiver
+reads. `--brief` reads
 the receiving team's `brief-transport` before it writes anything: `file` and `message` both send
 the whole body as an ordinary send, while `memory` refuses the send (exit `send.brief-memory`,
 1) — no drop, no state or history line, no fallback — because no runtime in this build proves
@@ -464,6 +471,46 @@ that header, so the sender's own call carries it too. A waited send's frame open
 same way, and so
 does the body the message history keeps. The receiver reads who sent a message and why that sender
 was let through; the record carries the sender's ids from day one.
+
+## The message-display wake line
+
+A message a typed leg or a watch announces opens with a header the `message-display` policy
+renders. The policy is a signed, enforced setting at the entity and team levels and has no team
+file field: the entity's default stands until a team writes its own value, and the team's value
+wins. The shipped default is
+
+    Message from {name} ({seat}@{team}): {summary}
+
+A template may carry seven placeholders and no others; a value naming any other word is refused
+when it is saved, and the refusal names the placeholder:
+
+| Placeholder | What it renders |
+| --- | --- |
+| `{name}` | the seat's nickname, or its seat name when the file holds no nickname — a header is never hollow |
+| `{seat}` | the seat's own name |
+| `{team}` | the team's name |
+| `{subject}` | the sender's [`--subject`](#synopsis) line, sanitised like every field; empty when none was written |
+| `{summary}` | the body's first content line, sanitised and then cut at 80 characters — never paraphrased, and never the subject |
+| `{age}` | how long the message has waited: seconds, minutes, hours or days |
+| `{id}` | reserved for the record's id; this build's typed lines and frames leave it empty, because the id travels in the socket frame's `msg_id` only |
+
+Every field is data: control characters, escape sequences and line breaks are neutralised, so a
+rendered header is one printable line. A body line that forges a sender header stays summary
+text and never becomes the header.
+
+On an agent seat the typed wake is the rendered header, one space, and the fixed sentence
+`Read it with: team drops --read.` The whole typed line is one printable line of at most 100
+characters; the hint is kept whole and the header gives way to it. The template cannot remove
+the hint — an agent seat always learns where to read the signed record — and the message's id
+is not in the line.
+
+The socket frame an agent seat receives carries the rendered header, the full body, and the
+fixed reply line, `Reply with: team send <address> "…"`. A person-pane seat's frame carries the
+header and the body and neither the reply line nor the read hint: a person answers in the
+client, and the line is never shown to an agent.
+
+A running watch uses the same header to ring for the oldest waiting message, and it does not
+ring when nothing waits.
 
 ## Outcomes
 

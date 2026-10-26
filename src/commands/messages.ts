@@ -128,6 +128,15 @@ type Candidate = {
 
 export type Unacked = { id: string; to: string; at: string };
 
+/** One unread message with what its wake line shows: the sender the signed record carries, the
+ *  body the summary is read from, and the sender's own subject when one was written. */
+export type UnackedMessage = Unacked & {
+  from: string;
+  from_id: string | null;
+  body: string;
+  subject?: string;
+};
+
 function isFile(path: string): boolean {
   try {
     return lstatSync(path).isFile();
@@ -265,13 +274,14 @@ function recordReadHeld(candidate: Candidate, root: string, session: string, key
 }
 
 /**
- * Records with no verifying read receipt. A missing message key yields nothing: a signature
- * cannot be checked, and this read does not create the key. The watch rings from this list.
+ * Records with no verifying read receipt, with the fields a wake line reads. A missing message
+ * key yields nothing: a signature cannot be checked, and this read does not create the key. The
+ * watch rings from this list.
  */
-export function listUnacked(root: string, session: string, home: string): Unacked[] {
+export function listUnackedMessages(root: string, session: string, home: string): UnackedMessage[] {
   const state = messageKeyState(home);
   if (state.kind !== 'key') return [];
-  const out: Unacked[] = [];
+  const out: UnackedMessage[] = [];
   for (const candidate of candidates(root, session)) {
     if (candidate.store === 'legacy') {
       if (legacyReceiptMatches(receiptFile(root, candidate.seat, candidate.id), candidate.seat, candidate.id, root, session, state.key)) continue;
@@ -281,7 +291,8 @@ export function listUnacked(root: string, session: string, home: string): Unacke
       if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
       if (payload.session !== session || !samePath(payload.root, root)) continue;
       if (!verifyDomain(MESSAGE_DOMAIN, payload as Json, parsed.signature, state.key)) continue;
-      out.push({ id: candidate.id, to: candidate.seat, at: payload.at });
+      // A legacy message carries no agent id and no subject: its sender is its signed `from`.
+      out.push({ id: candidate.id, to: candidate.seat, at: payload.at, from: payload.from, from_id: null, body: payload.body });
       continue;
     }
     if (recordReadHeld(candidate, root, session, state.key)) continue;
@@ -291,9 +302,22 @@ export function listUnacked(root: string, session: string, home: string): Unacke
     if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
     if (payload.session !== (candidate.session ?? session) || !samePath(payload.root, root)) continue;
     if (!verifyRecord(record, state.key)) continue;
-    out.push({ id: candidate.id, to: candidate.seat, at: payload.at });
+    out.push({
+      id: candidate.id,
+      to: candidate.seat,
+      at: payload.at,
+      from: payload.from,
+      from_id: payload.from_id,
+      body: payload.body,
+      ...(payload.subject === undefined ? {} : { subject: payload.subject }),
+    });
   }
   return out;
+}
+
+/** The ids of the records with no verifying read receipt: the ring's recheck. */
+export function listUnacked(root: string, session: string, home: string): Unacked[] {
+  return listUnackedMessages(root, session, home).map((record) => ({ id: record.id, to: record.to, at: record.at }));
 }
 
 /**

@@ -15,7 +15,15 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { renderSenderLine, SENDER_LINE_DEFAULT } from '../settings/sender-line.ts';
+import {
+  composeMessageLine,
+  MESSAGE_DISPLAY_DEFAULT,
+  MESSAGE_HINT_SEPARATOR,
+  MESSAGE_READ_HINT,
+  messageAgeText,
+  messageSummaryOf,
+  renderMessageDisplay,
+} from '../settings/message-display.ts';
 
 /** The longest trigger typed into a pane. Agy on a 13-column pane submitted 200 and collapsed at 400. */
 export const TRIGGER_MAX = 200;
@@ -53,30 +61,60 @@ export type NativePane = {
 };
 
 /** The sender a typed wake names, taken from the send's authenticated record — the seat that
- *  wrote it and the team it wrote from — never from the body or its first line. `format` is the
- *  receiving team's `sender-line` policy in force: the words ahead of the instruction, with
- *  `{seat}` and `{team}` standing for this record's own. Absent, the shipped floor applies. */
-export type TriggerSender = { seat: string; team: string; format?: string };
+ *  wrote it and the team it wrote from — never from the body or its first line. `name` is the
+ *  seat's nickname, its seat name when the file writes none; `template` is the receiving team's
+ *  `message-display` policy in force. `body` supplies the summary (its first content line, cut at
+ *  80 and sanitised), `subject` the sender's own `--subject`, `ageMs` the message's age. The
+ *  message id is never part of a typed header; it travels in the socket frame's `msg_id`.
+ *  `format` is the legacy `sender-line` format, read only when no `template` is given. */
+export type TriggerSender = {
+  seat: string;
+  team: string;
+  name?: string;
+  template?: string;
+  subject?: string;
+  body?: string;
+  ageMs?: number;
+  format?: string;
+};
 
-/** The line's opening: the team's format with this sender's signed identity in its slots. */
+/** The line's opening: the team's template with this sender's signed identity in its slots. */
 function wakeHead(sender: TriggerSender): string {
-  return renderSenderLine(sender.format ?? SENDER_LINE_DEFAULT, sender);
+  return renderMessageDisplay(sender.template ?? sender.format ?? MESSAGE_DISPLAY_DEFAULT, {
+    name: sender.name ?? sender.seat,
+    seat: sender.seat,
+    team: sender.team,
+    ...(sender.subject === undefined ? {} : { subject: sender.subject }),
+    summary: messageSummaryOf(sender.body ?? ''),
+    age: messageAgeText(sender.ageMs ?? 0),
+    id: '',
+  });
 }
 
 /**
- * One line naming the drop file and, when the send knows it, the sender: `From
- * <seat>@<team>: read <path> and do that.` The sender is the record's own, so a name typed into
- * the body cannot change who the wake says wrote it. A wake for a message never drops the name to
- * make it fit: when the named line would be longer than `TRIGGER_MAX` or would not be one line,
- * this returns null and the caller refuses, keeping the written drop. The earlier form, `Read
- * <path> and do that.`, is used only by callers with no message sender (a work nudge); receivers
- * still read it during the transition.
+ * One line naming the drop file and, when the send knows it, the sender. A wake for a message
+ * never drops the name to make it fit: when the line would not be one line or would not fit
+ * `TRIGGER_MAX`, this returns null and the caller refuses, keeping the written drop. The earlier
+ * form, `Read <path> and do that.`, is used only by callers with no message sender (a work nudge).
+ * A message wake's header is the `message-display` template; its hint names the staged drop,
+ * which sits outside the folder `team drops --read` scans.
  */
 export function triggerLine(path: string, sender?: TriggerSender): string | null {
   if (sender !== undefined) {
-    const named = `${wakeHead(sender)} read ${path} and do that.`;
-    if (/[\r\n]/.test(named) || named.length > TRIGGER_MAX) return null;
-    return named;
+    // This line names a staged drop outside the folder a read scans, so the path stays whole.
+    // The full header goes first; a path long enough to crowd it gives up the summary, then the
+    // long opening. The shipped compact address keeps the signed sender named; only a path that
+    // does not fit even that refuses the wake, and the caller keeps the drop.
+    const hint = `Read it at ${path}.`;
+    const candidates = [
+      `${wakeHead(sender)}${MESSAGE_HINT_SEPARATOR}${hint}`,
+      `${wakeHead({ ...sender, body: '' })}${MESSAGE_HINT_SEPARATOR}${hint}`,
+      `${wakeHead({ ...sender, body: '', template: 'From {seat}@{team}:' })} read ${path} and do that.`,
+    ];
+    for (const line of candidates) {
+      if (!line.includes('\n') && line.length <= TRIGGER_MAX) return line;
+    }
+    return null;
   }
   const line = `Read ${path} and do that.`;
   if (line.includes('\n') || line.length > TRIGGER_MAX) return null;
@@ -84,22 +122,19 @@ export function triggerLine(path: string, sender?: TriggerSender): string | null
 }
 
 /**
- * The trigger a message's typed leg types: the seat runs its own drop read, the same command its
- * turn-start hook runs, so the line that wakes it is also the one that writes the signed read
- * receipt beside the drop — `team drops --read` prints the body after the receipt is on disk. The
- * seat and session are the receiver's, exactly as its launch names them. When the wake has a
- * message sender (every route but a work nudge), the first line names it: `From <seat>@<team>: run
- * team drops --read ...`. The name is the signed record's, so a name typed into a body cannot
- * change who the wake says wrote it. A message wake never drops the name to make it fit: null when
- * that line would be longer than `TRIGGER_MAX` or would not be one line, and the caller keeps the
- * drop and ends held with its reason. The earlier nameless form is used only by callers with no
- * message sender; receivers still read it during the transition.
+ * The trigger a message's typed leg types: the message's header — the receiving team's
+ * `message-display` template, the sender's nickname, the address and the body's first line — then
+ * the one fixed read sentence, `Read it with: team drops --read.` The line is a hint, never a
+ * command: the seat reads it and runs its read. The whole line stays inside a narrow composer
+ * (`MESSAGE_LINE_MAX`, 80); the hint is kept whole and the header gives way. Null when no
+ * line can carry both, and the caller keeps the drop and ends held with its reason. The nameless
+ * form is used only by callers with no message sender (a work nudge).
  */
 export function readTriggerLine(seat: string, session: string, sender?: TriggerSender): string | null {
   if (sender !== undefined) {
-    const named = `${wakeHead(sender)} run team drops --read --seat ${seat} --session ${session} and do that.`;
-    if (/[\r\n]/.test(named) || named.length > TRIGGER_MAX) return null;
-    return named;
+    const header = wakeHead(sender);
+    if (header === '') return null;
+    return composeMessageLine(header, MESSAGE_READ_HINT);
   }
   const line = `Run team drops --read --seat ${seat} --session ${session} and do that.`;
   if (line.includes('\n') || line.length > TRIGGER_MAX) return null;
