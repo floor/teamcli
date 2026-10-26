@@ -950,6 +950,33 @@ Usage:
 | --- | --- | --- |
 | `reason` | yes | no |
 
+## `import`
+
+Hidden: no
+
+Usage:
+
+    team import [<file>] [--dry-run] [--json]
+
+### Who may run it
+
+`owner-only` — the team's configuration is the owner's: making a file its registry record is the owner's act, from a terminal outside herdr
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `file` | yes | no |
+
 ## `init`
 
 Hidden: no
@@ -1198,6 +1225,31 @@ Usage:
 | `--limit` | yes | no | no |
 | `--request-id` | yes | no | no |
 | `--since` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+## `migrate`
+
+Hidden: no
+
+Usage:
+
+    team migrate [--dry-run] [--json]
+
+### Who may run it
+
+`owner-only` — the team's configuration is the owner's: moving it into the registry is the owner's act, from a terminal outside herdr
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

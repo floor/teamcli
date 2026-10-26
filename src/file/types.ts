@@ -330,5 +330,19 @@ export type ValidateResult =
   | { ok: false; errors: Problem[] };
 
 export type LoadResult =
-  | { ok: true; team: TeamFile; root: string; path: string; warnings: Problem[]; deprecations?: Deprecation[]; text: string }
+  | {
+      ok: true;
+      team: TeamFile;
+      root: string;
+      path: string;
+      warnings: Problem[];
+      deprecations?: Deprecation[];
+      text: string;
+      /** Where the configuration was read from: set by `readTeamConfig`, absent from the file
+       *  reader's own result (src/file/team-config.ts). */
+      source?: 'registry' | 'team-file';
+      /** A `.agents/team.yaml` left beside a team read from the registry, and whether it still
+       *  says what the registry's record says. The file is not read as the team either way. */
+      leftover?: { path: string; matches: boolean };
+    }
   | { ok: false; errors: Problem[]; path?: string };

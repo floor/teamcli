@@ -23,6 +23,10 @@ export type Current =
       deprecations?: Deprecation[];
       notice?: string;
       path?: string;
+      /** Where the configuration was read from (src/file/team-config.ts). */
+      source?: 'registry' | 'team-file';
+      /** A team file left beside a registry team, and whether it matches the record. */
+      leftover?: { path: string; matches: boolean };
     }
   | { ok: false; errors: Problem[] };
 
@@ -44,7 +48,9 @@ export function currentTeam(
   if (loaded.ok) {
     const dir = dirname(loaded.path);
     if (remember) rememberLastValid(dir, loaded.path, now);
-    return { ok: true, team: loaded.team, root: loaded.root, dir, warnings: loaded.warnings, deprecations: loaded.deprecations ?? [], path: loaded.path };
+    return { ok: true, team: loaded.team, root: loaded.root, dir, warnings: loaded.warnings, deprecations: loaded.deprecations ?? [], path: loaded.path,
+      ...(loaded.source !== undefined ? { source: loaded.source } : {}),
+      ...(loaded.leftover !== undefined ? { leftover: loaded.leftover } : {}) };
   }
   if (!loaded.path || !existsSync(loaded.path)) return { ok: false, errors: loaded.errors };
   const dir = dirname(loaded.path);

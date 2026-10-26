@@ -436,6 +436,8 @@ describe('team mcp serve', () => {
       const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
       const proc = Bun.spawn([process.execPath, cliEntry, 'mcp', 'serve', '--seat', 'lead'], {
         cwd: at.root,
+        // The child does not see the suite preload's setting unless it is passed on.
+        env: { ...process.env, TEAM_CONFIG_SOURCE: 'file' },
         stdin: 'pipe',
         stdout: 'pipe',
         stderr: 'pipe',

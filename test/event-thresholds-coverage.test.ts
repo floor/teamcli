@@ -585,6 +585,8 @@ describe('the bus serves on the numbers the chain resolves', () => {
   test('the bus hands the team-level reconcile, retention and held numbers to the server', () => {
     const proc = Bun.spawnSync(['bun', join(import.meta.dir, 'event-thresholds-bus-run.ts')], {
       cwd: join(import.meta.dir, '..'),
+      // The harness is a plain script, outside the suite preload: it keeps the file source here.
+      env: { ...process.env, TEAM_CONFIG_SOURCE: 'file' },
       stdout: 'pipe',
       stderr: 'pipe',
     });
