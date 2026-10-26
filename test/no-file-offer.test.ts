@@ -45,6 +45,13 @@ const TO_THE_FILE: Record<string, string[]> = {
  *  machine-wide daemon process. */
 const MACHINE_ONLY = new Set(['usage', 'daemon']);
 
+/** Subcommands that run in the foreground until stopped. `team owner-seat serve` reads the
+ *  owner seat under the real home (Bun fixes `homedir()` at startup, so the census cannot point
+ *  it elsewhere): on a machine with an owner seat it starts the owner page and waits for Ctrl-C,
+ *  which timed the census out on every owner's Mac and never on CI. It reads no team file, so
+ *  the sentence cannot come from it. */
+const FOREGROUND = new Set(['owner-seat serve']);
+
 const OFFER = 'or pass --file';
 const NO_REPO = 'not inside a git repository';
 
@@ -97,6 +104,7 @@ describe('outside a checkout, the sentence offers --file only where the contract
     .filter(
       ({ path, node }) =>
         !MACHINE_ONLY.has(path[0] as string) &&
+        !FOREGROUND.has(path.join(' ')) &&
         // Hidden dispatchers: neither is a command in the table, and neither prints a no-repository
         // sentence — one answers a port's protocol, the other stages a hook's record.
         path[0] !== 'conformance-adapter' &&
