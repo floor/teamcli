@@ -1,7 +1,7 @@
 import { formatTable, renderDifferences, type OutputDifference } from '../output/index.ts';
 import { forbiddenPatterns, type CheckConfig } from './config.ts';
 import { selectCommits, type Commit } from './git.ts';
-import { checkSignature, findForbidden, splitLines, type Finding, type FindingKind } from './message.ts';
+import { checkSignature, findForbidden, splitLines, withoutPublicationTrailer, type Finding, type FindingKind } from './message.ts';
 
 export interface CheckOptions {
   /** A folder of the repository to read. */
@@ -66,9 +66,12 @@ export function runCheck(config: CheckConfig, options: CheckOptions): CheckRepor
  *  and the body-only `team pr check` share one definition of what a body must pass. */
 export function checkBody(config: CheckConfig, body: string): Finding[] {
   const lines = splitLines(body);
+  // Forbidden patterns still see the publication trailer. The signature is read
+  // on the author's text: that trailer is not a line the author can remove.
+  const signed = splitLines(withoutPublicationTrailer(body));
   return [
     ...findForbidden(lines, forbiddenPatterns(config)),
-    ...checkSignature({ lines, rule: config.pullRequests, ledger: config.ledger }),
+    ...checkSignature({ lines: signed, rule: config.pullRequests, ledger: config.ledger }),
   ];
 }
 

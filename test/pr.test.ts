@@ -54,6 +54,23 @@ describe('team pr check follows the output contract', () => {
     assertGoldenOutput(result.out, ['team pr check: 1 pull request body checked: ok']);
   });
 
+  test('a Cursor publication trailer after the signature still passes', async () => {
+    const div = '<div><img src="https://cursor.com/assets/images/open-in-web-dark.png"><img src="https://cursor.com/assets/images/open-in-cursor-dark.png"></div>';
+    const text = `The page is ready.\n\n${PR_SIGNATURE}\n\n<!-- CURSOR_AGENT_PR_BODY_END -->\n\n${div}\n`;
+    const result = await run([body('trailer.md', text)]);
+    expect(result.code).toBe(0);
+    expect(result.err).toBe('');
+    assertGoldenOutput(result.out, ['team pr check: 1 pull request body checked: ok']);
+  });
+
+  test('prose after the signature still refuses when a publication trailer follows it', async () => {
+    const div = '<div><img src="https://cursor.com/assets/images/open-in-web-dark.png"><img src="https://cursor.com/assets/images/open-in-cursor-dark.png"></div>';
+    const text = `${PR_SIGNATURE}\n\nSee the notes.\n\n<!-- CURSOR_AGENT_PR_BODY_END -->\n\n${div}\n`;
+    const result = await run([body('trailer-prose.md', text)]);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain('the signature is not in the last line');
+  });
+
   test('a refused body is one difference block per finding, then the closing line', async () => {
     const result = await run([body('refused.md', 'Bump the retry window.\n\nSee WEB-1234.\n')]);
     expect(result.code).toBe(1);

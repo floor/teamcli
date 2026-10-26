@@ -18,6 +18,38 @@ export function splitLines(text: string): string[] {
   return text.split(/\r?\n/).map((line) => line.trimEnd());
 }
 
+const PUBLICATION_END = '<!-- CURSOR_AGENT_PR_BODY_END -->';
+
+/** Cursor's open-in-web / open-in-cursor line, the one div a cloud-agent update appends. */
+function isPublicationDiv(line: string): boolean {
+  const text = line.trim();
+  return text.startsWith('<div>') && text.endsWith('</div>')
+    && text.includes('cursor.com/assets/images/open-in-web')
+    && text.includes('cursor.com/assets/images/open-in-cursor');
+}
+
+/**
+ * The author's text when `body` ends with Cursor's publication trailer: the end
+ * marker, then that one div. Blank lines around them do not count. Any other
+ * trailing line is left in place, so the signature still has to be the last
+ * line the author wrote.
+ */
+export function withoutPublicationTrailer(body: string): string {
+  const lines = body.split(/\r?\n/);
+  let end = lines.length;
+  const dropBlanks = (): void => {
+    while (end > 0 && (lines[end - 1] ?? '').trim() === '') end--;
+  };
+  dropBlanks();
+  if (end === 0 || !isPublicationDiv(lines[end - 1] ?? '')) return body;
+  end--;
+  dropBlanks();
+  if (end === 0 || lines[end - 1]?.trim() !== PUBLICATION_END) return body;
+  end--;
+  dropBlanks();
+  return lines.slice(0, end).join('\n');
+}
+
 /** Every line that matches a forbidden pattern. */
 export function findForbidden(lines: readonly string[], patterns: readonly ForbiddenPattern[]): Finding[] {
   const findings: Finding[] = [];
