@@ -32,3 +32,8 @@ The transformation from the raw screen, recorded here so the derivation can be c
 Only the ready frame was captured at this version. The trust, permission, question, working,
 unsent and exit shapes keep their `2026.10.16` captures and their readings; this folder makes no
 claim about those screens at `2026.10.19`.
+
+## Not produced
+
+- `trust`, `unsent`, `working`, `question`, `permission`, `unknown`: not produced. Only the
+  ready frame was captured at `2026.10.19`; those shapes keep their `2026.10.16` captures.

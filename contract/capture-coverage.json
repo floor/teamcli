@@ -1193,7 +1193,7 @@
     "cursor": {
       "tested": {
         "from": "2026.10.01",
-        "to": "2026.10.16"
+        "to": "2026.10.19"
       },
       "byVersion": {
         "2026.10.01": {
@@ -1363,6 +1363,63 @@
           },
           "unknown": {
             "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "2026.10.19": {
+          "idle": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           }
@@ -1687,7 +1744,7 @@
         "1.4.11": {
           "idle": {
             "real": 1,
-            "constructed": 0,
+            "constructed": 1,
             "undocumented": 0
           },
           "working": {
@@ -1696,7 +1753,7 @@
             "undocumented": 0
           },
           "unsent": {
-            "real": 0,
+            "real": 2,
             "constructed": 1,
             "undocumented": 0
           },
@@ -1761,7 +1818,14 @@
       "question": "reason not stated",
       "exit question": "reason not stated"
     },
-    "cursor": {},
+    "cursor": {
+      "working": "reason not stated",
+      "unsent": "reason not stated",
+      "permission": "reason not stated",
+      "question": "reason not stated",
+      "trust": "reason not stated",
+      "unknown": "reason not stated"
+    },
     "gemini": {},
     "grok": {
       "unsent": "the installed binary 1.0.60 is newer than this folder's 1.0.52",
