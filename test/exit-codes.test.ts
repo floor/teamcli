@@ -1,6 +1,6 @@
 // One run per row of contract/exit-codes.json. Each trigger is a temporary directory and the
 // injectable stand-ins the other command tests use: no herdr session, no user-level store.
-import { seatOwner } from './helpers/owner-seat.ts';
+import { fakeOwnerStore, seatOwner } from './helpers/owner-seat.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -83,6 +83,7 @@ import { runSeats, type SeatsSources } from '../src/commands/seats.ts';
 import { runSeat } from '../src/commands/seat.ts';
 import { runSessions } from '../src/commands/sessions.ts';
 import { runConfig } from '../src/commands/config.ts';
+import { runSetup } from '../src/commands/setup.ts';
 import { runSettings, type SettingsCommandOptions } from '../src/commands/settings.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
@@ -1461,6 +1462,31 @@ scene('owner-seat.invocation', async (place) => {
   return show({ code: await runOwnerSeat(['profile', 'maybe'], io, { home: place.home }), out: io.out, err: io.err }, 'profile is strict, relaxed or dev');
 });
 
+scene('setup.done', async (place) => {
+  const io = testIo(place.root, owner);
+  const store = fakeOwnerStore();
+  return show(
+    { code: await runSetup(['--signer', 'touch-id', '--team', 'floor', '--roots', place.root], io, { home: place.home, store, now: () => NOW }), out: io.out, err: io.err },
+    'signed by mac',
+  );
+});
+scene('setup.refused', async (place) => {
+  const io = testIo(place.root, owner);
+  const store = fakeOwnerStore();
+  store.sign = () => ({ ok: false, why: 'cancelled' });
+  return show(
+    { code: await runSetup(['--signer', 'touch-id', '--team', 'floor', '--roots', place.root], io, { home: place.home, store, now: () => NOW }), out: io.out, err: io.err },
+    'nothing was written',
+  );
+});
+scene('setup.invocation', async (place) => {
+  const io = testIo(place.root, owner);
+  return show(
+    { code: await runSetup([], io, { home: place.home, store: fakeOwnerStore(), now: () => NOW }), out: io.out, err: io.err },
+    '--signer',
+  );
+});
+
 scene('doctor.invocation', async (place) => {
   const io = testIo(place.root, owner);
   return show({ code: await runDoctor(['extra'], io, doctor(place.home)), out: io.out, err: io.err }, 'unexpected');
@@ -1864,6 +1890,14 @@ scene('remove.file-owner', async (place) => {
 scene('remove.caller', async (place) => {
   write(place, TWO);
   return show(await removed(place, ['worker'], other, downSources({ home: place.home })), 'only the owner or `leads` removes a seat');
+});
+scene('remove.charter', async (place) => {
+  write(place, TWO);
+  const store = fakeOwnerStore();
+  const signed = testIo(place.root, owner);
+  const code = await runSetup(['--signer', 'touch-id', '--team', 'floor', '--roots', join(place.home, 'Code')], signed, { home: place.home, store, now: () => NOW });
+  if (code !== 0) throw new Error(signed.err);
+  return show(await removed(place, ['worker'], owner, downSources({ home: place.home, ownerSeatStore: store })), 'team setup --edit');
 });
 scene('remove.no-pane', async (place) => {
   write(place, TWO);
@@ -2303,6 +2337,19 @@ scene('seats.not-yours', async (place) => {
   scene('config.detached', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'project', 'other'], detachedCaller), 'terminal');
+  });
+  scene('config.charter', async (place) => {
+    write(place, TEAM);
+    const store = fakeOwnerStore();
+    const signed = testIo(place.root, owner);
+    const code = await runSetup(['--signer', 'touch-id', '--team', 'floor', '--roots', join(place.home, 'Code')], signed, { home: place.home, store, now: () => NOW });
+    if (code !== 0) throw new Error(signed.err);
+    const io = testIo(place.root, owner);
+    const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
+    return show(
+      { code: await runConfig(['set', 'project', 'other'], io, { home: place.home, env, now: () => NOW, ownerSeatStore: store }), out: io.out, err: io.err },
+      'team setup --edit',
+    );
   });
   scene('config.not-owner', async (place) => {
     write(place, TEAM);

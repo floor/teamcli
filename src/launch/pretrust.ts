@@ -6,6 +6,8 @@
 // so that seat still starts: a guessed file is not written, and a refusal could not be cleared.
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
+import { charterCoversFolder } from '../charter/check.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { profileFor } from '../profiles/index.ts';
 
 /** The fields a launch seat needs for the lobby trust decision. */
@@ -85,6 +87,28 @@ export function projectRootPretrust(seat: PretrustSeat, home: string, opts: { no
   try {
     const folder = realpathSync(seat.cwd);
     if (folder !== realpathSync(opts.root)) return false;
+    writer(folder, home, opts.now);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Writes the trust record of a launching seat's start folder when that folder sits under a
+ *  verified charter root. The vendor's folder question is then already answered. A lobby seat,
+ *  a seat that does not start now, a CLI with no captured record, or a folder outside the
+ *  charter writes nothing. A record that cannot be written is not a refusal. */
+export function charterFolderPretrust(
+  seat: PretrustSeat,
+  home: string,
+  opts: { now: Date; store?: OwnerSeatKeyStore },
+): boolean {
+  if (seat.lobby || !isAbsolute(seat.cwd) || !startsFresh(seat)) return false;
+  const writer = WRITERS[seat.cli];
+  if (!writer) return false;
+  try {
+    const folder = realpathSync(seat.cwd);
+    if (!charterCoversFolder(home, folder, opts.store)) return false;
     writer(folder, home, opts.now);
     return true;
   } catch {

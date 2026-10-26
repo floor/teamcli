@@ -65,7 +65,8 @@ import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENE
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
-import { grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
+import { charterGate } from '../charter/check.ts';
+import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -1816,7 +1817,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       const line = lobbyPretrustLine(seat, sources.home, { write, now });
       if (line) seats[index] = { ...seat, launchProblem: line };
       // The project root, for a seat that starts there: pre-accepted in its CLI's own record.
-      else if (write) projectRootPretrust(seat, sources.home, { now, root });
+      // A start folder under a charter root is pre-accepted the same way, wherever it sits.
+      else if (write) {
+        projectRootPretrust(seat, sources.home, { now, root });
+        charterFolderPretrust(seat, sources.home, { now, store: sources.ownerSeatStore });
+      }
     }
   };
 
@@ -2435,13 +2440,15 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
        * wait and leaves the seat out, exactly as `team restart` and `team add` do.
        */
       dialog:
-        internal?.nonInteractive === true
-          ? { mode: 'keep' }
-          : delegated !== null
-            ? { mode: 'close-no-terminal', timeoutIsDialog: true }
-            : caller.kind === 'owner' && clientUp === null
-              ? { mode: 'prompt', run: (input: PauseInput) => runPause(input, pauseHostFor(input)) }
-              : { mode: 'close-no-terminal' },
+        charterGate(sources.home, { operation: 'up', cwd: root }, sources.ownerSeatStore).kind === 'admit'
+          ? { mode: 'notice' }
+          : internal?.nonInteractive === true
+            ? { mode: 'keep' }
+            : delegated !== null
+              ? { mode: 'close-no-terminal', timeoutIsDialog: true }
+              : caller.kind === 'owner' && clientUp === null
+                ? { mode: 'prompt', run: (input: PauseInput) => runPause(input, pauseHostFor(input)) }
+                : { mode: 'close-no-terminal' },
       clearWaiting(name) {
         updateState(dir, (file) => {
           const seatState = file.sessions[session]?.seats[name];

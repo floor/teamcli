@@ -20,6 +20,7 @@
 import { homedir } from 'node:os';
 import type { AuthorityEditOptions, AuthorityEditResult } from '../authority-edit.ts';
 import { describeCaller, isOwner, walkCaller } from '../caller.ts';
+import { charterGate } from '../charter/check.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { grantsDir } from '../grant.ts';
@@ -68,7 +69,14 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
   const io = cleanedIo(rawIo);
   const json = Boolean(options.json);
   const caller = walkCaller(io);
-  if (!isOwner(caller)) {
+  const home = options.home ?? homedir();
+  const gate = charterGate(home, { operation: 'grant', cwd: io.cwd });
+  if (gate.kind === 'block') {
+    if (json) writeJsonError(rawIo, 'grant.refused', plainText(gate.message), `the owner widens the charter with team setup --edit`, 1, 'owner-only');
+    else io.stderr(`team grant: ${gate.message}\n`);
+    return 'refused';
+  }
+  if (gate.kind !== 'admit' && !isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
     const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, home: options.home ?? homedir() });
@@ -83,7 +91,6 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
     io.stderr(`${lift.warning}\n`);
   }
 
-  const home = options.home ?? homedir();
   try {
     const loaded = readTeamConfig(io.cwd, { home });
     if (!loaded.ok) {

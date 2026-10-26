@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
+import { charterLifetime } from '../charter/check.ts';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { readOwnerSeat, signOwnerAnswer, systemOwnerSeatKeyStore, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
@@ -778,10 +779,14 @@ export function approvalRuleTtlDays(home: string, entity: string, now: Date = ne
   return APPROVAL_RULE_TTL_DEFAULT_DAYS;
 }
 
-/** Whether a rule created at `created` is past the entity's approval-rule-ttl at `now`. */
-export function approvalRuleExpired(home: string, entity: string, created: string, now: Date = new Date()): boolean {
+/** Whether a rule created at `created` is past the entity's approval-rule-ttl at `now`.
+ *  A verified charter's rule lifetime replaces that policy: `null` means the rule does not expire. */
+export function approvalRuleExpired(home: string, entity: string, created: string, now: Date = new Date(), store?: OwnerSeatKeyStore): boolean {
   const at = Date.parse(created);
   if (!Number.isFinite(at)) return true;
+  const life = charterLifetime(home, 'rule', store);
+  if (life.kind === 'invalid') return true;
+  if (life.kind === 'set') return life.ms === null ? false : now.getTime() >= at + life.ms;
   return now.getTime() >= at + approvalRuleTtlDays(home, entity, now) * 86_400_000;
 }
 
@@ -912,6 +917,23 @@ export function autoApprovePendingGrant(
   if (!written.ok) return written;
   const name = `auto_${written.grant.grantId}`;
   const audited = writeEmissionAudit(home, { grant_id: written.grant.grantId, params_sha256: pendingGrantHash(p), adapter: 'standing-rule', rule_id: rule.rule_id, choice: 'auto', at: now.toISOString() }, name, key);
+  if (!audited.ok) return { ok: false, why: `the grant ${written.grant.grantId} was written but its audit entry could not be` };
+  return { ok: true, grant: written.grant, path: written.path, audit: audited.path };
+}
+
+/** Writes the grant a verified charter already covers. No new owner signature and no pending card. */
+export function issueGrantUnderCharter(
+  home: string,
+  p: PendingGrantParams,
+  now: Date = new Date(),
+): { ok: true; grant: IssuedClientGrant; path: string; audit: string } | { ok: false; why: string } {
+  if (p.allow_grant) return { ok: false, why: 'a grant cannot carry the right to grant' };
+  const key = ownerKey(home);
+  if (key === null) return { ok: false, why: 'the owner signing key is absent or unreadable' };
+  const written = issueFromParams(home, p, now, key);
+  if (!written.ok) return written;
+  const name = `charter_${written.grant.grantId}`;
+  const audited = writeEmissionAudit(home, { grant_id: written.grant.grantId, params_sha256: pendingGrantHash(p), adapter: 'charter', choice: 'auto', at: now.toISOString() }, name, key);
   if (!audited.ok) return { ok: false, why: `the grant ${written.grant.grantId} was written but its audit entry could not be` };
   return { ok: true, grant: written.grant, path: written.path, audit: audited.path };
 }

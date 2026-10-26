@@ -254,6 +254,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'it serves the owner page on 127.0.0.1 behind a per-run token; every act on it needs an owner-device passkey or Touch ID signature',
     },
+    setup: {
+      kind: 'any-caller',
+      why: 'an agent may start it, but nothing is written until the owner signs the charter; the owner-device signature is the authority',
+    },
     doctor: {
       kind: 'any-caller',
       why: 'the report changes nothing; the owner alone gets the budget checks, and every other caller gets the same report without them',

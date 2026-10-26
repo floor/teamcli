@@ -186,6 +186,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
 | `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
 | `config.written` | `config` | 0 | the change validated and was written | `team config set watch.unread_after 5m` |
+| `config.charter` | `config` | 1 | the owner charter does not cover this edit | `team config set watch.unread_after 5m` |
 | `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
@@ -537,6 +538,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `remove.another-pane` | `remove` | 1 | the state records another pane for the caller's seat | `team remove worker` |
 | `remove.busy` | `remove` | 1 | the seat is not free | `team remove worker` |
 | `remove.caller` | `remove` | 1 | the caller may not change the team | `team remove worker` |
+| `remove.charter` | `remove` | 1 | the owner charter does not cover this removal | `team remove worker` |
 | `remove.client-refused` | `remove` | 1 | the owner-signed manager grant, or the client removal it admits, did not verify, or the seat is a lead seat or a human's pane | `team remove spare --client grant.json --key client.key --team docs` |
 | `remove.coordinator` | `remove` | 1 | only the owner removes the orchestrator's or the operator's seat | `team remove lead` |
 | `remove.default-session` | `remove` | 1 | the session can't be "default" | `team remove worker --session default` |
@@ -689,6 +691,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `settings.source` | `settings` | 2 | a signed settings record can't be read or does not verify | `team settings lead` |
 | `settings.value` | `settings` | 2 | a value is outside what the seat's profile or the key's shape accepts | `team settings set lead model=nope` |
 | `settings.write` | `settings` | 2 | the seat's record can't be replaced | `team settings set lead nickname=Ada` |
+| `setup.done` | `setup` | 0 | the owner signed the charter | `team setup --signer touch-id` |
+| `setup.refused` | `setup` | 1 | the owner did not sign the charter; nothing was written | `team setup --signer touch-id` |
+| `setup.invocation` | `setup` | 2 | the invocation is invalid, or --signer was omitted so this run does not sign | `team setup` |
 | `status.agrees` | `status` | 0 | the file, the state and the session agree | `team status` |
 | `status.project-listed` | `status` | 0 | the project's teams are listed | `team status --project TeamCLI` |
 | `status.client-refused` | `status` | 1 | the owner-signed bundle grant, or the client read it admits, did not verify | `team status --client grant.json --key client.key` |

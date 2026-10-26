@@ -550,7 +550,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A leads seat on its own pane is admitted by the gate below, as before.
   const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
-  if (clientDown === null && (args.flags.has('request') || args.values.approval !== undefined)) {
+  if (clientDown === null) {
     const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, seatSources);
     if (seat.kind === 'requested') {
       // exit: down.approval-requested
