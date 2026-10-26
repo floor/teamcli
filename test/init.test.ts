@@ -3,8 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { firstLoggedInCli, init, runInit, skeleton, USAGE } from '../src/commands/init.ts';
+import { writeArchive } from '../src/commands/archive.ts';
 import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
 import { fingerprints } from '../src/approve/fingerprint.ts';
 import { version } from '../src/cli.ts';
@@ -412,4 +413,144 @@ describe('team init', () => {
 test('the skeleton validates with and without a first commit', () => {
   expect(validateTeamFile(skeleton('acme', null)).ok).toBe(true);
   expect(validateTeamFile(skeleton('acme', 'abc1234')).ok).toBe(true);
+});
+
+const ARCHIVED_AT = new Date('2026-10-16T09:00:00Z');
+
+/** An archive written the way `team archive` writes one: the team file by the real writer, with
+ *  its manifest, and whatever else the caller asked it to hold beside the file. */
+function archiveOf(options: { home: string; text: string; root?: string; state?: string; drops?: string[] }): string {
+  const root = options.root ?? join(base, 'archived');
+  const agents = join(root, '.agents');
+  mkdirSync(agents, { recursive: true });
+  writeFileSync(join(agents, 'team.yaml'), options.text);
+  if (options.state !== undefined) writeFileSync(join(agents, 'team.state.json'), options.state);
+  for (const rel of options.drops ?? []) {
+    mkdirSync(dirname(join(agents, 'send-drops', rel)), { recursive: true });
+    writeFileSync(join(agents, 'send-drops', rel), 'a drop\n');
+  }
+  const written = writeArchive({
+    file: join(agents, 'team.yaml'),
+    root,
+    project: 'acme-web',
+    session: 'acme-web',
+    home: options.home,
+    out: join(options.home, '.config', 'team', 'archive'),
+    caller: 'owner',
+    now: ARCHIVED_AT,
+    dry: false,
+  });
+  if (!written.ok) throw new Error(written.reason);
+  return written.dir;
+}
+
+const exampleText = (): string => readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
+
+describe('team init --from-archive', () => {
+  test('restores the archived team file verbatim, and says where the archive came from', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const text = exampleText();
+    const root = join(base, 'archived');
+    const dir = archiveOf({ home, text, root, state: '{}\n', drops: ['acme-web/builder-4/abc1', 'acme-web/builder-4/abc2'] });
+
+    const io = testIo(project, owner);
+    expect(await runInit(['--from-archive', dir], io, home)).toBe(0);
+    // Verbatim: the file an archive holds is written as it was, not re-composed.
+    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(text);
+    expect(io.out).toContain('Restored .agents/team.yaml from an archive.');
+    expect(io.out).toContain(`The archive is acme-web's, taken at ${root} on ${ARCHIVED_AT.toISOString()} by owner.`);
+    expect(io.out).toContain('It also holds team.state.json and send-drops (2 files); a restore writes the team file alone.');
+    expect(io.out).toContain('private to this clone');
+    expect(readFileSync(join(project, '.agents', 'team.log'), 'utf8')).toMatch(/ init \[owner\] restored the team file from the archive .* written with teamcli \d+\.\d+\.\d+\S* as \.agents\/team\.yaml/);
+    // The restored file is private like any other: excluded, never staged.
+    expect(git(project, 'status', '--porcelain')).toBe('');
+  });
+
+  test('an archive with nothing but the file says nothing about what else it holds', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const dir = archiveOf({ home, text: exampleText() });
+    const io = testIo(project, owner);
+    expect(await runInit(['--from-archive', relative(project, dir)], io, home)).toBe(0);
+    expect(io.out).not.toContain('It also holds');
+  });
+
+  test('a tampered team file is refused, by the manifest’s own hash, and nothing is written', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const dir = archiveOf({ home, text: exampleText() });
+    writeFileSync(join(dir, 'team.yaml'), `${exampleText()}\nrules:\n  - added after the archive was taken\n`);
+
+    const io = testIo(project, owner);
+    expect(await runInit(['--from-archive', dir], io, home)).toBe(1);
+    expect(io.err).toContain('is not the file the manifest recorded: its sha256 is ');
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
+  test('a folder that is not a teamcli archive is refused in its own words', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const empty = join(base, 'not-an-archive');
+    mkdirSync(empty);
+    const emptyIo = testIo(project, owner);
+    expect(await runInit(['--from-archive', empty], emptyIo, home)).toBe(1);
+    expect(emptyIo.err).toContain(`no archive at ${empty}: it holds no manifest.json`);
+
+    const foreign = join(base, 'other-archive');
+    mkdirSync(foreign);
+    writeFileSync(join(foreign, 'manifest.json'), '{"kind":"something-else","format":1}\n');
+    const foreignIo = testIo(project, owner);
+    expect(await runInit(['--from-archive', foreign], foreignIo, home)).toBe(1);
+    expect(foreignIo.err).toContain('is not a teamcli archive: its kind is "something-else"');
+
+    const papered = join(base, 'paper-archive');
+    mkdirSync(papered);
+    writeFileSync(join(papered, 'manifest.json'), `${JSON.stringify({ kind: 'teamcli-archive', format: 1, team: { sha256: '0'.repeat(64) } })}\n`);
+    const paperedIo = testIo(project, owner);
+    expect(await runInit(['--from-archive', papered], paperedIo, home)).toBe(1);
+    expect(paperedIo.err).toContain(`the archive at ${papered} holds no team.yaml`);
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
+  test('a file the manifest names but validation refuses is never written', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const dir = archiveOf({ home, text: 'format: 1\nproject: acme-web\nseats: nope\n' });
+    const io = testIo(project, owner);
+    expect(await runInit(['--from-archive', dir], io, home)).toBe(1);
+    expect(io.err).toContain("the archived team file doesn't validate");
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
+  test('--restore and --from-archive together are refused: one file, one source', async () => {
+    const io = testIo(project, owner);
+    expect(await runInit(['--restore', '--from-archive', join(base, 'nowhere')], io, join(base, 'home'))).toBe(2);
+    expect(io.err).toContain('--restore and --from-archive are two sources for the one file');
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
+
+  test('a team file that exists is left alone, and the archive is not read', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const written = testIo(project, owner);
+    expect(await runInit([], written, home, undefined, noLogin)).toBe(0);
+    const skeletonText = readFileSync(join(project, '.agents', 'team.yaml'), 'utf8');
+    const dir = archiveOf({ home, text: exampleText() });
+
+    const io = testIo(project, owner);
+    expect(await runInit(['--from-archive', dir], io, home)).toBe(1);
+    expect(io.err).toContain('exists already; it is left as it is');
+    expect(readFileSync(join(project, '.agents', 'team.yaml'), 'utf8')).toBe(skeletonText);
+  });
+
+  test('a seat may not restore an archive: it is the owner’s, from a terminal outside herdr', async () => {
+    const home = join(base, 'home');
+    mkdirSync(home, { recursive: true });
+    const dir = archiveOf({ home, text: exampleText() });
+    const io = testIo(project, { kind: 'seat', name: 'worker', pane: 'w1:p1' });
+    expect(await runInit(['--from-archive', dir], io, home)).toBe(1);
+    expect(io.err).toBe('team init: only the owner runs this, from a terminal outside herdr; this call is worker\n');
+    expect(existsSync(join(project, '.agents'))).toBe(false);
+  });
 });

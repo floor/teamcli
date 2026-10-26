@@ -89,6 +89,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: '`stop`: the owner or `leads` for its own team, and the owner may always stop',
     },
+    archive: {
+      kind: 'owner-or-leads',
+      why: '`stop` first, as `down`, then a move of the team\'s own state; `--out` stays the owner\'s',
+    },
     restart: {
       kind: 'owner-or-leads',
       why: 'the `start` row for a seat: as `start`',

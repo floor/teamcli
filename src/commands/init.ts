@@ -18,6 +18,7 @@ import { noteTeam } from '../registry/teams.ts';
 import { LOCK_FILE, LOG_FILE, STATE_FILE, writeAtomic } from '../state.ts';
 import { approvalStanding, LEGACY_LINE, type Standing } from '../store/store.ts';
 import { version } from '../version.ts';
+import { readArchive, type ArchiveManifest } from './archive.ts';
 import { realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { ruleRelaxed } from '../security/profile.ts';
@@ -180,7 +181,7 @@ export function exclude(root: string): string[] {
 export const init: Command = (argv, io) => runInit(argv, io, undefined, undefined, { ...doctorSources, registryHome: homedir() });
 export default init;
 
-export const USAGE = `Usage: team init [--restore] [--json]
+export const USAGE = `Usage: team init [--restore] [--from-archive <folder>] [--json]
        team init --request [--json]
        team init --execute <request-id> [--json]
        team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
@@ -206,7 +207,7 @@ export async function runInit(
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope'], ['restore', 'json', 'request', 'approvals', 'approval-modes']);
+  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope'], ['restore', 'json', 'request', 'approvals', 'approval-modes']);
   const approving = args.values['approve-as-owner-seat'] !== undefined;
   if (args.error || (args.rest.length && !(approving && args.rest.length === 1))) {
     refuse(io, json, 'init', {
@@ -216,6 +217,16 @@ export async function runInit(
       usage: USAGE,
     });
     // exit: init.invocation
+    return 2;
+  }
+  const fromArchive = args.values['from-archive'];
+  if (args.flags.has('restore') && fromArchive !== undefined) {
+    refuse(io, json, 'init', {
+      id: 'init.sources',
+      message: '--restore and --from-archive are two sources for the one file: pass one of them',
+      repair: null,
+    });
+    // exit: init.sources
     return 2;
   }
   // Owner-seat approval of a team creation (src/client/team-create.ts). Each of these forms runs
@@ -296,9 +307,12 @@ export async function runInit(
   const caller = callerOf(io);
   let foundRoot: string | null | undefined;
   const rootOf = () => (foundRoot === undefined ? (foundRoot = findRoot(io.cwd)) : foundRoot);
+  // A restore reads a copy of a file rather than composing one, so neither it nor a restore from
+  // an archive is the create a grant may stand behind.
   const createGranted = seatApproved || (
     !isOwner(caller) &&
     !args.flags.has('restore') &&
+    fromArchive === undefined &&
     readEntityCreateGrants(home).length > 0 &&
     (() => {
       const candidateRoot = rootOf();
@@ -395,6 +409,8 @@ export async function runInit(
   }
 
   let text: string;
+  let what: string;
+  let first: string;
   if (args.flags.has('restore')) {
     // Only a verified record carries a copy worth restoring: a legacy or refused
     // one is said in its own words, never restored from.
@@ -446,6 +462,28 @@ export async function runInit(
       return 1;
     }
     text = copy;
+    what = 'restored the copy this machine stored';
+    first = `Restored ${TEAM_FILE} from the copy this machine stored.\n`;
+  } else if (fromArchive !== undefined) {
+    // The archive's own team file, checked against the archive's manifest before anything else
+    // is done: the sha256 it records is the file's, and the file validates. It is written
+    // verbatim — a restore never edits the file it restores — and it is this root's file
+    // afterwards, so the placement it was archived with may still need the owner's attention.
+    const archived = readArchive(fromArchive, io.cwd);
+    if (!archived.ok) {
+      refuse(io, json, 'init', { id: 'init.from-archive', message: `nothing was restored: ${archived.reason}.`, repair: null });
+      // exit: init.from-archive
+      return 1;
+    }
+    const check = validateTeamFile(archived.text, { home, root });
+    if (!check.ok) {
+      refuse(io, json, 'init', { id: 'init.from-archive-invalid', message: `nothing was written: the archived team file doesn't validate: ${check.errors[0]?.message}`, repair: null });
+      // exit: init.from-archive-invalid
+      return 1;
+    }
+    text = archived.text;
+    what = `restored the team file from the archive ${fromArchive}, written with teamcli ${archived.manifest.teamcli}`;
+    first = `Restored ${TEAM_FILE} from an archive. ${archiveProvenance(archived.manifest)}\n`;
   } else {
     text = skeleton(basename(root), git(root, 'rev-parse', 'HEAD'), version(), root, firstLoggedInCli(sources));
     const check = validateTeamFile(text);
@@ -458,6 +496,8 @@ export async function runInit(
       // exit: init.skeleton
       return 1;
     }
+    what = 'wrote a skeleton';
+    first = `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run team up.\n`;
   }
   mkdirSync(dirname(path), { recursive: true });
   const added = exclude(root);
@@ -469,9 +509,10 @@ export async function runInit(
   } else {
     writeFileSync(path, text, { flag: 'wx' });
   }
-  const what = args.flags.has('restore') ? 'restored the copy this machine stored' : 'wrote a skeleton';
+  const restored = args.flags.has('restore');
+  const fromArchiveRestored = fromArchive !== undefined;
   const into = target.kind === 'registry' ? 'into the registry' : `as ${TEAM_FILE}`;
-  logLine(dirname(path), 'init', describeCaller(caller), `${what} ${into}; excluded ${pluralCount(added.length, 'path')}`);
+  logLine(dirname(path), 'init', describeCaller(caller), `${restored ? 'restored the copy this machine stored' : what} ${into}; excluded ${pluralCount(added.length, 'path')}`);
   // The registry is where the user-level state lives: the home the shipped command names, or the
   // one a test hands in. A caller that names neither leaves the machine's registry alone.
   const registryHome = sources.registryHome ?? home;
@@ -485,20 +526,19 @@ export async function runInit(
       }
     }
   }
-  const restored = args.flags.has('restore');
   // The existing closing line is the action summary; the privacy paragraph is plain-only prose
   // the document has no field for.
   const action_summary = restored
     ? `Restored ${TEAM_FILE} from the copy this machine stored.`
-    : `Wrote ${TEAM_FILE}: a skeleton with one seat. Edit it, then run team up.`;
+    : first.trimEnd();
   if (json) {
     writeJson(io, 'team.init', {
       format: 1 as const,
       dry_run: false,
-      status: restored ? 'restored' : 'wrote',
+      status: restored || fromArchiveRestored ? 'restored' : 'wrote',
       action_summary,
       file: TEAM_FILE,
-      restored,
+      restored: restored || fromArchiveRestored,
       notes,
     });
   } else {
@@ -506,5 +546,19 @@ export async function runInit(
   }
   // exit: init.wrote
   // exit: init.restored
+  // exit: init.restored-archive
   return 0;
+}
+
+/** What an archive says about itself, printed with the restore: which project it was taken from,
+ *  where and when, by whom — and what else it holds, since a restore writes the team file alone.
+ *  Every field is the manifest's, whatever the archive's writer put there; the file itself is the
+ *  one the manifest's hash names. The teamcli version the archive was written with stays in the
+ *  manifest and the log line: the printed line is the same on every release. */
+function archiveProvenance(manifest: ArchiveManifest): string {
+  const also: string[] = [];
+  if (manifest.state) also.push(STATE_FILE);
+  if (manifest.drops) also.push(`send-drops (${manifest.drops.files} file${manifest.drops.files === 1 ? '' : 's'})`);
+  const holds = also.length ? ` It also holds ${also.join(' and ')}; a restore writes the team file alone.` : '';
+  return `The archive is ${manifest.project}'s, taken at ${manifest.root} on ${manifest.stampedAt} by ${manifest.by}.${holds}`;
 }
