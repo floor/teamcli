@@ -1,15 +1,14 @@
 # team init
 
-Under the registry source (the default since 0.5.5), `team init` writes the new team into the
-registry and never writes `.agents/team.yaml`; edit it afterwards with [`team config`](config.md).
-The file it describes below is written only on the legacy `file` source (`team-config.source:
-file`), which is deprecated and kept for tests and snapshots.
+Writes a new team into the registry: a skeleton record for this project, at
+`~/.config/team/team-config/<team id>.json`, or with `--restore` the copy this machine stored. It
+never writes `.agents/team.yaml`. Edit the team afterwards with [`team config`](config.md). It also
+lists the team's runtime files in `.git/info/exclude`, so git never sees them. The owner runs it,
+from a terminal outside herdr; a seat whose own registry record an active create-grant names may
+run it as well. A team that already exists is never overwritten.
 
-Writes the team file: a skeleton for this project, or with `--restore` the copy of
-`.agents/team.yaml` this machine stored. It also lists the team file and its runtime
-files in `.git/info/exclude`, so git never sees them and a fresh clone never carries them. The owner
-runs it, from a terminal outside herdr; a seat whose own registry record an active create-grant
-names may run it as well. A file that already exists is never overwritten.
+On the legacy `file` source (`team-config.source: file`, deprecated and kept for tests and
+snapshots), it writes `.agents/team.yaml` instead, and the examples below show that source.
 
 `--from-archive <folder>` is the third source: the team file one of [team archive](archive.md)'s
 archives holds, written verbatim. The folder's manifest and the file it hashes are checked first,

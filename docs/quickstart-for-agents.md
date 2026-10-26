@@ -21,7 +21,7 @@ You have no terminal of the owner's, so plain `team init` refuses you
 ```sh
 cd <the repository the team works in>
 team init --request --json        # prints a request id (tc_...)
-team init --execute <request-id>  # writes .agents/team.yaml once the request is approved
+team init --execute <request-id>  # writes the team into the registry once approved
 ```
 
 `--execute` succeeds when one of these holds, checked in this order:

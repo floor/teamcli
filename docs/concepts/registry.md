@@ -4,9 +4,10 @@ Three records hold who the fleet is: one file per agent under `~/.config/team/ag
 file, and one projects file. `team` writes them — registration happens at a seat's first launch by
 `up`, `add`, `restart` or `reload`, or at its first successful settings write, which creates the
 record a declared but never-launched seat has none of — and routing, [team list](../commands/list.md),
-[team send](../commands/send.md) and [team projects](../commands/projects.md) read them. The team
-file (`.agents/team.yaml`) stays the seed and the projection; the registries are the live truth
-that `up` and routing read.
+[team send](../commands/send.md) and [team projects](../commands/projects.md) read them. Since 0.5.5
+the team's own configuration is a registry record too (`team-config/<team id>.json`, edited with
+[team config](../commands/config.md)); `.agents/team.yaml` is legacy, read only by
+[team migrate](../commands/migrate.md) and [team import](../commands/import.md).
 
 ## The agent record
 
