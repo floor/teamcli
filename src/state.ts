@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredReading, StoredSpend } from './budgets/readings.ts';
 import { BRIEF_ID_PATTERN, isBriefEpoch, isBriefId, isBriefIncarnation } from './launch/brief-id.ts';
@@ -549,7 +549,9 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
   if (!existsSync(path)) return { format: 1, sessions: {} };
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
+    // A file replaced under this reader (a writer that is not the atomic one) can parse as a
+    // truncated prefix on the first read: the retry reads the settled file once more.
+    parsed = readParsed(path, (text) => JSON.parse(text) as unknown);
   } catch {
     throw new Error(`${path} is not valid JSON; move it aside and run the command again`);
   }
@@ -838,6 +840,42 @@ export function writeAtomic(path: string, text: string): void {
   const temporary = `${path}.${process.pid}.tmp`;
   writeFileSync(temporary, text);
   renameSync(temporary, path);
+}
+
+/**
+ * Creates a file that must not exist yet, the atomic way `writeAtomic` replaces one: the text
+ * lands in a same-directory temporary, and the link into place is the create — it fails with
+ * `EEXIST` when the path is taken rather than clobbering what is there, so the name either holds
+ * nothing or the whole text, never a prefix. The temporary is removed either way.
+ */
+export function createAtomic(path: string, text: string, mode?: number): void {
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, text, mode === undefined ? {} : { mode });
+  try {
+    linkSync(temporary, path);
+  } finally {
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // The temporary is this process's own pid-named file; a failed cleanup must not mask
+      // what the link said.
+    }
+  }
+}
+
+/**
+ * Reads a file and parses it; a parse failure reads and parses once more before any error goes
+ * out — a file replaced under the reader has settled by the re-read. The retry's own error is
+ * the one reported, so the message describes what the file holds now.
+ */
+export function readParsed<T>(path: string, parse: (text: string) => T): T {
+  try {
+    return parse(readFileSync(path, 'utf8'));
+  } catch {
+    // The first read or parse failed; one more read and parse, reporting that attempt's error,
+    // which describes what the file holds now.
+    return parse(readFileSync(path, 'utf8'));
+  }
 }
 
 /** Whether a process with this pid exists. A pid owned by another user counts as alive

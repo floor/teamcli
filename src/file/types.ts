@@ -327,7 +327,10 @@ export type TeamFile = {
 
 export type ValidateResult =
   | { ok: true; team: TeamFile; warnings: Problem[]; deprecations: Deprecation[] }
-  | { ok: false; errors: Problem[] };
+  // `parse` marks a failure of the YAML parse itself, told apart from a file that parses and
+  // then fails validation: only the parse can fail transiently on a file replaced under the
+  // reader, so only the parse is worth one more read (see `loadTeamFile`).
+  | { ok: false; errors: Problem[]; parse?: true };
 
 export type LoadResult =
   | {
