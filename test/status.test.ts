@@ -132,7 +132,9 @@ describe('team status', () => {
   test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
     const { code, out } = await status();
     expect(out).toContain('team acme-web, session "acme-web"');
-    expect(out).toContain('  SEAT                     STATE                                 MODEL                         PANE   REACH');
+    expect(out).toContain('  SEAT                     STATE                                 MODEL                                   PANE   REACH');
+    // An unread screen keeps the declared display, marked declared and unread together.
+    expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked\s+GPT-6 Sol \(declared, unread\)\s+w2:p1/);
     expect(out).toMatch(/claude-coordinator-acme\s+working\s+Claude Opus 5\.5\s+w1:p1/);
     expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked/);
     expect(out).not.toMatch(/grok-acme\s+stopped/);
@@ -145,7 +147,7 @@ describe('team status', () => {
 
   test('a seat whose model can\'t be read is a note, not a difference', async () => {
     const { code, out } = await status();
-    expect(out).toContain('note: codex-acme: version unread');
+    expect(out).toContain('note: codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread');
     expect(code).toBe(0);
   });
 
@@ -242,11 +244,11 @@ describe('team status', () => {
     expect(out).toContain('codex-acme: the agent in w2:p1 is named "codex-old"');
     // The model column is what the screen names. Codex's captured footer names GPT Terra 5.6.
     // DeepSeek's seat runs through Claude Code, whose screen cannot name that model, so the
-    // cell is unread — never the file's display, and never the workspace label.
+    // cell keeps the seat's declared display marked declared and unread — never a reading, and
+    // never the workspace label.
     expect(out).toMatch(/codex-acme\s+wrong name\s+GPT Terra 5\.6\s+w2:p1/);
-    expect(out).toMatch(/deepseek-acme\s+wrong name\s+\(unread\)\s+w3:p1/);
+    expect(out).toMatch(/deepseek-acme\s+wrong name\s+DeepSeek V4\.1 Flash \(declared, unread\)\s+w3:p1/);
     expect(out).not.toMatch(/codex-acme\s+wrong name\s+GPT-6 Sol/);
-    expect(out).not.toMatch(/deepseek-acme\s+wrong name\s+DeepSeek/);
     expect(out).toContain('2 differences');
   });
 
@@ -350,7 +352,7 @@ describe('team status', () => {
     const screen = codexScreen('idle').replace('GPT-5.6-Terra medium ·', 'GPT-9-Nova medium ·');
     live = { ...built(), screens: { ...built().screens, 'w2:p1': screen } };
     const { code, out } = await status();
-    expect(out).toContain('note: codex-acme: version unread');
+    expect(out).toContain('note: codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread');
     expect(out).not.toContain('codex-acme runs');
     expect(code).toBe(0);
   });
@@ -360,7 +362,7 @@ describe('team status', () => {
   test('a seat that runs another maker\'s model through Claude Code is unread, never a mismatch', async () => {
     live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
     const { code, out } = await status();
-    expect(out).toContain('note: deepseek-acme: version unread');
+    expect(out).toContain('note: deepseek-acme: its screen shows no model; the declared DeepSeek V4.1 Flash stands, and the screen reading is unread');
     expect(out).not.toContain('deepseek-acme runs');
     expect(code).toBe(0);
   });
@@ -694,9 +696,9 @@ describe('team status', () => {
     expect(doc.differences).toEqual([]);
     expect(doc.summary).toEqual({ differences: 0, owner_differences: 0 });
     expect(doc.notes).toEqual([
-      'codex-acme: version unread (its screen doesn\'t show the model)',
-      'deepseek-acme: version unread (its screen doesn\'t show the model)',
-      'deepseek-acme-2: version unread (its screen doesn\'t show the model)',
+      'codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread',
+      'deepseek-acme: its screen shows no model; the declared DeepSeek V4.1 Flash stands, and the screen reading is unread',
+      'deepseek-acme-2: its screen shows no model; the declared DeepSeek V4.1 Flash stands, and the screen reading is unread',
       // The watch the state records, after the seats' notes: `status` lists it on every run.
       'watch: pane not recorded, pid 1, last heartbeat 60s ago',
     ]);
@@ -705,9 +707,9 @@ describe('team status', () => {
     // the table's STATE and SOURCE columns — and no `blind` key here: every row reads a word.
     expect(doc.rows).toEqual([
       { name: 'claude-coordinator-acme', state: 'working', seat_state: 'idle', seat_state_source: 'cli', model: 'Claude Opus 5.5', pane: 'w1:p1' },
-      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (unread)', pane: 'w2:p1' },
-      { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w3:p1' },
-      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (unread)', pane: 'w4:p1' },
+      { name: 'codex-acme', state: 'idle (screen not recognised), parked', seat_state: 'idle', seat_state_source: 'herdr', model: 'GPT-6 Sol (declared, unread)', pane: 'w2:p1' },
+      { name: 'deepseek-acme', state: 'done (screen not recognised)', seat_state: 'done', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (declared, unread)', pane: 'w3:p1' },
+      { name: 'deepseek-acme-2', state: 'idle (screen not recognised)', seat_state: 'idle', seat_state_source: 'herdr', model: 'DeepSeek V4.1 Flash (declared, unread)', pane: 'w4:p1' },
     ]);
   });
 
@@ -1012,6 +1014,99 @@ describe('team status', () => {
     live = { ...built(), agents: built().agents.filter((one) => one.name !== 'deepseek-acme-2') };
     const mixed = await status();
     expect(mixed.out).toContain('2 differences, 1 for the owner\n');
+  });
+});
+
+// A model the screen names is checked against the file; a model no screen names is never shown as
+// one the screen was read for. The registry's own declaration is the one value a row may carry
+// without a reading, and it says so.
+describe('a model the screen cannot show', () => {
+  afterEach(() => {
+    delete sources.home;
+  });
+
+  /** The ready screen cursor-agent drew on 2026.10.19 for a model this version cannot spell: the
+   *  status row is not one the profile's grammar knows, so the whole screen reads unknown. The
+   *  observation is retained, not reproduced; the pane text is the one the review captured. */
+  const CURSOR_UNKNOWN = '  Gemini 4 Argon High    Run Everything\n  ~/lobby\n';
+
+  test('a registry record shows its model as declared, never as a reading', async () => {
+    // The file's Cursor seat (the sample's stopped grok seat, rewritten in place) runs a model
+    // the profile has no status rule for. `readScreen` returns unknown and `team register`
+    // refuses the seat at its prompt (src/commands/register.ts, the screen refusal), so the
+    // registry's signing triple is a declaration from launch, not a reading. The row names it
+    // as one; a seat with no registry record carries the same declared-unread marking.
+    writeFileSync(file, example.replace(
+      /  - role: reviewer\n    name: grok-acme\n(?:    [^\n]*\n)+/,
+      '  - role: implementer\n' +
+      '    name: cursor-acme\n' +
+      '    cli: cursor\n' +
+      '    vendor: google\n' +
+      '    model: Gemini\n' +
+      '    version: "4 Argon"\n' +
+      '    launch: cursor-agent --model gemini-4-argon-high\n',
+    ));
+    approveOnDisk();
+    updateState(join(dir, '.agents'), (state) => {
+      const session = (state.sessions['acme-web'] ??= emptySession());
+      session.seats['cursor-acme'] = {
+        stage: 'ready',
+        pane: 'w10:p1',
+        workspace: 'w10',
+        launched: { shell: 400, cli: [401] },
+      };
+    });
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    sources.home = home;
+    registerAgent(home, {
+      name: 'cursor-acme',
+      signing: { model: 'Gemini', version: '4 Argon', role: 'implementer' },
+      lab: 'google',
+      cli: 'cursor',
+      launcher: null,
+      launch: 'cursor-agent --model gemini-4-argon-high',
+      reach: {
+        team: teamIdOf(dir),
+        seat: 'cursor-acme',
+        session: 'acme-web',
+        pane: 'w10:p1',
+        address: null,
+        agent_session: null,
+      },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    live = {
+      ...built(),
+      agents: [...built().agents, agent('cursor-acme', 'w10', 'idle', 'cursor')],
+      workspaces: [...built().workspaces, { id: 'w10', label: 'cursor' }],
+      screens: { ...built().screens, 'w10:p1': CURSOR_UNKNOWN },
+      processes: { 'w10:p1': { shell: 400, foreground: [401] } },
+    };
+    const { out } = await status();
+    expect(out).toMatch(/cursor-acme\s+idle \(screen not recognised\)\s+gemini 4 argon \(declared, unread\)/);
+    expect(out).toContain('cursor-acme: its screen shows no model; the registry declares gemini 4 argon, and the screen reading is unread');
+    // No drift is claimed from an unread screen; the seat's only difference is the rules file
+    // every seat in this fixture lacks under the home read.
+    expect(out).not.toContain('difference: cursor-acme: running');
+    // The control: a seat with no registry record carries the same declared-unread marking —
+    // the declared display, never a reading, and never the bare marker either.
+    expect(out).toMatch(/codex-acme\s+idle \(screen not recognised\), parked\s+GPT-6 Sol \(declared, unread\)\s+w2:p1/);
+    expect(out).toContain('note: codex-acme: its screen shows no model; the declared GPT-6 Sol stands, and the screen reading is unread');
+    const doc = JSON.parse((await status('--json')).out);
+    expect(doc.rows.find((row: { name: string }) => row.name === 'cursor-acme')).toMatchObject({
+      state: 'idle (screen not recognised)',
+      model: 'gemini 4 argon (declared, unread)',
+      pane: 'w10:p1',
+    });
+    // The document carries the same wording for both branches, unregistered seats included.
+    expect(doc.rows.find((row: { name: string }) => row.name === 'codex-acme')).toMatchObject({
+      model: 'GPT-6 Sol (declared, unread)',
+      pane: 'w2:p1',
+    });
   });
 });
 

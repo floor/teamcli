@@ -727,11 +727,12 @@ function notLaunched(
   };
 }
 
-/** What an unverified pane may show in the model column: the model its screen names, or
- *  `(unread)`. Never the file's model, and never a difference — this is not a comparison. */
+/** What an unverified pane may show in the model column: the model its screen names, or the
+ *  seat's declared display marked `(declared, unread)`. Never a difference — this is not a
+ *  comparison. */
 function unverifiedModel(seat: Seat, screen: string | undefined): string {
   const running = seatModel(seat, screen);
-  return running ? `${running.model} ${running.version}` : '(unread)';
+  return running ? `${running.model} ${running.version}` : `${seat.display} (declared, unread)`;
 }
 
 function modelOf(
@@ -754,8 +755,16 @@ function modelOf(
       notes.push(`${seat.name}: its screen shows no model; the launch line's ${seat.display} stands`);
       return `${seat.display} (from launch)`;
     }
-    notes.push(`${seat.name}: version unread (its screen doesn't show the model)`);
-    return `${seat.display} (unread)`;
+    // A screen that names no model is never shown as though it had been read: the column keeps
+    // the seat's declared display and marks both halves — declared, and unread. A registry
+    // record's declaration is named as the registry's; without one the file's (or the state's
+    // retained) declaration stands, still marked as a declaration and never as a reading.
+    if (registered) {
+      notes.push(`${seat.name}: its screen shows no model; the registry declares ${seat.display}, and the screen reading is unread`);
+    } else {
+      notes.push(`${seat.name}: its screen shows no model; the declared ${seat.display} stands, and the screen reading is unread`);
+    }
+    return `${seat.display} (declared, unread)`;
   }
   // What the pane shows against what the file promises, effort included: the word the screen
   // prints is the observed one, and a screen printing none leaves the file's word standing —
