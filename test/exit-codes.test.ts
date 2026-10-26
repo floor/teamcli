@@ -6420,8 +6420,10 @@ leadTest('the exit-code check is clean', () => {
 // The analyzer's own probes: crafted fixtures fed to the analyzer, never this repo's files. A
 // filtered local run (`TEAM_EXIT_IDS`) skips them — a feature diff cannot change what they feed
 // the analyzer — and CI runs every one of them. The checks above read this repo and always run.
+// Each analyzer test reads the whole command tree, which took 5.3s on a slow hosted runner
+// against the 5s default; 30s leaves the margin the dry-run parity tests were given.
 const analyzerTest = (name: string, fn: () => void): void => {
-  if (wanted === null && leadPart(part)) test(name, fn);
+  if (wanted === null && leadPart(part)) test(name, fn, 30_000);
 };
 
 analyzerTest('a new return that reuses a code fails the check', () => {
