@@ -1,4 +1,4 @@
-// The owner-seat door of `team import`, `team add` and `team up` (src/client/owner-action.ts):
+// The owner-seat door of the lifecycle commands (src/client/owner-action.ts):
 // `--request` records what the caller will run and asks the owner seat; `--approval <id>` runs it
 // once the owner seat signed for exactly that. The owner never types a command and never answers
 // a pane: the answer is a signature from the owner page (passkey or Touch ID). Each command keeps
@@ -42,7 +42,7 @@ export function teamNameAt(root: string, home: string): string {
 
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed. */
 export function ownerSeatStep(
-  command: 'up' | 'add' | 'import',
+  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget',
   action: OwnerAction,
   argv: readonly string[],
   ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean },

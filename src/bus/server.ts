@@ -324,6 +324,11 @@ function probeSocket(path: string): Promise<Probe> {
   });
 }
 
+/** Whether a bus is accepting connections on this checkout's socket. A stale or missing file is not. */
+export async function busListening(root: string): Promise<boolean> {
+  return (await probeSocket(busSocket(root))) === 'live';
+}
+
 export function encodeBusLine(value: BusRequest | BusAnswer): string {
   return `${JSON.stringify(value)}\n`;
 }

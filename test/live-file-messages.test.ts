@@ -70,7 +70,13 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^init\.approval-refused$/, why: "init's owner-seat refusal id, a key in the JSON envelope" },
   { literal: /^(?:(?:up|add|import)\.)?approval-(?:requested|refused)$/, why: "the owner-seat door's outcome and refusal ids (src/client/owner-action.ts): keys, not an approval copy" },
   { literal: /^owner-seat-approved$/, why: "up's log word for a run an owner-seat answer admitted" },
-  { literal: /^Usage: team up .*--approval <request-id>/s, why: "up's usage, naming the owner-seat door's --approval flag" },
+  { literal: /^Usage: team (?:up|down) .*--approval <request-id>/s, why: "up and down usage, naming the owner-seat door's --approval flag" },
+  // `team approvals` lists and revokes owner-seat always rules. The word is the command's own,
+  // and the rule it removes is an owner-seat answer, never a verified copy of the live file.
+  { literal: /^team approvals: /, why: "approvals' own lines: listing and revoking owner-seat always rules" },
+  { literal: /^team-revoke-approval$/, why: "the owner-seat action id for revoking an always rule" },
+  { literal: /^only the owner revokes an approval rule, from a terminal outside herdr; this call is \$\{describeCaller\(caller\)\}$/, why: "approvals' caller refusal: the owner revokes a standing rule" },
+  { literal: /^"\$\{id\}" is not an approval rule id$/, why: "approvals refuses an id that is neither a team-create nor an owner-action rule" },
   { literal: /^team init: (?:team-create approval rules|approval rule revoked)/, why: "init's standing team-create rules: an owner-seat answer, not an approval copy" },
   // The approval mode of team-create (`none | always-rule | per-action`): an owner-signed policy
   // record, signed once at setup, never a copy of the live file.

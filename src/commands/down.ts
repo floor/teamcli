@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 import { notInForce } from '../approve/approval.ts';
 import { dirname, join, resolve } from 'node:path';
 import { readArgs, type Args } from '../args.ts';
+import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
 import { plainText } from '../launch/plain.ts';
@@ -81,6 +83,8 @@ export type DownSources = {
   sleep?(ms: number): Promise<void>;
   /** Approval store home. The real command uses the owner's home. */
   home?: string;
+  /** The credential store an owner-seat answer is confirmed against. Absent: the system store. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   /** The approval standing. Tests hand in a record; the shipped command reads the store. */
   standing?(root: string): Standing;
   // Present on the shipped command. A dry run never calls it.
@@ -182,7 +186,7 @@ export const realSources: DownSources = {
 /** How long `--wait` gives a working seat, in seconds. */
 export const WAIT_SECONDS = 120;
 
-export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
+export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]\n       team down --request [--dry-run] [--wait] [--json]\n       team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this stop (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-down covering this folder admits the run with no request. A seat the team marks leads, on its own pane, may run it too.\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
 
 export const down: Command = (argv, io) => runDown(argv, io, realSources);
 export default down;
@@ -482,7 +486,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['dry-run', 'wait', 'abandon', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'wait', 'abandon', 'json', 'request']);
   // The lines plain output writes while it works ride on the document as notes under `--json`.
   const jsonNotes: string[] = [];
   const collect = (text: string): void => {
@@ -540,17 +544,37 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     io = { ...io, cwd: verified.root };
     if (!json) io.stderr(`client grant ${verified.grant.grantId}: ${verified.grant.clientId} for team ${verified.grant.up.project} at ${verified.root}, ${expiryPhrase(verified.grant.expires)}\n`);
   }
+  const dry = args.flags.has('dry-run');
+  // The owner-seat door, for a stop that is not a client grant. `--request` records the stop and
+  // returns; `--approval` and an always rule admit it, so the owner never has to be at a terminal.
+  // A leads seat on its own pane is admitted by the gate below, as before.
+  const seatSources = { ...(sources.home !== undefined ? { home: sources.home } : {}), now: sources.now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
+  let seatApproved = false;
+  if (clientDown === null && (args.flags.has('request') || args.values.approval !== undefined)) {
+    const seat = ownerSeatStep('down', 'team-down', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, seatSources);
+    if (seat.kind === 'requested') {
+      // exit: down.approval-requested
+      return 0;
+    }
+    if (seat.kind === 'refused') {
+      // exit: down.approval-refused
+      return 1;
+    }
+    seatApproved = seat.kind === 'admitted';
+  }
+  if (clientDown === null && !seatApproved && !isOwner(walkCaller(io))) {
+    seatApproved = ownerSeatRuleAdmits('team-down', io.cwd, dry, seatSources);
+  }
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `init` asks it; the route names who may run it, so the sentence does not send every
-  // reader to the owner.
-  const detached = clientDown !== null ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
+  // reader to the owner. An owner-seat answer has already admitted this run.
+  const detached = clientDown !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'down', { id: 'down.detached', message: detached, repair: null });
     // exit: down.detached
     return 1;
   }
-  const dry = args.flags.has('dry-run');
   // Dev mode is resolved from the run's file below, once its chain is known.
   const refusals: DownRefusal[] = [];
 
@@ -628,7 +652,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // this one included, so the flagged path is never read and the run goes on as the delegate's.
   // Any other answer — the gate didn't place this caller, or the file carries no delegate — is
   // refused here, byte for byte as today.
-  const fileRefusal = fileOwnerRefusal(io, args.values.file);
+  const fileRefusal = seatApproved ? undefined : fileOwnerRefusal(io, args.values.file);
   if (fileRefusal !== undefined) {
     const said = decide();
     if (said?.kind === 'refused' && placed) {
@@ -645,7 +669,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // refuses the same way: the plan it would print is that session's, which is not its to aim.
   // (A seat cannot be named in this refusal: placing it would read a session, and that is what
   // must not happen yet.) A delegate's `--session` is the same case as its `--file`.
-  if (args.values.session !== undefined && !branching()) {
+  if (args.values.session !== undefined && !branching() && !seatApproved) {
     const walked = walkCaller(io);
     if (!isOwner(walked)) {
       const said = decide();
@@ -670,7 +694,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // directly — never `currentTeam`, never `last_valid` — so a live file that carries `delegates`
   // is the run's file, whether the gate passes that caller or refuses it. A file that does not
   // load carries no delegate: today's path, with today's fallback and today's words, decides.
-  const owner = isOwner(walkCaller(io));
+  const owner = isOwner(walkCaller(io)) || seatApproved;
   const liveNow = owner ? undefined : liveFile();
   const liveCurrent: Current | undefined =
     liveNow !== undefined && liveNow.team.delegates !== null
@@ -907,7 +931,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // then not a refusal, and the delegate gate — which the ordinary refusal alone summons — has
   // nothing to replace. Every check below (the approval, the budgets, the machine gate) still
   // reads exactly as it does for the owner.
-  if (rule.kind !== 'ok' && !branching() && !createGranted) {
+  if (rule.kind !== 'ok' && !branching() && !createGranted && !seatApproved) {
     // The ordinary rule has refused, and only now is the gate asked. With no delegate in the live
     // file nothing changes. A refusal takes the ordinary refusal's place, in the same place and at
     // the same exit statuses: a real run stops on it, a dry run says what it would refuse and
@@ -933,7 +957,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // has answered is the run's only refusal: today's abandon line stays out of the way of its own.
   const abandon = args.flags.has('abandon') && granted === undefined;
   let abandonLifted = false;
-  if (abandon && !callerOwns(caller) && verdict === undefined) {
+  if (abandon && !callerOwns(caller) && !seatApproved && verdict === undefined) {
     // The owner's dev-mode admission for exactly this gate: a placed lead or
     // orchestrator continues with the warning; every other caller keeps the refusal.
     const lift = devModeOwnerLiftAtCwd(io, {

@@ -71,7 +71,8 @@ entity, project and team levels.
 
 The view (`team policy`) may be run by the owner, a seat of the team, or an approved delegate pane
 that may read the team. `team policy set` and `team policy unset` are owner-only from a terminal
-outside herdr, signed under `team-policy-v1\n`, and logged to `.agents/team.log`.
+outside herdr, signed under `team-policy-v1\n`, and logged to `.agents/team.log`. `--dry-run`
+prints the plan and does not ask for Touch ID.
 
 ## Output and exit codes
 

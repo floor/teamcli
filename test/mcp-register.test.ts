@@ -77,15 +77,12 @@ describe('registerInbox', () => {
     }]);
   });
 
-  test('a work tree that does not ignore the file refuses, and the add never runs', () => {
+  test('a work tree that does not ignore the file excludes it and then registers', () => {
     const dir = folder({ repo: 'plain' });
     const { run, calls } = fakeAdd();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({
-      ok: false,
-      reason: 'its project does not ignore .gemini/settings.json',
-    });
-    expect(calls).toEqual([]);
-    expect(() => readFileSync(join(dir, '.gemini', 'settings.json'))).toThrow();
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({ ok: true });
+    expect(calls).toHaveLength(1);
+    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain('.gemini/settings.json\n');
   });
 
   test('a work tree that ignores the file registers', () => {
@@ -103,24 +100,31 @@ describe('registerInbox', () => {
     const { run, calls } = fakeAdd();
     expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run })).toEqual({
       ok: false,
-      reason: 'its project does not ignore .gemini/settings.json',
+      reason: 'its project tracks .gemini/settings.json',
     });
     expect(calls).toEqual([]);
   });
 
-  test('the refusal names the target the profile declares', () => {
+  test('a non-json target the add does not write names that target', () => {
     const dir = folder({ repo: 'plain' });
     expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: dir, run: () => ({ code: 0 }) })).toEqual({
       ok: false,
-      reason: 'its project does not ignore .grok/config.toml',
+      reason: '.grok/config.toml was not written',
     });
+    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain('.grok/config.toml\n');
   });
 
-  test('a refused add names the command and its exit', () => {
+  test('a json add that exits falls back to writing the project file', () => {
     const dir = folder();
-    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run: () => ({ code: 2 }) })).toEqual({
+    expect(registerInbox({ cli: 'gemini', seat: 'helper', cwd: dir, run: () => ({ code: 1 }) })).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(dir, '.gemini', 'settings.json'), 'utf8')).mcpServers['team-inbox']).toBeDefined();
+  });
+
+  test('a refused add of a non-json target names the command and its exit', () => {
+    const dir = folder();
+    expect(registerInbox({ cli: 'grok', seat: 'helper', cwd: dir, run: () => ({ code: 1 }) })).toEqual({
       ok: false,
-      reason: '`gemini mcp add` exited 2',
+      reason: '`grok mcp add` exited 1',
     });
   });
 
@@ -301,13 +305,11 @@ describe('the cursor file route', () => {
     expect(written.mcpServers.other).toEqual({ command: 'x', args: [] });
   });
 
-  test('a work tree that does not ignore the file refuses, and nothing is created', () => {
+  test('a work tree that does not ignore the file excludes it and then writes it', () => {
     const dir = folder({ repo: 'plain' });
-    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({
-      ok: false,
-      reason: 'its project does not ignore .cursor/mcp.json',
-    });
-    expect(() => readFileSync(join(dir, '.cursor', 'mcp.json'))).toThrow();
+    expect(registerInbox({ cli: 'cursor', seat: 'helper', cwd: dir })).toEqual({ ok: true });
+    expect(readFileSync(join(dir, '.git', 'info', 'exclude'), 'utf8')).toContain('.cursor/mcp.json\n');
+    expect(JSON.parse(readFileSync(join(dir, '.cursor', 'mcp.json'), 'utf8')).mcpServers['team-inbox']).toBeDefined();
   });
 
   test('a work tree that ignores the file registers', () => {

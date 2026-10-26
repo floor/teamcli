@@ -23,6 +23,9 @@ import { runApprove, type ApproveSources, type Waiting } from '../src/approve/co
 import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
+import { runApprovals } from '../src/commands/approvals.ts';
+import { runForget } from '../src/commands/forget.ts';
+import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
 import { FAULT_WHY, faultRequestPath, faultResultPath, writeFaultRequest } from '../src/daemon/fault.ts';
@@ -4111,8 +4114,10 @@ async function bussed(place: Place, argv: string[] = [], sources: BusCommandSour
 
 scene('bus.usage', async (place) => show(await bussed(place, ['extra']), 'unexpected'));
 scene('bus.configuration', async (place) => show(await bussed(place), 'run team from a project\n'), false);
-scene('bus.refused', async (place) =>
-  show(await bussed(place, [], {}, { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }), 'only the owner runs `bus`'));
+scene('bus.refused', async (place) => {
+  write(place, TEAM);
+  return show(await bussed(place, [], {}, { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }), 'only the owner or a `leads` seat runs `bus`');
+});
 scene('bus.started', async (place) => {
   write(place, TEAM);
   const stop = (end: () => void): (() => void) => {
@@ -4123,6 +4128,12 @@ scene('bus.started', async (place) => {
   expect(existsSync(join(place.root, '.agents', 'bus.sock'))).toBe(false);
   return show(ran, 'team bus: answering on .agents/bus.sock');
 });
+scene('bus.approval-requested', async (place) => {
+  seatOwner(place.home);
+  return show(await bussed(place, ['--request'], {}, detachedCaller), 'owner-seat request');
+});
+scene('bus.approval-refused', async (place) =>
+  show(await bussed(place, ['--approval', 'oa_nope'], {}, detachedCaller), 'is not an owner-seat request id'));
 scene('bus.stopped', async (place) => {
   write(place, TEAM);
   const stop = (end: () => void): (() => void) => {
@@ -5634,6 +5645,61 @@ scene('down.detached', async (place) => show(await down(place, [], detachedCalle
 scene('init.detached', async (place) => show(await initial(place, [], detachedCaller), SENTENCE));
 scene('remove.detached', async (place) => show(await removed(place, ['worker'], detachedCaller, downSources()), LEADS));
 scene('send.detached', async (place) => show(await sent(place, ['--list'], detachedCaller, sendHost(place)), ADMISSION));
+scene('send.approval-requested', async (place) => {
+  write(place, TEAM);
+  seatOwner(place.home);
+  return show(await sent(place, ['lead', 'hello', '--request'], detachedCaller, sendHost(place)), 'owner-seat request');
+});
+scene('send.approval-refused', async (place) => {
+  write(place, TEAM);
+  return show(await sent(place, ['lead', 'hello', '--approval', 'oa_nope'], detachedCaller, sendHost(place)), 'is not an owner-seat request id');
+});
+scene('down.approval-requested', async (place) => {
+  write(place, TEAM);
+  seatOwner(place.home);
+  return show(await down(place, ['--request'], detachedCaller, { ...downSources(), home: place.home }), 'owner-seat request');
+});
+scene('down.approval-refused', async (place) => {
+  write(place, TEAM);
+  return show(await down(place, ['--approval', 'oa_nope'], detachedCaller, { ...downSources(), home: place.home }), 'is not an owner-seat request id');
+});
+
+async function approvalsRun(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runApprovals(argv, io, { home: place.home }), out: io.out, err: io.err };
+}
+async function forgetRun(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runForget(argv, io, { home: place.home }), out: io.out, err: io.err };
+}
+scene('approvals.invocation', async (place) => show(await approvalsRun(place, []), 'a verb is required'));
+scene('approvals.listed', async (place) => show(await approvalsRun(place, ['list']), 'no always rules'));
+scene('approvals.revoked', async (place) => {
+  const id = `oa_${'ab'.repeat(12)}`;
+  mkdirSync(actionApprovalsFolder(place.home), { recursive: true });
+  writeFileSync(join(actionApprovalsFolder(place.home), `${id}.json`), '{}\n');
+  return show(await approvalsRun(place, ['revoke', id]), `revoked ${id}`);
+});
+scene('approvals.refused', async (place) => show(await approvalsRun(place, ['revoke', 'oa_nope'], detachedCaller), 'only the owner runs this'));
+scene('approvals.approval-requested', async (place) => {
+  seatOwner(place.home);
+  return show(await approvalsRun(place, ['revoke', 'oa_nope', '--request'], detachedCaller), 'owner-seat request');
+});
+scene('approvals.approval-refused', async (place) =>
+  show(await approvalsRun(place, ['revoke', 'oa_nope', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id'));
+scene('forget.invocation', async (place) => show(await forgetRun(place, []), 'a team id is required'));
+scene('forget.missing', async (place) => show(await forgetRun(place, ['missing-team']), 'no team record'));
+scene('forget.forgotten', async (place) => {
+  upsertTeam(place.home, 'abc123abc123', { project: 'acme', session: 'acme', root: place.root, by: 'test' });
+  return show(await forgetRun(place, ['abc123abc123']), 'forgot abc123abc123');
+});
+scene('forget.refused', async (place) => show(await forgetRun(place, ['abc123abc123'], detachedCaller), 'only the owner runs this'));
+scene('forget.approval-requested', async (place) => {
+  seatOwner(place.home);
+  return show(await forgetRun(place, ['abc123abc123', '--request'], detachedCaller), 'owner-seat request');
+});
+scene('forget.approval-refused', async (place) =>
+  show(await forgetRun(place, ['abc123abc123', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id'));
 scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), LEADS));
 scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), PLACED));
 scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), ORCH));

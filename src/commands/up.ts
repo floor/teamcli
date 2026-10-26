@@ -7,6 +7,7 @@ import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type Clie
 import { verifyClientUp } from '../client/up-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import { spawnInheritedBus } from '../bus/supervise.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { readArgs, type Args } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -132,6 +133,8 @@ export type UpSources = {
   // mode for one key at a time (`terminal.ts`). A dry run and a caller without a terminal
   // never read it.
   terminal?(): Terminal;
+  /** Present on the shipped command. A test leaves it unset, so `up` never spawns a bus there. */
+  superviseBus?: boolean;
   // The approval store's one read, overridable so a test can count it or swap the record
   // after the gate. Absent: the real read.
   standing?(root: string): Standing;
@@ -303,6 +306,8 @@ export const realSources: UpSources = {
   watchCommand,
   daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
+  /** Present on the shipped command only: a dead bus is started in its own process before launch. */
+  superviseBus: true,
 };
 
 export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
@@ -572,14 +577,28 @@ function seatPlan(
   const known = agents ?? [];
   const asked = agents !== null;
   if (!resume || !recorded || seat.stopped) return planned;
-  // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane and
-  // workspace are reused — never launched again — while the host still lists that pane: the
-  // pause reads it fresh and verifies it before doing anything. A pane the host no longer
-  // lists is not that refusal: a fresh workspace is made and the seat launches. A recorded
-  // workspace the host still lists is named on that line and left. A pane the host still
-  // lists, including one whose process this run cannot account for, is never closed or
-  // recreated.
+  // §5: a seat recorded waiting takes precedence over everything below. Its recorded pane is
+  // reused while the host still lists it and the process there is still the one this run
+  // launched: the pause reads it fresh and verifies it before doing anything. A process that
+  // is gone or has been replaced is not that seat — a fresh workspace is made, and the old
+  // pane is left, not closed and not typed into. A pane the host no longer lists is the same
+  // fresh workspace, and a workspace the host still lists is named and left. An unreadable
+  // process stays fail-closed, so the pane is not duplicated.
   if (recorded.waiting) {
+    // A waiting record whose process is gone or has been replaced is not that seat any more.
+    // A later `up` must not stay blocked on it, and must not close the old pane or type into it:
+    // a new workspace is made and the old one is left. `same` still resumes the wait. `unknown`
+    // stays fail-closed, so an unreadable pane is not duplicated.
+    const reading = Object.hasOwn(processes, seat.name) ? processes[seat.name] : undefined;
+    if (recorded.launched && recorded.pane && reading !== undefined) {
+      const waitingVerdict = seatProcessVerdict(recorded.launched, reading);
+      if (waitingVerdict === 'gone' || waitingVerdict === 'replaced') {
+        const leftWorkspace = recorded.workspace !== undefined && workspaces?.some((item) => item.id === recorded.workspace)
+          ? recorded.workspace
+          : undefined;
+        return { ...planned, replacedPane: recorded.pane, ...(leftWorkspace ? { leftWorkspace } : {}) };
+      }
+    }
     const named = known.filter((agent) => agent.name === seat.name);
     const paneListed = recorded.pane !== undefined && known.some((agent) => agent.pane === recorded.pane);
     if (named.length === 0 && recorded.pane && !paneListed) {
@@ -2295,6 +2314,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
           else if (written) seat.waiting = written;
           if (patchedEffort === null) delete seat.effort;
           else if (patchedEffort !== undefined) seat.effort = patchedEffort;
+          // A new pane is a new process. The identity the previous pane was launched under does
+          // not move with the seat: a later `up` would treat those pids as this pane's, and
+          // either refuse a healthy seat or adopt a stranger. A patch that names the new
+          // identity writes it; one that does not leaves the field empty until the pane is read.
+          if (patch.pane && prior.pane && patch.pane !== prior.pane && rest.launched === undefined) delete seat.launched;
           current.seats[name] = seat;
           if (patch.pane) {
             replaced = prior.pane !== patch.pane ? prior.pane : undefined;
@@ -2510,6 +2534,16 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       seats: team.seats,
       states: recorded?.seats ?? {},
     });
+    // A dead bus is started in its own process, with no owner at a terminal. The up process does
+    // not serve the bus: that process would die when up exits. A test leaves superviseBus unset.
+    if (sources.superviseBus === true) {
+      try {
+        await spawnInheritedBus(root, sources.home);
+      } catch {
+        // The launch does not depend on the bus. A start that cannot be spawned is the daemon's
+        // heartbeat to retry.
+      }
+    }
     const report = await executePlan(plan, session, host, {
       concurrency,
       continuityIds,

@@ -130,6 +130,88 @@ Literal: `trust`
 | --- | --- | --- |
 | `seat` | no | no |
 
+## `approvals`
+
+Hidden: no
+
+Usage:
+
+    team approvals list [--json]
+    team approvals revoke <id> [--json]
+    team approvals revoke <id> --request [--json]
+    team approvals revoke <id> --approval <request-id> [--json]
+
+### Who may run it
+
+`any-caller` — listing approval rules reads the owner's folder and changes nothing; revoking one is the owner's, or an owner-seat answer for that revoke
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `list`
+
+Hidden: no
+
+Usage:
+
+    team approvals list [--json]
+
+#### Who may run it
+
+`any-caller` — the list reads team-create and owner-action always rules and writes nothing
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
+### `revoke`
+
+Hidden: no
+
+Usage:
+
+    team approvals revoke <id> [--json]
+    team approvals revoke <id> --request [--json]
+    team approvals revoke <id> --approval <request-id> [--json]
+
+#### Who may run it
+
+`owner-only` — removing an always rule is the owner's, from a terminal outside herdr or by an owner-seat answer for that revoke
+
+A run with no terminal is refused: only the owner runs this, from a terminal outside herdr
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--approval` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--request` | no | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
+
 ## `archive`
 
 Hidden: no
@@ -270,16 +352,23 @@ Hidden: no
 Usage:
 
     team bus
+    team bus --request
+    team bus --approval <request-id>
 
 ### Who may run it
 
-`owner-only` — the bus reconciles the project's event log, and the owner runs it, one per clone, from a terminal outside herdr
+`owner-or-leads` — the bus reconciles the project's event log, one per clone: the owner from a terminal outside herdr, or a seat that holds `leads` from its own pane
+
+A run with no terminal is refused: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--help` | no | no | no |
+| `--inherited` | yes | no | yes |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -862,6 +951,8 @@ Usage:
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
     team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]
+    team down --request [--dry-run] [--wait] [--json]
+    team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]
 
 ### Who may run it
 
@@ -872,12 +963,14 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--abandon` | no | no | no |
+| `--approval` | yes | no | no |
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--request` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
 | `--wait` | no | no | no |
@@ -946,6 +1039,38 @@ Usage:
 ### Positionals
 
 None.
+
+## `forget`
+
+Hidden: no
+
+Usage:
+
+    team forget <id> [--json]
+    team forget <id> --request [--json]
+    team forget <id> --approval <request-id> [--json]
+
+### Who may run it
+
+`owner-only` — removing a team registry record is the owner's, from a terminal outside herdr or by an owner-seat answer for that forget; it does not stop panes or delete the team file
+
+A run with no terminal is refused: only the owner runs this, from a terminal outside herdr
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--approval` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--request` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `id` | no | no |
 
 ## `grant`
 
@@ -2662,6 +2787,8 @@ Usage:
     team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
     team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
     team send --list [--json]
+    team send <seat> <message> --request [--json]
+    team send <seat> <message> --approval <request-id> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -2671,6 +2798,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--brief` | yes | no | no |
 | `--channel` | yes | no | no |
 | `--client` | yes | no | no |
@@ -2683,6 +2811,7 @@ Usage:
 | `--list` | no | no | no |
 | `--ms` | yes | no | no |
 | `--record` | yes | no | no |
+| `--request` | no | no | no |
 | `--request-id` | yes | no | no |
 | `--subject` | yes | no | no |
 | `--timeout` | yes | no | no |

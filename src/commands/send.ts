@@ -7,7 +7,9 @@ import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
-import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
+import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -76,6 +78,8 @@ export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wa
        team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]
        team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]
        team send --list [--json]
+       team send <seat> <message> --request [--json]
+       team send <seat> <message> --approval <request-id> [--dry-run] [--json]
 
 Writes one message to one seat. A plain send writes the body whole to a drop file
 (mode 0600, atomic rename) and types one short trigger line, for every seat; a
@@ -100,7 +104,10 @@ with the checkout's message key, and its payload names the sender and the rule t
 admitted it. --list sends nothing: it prints
 the file's seats and the seats of the other teams of the same entity, each
 with the project its team sits in — another team's seat reads <seat>@<team> —
-and needs no caller check. --dry-run resolves the seat and the
+and needs no caller check. --request records this send for the owner seat and sends nothing;
+--approval <request-id> runs the send the owner seat signed, with no owner terminal, and a signed
+always rule for team-send covering this folder admits the run with no request. The owner answers
+on the owner page. --dry-run resolves the seat and the
 legs the run would walk, writes no drop file, and types nothing. It
 writes no record, dials no socket and appends no line to the team log: a dry run
 writes nothing, and the log records writes. Under --json its document's \`delivery\`
@@ -343,6 +350,8 @@ export type SendHost = {
    *  leaves it at the client module's own bound; a test sets a short wait. */
   clientLockWaitMs?: number;
   home: string;
+  /** The credential store an owner-seat answer is confirmed against. Absent: the system store. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   /** The project registry, for the project each seat's team sits in. The real one when absent;
    *  a test stands in for it. */
   projects?: ProjectSources;
@@ -677,7 +686,7 @@ function outputMarkerLines(body: string): number {
 }
 
 export async function runSend(argv: string[], io: Io, host: SendHost): Promise<number> {
-  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject'], ['wait', 'json', 'list', 'dry-run']);
+  const args = readArgs(argv, ['file', 'brief', 'timeout', 'record', 'channel', 'ms', 'confirm', 'client', 'key', 'request-id', 'subject', 'approval'], ['wait', 'json', 'list', 'dry-run', 'request']);
   const seatName = args.rest[0];
   // Raw argv, before the parser: `--nope --json` and `--json=1` must still answer with the
   // structured error document, and the parser errors before its flag set sees them.
@@ -702,10 +711,35 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   if (args.values.key !== undefined || args.values['request-id'] !== undefined) {
     return usage(io, '--key and --request-id are only meaningful with --client', report);
   }
+  // The owner-seat door, for a send that is not the watch's own. `--request` records the send and
+  // returns before anything is written; `--approval` and an always rule admit this run, so a
+  // caller with no terminal can send exactly what the owner seat signed. List, confirm and record
+  // keep the terminal check they have always had.
+  const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
+  let seatApproved = false;
+  if (host.watch === undefined && (args.flags.has('request') || args.values.approval !== undefined)) {
+    const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, seatSources);
+    if (step.kind === 'requested') {
+      // exit: send.approval-requested
+      return 0;
+    }
+    if (step.kind === 'refused') {
+      // exit: send.approval-refused
+      return 1;
+    }
+    seatApproved = step.kind === 'admitted';
+  }
+  if (
+    host.watch === undefined && !seatApproved && !isOwner(callerOf(io))
+    && !args.flags.has('list') && args.values.confirm === undefined && args.values.record === undefined
+  ) {
+    seatApproved = ownerSeatRuleAdmits('team-send', io.cwd, args.flags.has('dry-run'), seatSources);
+  }
   // The no-terminal refusal judges the ordinary caller. A direct-work run's caller is the watch
   // principal, established and verified by its internal entry, which may run with no terminal;
-  // it is judged at admission by its own branch, never by the process's placement.
-  const detached = detachedRefusal(host.watch === undefined ? callerOf(io) : watchCaller(host.watch), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
+  // it is judged at admission by its own branch, never by the process's placement. An owner-seat
+  // answer has already admitted this run, so the terminal is not asked again.
+  const detached = seatApproved ? undefined : detachedRefusal(host.watch === undefined ? callerOf(io) : watchCaller(host.watch), { who: 'the owner or a seat the send admission admits', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     if (report.json) writeJsonError(io, 'send.detached', detached, 'run team send from a terminal outside herdr');
     else io.stderr(`team send: ${detached}\n`);
@@ -761,6 +795,9 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     return refuse(io, pro.dir, pro.who, pro.reason, host, report);
   }
   const { team, root, dir, fileTeamId, loaded, caller, who, from, standing, hit } = pro;
+  // An owner-seat answer admits this one send the way the owner would. The caller's own identity
+  // stays on the log line; the admission is the owner's, because the owner seat signed it.
+  const acting: Caller = seatApproved ? { kind: 'owner' } : caller;
   // The line's own team, for every reader outside this one: the history the receiving team keeps
   // must say where its sender stood, not leave a shared seat name to the local roster.
   report.from_team = fileTeamId;
@@ -781,7 +818,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   let to: Aim;
   let admission: Admission;
   if (hit === null) {
-    const placement = placementProblemOf(caller, standing);
+    const placement = placementProblemOf(acting, standing);
     if (placement) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'placement', seatName, host.now());
       return refuse(io, dir, who, placement, host, report);
@@ -793,7 +830,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (named.error !== undefined) return configuration(io, `${seatName}: ${named.error}`, report);
     const configured = named.seat;
     const seat = configured === undefined ? seatName : configured.name;
-    admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
+    admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
       return refuse(io, dir, who, admission.why, host, report);
@@ -804,7 +841,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     }
     to = { seat, agentId: null, session: team.session, cli: configured.cli, address: null, sentAs: null, dir, project: team.project, root, cross: false };
   } else {
-    admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
+    admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
       return refuse(io, dir, who, admission.why, host, report);

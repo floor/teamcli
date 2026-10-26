@@ -15,9 +15,10 @@
 //
 // An `always` answer stands as a rule for the same actions under the repository's parent folder,
 // inside the owner's approval-rule-ttl. Fail-closed: a missing, expired, mismatched, unsigned,
-// replayed or self-signed answer admits nothing. The actions are lifecycle actions only: no grant,
-// owner-signer or approval-mode change can be requested here, so no principal widens its own
-// authority through it.
+// replayed or self-signed answer admits nothing. The actions never grant, never change
+// owner-signers and never change approval-mode, so no principal widens its own authority
+// through them. Revoking an always rule and forgetting a registry record are asked here too:
+// they remove a standing the owner already gave, and they do not hand a new one out.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
@@ -26,7 +27,7 @@ import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
-export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-add', 'team-up'] as const;
+export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget'] as const;
 export type OwnerAction = (typeof OWNER_ACTIONS)[number];
 export const OWNER_ACTION_TTL_MS = 15 * 60 * 1000;
 export const OWNER_ACTION_ID_PATTERN = /^oa_[0-9a-f]{24}$/;
@@ -109,6 +110,11 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
   'team-import': 'import the team file',
   'team-add': 'add a seat',
   'team-up': 'start the team',
+  'team-send': 'send a message',
+  'team-down': 'stop the team',
+  'team-bus': 'start the bus',
+  'team-revoke-approval': 'revoke an approval rule',
+  'team-forget': 'forget a team record',
 };
 
 export function ownerActionSummary(p: OwnerActionParams): string {
@@ -316,6 +322,19 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
 function ruleFor(home: string, ask: Pick<OwnerActionAsk, 'action' | 'root' | 'team'>, store: OwnerSeatKeyStore, now: Date): OwnerActionRule | undefined {
   const root = canonicalRoot(ask.root);
   return listOwnerActionRules(home, store, now).rules.find((r) => r.actions.includes(ask.action) && r.scope === dirname(root));
+}
+
+/** Removes one owner-action `always` rule (`oa_…`). A missing file is a refusal; nothing else is touched. */
+export function revokeOwnerActionRule(home: string, ruleId: string): { ok: true } | { ok: false; why: string } {
+  if (!OWNER_ACTION_ID_PATTERN.test(ruleId)) return { ok: false, why: `"${ruleId}" is not an owner-action rule id` };
+  try {
+    const path = join(actionApprovalsFolder(home), `${ruleId}.json`);
+    if (!lstatSync(path).isFile()) return { ok: false, why: `no owner-action rule ${ruleId}` };
+    unlinkSync(path);
+    return { ok: true };
+  } catch {
+    return { ok: false, why: `no owner-action rule ${ruleId}` };
+  }
 }
 
 /** With no request id: a verified `always` rule for this action whose scope holds the repository. */

@@ -210,7 +210,7 @@ describe('team up, a pane that is gone or unknown', () => {
     },
   );
 
-  test('a waiting seat whose pane holds another process is never closed or replaced', async () => {
+  test('a waiting seat whose pane holds another process is left and launched fresh', async () => {
     await approve();
     seedState({
       'claude-coordinator-acme': {
@@ -226,9 +226,11 @@ describe('team up, a pane that is gone or unknown', () => {
     const made = world();
     made.session = 'running';
     made.seed('w9:p1', IDLE, true);
-    // The pane exists, renamed to the seat, and its process is not the recorded one: a foreign
-    // CLI holds the pane. The heal must not fire — the pane is listed — and nothing else may
-    // touch it.
+    // The pane is still listed and named, but a foreign CLI holds it. The old workspace stays
+    // and is not typed into; the seat is launched again in a new workspace.
+    const typed: string[] = [];
+    made.launch.typeText = (_session, pane, text) => { typed.push(`${pane}:${text}`); return true; };
+    made.launch.pressEnter = (_session, pane) => { typed.push(`${pane}:Enter`); return true; };
     const listed = () => [
       agent('claude-coordinator-acme', 'w9:p1'),
       agent('deepseek-acme', 'w2:p1'),
@@ -236,7 +238,7 @@ describe('team up, a pane that is gone or unknown', () => {
     ];
     made.launch.agents = listed;
     made.launch.processInfo = (_session, pane) =>
-      pane === 'w9:p1' ? { shell: 400, foreground: [400, 777] } :
+      pane === 'w9:p1' ? { shell: 400, foreground: [777] } :
       pane === 'w2:p1' ? { shell: 500, foreground: [500, 501] } :
       pane === 'w3:p1' ? { shell: 510, foreground: [510, 511] } : null;
     const io = testIo(root, { kind: 'owner' });
@@ -250,20 +252,16 @@ describe('team up, a pane that is gone or unknown', () => {
       ],
       agents: listed,
     }, made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane holds another process\n');
-    expect(`${io.out}${io.err}`).not.toContain('was gone and was replaced');
-    expect(made.creates).toEqual([]);
-    expect(made.closes).toEqual([]);
-    expect(made.runs).toEqual([]);
-    expect(made.renames).toEqual([]);
-    expect(stateOf().sessions['acme-web']?.seats['claude-coordinator-acme']).toMatchObject({
-      stage: 'launched',
-      pane: 'w9:p1',
-      workspace: 'w9',
-      launched: { shell: 400, cli: [401] },
-      waiting: { state: 'waiting-owner', classification: 'trust' },
-    });
+    expect(code).toBe(0);
+    expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced; its workspace w9 was left\n');
+    expect(made.closes).not.toContain('w9');
+    expect(typed.filter((line) => line.startsWith('w9:'))).toEqual([]);
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
+    const seat = stateOf().sessions['acme-web']?.seats['claude-coordinator-acme'];
+    expect(seat?.pane).not.toBe('w9:p1');
+    expect(seat?.waiting).toBeUndefined();
+    expect(seat?.launched).not.toEqual({ shell: 400, cli: [401] });
+    expect(stateOf().sessions['acme-web']?.seats['deepseek-acme']?.pane).toBe('w2:p1');
   });
 
   test('a waiting seat whose pane cannot be read is never closed or replaced', async () => {
@@ -316,7 +314,7 @@ describe('team up, a pane that is gone or unknown', () => {
     });
   });
 
-  test('a lead seat heals while another waiting seat is left out', async () => {
+  test('a lead seat and another waiting seat whose process was replaced are both launched fresh', async () => {
     await approve();
     seedState({
       'claude-coordinator-acme': {
@@ -358,19 +356,19 @@ describe('team up, a pane that is gone or unknown', () => {
       ],
       agents: listed,
     }, made));
-    // The refused seat keeps its exit; the heal is still performed for the lead.
-    expect(code).toBe(1);
+    // Both waiting processes are gone: each seat is launched again, and neither old workspace is closed.
+    expect(code).toBe(0);
     expect(`${io.out}${io.err}`).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced\n');
-    expect(io.out).toContain('deepseek-acme: left out: its waiting pane holds another process\n');
-    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator']);
+    expect(`${io.out}${io.err}`).toContain('deepseek-acme: its recorded pane w7:p1 was gone and was replaced; its workspace w7 was left\n');
+    expect(made.creates).toEqual(['claude-coordinator-acme · project coordinator', 'deepseek-acme · implementer']);
     expect(made.closes).toEqual([]);
     const lead = stateOf().sessions['acme-web']?.seats['claude-coordinator-acme'];
     expect(lead?.pane).toBe('w1:p1');
     expect(lead?.waiting).toBeUndefined();
-    expect(stateOf().sessions['acme-web']?.seats['deepseek-acme']).toMatchObject({
-      pane: 'w7:p1',
-      waiting: { state: 'waiting-owner', classification: 'trust' },
-    });
+    const worker = stateOf().sessions['acme-web']?.seats['deepseek-acme'];
+    expect(worker?.pane).not.toBe('w7:p1');
+    expect(worker?.waiting).toBeUndefined();
+    expect(worker?.launched).not.toEqual({ shell: 700, cli: [701] });
   });
 });
 

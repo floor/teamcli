@@ -362,7 +362,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     }
   });
 
-  test('the heartbeat marks a hosted bus endpoint that stopped answering', async () => {
+  test('the heartbeat restarts a hosted bus whose socket stopped answering', async () => {
     const { root, home } = scratch();
     const started = await startMachineDaemon({
       home,
@@ -374,20 +374,27 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     expect(started.kind).toBe('serving');
     if (started.kind !== 'serving') return;
     try {
-      unlinkSync(join(root, '.agents', 'bus.sock'));
-      await waitFor(async () => (await daemonHealth(home)).roots[0]?.bus === 'failed');
+      const socket = join(root, '.agents', 'bus.sock');
+      unlinkSync(socket);
+      // The beat notices the socket is gone and starts the bus again. Health is written after
+      // that start, so the record a reader sees is the bus answering, not the gap in between.
+      await waitFor(async () => {
+        const rootState = (await daemonHealth(home)).roots[0];
+        return rootState?.bus === 'serving' && rootState.why === null && existsSync(socket);
+      }, 15_000);
 
       const health = await daemonHealth(home);
       expect(health.roots[0]).toMatchObject({
         send: 'serving',
-        bus: 'failed',
-        why: 'the hosted bus endpoint stopped answering',
+        bus: 'serving',
+        why: null,
       });
+      expect(readFileSync(daemonLogPath(home), 'utf8')).toContain('bus restarted');
 
       const status = testIo(home, owner);
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
-      expect(status.out).toContain('roots 1 (send 1, bus 0)');
-      expect(status.out).toContain('1 endpoint not hosted here');
+      expect(status.out).toContain('roots 1 (send 1, bus 1)');
+      expect(status.out).not.toContain('not hosted here');
     } finally {
       await started.daemon.close();
     }

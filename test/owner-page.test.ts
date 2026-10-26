@@ -164,6 +164,24 @@ describe('owner page', () => {
     expect(admitOwnerAction(s.home, id, ask('team-up'), s.store, new Date()).ok).toBe(false);
   });
 
+  test('a passkey the owner-signers policy does not name is refused before a challenge is issued', async () => {
+    const s = await setup();
+    const p = phone();
+    expect((await registerPhone(s, p)).status).toBe(200);
+    const wrote = writePolicySet(s.home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['mac'] }, { now: new Date() });
+    if (!wrote.ok) throw new Error(wrote.why);
+    const root = join(s.base, 'code', 'docs');
+    mkdirSync(root, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+    const made = createTeamCreateRequest(s.home, root, null, new Date());
+    if (!made.ok) throw new Error(made.why);
+    const id = made.record.request_id;
+    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
+    expect(ch.status).toBe(400);
+    expect(String(ch.body.error)).toContain('not accepted by the owner-signers policy');
+    expect(existsSync(join(actionRequestsFolder(s.home), `${id}.seat-answer.json`))).toBe(false);
+  });
+
   test('a passkey the owner does not confirm with Touch ID is not added', async () => {
     const s = await setup();
     const p = phone();

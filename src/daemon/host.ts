@@ -23,6 +23,7 @@ import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
+import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -323,6 +324,9 @@ type EndpointWatch = {
   status: MachineRootStatus;
   sendSocket: string | null;
   busSocket: string | null;
+  /** The checkout whose bus this heartbeat may restart. Null until the team file loads. */
+  busRoot: string | null;
+  busState: BusWatch;
 };
 
 /** A bus socket has no ping op, so one successful connect is the whole liveness answer. */
@@ -706,7 +710,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   for (const rootArg of input.roots) {
     const status: MachineRootStatus = { root: rootArg, team: null, send: 'failed', bus: 'failed', why: null };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
-    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null };
+    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null, busRoot: null, busState: freshBusWatch() };
     watched.push(watch);
     const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
@@ -733,6 +737,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
     }
     status.root = canonical;
     status.team = loaded.team.project;
+    watch.busRoot = canonical;
     sweepRoots.push({ root: loaded.root, team: loaded.team });
     const route = routeOf(
       canonical,
@@ -1382,9 +1387,58 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   }
 
   // A socket file that stays behind after a crash, or a listener that stops answering, is not a
-  // hosted endpoint. The heartbeat asks each hosted socket; an endpoint that stopped answering is
-  // marked failed with its reason and logged once, and a later heartbeat never resurrects it.
+  // hosted endpoint. The heartbeat asks each hosted socket. A send endpoint that stopped answering
+  // is marked failed and left; a bus that is not answering is started again, with backoff, so a
+  // killed bus does not stay dead.
   let refreshing = false;
+  const reviveHostedBus = async (watch: EndpointWatch): Promise<void> => {
+    const root = watch.busRoot;
+    if (root === null || closed) return;
+    const at = now().getTime();
+    if (at < watch.busState.nextAt || watch.busState.starting) return;
+    const loaded = readTeamConfig(root, { home });
+    if (!loaded.ok) {
+      watch.busState.failures += 1;
+      watch.busState.nextAt = at + nextBackoffMs(watch.busState.failures);
+      return;
+    }
+    const thresholds = eventThresholdsInForce({
+      home,
+      entity: loaded.team.entity,
+      projectId: projectIdOfTeam(home, loaded.team, loaded.root),
+      root: loaded.root,
+      team: loaded.team,
+      upToLevel: 'team',
+      now: now(),
+    });
+    if (!thresholds.ok) {
+      watch.busState.failures += 1;
+      watch.busState.nextAt = at + nextBackoffMs(watch.busState.failures);
+      appendDaemonLog(home, `root ${root}: bus not restarted: ${thresholds.refusals.map((refusal) => refusal.message).join('; ')}`, now());
+      return;
+    }
+    const revived = await reviveBus({
+      root: loaded.root,
+      team: loaded.team,
+      home,
+      stderr: (text) => appendDaemonLog(home, text, now()),
+      heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
+      now,
+    }, watch.busState, at);
+    if (revived.kind === 'serving') {
+      busHandles.push(revived.handle);
+      watch.status.bus = 'serving';
+      watch.busSocket = busSocket(loaded.root);
+      if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
+      appendDaemonLog(home, `root ${root}: bus restarted`, now());
+    } else if (revived.kind === 'busy' || revived.kind === 'listening') {
+      watch.status.bus = 'serving';
+      watch.busSocket = busSocket(loaded.root);
+      if (watch.status.why === 'the hosted bus endpoint stopped answering') watch.status.why = null;
+    } else if (revived.kind === 'failed') {
+      appendDaemonLog(home, `root ${root}: bus restart failed (${revived.why})`, now());
+    }
+  };
   const refreshHostedEndpoints = async (): Promise<void> => {
     if (closed || refreshing) return;
     refreshing = true;
@@ -1402,11 +1456,20 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
               appendDaemonLog(home, `root ${status.root}: send endpoint stopped answering`, now());
             }
           }
-          if (status.bus === 'serving' && watch.busSocket !== null) {
-            if (!(await probeBusSocket(watch.busSocket))) {
-              status.why ??= 'the hosted bus endpoint stopped answering';
-              status.bus = 'failed';
-              appendDaemonLog(home, `root ${status.root}: bus endpoint stopped answering`, now());
+          if (watch.busRoot !== null) {
+            const socket = busSocket(watch.busRoot);
+            const up = await probeBusSocket(socket);
+            if (up) {
+              watch.busState.failures = 0;
+              watch.busState.nextAt = 0;
+              if (status.bus === 'serving') watch.busSocket = socket;
+            } else {
+              if (status.bus === 'serving') {
+                status.why ??= 'the hosted bus endpoint stopped answering';
+                status.bus = 'failed';
+                appendDaemonLog(home, `root ${status.root}: bus endpoint stopped answering`, now());
+              }
+              await reviveHostedBus(watch);
             }
           }
         }),

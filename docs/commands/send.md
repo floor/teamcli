@@ -360,7 +360,9 @@ bootstrap a seat herdr placed, before `up` or `add` first recorded it, still nee
 else does: a target in another team, and an owner-signed grant, both wait for its record. `up` and
 `add` register a seat when they first launch it. A run with no
 terminal is refused before `--list` as well: `team send: only the owner or a seat the send admission
-admits runs this, from a terminal outside herdr or its own pane`. For every other caller, `--list`
+admits runs this, from a terminal outside herdr or its own pane`. `--request` records the send for
+the owner seat instead, and `--approval` runs the signed answer once; an always rule for `team-send`
+covering this folder admits it with no request. The owner answers on the owner page. For every other caller, `--list`
 prints the file's roster and the seats of its entity's other teams, and sends nothing, so it needs
 no caller check.
 
