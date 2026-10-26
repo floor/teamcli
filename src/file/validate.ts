@@ -78,13 +78,13 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
   const mode = valueOf<TeamFile['workspace']>(ctx, 'workspace').mode;
   for (const seat of seats) seat.mode ??= mode;
   const policies = valueOf<TeamFile['policies'] | null>(ctx, 'policies');
+  const bus = valueOf<TeamFile['bus'] | null>(ctx, 'bus');
 
   return {
     format: 1,
     project: valueOf<string>(ctx, 'project'),
     inProject: valueOf<string | null>(ctx, 'in_project'),
     projectLead: valueOf<boolean>(ctx, 'project_lead'),
-    bus: valueOf<NonNullable<TeamFile['bus']>>(ctx, 'bus'),
     entity: valueOf<string | null>(ctx, 'entity'),
     lobby: valueOf<string | null>(ctx, 'lobby'),
     visibility: valueOf<TeamFile['visibility']>(ctx, 'visibility'),
@@ -94,6 +94,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     deliveryOrder: valueOf<TeamFile['deliveryOrder']>(ctx, 'delivery_order'),
     senderName: valueOf<TeamFile['senderName']>(ctx, 'sender_name'),
     ...(policies !== null && policies !== undefined ? { policies } : {}),
+    ...(bus !== null && bus !== undefined ? { bus } : {}),
     tools: valueOf<TeamFile['tools']>(ctx, 'tools'),
     identity: valueOf<TeamFile['identity']>(ctx, 'identity'),
     rules: valueOf<string[]>(ctx, 'rules'),

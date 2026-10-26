@@ -10,7 +10,9 @@ export const bus: Section = {
   name: 'bus',
   owner: false,
   after: [],
-  validate(entry, ctx): TeamFile['bus'] {
+  validate(entry, ctx): TeamFile['bus'] | null {
+    // No `bus:` written: no parsed section, so the canonical record of an existing file is unchanged.
+    if (entry === undefined) return null;
     const fields = ctx.check.fields(entry?.value, 'bus', ['autostart']);
     const autostart = fields.get('autostart');
     return { autostart: autostart === undefined ? true : ctx.check.flag(autostart, 'bus.autostart') };

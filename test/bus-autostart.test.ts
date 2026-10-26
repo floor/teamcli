@@ -2,7 +2,7 @@
 // closes it; `bus.autostart: false` keeps it the owner's. Status and check read the bus from its
 // process marker. Hermetic: plans are pure, markers live in a temp root, no herdr, no real home.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { downPlan, upPlan } from '../src/launch/plan.ts';
 import { busHealth, busMarkerPath, readBusMarker, startBus } from '../src/bus/server.ts';
@@ -12,7 +12,7 @@ import { busLabel } from '../src/watch/pane.ts';
 
 const roots: string[] = [];
 afterEach(() => {
-  for (const root of roots.splice(0)) Bun.spawnSync(['/usr/bin/trash', root]);
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 function tempRoot(): string {
   const root = mkdtempSync(join(realpathSync('/tmp'), 'tba-'));
