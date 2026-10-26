@@ -47,6 +47,28 @@ screen hatch is an escape hatch for a CLI whose
 screens the data primitives cannot express. The guarantees cover what a hatch returns and what load
 accepts; a hatch is trusted package code, not a sandbox.
 
+## Queue reports
+
+Set `watch.queue_dir` to the team's notes/queue directory to report idle capacity alongside
+queue depth. Paths are relative to the project root, absolute, or begin with `~/` for the
+selected home. Each seat's queue is `<seat>.md`; top-level numbered entries and unchecked
+Markdown tasks count, while checked tasks, nested details and fenced examples do not.
+Use `[x]` to mark a finished task. A missing or unreadable queue is unknown, not empty.
+The directory's `linear-backlog.md`, when it is there, is read the same way: its top-level
+numbered items that are unchecked and carry no `claimed:` or `done:` marker are unclaimed work.
+
+When every active worker has a known empty queue, the watch waits `watch.team_idle` and
+reports `N seats idle, queues empty` once per unchanged stretch. Only workers with an idle
+screen count; leads, parked or stopped seats, quota screens, unknown screens and unsent text
+do not. Quota-blocked workers are named separately. Unclaimed items in the backlog file are
+named in the same sentence — `; 2 unclaimed backlog items` — so empty queues with a full
+backlog do not read as a team out of work; an absent, unreadable or fully claimed backlog adds
+nothing. A pending queue, an unreadable queue or a missing worker suppresses the summary. With
+no queue directory, the existing team-idle report remains unchanged.
+
+Like every other report, the summary goes to `.agents/team.log`, the desktop notification and
+the bus; it is never typed into the orchestrator's pane.
+
 ## Synopsis
 
     team watch [--session <name>] [--file <path>] [--no-nudge] [--no-notify]

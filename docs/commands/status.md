@@ -150,6 +150,18 @@ invocation refusal, exit 2.
 
 ## Output and exit codes
 
+When `watch.queue_dir` names the team's queue directory, a `queues:` section lists the depth
+for each seat. Each queue is `<seat>.md`: top-level numbered entries and unchecked Markdown
+tasks count as work; checked tasks, nested details and fenced examples do not. Missing,
+unreadable, non-file or larger-than-1-MiB queues read `unknown`, not zero.
+
+The section closes with the directory's backlog file, `linear-backlog.md`, as `backlog: <n>
+unclaimed`: its top-level numbered items that are unchecked and carry no `claimed:` or `done:`
+marker, in their own text or in the text under them. A missing or unreadable backlog file reads
+`backlog: unknown`, never zero. JSON rows carry the depth as `queue_depth` (a number or `null`)
+and the document carries the backlog count as `queue_backlog`; both fields are absent when
+queues are not configured.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | no difference | the seats table, the `budgets:` table when the file names an account or a reading is stored, one `note:` line per note, then `no differences` | 0 |

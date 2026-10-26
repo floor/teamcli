@@ -55,7 +55,8 @@ import { promptEscalation } from './checks/prompt-escalation.ts';
 import { restored } from './checks/restored.ts';
 import { swapFree } from './checks/swap-free.ts';
 import { swapGrowth } from './checks/swap-growth.ts';
-import { teamIdle } from './checks/team-idle.ts';
+import { idleQueueSummary, teamIdle } from './checks/team-idle.ts';
+import type { QueueDepths } from '../queues.ts';
 import { unsent } from './checks/unsent.ts';
 import type { Machine } from './machine.ts';
 import { readScreen, statusRow, type Screen } from './screen.ts';
@@ -162,6 +163,7 @@ export type MailboxWaiting = {
 };
 
 export type PassResult = {
+  queueSummary?: { key: string; text: string } | null;
   reports: Report[];
   // One drop per idle worker that has reached `idle_first`, and again every `idle_repeat`
   // when that is set. `body` is `watch.nudge`, or the fixed line when the file omits it.
@@ -244,6 +246,9 @@ export type PassInput = {
   machine: Machine;
   now: number;
   memory: Memory;
+  queueDepths?: QueueDepths | null;
+  /** Unclaimed items in the queue directory's backlog file, read beside the depths. */
+  queueBacklog?: number | null;
   approval?: string[] | null;
   // The case in one line when no verified approval is in force and the record says why. The
   // watch says it itself, once; the pass's approval check reads it and adds nothing.
@@ -312,6 +317,8 @@ export function pass({
   machine,
   now,
   memory,
+  queueDepths,
+  queueBacklog,
   approval,
   approvalReason,
   watch,
@@ -582,6 +589,8 @@ export function pass({
   }
 
   const teamObservation: TeamObservation = {
+    queueDepths,
+    queueBacklog,
     team,
     state,
     live,
@@ -686,6 +695,7 @@ export function pass({
   }
   return {
     reports,
+    ...(queueDepths ? { queueSummary: enabled('team-idle') ? idleQueueSummary(teamObservation) : null } : {}),
     work: pause ? pauseDrops(team, live, observations, pause, now, memory, read, nativeHeld) : workDrops(team, live, observations, watch, now, memory, read, nativeHeld, seatPauses),
     ring,
     mailboxNote,

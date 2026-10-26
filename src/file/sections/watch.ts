@@ -52,6 +52,11 @@ export const watch: Section = {
         minLength: 1,
         description: 'text the work drop asks each idle worker to read after idle_first; the fixed watch line when omitted',
       },
+      queue_dir: {
+        type: 'string',
+        minLength: 1,
+        description: 'directory containing <seat>.md queues; relative to the project root, absolute, or ~/…',
+      },
       quota_marks: {
         type: 'array',
         items: { type: 'number', exclusiveMinimum: 0, maximum: 100 },
@@ -89,7 +94,7 @@ export function defaultWatch(): TeamFile['watch'] {
 
 function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
   const fields = check.fields(entry?.value, 'watch', [
-    'interval', 'idle_first', 'idle_owner', 'blind_after', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'unread_after', 'nudge', 'quota_marks', 'checks',
+    'interval', 'idle_first', 'idle_owner', 'blind_after', 'idle_repeat', 'team_idle', 'nudge_wait', 'unsent_after', 'unread_after', 'nudge', 'queue_dir', 'quota_marks', 'checks',
   ]);
   const time = (name: string, fallback: number) =>
     check.measure(fields.get(name), `watch.${name}`, DURATION, '120s or 10m') ?? fallback;
@@ -98,6 +103,7 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
     ? check.measure(repeatField, 'watch.idle_repeat', DURATION, '120s or 10m')
     : undefined;
   const nudge = check.text(fields.get('nudge'), 'watch.nudge');
+  const queueDir = check.text(fields.get('queue_dir'), 'watch.queue_dir');
   const base = defaultWatch();
   let quotaMarks = base.quotaMarks;
   const marks = fields.get('quota_marks');
@@ -123,6 +129,7 @@ function readWatch(entry: YamlEntry | undefined, check: Check): Watched {
       quotaMarks,
       checks: readChecks(fields.get('checks'), check),
       ...(nudge !== undefined ? { nudge } : {}),
+      ...(queueDir !== undefined ? { queueDir } : {}),
     },
   };
 }

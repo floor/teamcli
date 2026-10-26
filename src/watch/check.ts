@@ -17,10 +17,11 @@ import type { SessionState } from '../state.ts';
 import type { ModelRecipe, RuleDonor } from '../swap/rule.ts';
 import type { Machine } from './machine.ts';
 import type { Screen } from './screen.ts';
+import type { QueueDepths } from '../queues.ts';
 
 // A report says what is. The model and launcher reports also name the restart; a report never
 // starts a seat. `to` is who can act on it.
-export type Report = { key: string; text: string; to: 'operator' | 'owner' };
+export type Report = { key: string; text: string; to: 'operator' | 'owner' | 'orchestrator' };
 
 // The one exclusive reading of a seat's screen and herdr status: a seat at a permission prompt is
 // never also merely idle. `permission` covers a permission or trust screen; `question` a question
@@ -128,6 +129,10 @@ export type SeatObservation = {
 
 // Everything a team check may read about the team it is handed, built after the seat loop.
 export type TeamObservation = {
+  queueDepths?: QueueDepths | null;
+  // Unclaimed items in the queue directory's backlog file, when the caller read it: the queue
+  // summary names them, so an empty queue set does not read as no work left.
+  queueBacklog?: number | null;
   // The file, and the session's state: the budget check (RFC 0003 § 9) reads both.
   team: TeamFile;
   state: SessionState;
