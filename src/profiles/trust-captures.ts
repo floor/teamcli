@@ -189,6 +189,7 @@ export const TRUST_CAPTURES: readonly string[] = [
   "cursor cursor/2026.10.14/permission.txt",
   "cursor cursor/2026.10.14/question.txt",
   "cursor cursor/2026.10.14/trust.txt",
+  "cursor cursor/2026.10.14/unsent.txt",
   "cursor cursor/2026.10.14/working.txt",
   "cursor cursor/2026.10.16/exit.txt",
   "cursor cursor/2026.10.16/idle.txt",

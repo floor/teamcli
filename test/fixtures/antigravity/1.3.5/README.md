@@ -21,3 +21,10 @@ The account line is `<account>` and the plan is `<plan>`. Directory paths are `<
   after `your` each hide one space, and the break in the path hides nothing. Read `unsent`.
   One `pane send-keys` `ctrl+u` with that line in the box restored the idle prompt and
   `? for shortcuts`, and the CLI stayed up.
+
+## Not produced
+
+- `unsent`: not produced, the installed binary 1.4.0 is newer than this folder's 1.3.5, so a
+  1.3.5 composer screen cannot be launched on this machine without downgrading. The capture
+  waits for a refresh to the installed version, in a new version folder with its own
+  `tested.to` bump.

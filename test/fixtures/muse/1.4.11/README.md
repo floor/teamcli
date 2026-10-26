@@ -28,3 +28,9 @@ These files are derived from `idle.txt` for the tests; nothing in them was read 
   at the box's own column — the unsent shape of the 1.4.9 capture, not captured on 1.4.11.
 - `ambiguous-synthetic.txt`: the banner, skills line and footer with the composer box removed: an
   idle-looking screen that is not the ready box, expected to read `unknown`.
+
+## Not produced
+
+- `unsent`, `working`, `question`, `permission`, `trust`, `unknown`: not produced. The one real
+  frame here was read from a running pane without typing a key, so no other screen was drawn;
+  the synthetic files above are constructed, not captures.
