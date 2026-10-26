@@ -4,9 +4,9 @@ import { describe, expect, test } from 'bun:test';
 import type { TeamFile } from '../src/file/types.ts';
 import type { CheckContext, Report, SeatObservation } from '../src/watch/check.ts';
 import { providerError } from '../src/watch/checks/provider-error.ts';
-import type { Screen } from '../src/watch/screen.ts';
+import type { Reset, Screen } from '../src/watch/screen.ts';
 
-function seat(name: string, screen: { kind: string; reset?: string | null }, running = true, working = false, account?: string): SeatObservation {
+function seat(name: string, screen: { kind: string; reset?: Reset | null }, running = true, working = false, account?: string): SeatObservation {
   return {
     name,
     running,
@@ -65,30 +65,30 @@ describe('provider-error check', () => {
 
   test('a rate limit carries the reset time the screen gives, and says so when it gives none', () => {
     const { ctx, finish } = harness();
-    const limited = seat('claude-b', { kind: 'rate limit', reset: '11:00' });
+    const limited = seat('claude-b', { kind: 'rate limit', reset: { kind: 'at', value: '11:00' } });
     expect(texts(providerError.run(limited, ctx))).toEqual([
-      'operator: claude-b is at a rate limit: usage limit, resets at 11:00',
-      'owner: claude-b is at a rate limit: usage limit, resets at 11:00',
+      'operator: claude-b is out of quota: usage limit, resets at 11:00',
+      'owner: claude-b is out of quota: usage limit, resets at 11:00',
     ]);
     finish();
     const quiet = harness();
     expect(texts(providerError.run(seat('claude-b', { kind: 'rate limit', reset: null }), quiet.ctx))).toEqual([
-      'operator: claude-b is at a rate limit: usage limit, and the screen names no reset time',
-      'owner: claude-b is at a rate limit: usage limit, and the screen names no reset time',
+      'operator: claude-b is out of quota: usage limit, and the screen names no reset time',
+      'owner: claude-b is out of quota: usage limit, and the screen names no reset time',
     ]);
   });
 
   test('a rate limit names the pool the seat spends, and leaves it out when the seat names none', () => {
     const { ctx } = harness();
-    const limited = seat('claude-b', { kind: 'rate limit', reset: '11:00' }, true, false, 'claude-glm');
+    const limited = seat('claude-b', { kind: 'rate limit', reset: { kind: 'at', value: '11:00' } }, true, false, 'claude-glm');
     expect(texts(providerError.run(limited, ctx))).toEqual([
-      'operator: claude-b is at a rate limit on claude-glm: usage limit, resets at 11:00',
-      'owner: claude-b is at a rate limit on claude-glm: usage limit, resets at 11:00',
+      'operator: claude-b is out of quota on claude-glm: usage limit, resets at 11:00',
+      'owner: claude-b is out of quota on claude-glm: usage limit, resets at 11:00',
     ]);
     const bare = harness();
     expect(texts(providerError.run(seat('claude-b', { kind: 'rate limit', reset: null }, true, false, ''), bare.ctx))).toEqual([
-      'operator: claude-b is at a rate limit: usage limit, and the screen names no reset time',
-      'owner: claude-b is at a rate limit: usage limit, and the screen names no reset time',
+      'operator: claude-b is out of quota: usage limit, and the screen names no reset time',
+      'owner: claude-b is out of quota: usage limit, and the screen names no reset time',
     ]);
   });
 
@@ -111,7 +111,7 @@ describe('provider-error check', () => {
   test('the two states carry different report keys, so the bus maps by key and never by the prose', () => {
     const limited = harness();
     expect(
-      providerError.run(seat('claude-b', { kind: 'rate limit', reset: '11:00' }), limited.ctx).map((report) => report.key),
+      providerError.run(seat('claude-b', { kind: 'rate limit', reset: { kind: 'at', value: '11:00' } }), limited.ctx).map((report) => report.key),
     ).toEqual(['rate-limit:claude-b', 'rate-limit:claude-b:owner']);
     const lost = harness();
     expect(

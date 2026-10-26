@@ -27,17 +27,20 @@ import { pauseText, stopText, updateState, type PauseRecord } from '../state.ts'
 // lead restarts each seat from the place the tool holds. The caller rule is the pause's own,
 // because resuming is the same lever in the other direction.
 
-export const USAGE = `Usage: team resume [<team>] [--all] [--json]
+export const USAGE = `Usage: team resume [<name>] [--seat <seat>] [--team <team>] [--all] [--json]
 
-Clears the team's pause and prints the stop points it recorded; team next claims and the watch
-nudges again. The owner or the team's orchestrator runs it. <team> is a registered team's name,
-project or id, and --all is every registered team.
+Clears the pause of a seat or of a whole team and prints the stop points it recorded; team next
+claims and the watch nudges again. <name> is a seat the current folder's team declares, or a
+registered team's name, project or id; --seat and --team say which one a name that is both means.
+--all is every registered team. A seat's resume leaves a team-wide pause standing, and a team's
+resume leaves seats paused on their own. The owner or the team's orchestrator runs it.
 
        team resume --client <grant-file> --key <client-key> [--team <team>] [--json]
 
 The --client form is for a client with no terminal that the owner signed a developer bundle grant carrying resume for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle developer --request): it resumes that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no <team> and no --all.
 
-Exits 0 when the team resumes, 1 when it is refused or state I/O fails, 2 when the invocation or team file can't be read.
+Exits 0 when the seat or team resumes, 1 when it is refused or state I/O fails, 2 when the
+invocation or team file can't be read.
 `;
 
 /** What `runResume` reads from outside, so tests can stand in for the clock and the store. */
@@ -48,26 +51,44 @@ const realResumeSources: ResumeSources = {};
 export const resume: Command = (argv, io) => runResume(argv, io, realResumeSources);
 export default resume;
 
-type Op = { kind: 'resumed'; pause: PauseRecord } | { kind: 'not-paused' };
+type Op =
+  | { kind: 'resumed'; pause: PauseRecord; still?: Array<{ seat: string; pause: PauseRecord }> }
+  | { kind: 'not-paused'; teamPaused?: boolean };
 
 /** One target's write outcome, collected so a `--all` run reports every team it reached. */
 type Outcome =
-  | { kind: 'resumed'; target: PauseTarget; pause: PauseRecord; session: string }
-  | { kind: 'not-paused'; target: PauseTarget }
+  | { kind: 'resumed'; target: PauseTarget; pause: PauseRecord; still: Array<{ seat: string; pause: PauseRecord }>; session: string }
+  | { kind: 'not-paused'; target: PauseTarget; teamPaused: boolean }
   | { kind: 'io'; target: PauseTarget; message: string };
 
 export async function runResume(argv: string[], io: Io, sources: ResumeSources = realResumeSources): Promise<number> {
   let out = cleanedIo(io);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['client', 'key', 'team'], ['all', 'json']);
+  const args = readArgs(argv, ['seat', 'client', 'key', 'team'], ['all', 'json']);
   if (args.error) return invocation(out, args.error, json);
-  const clientProblem = clientFormProblem(args.values, 'team resume --client <grant-file> --key <client-key-file>')
+  const clientProblem = clientFormProblem(args.values, 'team resume --client <grant-file> --key <client-key-file>', { ownTeam: true })
     ?? (args.values.client !== undefined && (args.rest.length > 0 || args.flags.has('all'))
       ? '--client resumes the one team its grant names: <team> and --all are the owner\'s and take no --client'
       : null);
   if (clientProblem !== null) return invocation(out, clientProblem, json);
   const all = args.flags.has('all');
+  let seat: string | undefined;
+  if (args.values.seat !== undefined) {
+    seat = plainLine(args.values.seat).trim();
+    if (seat === '') return invocation(out, '--seat needs a seat name', json);
+  }
+  let team: string | undefined;
+  if (args.values.team !== undefined) {
+    team = plainLine(args.values.team).trim();
+    if (team === '') return invocation(out, '--team needs a team name', json);
+  }
+  if (args.values.client !== undefined && seat !== undefined) return invocation(out, '--client resumes the one team its grant names and takes no --seat', json);
+  if (all && seat !== undefined) return invocation(out, '--all and --seat can\'t be used together', json);
+  if (all && team !== undefined) return invocation(out, '--all and --team can\'t be used together', json);
+  if (seat !== undefined && team !== undefined) return invocation(out, '--seat and --team can\'t be used together', json);
   if (all && args.rest.length > 0) return invocation(out, '--all takes no <team>', json);
+  if (seat !== undefined && args.rest.length > 0) return invocation(out, '--seat takes no positional name', json);
+  if (team !== undefined && args.rest.length > 0) return invocation(out, '--team takes no positional name', json);
   if (!all && args.rest.length > 1) return invocation(out, `unexpected "${plainLine(args.rest[1] ?? '')}"`, json);
   if (all && json) return invocation(out, '--all and --json can\'t be used together', json);
   const now = sources.now?.() ?? new Date();
@@ -94,8 +115,11 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
     return 1;
   }
   const resolved = resolveTargets({
-    key: all ? undefined : args.rest[0],
+    key: seat !== undefined || team !== undefined || all ? undefined : args.rest[0],
+    ...(seat !== undefined ? { seat } : {}),
+    ...(team !== undefined ? { team } : {}),
     all,
+    command: 'resume',
     io,
     ...(sources.home !== undefined ? { home: sources.home } : {}),
     now: () => now,
@@ -139,16 +163,33 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
     const { target, by, session } = entry;
     try {
       const op = updateState<Op>(target.dir, (state) => {
+        if (target.seat !== undefined) {
+          const standing = state.seat_pauses?.[target.seat];
+          if (standing === undefined) return { kind: 'not-paused', teamPaused: state.pause !== undefined };
+          if (state.seat_pauses !== undefined) {
+            delete state.seat_pauses[target.seat];
+            if (Object.keys(state.seat_pauses).length === 0) delete state.seat_pauses;
+          }
+          return { kind: 'resumed', pause: standing };
+        }
         const standing = state.pause;
         if (standing === undefined) return { kind: 'not-paused' };
         delete state.pause;
-        return { kind: 'resumed', pause: standing };
+        // The team's record and a seat's are independent: clearing the team leaves every seat
+        // paused on its own exactly as it was, and says so, so the lead does not read the team
+        // line as "everyone is moving again".
+        const still = Object.entries(state.seat_pauses ?? {})
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([seat, pause]) => ({ seat, pause }));
+        return { kind: 'resumed', pause: standing, still };
       });
       outcomes.push(op.kind === 'resumed'
-        ? { kind: 'resumed', target, pause: op.pause, session }
-        : { kind: 'not-paused', target });
+        ? { kind: 'resumed', target, pause: op.pause, still: op.still ?? [], session }
+        : { kind: 'not-paused', target, teamPaused: op.teamPaused === true });
       if (op.kind === 'resumed') {
-        logLine(target.dir, 'resume', by, `resumed the team; paused since ${op.pause.at} by ${op.pause.by}`, now);
+        logLine(target.dir, 'resume', by, target.seat === undefined
+          ? `resumed the team; paused since ${op.pause.at} by ${op.pause.by}`
+          : `resumed seat ${target.seat}; paused since ${op.pause.at} by ${op.pause.by}`, now);
       }
     } catch (error) {
       outcomes.push({ kind: 'io', target, message: `${target.team.project}: ${error instanceof Error ? error.message : String(error)}` });
@@ -159,7 +200,10 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
   for (const outcome of outcomes) {
     if (outcome.kind === 'io') continue;
     if (outcome.kind === 'resumed') {
-      const summary = `resumed ${outcome.target.team.project} (${pauseText(outcome.pause)})`;
+      const seat = outcome.target.seat;
+      const summary = seat === undefined
+        ? `resumed ${outcome.target.team.project} (${pauseText(outcome.pause)})`
+        : `resumed ${seat} (${pauseText(outcome.pause)})`;
       if (json) {
         writeJson(out, 'team.resume', {
           format: 1,
@@ -168,21 +212,32 @@ export async function runResume(argv: string[], io: Io, sources: ResumeSources =
           action_summary: summary,
           project: outcome.target.team.project,
           session: outcome.session,
-          target: 'team',
-          value: null,
+          target: seat === undefined ? 'team' : 'seat',
+          value: seat ?? null,
           resumed: outcome.pause,
+          ...(outcome.still.length > 0 ? { still_paused: outcome.still.map((entry) => entry.seat) } : {}),
           ...(notice !== undefined ? { notice } : {}),
         });
         continue;
       }
       out.stdout(`${summary}\n`);
-      if (resolved.targets.length === 1) for (const stop of outcome.pause.stops) out.stdout(`${stopText(stop)}\n`);
+      if (resolved.targets.length === 1) {
+        for (const stop of outcome.pause.stops) out.stdout(`${stopText(stop)}\n`);
+        for (const entry of outcome.still) out.stdout(`still paused: ${entry.seat} (${pauseText(entry.pause)})\n`);
+      }
       continue;
     }
     refused += 1;
-    const message = `not paused${resolved.targets.length > 1 ? `: ${outcome.target.team.project}` : ''}`;
+    const seat = outcome.target.seat;
+    const many = resolved.targets.length > 1;
+    const message = seat === undefined
+      ? `not paused${many ? `: ${outcome.target.team.project}` : ''}`
+      : outcome.teamPaused
+        ? 'the team is paused, not the seat; team resume clears the team'
+        : `not paused: ${seat}`;
+    const repair = seat === undefined ? 'team pause' : outcome.teamPaused ? 'team resume' : `team pause ${seat}`;
     if (json) {
-      writeJsonError(out, 'resume.not-paused', message, 'team pause', 1, undefined, notice);
+      writeJsonError(out, 'resume.not-paused', message, repair, 1, undefined, notice);
     } else {
       out.stderr(`team resume: ${message}\n`);
     }

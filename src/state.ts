@@ -378,6 +378,15 @@ export type State = {
    */
   pause?: PauseRecord;
   /**
+   * One record per seat paused on its own with `team pause <seat>`, cleared by
+   * `team resume <seat>`. While a seat's record stands, `team next` called by that seat claims
+   * nothing and the watch types no work nudge or wake to it; the rest of the team keeps working.
+   * The team-wide `pause` and this map are independent: either can stand without the other, and
+   * a team resume clears only the team's record. Like the hold and the pause, the map is the
+   * project's, not one session's.
+   */
+  seat_pauses?: Record<string, PauseRecord>;
+  /**
    * Unsigned markers of expired policy declarations whose expiry reading has already been logged
    * to `team.log`, so the expiry reading is logged at most once per expired entry while leaving
    * the signed policy file untouched.
@@ -555,6 +564,19 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
   // The pause, cleaned at the same door and for the same reason: the line every reader prints
   // is the record this command wrote, never a hand-edited file's.
   if (state.pause !== undefined && !isPauseRecord(state.pause)) delete state.pause;
+  // The per-seat pauses are cleaned at the same door: a key that is not a name by the lock's
+  // rule, a value that is not the record the command writes, or a record whose stop points do
+  // not name its own seat is dropped. Only `team pause <seat>` writes a key, so a key that
+  // survives this door is a seat name a reader prints.
+  if (state.seat_pauses && typeof state.seat_pauses === 'object') {
+    for (const [seat, record] of Object.entries(state.seat_pauses)) {
+      if (!validLockName(seat) || !isPauseRecord(record)
+        || !record.stops.some((stop) => stop.seat === seat)) delete state.seat_pauses[seat];
+    }
+    if (Object.keys(state.seat_pauses).length === 0) delete state.seat_pauses;
+  } else if (state.seat_pauses !== undefined) {
+    delete state.seat_pauses;
+  }
   if (Array.isArray(state.expired_policies)) {
     state.expired_policies = state.expired_policies.filter((item): item is string => typeof item === 'string');
   } else if (state.expired_policies !== undefined) {

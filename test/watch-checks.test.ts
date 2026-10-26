@@ -353,7 +353,9 @@ describe('team approve and watch.checks', () => {
 
 describe('a seat stopped on a provider error or a rate limit', () => {
   const lost = `API Error: Connection lost mid-response. The response above may be incomplete.\n${idle}`;
-  const limit = `API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${idle}`;
+  // The wall's own frame: the rejected line sits directly above the box, as the capture draws
+  // it. A later turn row between the two is a quote of the wall, not the wall.
+  const limit = `● Done.\n\nAPI Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
   const team = () => teamFile();
   const run = (memory: ReturnType<typeof newMemory>, now: number, screen: string) => texts(pass({
     team: team(),
@@ -382,9 +384,9 @@ describe('a seat stopped on a provider error or a rate limit', () => {
     const memory = newMemory();
     // The pool is the account the seat spends: its own `account:` when the file names one, its
     // vendor otherwise — deepseek-acme has none, so its vendor.
-    expect(run(memory, 0, limit)).toContain('deepseek-acme is at a rate limit on deepseek: usage limit, resets at 11:00');
+    expect(run(memory, 0, limit)).toContain('deepseek-acme is out of quota on deepseek: usage limit, resets at 11:00');
     expect(run(memory, 11 * 60_000, idle).some((line) => line.includes('rate limit'))).toBe(false);
-    expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is at a rate limit on deepseek: usage limit, resets at 11:00');
+    expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is out of quota on deepseek: usage limit, resets at 11:00');
   });
 });
 

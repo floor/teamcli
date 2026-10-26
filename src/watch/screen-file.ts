@@ -209,7 +209,7 @@ function testedOf(entry: YamlEntry): VersionRange {
 
 function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true): Rule {
   const entries = mapping(node, 'a rule');
-  only(entries, ['any', 'all', 'footer', 'on_footer', 'below_last_rule', 'without_rule', 'none_after', 'only_after', 'block', 'live']);
+  only(entries, ['any', 'all', 'footer', 'on_footer', 'below_last_rule', 'without_rule', 'none_after', 'only_after', 'block', 'live', 'at_composer']);
   if (entries.length === 0) fail(node.line, 'a rule has no primitive');
   const block = optional(entries, 'block');
   // A block spells the rows it draws, the footer among them, so it stands alone: a rule that
@@ -245,6 +245,18 @@ function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true): Rule {
       fail(live.line, '"live" reads with "any" or "all" alone, never beside another primitive');
     }
     if (narrowed) rule.live = true;
+  }
+  // `at_composer` narrows `any` and `all` to the block directly above the composer, and nothing
+  // else. It carries `live`'s history boundary too, so the two may be written together; a
+  // composer that cannot be read leaves the whole window, never a free prompt.
+  const atComposer = optional(entries, 'at_composer');
+  if (atComposer) {
+    const on = boolOf(atComposer.value, 'at_composer');
+    if (on && !any && !all) fail(atComposer.line, '"at_composer" narrows "any" or "all": it needs one of them');
+    if (on && (footer || onFooter || below || withoutRule || noneAfter || onlyAfter)) {
+      fail(atComposer.line, '"at_composer" reads with "any" or "all" alone, never beside another primitive');
+    }
+    if (on) rule.atComposer = true;
   }
   return rule;
 }
