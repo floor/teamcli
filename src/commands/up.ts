@@ -6,6 +6,8 @@ import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../app
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
+import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { readArgs, type Args } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, judgeCallerIn, mayLaunchSeats, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
 import { daemonHealth, type DaemonHealth } from '../daemon/health.ts';
@@ -17,7 +19,7 @@ import { gateVerdict } from '../permissions/who.ts';
 import { TEAM_FILE } from '../file/load.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
-import { migrationText } from '../file/migrate.ts';
+import { derivedTrust, migrationText } from '../file/migrate.ts';
 import { insideTrust, isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
@@ -62,7 +64,7 @@ import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENE
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
-import { grantedFolderPretrust, lobbyPretrustLine } from '../launch/pretrust.ts';
+import { grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -106,6 +108,8 @@ import { expiryPhrase } from '../client/duration-policy.ts';
 
 // What `up` reads from outside the file, so tests can stand in for it.
 export type UpSources = {
+  /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   sessionRunning(session: string): boolean | null;
   sessionState?(session: string): SessionState | null;
   agents(session: string): HerdrAgent[] | null;
@@ -301,7 +305,7 @@ export const realSources: UpSources = {
   launch: realLaunch,
 };
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -989,7 +993,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team'], ['dry-run', 'serial', 'json']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'serial', 'json', 'request']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -1055,13 +1059,28 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // own words. This folder's own file, with no `--session`, continues below. The path comparison
   // is the resolved spelling: a link, or a differently-cased spelling of this folder's own team
   // file, is not that file, and is refused here before it is opened.
+  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
+  // returns; `--approval <id>` admits this run when the owner seat signed for exactly it. An
+  // admitted run is a no-terminal owner launch: it never prompts and never types into a pane.
+  const seatStep = clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
+    ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
+    : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, sources);
+  if (seatStep.kind === 'requested') {
+    // exit: up.approval-requested
+    return 0;
+  }
+  if (seatStep.kind === 'refused') {
+    // exit: up.approval-refused
+    return 1;
+  }
+  const seatApproved = seatStep.kind === 'admitted';
   const walked = internal?.caller ?? walkCaller(io);
   // A run with no terminal is not the owner, and it is not asked of the delegate gate, the grant,
   // or the token. The refusal is one sentence, on the dry run and the real run.
-  const detached = clientUp !== null ? undefined : detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
+  const detached = clientUp !== null || seatApproved ? undefined : detachedRefusal(walked, { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   // The owner's run on a team still only in its file imports it first, with a notice
   // (docs/commands/up.md): moving to the registry never stands between the owner and a launch.
-  const imported = clientUp === null && detached === undefined && walked.kind === 'owner' && !args.values.file
+  const imported = clientUp === null && detached === undefined && (walked.kind === 'owner' || seatApproved) && !args.values.file
     ? importForUp(io.cwd, sources.home, dry, sources.now?.() ?? new Date())
     : null;
   if (imported !== null) {
@@ -1260,7 +1279,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // exit: up.file-invalid
     return 2;
   }
-  const { team, root } = loaded;
+  const { root } = loaded;
+  let team = loaded.team;
   const leftover = imported === null ? leftoverNote(loaded.leftover) : null;
   if (leftover !== null) {
     if (dry && !json) out.stdout(`${leftover}\n`);
@@ -1309,6 +1329,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     grantRefusal === null &&
     upFp !== undefined &&
     ownerAuthorized(io.env, upFp);
+  // A verified owner-seat answer for this run, or a signed always rule asked only where every
+  // other door refused.
+  const ownerSeat = seatApproved || (
+    detached === undefined && clientUp === null && !ordinaryAdmitted && !ownerToken && verdict === null && grantedSeat === null &&
+    ownerSeatRuleAdmits('team-up', io.cwd, dry, sources));
 
   const createGranted = entityGrantAdmits(root, io, { home: sources.home, now: sources.now?.(), cwd: io.cwd });
   // The map's admission, the trusted owner token, the granted seat, a passed delegation, a pane
@@ -1318,6 +1343,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   const named =
     ordinaryAdmitted ||
     ownerToken ||
+    ownerSeat ||
     grantedSeat !== null ||
     delegated !== null ||
     delegateNamedFor(team, 'up', io) ||
@@ -1379,7 +1405,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // decision. Written only when this call is one that may run `up` — the refusals above
       // accumulate rather than return, so a caller the caller gate refused must leave every
       // file as it was — and not on a dry run, which decides nothing.
-      if (!dry && (ordinaryAdmitted || delegated !== null || grantedSeat !== null || createGranted || ownerToken || clientUp !== null)) {
+      if (!dry && (ordinaryAdmitted || delegated !== null || grantedSeat !== null || createGranted || ownerToken || ownerSeat || clientUp !== null)) {
         logLine(dir, 'up', callerLabel(caller), `refused: ${problem} — readings: ${readingsText(machine)}`, sources.now?.() ?? new Date());
       }
       refusals.push({ id: 'up.machine', message: problem });
@@ -1449,13 +1475,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   }
 
   const lobby = teamLobby;
-  if (!team.trust || team.trust.length === 0 || isLegacyTrust(team.trust)) {
-    // The block names every entry the next `up` will require, computed from the file, so one
-    // edit takes the file past validation. The same block is what `doctor` and `add` print.
-    refusals.push({
-      id: 'up.doctor',
-      message: `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText({ ...team, session }, root, sources.home)}`,
-    });
+  // Missing or project-relative trust is not a refusal: the run trusts the lobby and the project
+  // root, both absolute, and says so once (src/file/migrate.ts derivedTrust).
+  const derived = derivedTrust({ ...team, session }, root, sources.home);
+  if (derived !== null) {
+    team = { ...team, trust: derived.trust };
+    stderrLine(`team up: ${plainText(derived.warning)}\n`);
   }
 
   const recorded = readState(dir).sessions[session];
@@ -1770,6 +1795,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       if (!seat) continue;
       const line = lobbyPretrustLine(seat, sources.home, { write, now });
       if (line) seats[index] = { ...seat, launchProblem: line };
+      // The project root, for a seat that starts there: pre-accepted in its CLI's own record.
+      else if (write) projectRootPretrust(seat, sources.home, { now, root });
     }
   };
 
@@ -1914,6 +1941,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // Provenance for an owner-token launch: the caller that ran it, and that the owner authorized
     // it out of band for this approved record.
     if (ownerToken) logLine(dir, 'up', callerLabel(caller), 'owner-token-authorized', sources.now?.() ?? new Date());
+    if (ownerSeat) logLine(dir, 'up', callerLabel(caller), 'owner-seat-approved', sources.now?.() ?? new Date());
     // The client's grant is read once more under the grant lock, immediately before the first
     // effect: a revocation appended since the check at the top stops this run here, and a run that
     // passes writes its audit line while it still holds the lock, so one of the two is always first.

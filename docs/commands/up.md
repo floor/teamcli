@@ -62,6 +62,8 @@ whatever the source.
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]
+    team up --request [--serial] [--json]
+    team up --approval <request-id> [--dry-run] [--serial] [--json]
 
 ## Flags
 
@@ -74,6 +76,8 @@ whatever the source.
 | `--client` | `<grant-file>` | the client form: an owner-signed up grant for one team, see [A client's up grant](#a-clients-up-grant) |
 | `--key` | `<client-key>` | the client's private key file, which proves the client holds the key the grant names; required with `--client`, refused without it |
 | `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |
+| `--request` | — | record this launch and send it to the owner seat; see [Owner-seat approval](#owner-seat-approval-no-owner-terminal) |
+| `--approval` | `<request-id>` | run the launch the owner seat signed for, once; a dry run verifies it and spends nothing |
 | `--json` | — | one `team.up` document instead of the working lines; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -82,6 +86,7 @@ whatever the source.
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr |
+| any caller holding an owner-seat approval | run it with `--approval <request-id>`, once, exactly as the owner seat signed it, or with no request where a signed always rule for `team-up` covers this folder; it never prompts and never types into a pane |
 | a seat an active create-grant names by its own registry id | run it, on the paths that record covers and before it expires |
 | a run with no terminal | a real run is refused: ``team up: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane``; `--dry-run` prints the plan and `! up would refuse:` with that sentence, and launches nothing |
 | a seat this team's record marks `leads` — its orchestrator, or a registry roster line that says `leads` | run it on this folder's own team file, and the run does not relaunch or close that seat. `--session` and `--file` are refused before either is read |
@@ -89,6 +94,48 @@ whatever the source.
 | a caller the run does not admit | a real run is answered with the one word `deny` on stderr and nothing on stdout — no reason, and no plan — and exit 1. A `--dry-run` is never denied: it prints `! up would refuse:` with that reason, `! to unblock:` with a `leads` seat's own run of this folder from its pane (or the owner's, from a terminal outside herdr), and — when no flag kept the file unread — the plan, and exits 1 |
 | the orchestrator's seat, where the row above does not admit it and the file's `grant` lists `up` | run it on this folder's own team file, and the run is audited as the grant's. A lead the map admits is not constrained by a grant, and the grant or delegate path applies only to seats the map does not admit: a grant that names another seat or pane, or leaves `up` out of its scope, refuses this fallback run, and a run the map admitted asks it nothing and is audited only as the row's. A file with no `grant` section grants nothing. The run does not relaunch or close that seat. `--session` and `--file` are refused before either is read, in the grant's words |
 | a seat of this team the record does not mark `leads`, or a pane of another session | run `--dry-run` only; a real run is refused, unless the live `grant` admits the orchestrator's seat or the live file's `delegates` section names that pane with `up` in its entry's `commands`, and a `--session` or `--file` it passes is refused before either is read |
+
+## Owner-seat approval: no owner terminal
+
+`team import`, `team add` and `team up` run for a caller that is not the owner at a terminal once
+the owner seat has signed for exactly that run. The owner never types a command and never answers
+a question in a pane: the answer is a signature from the owner's own device.
+
+1. The caller runs the command with `--request`. TeamCLI records the action, the repository root,
+   the team, `HEAD`, a hash of the command's arguments and who asks, for fifteen minutes, and drops
+   the confirmation in the owner-seat inbox. It prints the request id and the exact run to make next.
+2. The owner answers on the owner page (`team owner-seat serve`): **Oui**, **Toujours** or **Non**,
+   confirmed with Touch ID on the Mac or with the iPhone passkey. The answer is signed by an
+   accepted owner signer whose key TeamCLI confirms against the credential store.
+3. The caller runs the same command with `--approval <id>`. TeamCLI verifies the signed answer is
+   bound to this id, this action, this repository, team, `HEAD` and arguments, claims it once for
+   this action, and writes an audit entry in `~/.config/team/action-audit/`. `--dry-run` verifies
+   and spends nothing.
+
+**Toujours** also stores a signed rule for the same actions under the repository's parent folder,
+inside the owner's `approval-rule-ttl`: a later run of that action in a sibling repository is admitted
+with no request. Everything else fails closed: a missing, expired, mismatched (repository, team,
+`HEAD`, arguments or action), unsigned or forged answer, an answer signed for another kind of
+request, a request answered by a signer of the requester's own name, and a replay. Only lifecycle
+actions are requested this way; a grant, an owner-signer change or an approval-mode change keeps
+its own owner approval, so no principal grants or widens its own authority through it.
+
+`team init --request --then-up` asks for the team and its first `team up` in one request; the one
+answer admits `team init --execute <id>` and then `team up --approval <id>`, once each.
+
+## Trust at launch
+
+A file whose `trust:` is missing, empty or still project-relative does not stop the launch: the run
+trusts only the team's lobby and the project root, both absolute, and says so once on stderr with
+the block that makes it permanent. Nothing is written to the file.
+
+Before a seat starts, `up` pre-accepts its CLI's folder-trust question for the lobby (a lobby seat)
+or the project root (a seat that starts there), and for nothing else, in the record that CLI already
+reads: `projects[<folder>].hasTrustDialogAccepted` in `~/.claude.json` for Claude Code,
+`[projects."<folder>"] trust_level = "trusted"` in `~/.codex/config.toml` for Codex, the
+`trusted_folders.toml` table `grok --trust` writes, and the marker `cursor-agent --trust` writes. No
+key is ever typed into a pane for it. A CLI with no captured record (Antigravity) still starts, and
+its dialog waits for the owner as before.
 
 ## A create-grant's seat
 

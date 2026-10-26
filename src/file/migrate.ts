@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { defaultFs, lobbyTrustEntry, type FsReader } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
-import { absoluteTrustProblem, fixedFolder, insideProject } from './paths.ts';
+import { absoluteTrustProblem, fixedFolder, insideProject, isLegacyTrust } from './paths.ts';
 import type { TeamFile } from './types.ts';
 
 /** The keys of the file the block is computed from — `seatStart`'s own Pick, so every printer
@@ -129,3 +129,21 @@ export function migrationText(team: MigrationTeam, root: string, home: string, f
   ].join('\n');
 }
 
+
+/**
+ * A file whose `trust:` is missing, empty or still project-relative does not stop `up`, `add` or
+ * `doctor`: the run trusts exactly the two folders it needs — the team's lobby and the project
+ * root, both absolute — and says so once. Nothing is written to the file; the line names the
+ * block that makes it permanent. Null when the file already lists absolute trust.
+ */
+export function derivedTrust(team: MigrationTeam, root: string, home: string): { trust: string[]; warning: string } | null {
+  if (team.trust && team.trust.length > 0 && !isLegacyTrust(team.trust)) return null;
+  const lobby = lobbyOf(home, root, team);
+  const lobbyEntry = lobbyTrustEntry(home, { lobby });
+  const trust = lobbyEntry === root ? [root] : [lobbyEntry, root];
+  const why = !team.trust || team.trust.length === 0 ? 'lists no trust' : 'lists project-relative trust';
+  return {
+    trust,
+    warning: `the file ${why}: this run trusts only the lobby ${lobby} and the project root ${root}; to keep it, write trust as absolute paths including the lobby ${lobby}:\n${migrationText(team, root, home)}`,
+  };
+}

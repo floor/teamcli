@@ -1536,17 +1536,19 @@ describe('trust: validation', () => {
     expect(loaded.ok).toBe(true);
   });
 
-  test('empty trust loads and cannot launch', async () => {
+  test('empty trust loads and launches, trusting only the lobby and the project root, said once', async () => {
     const yaml = migratedTeamYaml().replace(/trust:\n(?:  - .*\n)+/, 'trust: []\n');
     writeFileSync(join(root, '.agents', 'team.yaml'), yaml);
     const loaded = loadTeamFile(root, { home });
     expect(loaded.ok).toBe(true);
     const made = world();
     const run = await runUpCmd([], made);
-    expect(run.code).toBe(1);
-    expect(run.err).toContain('the file is legacy: migrate trust to absolute paths');
-    expect(made.workspaces).toEqual([]);
-    expect(existsSync(lobby)).toBe(false);
+    expect(run.err).toContain(`team up: the file lists no trust: this run trusts only the lobby ${lobby} and the project root ${root}`);
+    expect(run.err.split('this run trusts only').length).toBe(2);
+    expect(run.err).not.toContain('the file is legacy: migrate trust');
+    expect(run.code, run.err + run.out).toBe(0);
+    // The file is not edited for it.
+    expect(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8')).toBe(yaml);
     const status = await runStatusCmd();
     expect(status.code).not.toBe(2);
     const work = await runWorktreeCmd(['new', 'task']);
@@ -1678,18 +1680,19 @@ seats:
     }
   });
 
-  test('omitted trust refuses up and add rather than launching', async () => {
+  test('omitted trust does not stop up or add: each warns once and continues', async () => {
     const omittedTrustYaml = migratedTeamYaml().replace(/trust:\n(?:  - .*\n)+/, '');
     approveYaml(omittedTrustYaml);
     const made = world();
     const upRes = await runUpCmd([], made);
-    expect(upRes.code).toBe(1);
-    expect(upRes.err).toContain('the file is legacy: migrate trust to absolute paths');
-    expect(made.workspaces).toHaveLength(0);
+    expect(upRes.err).toContain(`team up: the file lists no trust: this run trusts only the lobby ${lobby} and the project root ${root}`);
+    expect(upRes.err).not.toContain('the file is legacy: migrate trust');
+    expect(upRes.code, upRes.err + upRes.out).toBe(0);
 
     const addRes = await runAddCmd(['worker'], world());
-    expect(addRes.code).toBe(1);
-    expect(addRes.err).toContain('the file is legacy: migrate trust to absolute paths');
+    expect(addRes.err).toContain(`team add: the file lists no trust: this run trusts only the lobby ${lobby} and the project root ${root}`);
+    expect(addRes.err.split('this run trusts only').length).toBe(2);
+    expect(addRes.err).not.toContain('the file is legacy: migrate trust');
   });
 
   test('containment: dangling linked descendant fails containment', () => {
@@ -1940,28 +1943,27 @@ describe('legacy files and migration', () => {
     expect('problem' in start && start.problem).toContain('inside the protected checkout');
   });
 
-  test('up and add refuse every seat with the migration message naming the lobby path and showing trust:', async () => {
+  test('up and add warn once with the trust block naming the lobby path, trust the lobby and the project root, and continue', async () => {
     approveYaml(legacyTeamYaml());
 
     const madeUp = world();
     const upRes = await runUpCmd([], madeUp);
-    expect(upRes.code).toBe(1);
+    expect(upRes.err.split('this run trusts only').length).toBe(2);
     // The third entry is the one the old message left out: the folder workspace.path places
     // worktrees in, and the from-line says which key each entry comes from.
     expect(upRes.err).toContain(
-      `team up: the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`,
+      `team up: the file lists project-relative trust: this run trusts only the lobby ${lobby} and the project root ${root}; to keep it, write trust as absolute paths including the lobby ${lobby}:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`,
     );
     expect(upRes.err).toContain(
       `~/.config/team/lobby is the machine lobby, where every seat starts now; ${root} is the project root, replacing "."; `
         + `${join(base, 'worktrees', 'acme')} is the folder workspace.path "../worktrees/{repo}/{task}" places worktrees in, replacing "../worktrees/acme/*"`,
     );
-    expect(madeUp.workspaces).toHaveLength(0);
+    expect(upRes.err).not.toContain('the file is legacy: migrate trust');
 
     const madeAdd = world();
     const addRes = await runAddCmd(['worker'], madeAdd);
-    expect(addRes.code).toBe(1);
-    expect(addRes.err).toContain(`team add: the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`);
-    expect(madeAdd.workspaces).toHaveLength(0);
+    expect(addRes.err).toContain(`team add: the file lists project-relative trust: this run trusts only the lobby ${lobby} and the project root ${root}; to keep it, write trust as absolute paths including the lobby ${lobby}:\ntrust:\n  - ~/.config/team/lobby\n  - ${root}\n  - ${join(base, 'worktrees', 'acme')}\n`);
+    expect(addRes.err).not.toContain('the file is legacy: migrate trust');
   });
 
   test('doctor prints migration note once for legacy file, and stops after migration plus approval', async () => {
@@ -2219,7 +2221,6 @@ describe('the upgrade from 0.2.1', () => {
     // The file exactly as init wrote it, uncommented.
     approveYaml(v021TeamYaml());
     const refusedA = await runUpCmd([], world());
-    expect(refusedA.code).toBe(1);
     const entriesA = blockOf(refusedA.err);
     expect(entriesA).toEqual(['~/.config/team/lobby', root, join(base, 'worktrees', 'acme')]);
     writeFileSync(join(root, '.agents', 'team.yaml'), pasteTrust(v021TeamYaml(), entriesA));

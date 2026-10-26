@@ -7,13 +7,16 @@
 // What the page can do, each completed only by an owner-device signature:
 // - register a passkey as an owner signer (the existing Secure Enclave signer confirms with Touch ID);
 // - sign the waiting security-profile proposal;
-// - answer a waiting team-create request (oui / always / non).
+// - answer a waiting team-create request, or a team import / add / up request (oui / always / non).
 // Every API call carries the per-run token from the link and must come to Host localhost:<port>.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { addOwnerSigner, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
-import { approveTeamCreate } from '../client/team-create.ts';
+import { actionRequestsFolder, approveTeamCreate } from '../client/team-create.ts';
+import { approveOwnerAction, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { ownerDeviceConsent, readProposal, readSecurityProfile, securityProfileChallenge, securityProfileLine, signSecurityProfile } from './profile.ts';
 
 export const OWNER_PAGE_RP_ID = 'localhost';
@@ -43,6 +46,19 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   const signerOfCredential = (credentialId: string) => readOwnerSeat(home)?.signers.find((s) => s.type === 'webauthn' && s.credential_id === credentialId);
   const assertionOf = (a: Assertion) => ({ authenticator_data: a.authenticatorData, client_data_json: a.clientDataJSON, signature: derB64urlToHex(a.signature) });
 
+  // A request already answered, or past its fifteen minutes, is not shown again.
+  const answeredOrExpired = (id: string): boolean => {
+    try {
+      if (existsSync(join(actionRequestsFolder(home), `${id}.seat-answer.json`))) return true;
+      const record = JSON.parse(readFileSync(join(actionRequestsFolder(home), `${id}.json`), 'utf8')) as { expires_at?: string };
+      return typeof record.expires_at !== 'string' || Date.parse(record.expires_at) <= now().getTime();
+    } catch {
+      return true;
+    }
+  };
+  // One answer route for both request kinds: a team-create id (tc_) or an owner-action id (oa_).
+  const approveAny = (id: string, ...rest: Parameters<typeof approveTeamCreate> extends [unknown, unknown, ...infer R] ? R : never) =>
+    (OWNER_ACTION_ID_PATTERN.test(id) ? approveOwnerAction : approveTeamCreate)(home, id, ...rest);
   const state = () => {
     const seat = readOwnerSeat(home);
     const proposal = readProposal(home);
@@ -50,7 +66,10 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       seat: seat === null ? null : { team: seat.team, signers: seat.signers.map((s) => ({ name: s.name, type: s.type, credential_id: s.credential_id ?? null })) },
       profile: securityProfileLine(readSecurityProfile(home, store, now())),
       proposal: proposal === null ? null : { profile: proposal.profile, expires: proposal.expires, signer: proposal.signer, challenge: securityProfileChallenge(proposal) },
-      requests: ownerSeatMessages(home).filter((m) => (m as { kind?: string }).kind === 'team-create-confirmation').map((m) => ({ id: m.request_id, text: m.text })),
+      requests: ownerSeatMessages(home)
+        .filter((m) => ['team-create-confirmation', 'owner-action-confirmation'].includes((m as { kind?: string }).kind ?? ''))
+        .filter((m) => !answeredOrExpired(m.request_id))
+        .map((m) => ({ id: m.request_id, text: m.text })),
       rp_id: OWNER_PAGE_RP_ID,
     };
   };
@@ -99,7 +118,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       if (signer === undefined) return { status: 400, body: { error: 'unknown passkey' } };
       const at = now();
       // Asked without an assertion, the signer names the exact challenge; nothing is written.
-      const probe = approveTeamCreate(home, id, word, store, at, { signer: signer.name });
+      const probe = approveAny(id, word, store, at, { signer: signer.name });
       const challenge = !probe.ok ? /sign challenge (\S+)/.exec(probe.why)?.[1] : undefined;
       if (challenge === undefined) return { status: 400, body: { error: probe.ok ? 'unexpected' : probe.why } };
       pendingAnswers.set(`${id}:${word}:${signer.name}`, { at, challenge });
@@ -111,7 +130,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       const pending = signer === undefined ? undefined : pendingAnswers.get(`${a.id}:${a.word}:${signer.name}`);
       if (signer === undefined || pending === undefined) return { status: 400, body: { error: 'no challenge was issued for this answer' } };
       pendingAnswers.delete(`${a.id}:${a.word}:${signer.name}`);
-      const answered = approveTeamCreate(home, a.id, a.word, store, pending.at, { signer: signer.name, assertion: assertionOf(a) });
+      const answered = approveAny(a.id, a.word, store, pending.at, { signer: signer.name, assertion: assertionOf(a) });
       return answered.ok ? { status: 200, body: { ok: true, choice: answered.choice } } : { status: 400, body: { error: answered.why } };
     },
   };

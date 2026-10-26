@@ -17,6 +17,8 @@ and nothing else in the archive is restored: the state and the queues stay where
 ## Synopsis
 
     team init [--restore] [--from-archive <folder>] [--json]
+    team init --request [--then-up] [--json]
+    team init --execute <request-id> [--json]
 
 ## Flags
 
@@ -24,6 +26,8 @@ and nothing else in the archive is restored: the state and the queues stay where
 | --- | --- | --- |
 | `--restore` | — | write the copy of the team file this machine stored, instead of a skeleton |
 | `--from-archive` | `<folder>` | write the team file the archive at that folder holds, instead of a skeleton; `--restore` and this are two sources for the one file, and one of them is passed |
+| `--request` | — | record a team-create request for the owner seat; with `--then-up`, the first `team up` too, so one owner-seat answer creates and starts the team ([team up: Owner-seat approval](up.md#owner-seat-approval-no-owner-terminal)) |
+| `--execute` | `<request-id>` | write the team file once the owner seat signed the request |
 | `--json` | — | the same outcome as one JSON document (`team.init`) instead of the line |
 | `--help`, `-h` | — | the usage, and exit 0 |
 

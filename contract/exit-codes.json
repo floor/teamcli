@@ -32,6 +32,13 @@
     {
       "code": 0,
       "command": "add",
+      "id": "add.approval-requested",
+      "meaning": "an owner-seat request for this add was recorded and sent to the owner seat",
+      "trigger": "team add <name> --request"
+    },
+    {
+      "code": 0,
+      "command": "add",
       "id": "add.dry-run",
       "meaning": "a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch)",
       "trigger": "team add worker --dry-run"
@@ -56,6 +63,13 @@
       "id": "add.already-running",
       "meaning": "the seat is already running",
       "trigger": "team add worker"
+    },
+    {
+      "code": 1,
+      "command": "add",
+      "id": "add.approval-refused",
+      "meaning": "the owner-seat request or approval for this add was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team add <name> --approval <request-id>"
     },
     {
       "code": 1,
@@ -1936,9 +1950,23 @@
     {
       "code": 0,
       "command": "import",
+      "id": "import.approval-requested",
+      "meaning": "an owner-seat request for this import was recorded and sent to the owner seat",
+      "trigger": "team import --request"
+    },
+    {
+      "code": 0,
+      "command": "import",
       "id": "import.done",
       "meaning": "the registry holds the file, or would with --dry-run",
       "trigger": "team import"
+    },
+    {
+      "code": 1,
+      "command": "import",
+      "id": "import.approval-refused",
+      "meaning": "the owner-seat request or approval for this import was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team import --approval <request-id>"
     },
     {
       "code": 1,
@@ -4995,6 +5023,13 @@
     {
       "code": 0,
       "command": "up",
+      "id": "up.approval-requested",
+      "meaning": "an owner-seat request for this launch was recorded and sent to the owner seat",
+      "trigger": "team up --request"
+    },
+    {
+      "code": 0,
+      "command": "up",
       "id": "up.dry-run",
       "meaning": "a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch)",
       "trigger": "team up --dry-run"
@@ -5012,6 +5047,13 @@
       "id": "up.agents",
       "meaning": "the agents can't be read",
       "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.approval-refused",
+      "meaning": "the owner-seat request or approval for this launch was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team up --approval <request-id>"
     },
     {
       "code": 1,
