@@ -32,7 +32,7 @@ const LEAD_ROW =
   'never its own recorded pane, never `--abandon` on the orchestrator\'s or the operator\'s seat, and never `--abandon` on a `working` seat';
 const BUSY_ENUMERATION =
   'working, blocked at a prompt, at its own exit question, or holding unsent text';
-const FILE_FLAG = 'the team file, instead of `.agents/team.yaml`; the owner\'s alone';
+const FILE_FLAG = 'deprecated: a legacy team file to read instead of the team\'s registry record; the owner\'s alone';
 const SESSION_FLAG = 'the herdr session, instead of `team.session`; the owner\'s alone';
 const RESTARTED_ROW = 'team restart: restarted <seat>; pane <old-pane> -> <new-pane>';
 const DRY_ROW = 'the stop line and the launch plan';

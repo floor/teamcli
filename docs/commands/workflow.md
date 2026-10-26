@@ -4,7 +4,7 @@ Checks, dry-runs, or replays a workflow definition (`version: 1`):
 - `team workflow check <path> [--json]` checks one workflow definition and its transition graph:
   structural schema rules, reachability, transition ordering and ambiguity, hook effects, and
   resolved role references (`owner`, `lead`, `integrator`, and the `role:` strings declared on seats
-  in `.agents/team.yaml`, read from the working directory first and from `<path>`'s folder when the
+  in the team's configuration (`.agents/team.yaml` on the legacy `file` source), read from the working directory first and from `<path>`'s folder when the
   working directory has no team file). Transition `on:` entries accept the twelve transition signals
   (`pr-opened`, `pr-merged`, `sha-verified`, `gate-passed`, `approved`, `tag-outcome`,
   `publish-outcome`, `deploy-outcome`, `time-reached`, `goals-set`, `diverged`, `accepted`).

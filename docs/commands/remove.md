@@ -19,7 +19,7 @@ being touched: nothing is typed into it; left running.
 | `--keep` | — | leave the seat in the file with `stopped: true`: `team up` leaves it out, and `team add <name>` starts it again. On the orchestrator's or the operator's seat it is a swap: the file is not edited, the state records the swap, and `team add <name>` starts the new agent |
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--client` | `<grant-file>` | the client form: an owner-signed manager bundle grant that carries `remove`, see [A client's remove](#a-clients-remove) |
 | `--key` | `<client-key>` | the client's private key file; required with `--client`, refused without it |
 | `--team` | `<team>` | with `--client`, the team the grant is for; required |

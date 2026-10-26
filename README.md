@@ -20,27 +20,27 @@ npm install -g team
 
 ```sh
 mkdir hello && cd hello && git init
-team init                  # writes .agents/team.yaml, private to this clone
-$EDITOR .agents/team.yaml  # name your seats; any CLI fits any role
+team init                  # writes the team into this machine's registry
+team config edit           # name your seats; any CLI fits any role
 team doctor                # what this machine still needs
 team up --dry-run          # every command it would run, and every refusal
 team up                    # starts the session and its seats
 ```
 
-The file stays private to the clone: `team init` keeps it out of git in `.git/info/exclude`,
-never by editing `.gitignore`. `team init --restore` brings back the copy this machine stored.
-Read a file you receive before you run `team up`.
+The team lives in this machine's registry, not in the project: `team init` writes it there and
+`team config get|set|unset|edit` edits it, so nothing is committed and a fresh clone carries no
+team. A project that still has `.agents/team.yaml` from 0.5.3 moves it with `team migrate`.
 
 ## The few ideas
 
-**The team file.** `.agents/team.yaml` holds the roster and the owner's sections — `budgets`,
-`trust`, `grant`, `delegates`. It is private to each clone, and the commands read it as the
-record. The whole format is in
-[the team file](https://github.com/floor/teamcli/blob/main/docs/team-file.md).
+**Team configuration.** The team's record in the registry holds the roster and the owner's
+sections — `budgets`, `trust`, `grant`, `delegates` — and the commands read it as the record.
+`team config` reads and edits it. The whole format is in
+[team configuration](https://github.com/floor/teamcli/blob/main/docs/team-file.md).
 
 **Seats.** A seat is one role, one model, one launch command, in its own pane. Any CLI fits any
 role: `vendor`, `model` and `version` name what it runs, `count` adds instances, and `parked`
-or `stopped` keeps it out of reports or out of `up`. Swap a seat by editing the file.
+or `stopped` keeps it out of reports or out of `up`. Swap a seat with `team config set`.
 
 **Owner, grants, policies.** The owner is a person at a terminal outside herdr. Only the owner
 grants rights: `team grant` and `team delegate` record what a seat or pane may do, `budgets`
@@ -51,10 +51,10 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 
 | Command | What it does |
 | --- | --- |
-| [`team init`](https://github.com/floor/teamcli/blob/main/docs/commands/init.md) | writes the team file |
-| [`team doctor`](https://github.com/floor/teamcli/blob/main/docs/commands/doctor.md) | checks this machine against the file |
+| [`team init`](https://github.com/floor/teamcli/blob/main/docs/commands/init.md) | writes the team into the registry |
+| [`team doctor`](https://github.com/floor/teamcli/blob/main/docs/commands/doctor.md) | checks this machine against the team |
 | [`team up`](https://github.com/floor/teamcli/blob/main/docs/commands/up.md) / [`team down`](https://github.com/floor/teamcli/blob/main/docs/commands/down.md) | starts or stops the session and its seats |
-| [`team status`](https://github.com/floor/teamcli/blob/main/docs/commands/status.md) | the file against the running session, each difference with its repair |
+| [`team status`](https://github.com/floor/teamcli/blob/main/docs/commands/status.md) | the team against the running session, each difference with its repair |
 | [`team seats`](https://github.com/floor/teamcli/blob/main/docs/commands/seats.md) | each seat's state, and where it was read |
 | [`team send`](https://github.com/floor/teamcli/blob/main/docs/commands/send.md) | one message to one seat, with a delivery report |
 | [`team drops`](https://github.com/floor/teamcli/blob/main/docs/commands/drops.md) | the messages waiting for this seat |
@@ -90,7 +90,7 @@ The full list is in [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CH
 
 ## Learn more
 
-- [The team file](https://github.com/floor/teamcli/blob/main/docs/team-file.md) — the format by example, then every section field by field.
+- [Team configuration](https://github.com/floor/teamcli/blob/main/docs/team-file.md) — the registry record, `team config`, the format by example, then every section field by field.
 - [The command reference](https://github.com/floor/teamcli/blob/main/docs/commands/README.md) — every command, flag, refusal and exit code.
 - [Upgrading to 0.5](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.md) — from 0.3.5 or 0.4.x.
 - [Moving to 0.5.5](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.5.md) — run `team migrate` once in each project.

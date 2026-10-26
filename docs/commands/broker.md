@@ -38,7 +38,7 @@ file, and exits 0.
 
 This page's fixture team is the file-sourced one the other pages use, so the run below is the
 refusal a file source earns: the broker serves a tracker source, and a file source's records are
-already in the checkout. A broker source writes `.agents/team.yaml` with the tracker in place of
+already in the checkout. A broker source writes the team's configuration with the tracker in place of
 the path:
 
 ```yaml file=.agents/team.yaml

@@ -16,7 +16,7 @@ request's body alone and needs no git.
 | --- | --- | --- |
 | `<ref>` | one commit, or a range when it holds `..` | the commits to check, passed to git as given (`origin/main..HEAD`) |
 | `--since <ref>` | a commit | skip this commit and everything reachable from it, for this run; overrides `identity.since` |
-| `--file <path>` | a team file | the team file to read, instead of `.agents/team.yaml` |
+| `--file <path>` | a team file | deprecated: a legacy team file to read instead of the team's registry record |
 | `--json` | — | the report as the `team.commits` document (`schema/commits.schema.json`); a refusal as the `team.error` document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 

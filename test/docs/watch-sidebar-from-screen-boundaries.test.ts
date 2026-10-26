@@ -17,14 +17,14 @@ import { newMemory, pass } from '../../src/watch/pass.ts';
 
 const example = readFileSync(new URL('../fixtures/example.yaml', import.meta.url), 'utf8');
 
-// The write summary's sentence and the team-file page's paragraph, as written. Whitespace runs
+// The write summary's sentence and the team configuration page's paragraph, as written. Whitespace runs
 // collapse before the match, so the sentences survive line wrapping but not rewording.
 const WATCH_PAGE = '../../docs/commands/watch.md';
 const FILE_PAGE = '../../docs/team-file.md';
 const WRITE_SUMMARY =
   "the seats' sidebar lines — the workspace title from the file, and the display line from the file and the pane's screen; it paints them on its first cycle and again when the title, the model or the effort changes";
 const FILE_PARAGRAPH =
-  "While the seat runs, the watch paints both lines. Line 1 is the file's title. Line 2 takes the running model and version the pane's screen shows when they differ from the file's, and the effort word the screen shows; a screen this version cannot read, or one that shows no running model, keeps the file's display — never the CLI's name. An effort word, once seen, stays until a later screen shows a different one.";
+  "While the seat runs, the watch paints both lines. Line 1 is the record's title. Line 2 takes the running model and version the pane's screen shows when they differ from the record's, and the effort word the screen shows; a screen this version cannot read, or one that shows no running model, keeps the record's display — never the CLI's name. An effort word, once seen, stays until a later screen shows a different one.";
 
 function prose(path: string): string {
   return readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\s+/g, ' ');

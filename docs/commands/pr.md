@@ -14,7 +14,7 @@ The commits are a separate run, [`team commits check`](commits.md).
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `<file>` | a path, or `-` | the pull request's body; `-` reads standard input |
-| `--file <path>` | a team file | the team file to read, instead of `.agents/team.yaml` |
+| `--file <path>` | a team file | deprecated: a legacy team file to read instead of the team's registry record |
 | `--json` | — | the report as the `team.pr` document (`schema/pr.schema.json`); a refusal as the `team.error` document on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 

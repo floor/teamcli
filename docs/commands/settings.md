@@ -22,7 +22,7 @@ it.
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's |
 | `--json` | — | print a JSON document (`format: 1`, `project`, `seat`, `settings`), one entry per key with `value`, `source` and `applies`, and `source_file` when a signed record wins the key; the write forms print `team.settings-change` |
 | `--dry-run` | — | the write forms: print the change and write nothing |
 | `--help`, `-h` | — | the usage, and exit 0 |

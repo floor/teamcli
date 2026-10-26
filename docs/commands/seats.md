@@ -14,7 +14,7 @@ when `--all` is given, with its human name when the file writes one, its stable 
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's |
 | `--client` | `<grant-file>` | the client form: an owner-signed manager bundle grant that carries `seats`; it reads that one team, as signed. `--file`, `--session` and `--watch` are refused with it. A refusal is `seats.client-refused` (exit 1) |
 | `--key` | `<client-key>` | the client's private key file; required with `--client` |
 | `--team` | `<team>` | with `--client`, the team the grant is for |

@@ -27,7 +27,7 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 | `--wait` | — | give a working seat up to 120 seconds to come free; one that never does is left running, as without it |
 | `--abandon` | — | the owner's: close the workspace of a seat that can't be asked, typing nothing into it; a seat this run asks and cannot stop is closed in the same run |
 | `--session` | `<name>` | the herdr session to stop, instead of `team.session`; the owner's alone — a delegate is refused it by the gate |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone — a delegate is refused it by the gate |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone — a delegate is refused it by the gate |
 | `--client` | `<grant-file>` | the client form: an owner-signed down grant for one team, see [A client's down grant](#a-clients-down-grant) |
 | `--key` | `<client-key>` | the client's private key file, which proves the client holds the key the grant names; required with `--client`, refused without it |
 | `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |

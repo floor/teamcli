@@ -1,31 +1,71 @@
-# The team file
+# Team configuration
 
-> **Since 0.5.5 the team lives in the registry, not in this file.** Run [`team migrate`](commands/migrate.md)
-> once in each project: it imports `.agents/team.yaml`, verifies it, and moves the file to the
-> Trash. Edit the team afterwards with [`team config get|set|unset|edit`](commands/config.md).
-> This page still documents the record's format — the registry holds the same YAML — and the
-> legacy `file` source (`team-config.source: file`) and `--file`, which are deprecated and kept for
-> tests and snapshots. See [UPGRADE-0.5.5.md](../UPGRADE-0.5.5.md).
+Since 0.5.5 a team's configuration lives in the registry, one record per team at
+`~/.config/team/team-config/<team id>.json`, keyed by the team ID. [`team init`](commands/init.md)
+creates it, every command reads it, and [`team config`](commands/config.md) edits it. The
+project holds no team file: there is nothing to commit and nothing to keep in sync, and a fresh
+clone of the project carries no team. The record is per machine, like the rest of the registry.
 
-`team` reads one team file per clone: `.agents/team.yaml` under the project root, or the path
-`--file` names. It is a documented subset of YAML, read by the library's own parser — maps, lists,
+`team` reads one team record per team: the one the registry holds for the project the command
+runs in, found from the repository's main checkout, so a run inside a linked worktree reads the
+same record. The record holds the team's YAML, read by the library's own parser — maps, lists,
 one-line `{ }` and `[ ]`, plain and quoted values, comments; anchors, aliases, merge keys, tags,
 block scalars, a second document and duplicate keys are refused, with the line number. The JSON
-Schema ships at `schema/team.schema.json`, and `team init` writes a
-`# yaml-language-server: $schema=…` line so editors validate the file. The format is walked
-below, by example; after it, this page documents the sections one by one.
+Schema ships at `schema/team.schema.json`, and every write is validated against it and the rules
+behind it before it is stored. The format is walked below, by example; after it, this page
+documents the sections one by one: `tasks`, `seats`, `delivery_order`, `grant`, `delegates`,
+tempo, and `budgets` with the format.
 
-With no `--file`, the file is `.agents/team.yaml` of the repository's main checkout, found
-through git's common directory, so a run inside a linked worktree reads the main checkout's file;
-a folder that is not a git repository is read from `.agents/team.yaml` in that folder only, not
-from a parent, and a link at `.agents` or at the file is not followed.
+## Editing with team config
 
-## The file's format
+`team config get <path>` prints one value, `team config set <path> <value>` writes one,
+`team config unset <path>` removes one, and `team config edit` opens the whole record as YAML in
+`$VISUAL` (else `$EDITOR`) and stores it when the editor exits 0 and the text validates. A path is
+dotted keys; under a list, a segment names the item by its `name` or by its index:
+
+```sh
+team config get seats.lead.model
+team config set seats.lead.model Opus
+team config set watch.unread_after 15m
+team config set tasks.policy.dispatch manual
+team config unset seats.lead.label
+team config edit                  # the whole record, as YAML
+```
+
+Writes are the owner's, from a terminal outside herdr; `get` is any caller's. A write that does
+not validate is refused whole, and nothing is stored. A change to an owner section leaves the
+approval stale, and the run names what the approval no longer covers. The other editor commands
+(`team add`, `team remove`, `team rename`, `team tempo`, `team grant`, `team delegate`) edit the
+same record. `team config get <path> --json` prints the value as JSON. The record itself is a JSON
+document in the registry holding the YAML text, its digest and its canonical record; read and write
+it through `team config`, never by hand.
+
+## Migrating from team.yaml
+
+Up to 0.5.3 the team lived in `.agents/team.yaml` in each clone. From 0.5.5 that file is legacy:
+only [`team migrate`](commands/migrate.md) and [`team import`](commands/import.md) read it. In
+each project, from a terminal outside herdr:
+
+```sh
+team migrate --dry-run   # what it would import and move; writes nothing
+team migrate             # imports the file, verifies it, moves it to the Trash
+```
+
+`team migrate` imports the file into the registry, reads it back and compares canonical records,
+and only then moves the file to the system Trash, or renames it to `.agents/team.yaml.migrated`
+when no Trash can be reached. It never deletes it. `--keep-file` imports and leaves the file in
+place, unread. The approval stays in force: it is signed over the canonical record, not the file's
+text. A project that skips the step is imported by the owner's first `team up`, which says so.
+When a leftover file says something the registry does not, `team check` and `team status` name
+`team import` as the repair. The `file` source (`team-config.source: file`) and `--file` are
+deprecated and kept for tests and snapshots. See [UPGRADE-0.5.5.md](../UPGRADE-0.5.5.md).
+
+## The record's format
 
 A documented subset of YAML, read by the library's own parser: maps, lists, one-line `{ }` and
 `[ ]`, plain and quoted values, comments. Anchors, aliases, tags, block scalars, several documents
-in one file and duplicate keys are refused, with the line number. The file starts with `format: 1`.
-The package ships the JSON Schema at `schema/team.schema.json`, and `team init` writes a `# yaml-language-server: $schema=…` line at the top of the file so editors validate it.
+in one record and duplicate keys are refused, with the line number. The record starts with `format: 1`.
+The package ships the JSON Schema at `schema/team.schema.json`, and every `team config` write is validated against it. `team config edit` shows the record as below.
 By example:
 
 ```yaml
@@ -89,7 +129,7 @@ seats:
     model: Gemini
     version: "3"
     launch: agy
-    stopped: true             # kept in the file; `up` doesn't start it
+    stopped: true             # kept in the record; `up` doesn't start it
 
 budgets:                      # the owner's: reserve or floor per account, marks, freshness
   accounts:
@@ -103,22 +143,22 @@ budgets:                      # the owner's: reserve or floor per account, marks
 - `in_project` names the project this team sits in, by the project's display name, while `project:`
   keeps meaning the team's own name; `project_lead: true` beside it marks the team that leads that
   project — one team per project, and `team check` refuses a second. The project's record then
-  carries the lead: the agent of the seat this file's `leads: true` marks as the team's lead,
-  re-resolved on every launch, so a mark that moves in the file moves the record with it.
+  carries the lead: the agent of the seat this record's `leads: true` marks as the team's lead,
+  re-resolved on every launch, so a mark that moves in the record moves the record with it.
 - `entity` names the entity this team belongs to: the level above its project that a setting, the
   lobby's `<entity>` folder and a lead pair's reach are read from, and the name that makes two
-  teams one entity's when both files carry it.
-- `lobby` names the folder every seat except a lead starts in: the file's own `lobby:` wins over
+  teams one entity's when both records carry it.
+- `lobby` names the folder every seat except a lead starts in: the record's own `lobby:` wins over
   the lobby the registry recorded for the session and over the defaults, and setting it records
   that lobby for the session. The `workspace.mode` bullet below states the whole resolution order.
 - `coordinator` and `operator` name seats: the coordinator dispatches work, the operator receives
   the watch's reports. `leads: true` on a seat is the same lead, spelled on the seat
   the way `coordinator:` names it. `assistant: true` marks a seat as its entity's assistant — the
   one seat `team send` admits to its entity's main coordinator, by its place in the chain and
-  never by a role's name. At most one seat of a file carries the mark, and never a seat with
+  never by a role's name. At most one seat of a record carries the mark, and never a seat with
   `count`; the entity's assistant is the first mark found walking its teams in chain order — the
-  entity's own team first, then its other teams by team id, rosters in the order the file writes
-  them — so an entity whose files mark none has no assistant.
+  entity's own team first, then its other teams by team id, rosters in the order the record writes
+  them — so an entity whose records mark none has no assistant.
 - `identity.signature` is the rule `check` enforces: a template, where it must stand, and which
   commits are exempt. Commit signatures read `Agent: {display} · {role}`, pull request bodies
   `**Agent:** {display} · {role}`. Without `display`, the signature reads "model version"; with it,
@@ -142,7 +182,7 @@ budgets:                      # the owner's: reserve or floor per account, marks
   numbered names; `parked` keeps a seat out of idle reports, `stopped` keeps it out of `up`.
 - `workspace.mode` is `shared` (every seat in the project) or `worktree` (each task in its own
   checkout, with `path`, `base` and `setup`). Every seat except a lead starts in the team's lobby —
-  the file's `lobby:` if it sets one, else the lobby the registry recorded for the session, else
+  the record's `lobby:` if it sets one, else the lobby the registry recorded for the session, else
   `<home>/.config/team/lobbies/<entity>` if it names `entity:`, else the machine-global
   `~/.config/team/lobby`. `trust` lists that lobby's entry — `~/…` under the home, absolute
   otherwise — along with the project root. `up` and `add` refuse a seat
@@ -153,7 +193,7 @@ budgets:                      # the owner's: reserve or floor per account, marks
 
 The herdr session carries the project, so a seat's name is its role: `coordinator`, `implementer`,
 `reviewer`. When a role is used twice, the model is added: `implementer-deepseek`. `up` and `add`
-title the workspace with the seat's written `label` when the file has one. A seat with no written
+title the workspace with the seat's written `label` when the record has one. A seat with no written
 label is titled `<name> · <role>`. Seats expanded from `count` each get a distinct title: a written
 label is kept on the first instance and later instances append `-<n>` (the same suffix as the name),
 and a seat with no written label already has a distinct name (`implementer-deepseek`,
@@ -161,7 +201,7 @@ and a seat with no written label already has a distinct name (`implementer-deeps
 and version, `Claude Opus 5.5`), and ` · ` plus `effort` when the seat sets one (`Grok 4.7 · high`),
 is the pane's second line, set after launch. Left out, the stored `label` stays the model and
 version in lowercase.
-`team doctor` warns, and does not refuse the file, when a name or a stored label repeats the
+`team doctor` warns, and does not refuse the record, when a name or a stored label repeats the
 project or the session.
 
 The Claude Code profile is tested with CLI 2.1.288 to 2.1.302 (`claude`).
@@ -217,14 +257,14 @@ read.
 
 `budgets` is the owner's: marks (percent used), how long a figure stays fresh, and each
 account's reserve or floor. An account's `shared` key is informational; `team` does not act
-on it. A seat spends its own `account:` when the file names one, its `vendor`
+on it. A seat spends its own `account:` when the record names one, its `vendor`
 when it doesn't, so one lab's two accounts are two buckets; a pattern names the account it
 measures, not the seat's. A `check` command is resolved to a file and hashed in the record
 this machine keeps. A change to that file leaves that account's check unapproved: it is
-not run, and the account reads unknown. The rest of the file still runs. `watch.quota_marks` is still read, with a warning, until you move it to
+not run, and the account reads unknown. The rest of the record still runs. `watch.quota_marks` is still read, with a warning, until you move it to
 `budgets.marks`. A figure first seen on one seat does not count until it changes or a
 second seat shows the same number. It goes stale from the moment it last changed, and
-the last readings are kept in the state file beside the team file. `team status` prints
+the last readings are kept in the team's state file. `team status` prints
 them, one row per account and window, when there is an account or a stored reading.
 
 `examples/checks/codex-quota` is a check for an openai account. It ships with the package: with a
@@ -264,7 +304,7 @@ twice. A secondary figure that cannot be written is left off. When the primary
 figure cannot be written, nothing is printed. Five hours (`300` minutes) is
 `session`, a day (`1440`) is `daily`, and a week (`10080`) is `weekly`. Any other
 length, a figure over 100%, or no such rollout prints nothing, so the account
-reads unknown. The file names the command the check runs. Bun has to be on
+reads unknown. The record names the command the check runs. Bun has to be on
 `PATH` when the check runs.
 
 More fields exist — `tools`, `trust`, `machine`, `limits`, `watch`, `visibility` and
@@ -328,9 +368,9 @@ tasks:
   is `tasks.cadence needs a value with its unit (s, m, h), such as 120s or 10m`.
 - Any other key, including `backoff` and `quiet_hours`, is an unknown field.
 
-The file at `path` is a YAML list of task records. `team issues` reads it. `team next` claims one
+The record at `path` is a YAML list of task records. `team issues` reads it. `team next` claims one
 record from it, and claims one from a broker source's read the same way — the lease stays local
-either way. Nothing in this build writes the file or the tracker.
+either way. Nothing in this build writes the record or the tracker.
 
 ## `seats`
 
@@ -341,9 +381,9 @@ no model — write the CLI's own name and version as the pair (`model: Jules`,
 launcher chooses it and checks the running seat instead of the launch line. The orchestrator
 and the operator start in the project folder. Every other seat starts in the team's lobby. A lead already running in
 either folder is left there. The fields are in
-[the file format](#the-files-format). The sidebar has two lines:
+[the record format](#the-records-format). The sidebar has two lines:
 
-- `label`, when the file writes one, is line 1, the workspace title. A seat expanded from
+- `label`, when the record writes one, is line 1, the workspace title. A seat expanded from
   `count` keeps that label on the first instance; each later instance appends `-<n>`, the same
   suffix the seat's name gets, so the lines differ (`desk`, `desk-2`).
 - A seat with no written label is titled `<name> · <role>`. Count instances already have
@@ -351,7 +391,7 @@ either folder is left there. The fields are in
 - Left out, the stored `label` stays the model and version in lowercase, as a file written that
   way has always read. That stored field stays in the seat's digest.
 - `display` defaults to `model` and `version` (`Claude Opus 5.5`). It must contain the version
-  as a token of its own when the file writes it. After launch, `up` and `add` set the pane's
+  as a token of its own when the record writes it. After launch, `up` and `add` set the pane's
   display_agent to `<display> <effort>` when the seat sets `effort`, and to `<display> default`
   when it does not. A CLI whose launcher takes no effort setting is the display alone —
   `Jules 0.1.42`, with no effort word and no `default`. The display stays the proper-case name,
@@ -359,16 +399,16 @@ either folder is left there. The fields are in
   as its status word, then ` · `, then that text (`done · Grok 4.7 high`,
   `idle · Opus 5.5 default`, `idle · Jules 0.1.42`). That is line 2.
 
-While the seat runs, the watch paints both lines. Line 1 is the file's title. Line 2 takes the
-running model and version the pane's screen shows when they differ from the file's, and the
+While the seat runs, the watch paints both lines. Line 1 is the record's title. Line 2 takes the
+running model and version the pane's screen shows when they differ from the record's, and the
 effort word the screen shows; a screen this version cannot read, or one that shows no running
-model, keeps the file's display — never the CLI's name. An effort word, once seen, stays until a
+model, keeps the record's display — never the CLI's name. An effort word, once seen, stays until a
 later screen shows a different one.
 
-`effort` is optional. It is a known field: a file may set it, and a file that leaves it out
+`effort` is optional. It is a known field: a file may set it, and a record that leaves it out
 loads as before. The words a lab allows are [`src/profiles/efforts.json`](../src/profiles/efforts.json),
 format 1, keyed by the seat's `vendor`. Each list is the words that lab's own CLI help printed.
-A lab whose help or model list names none is left out of the file, and a vendor with no entry
+A lab whose help or model list names none is left out of the record, and a vendor with no entry
 accepts any effort.
 
 A word outside its lab's list is a warning, and the warning names the words that lab allows.
@@ -382,20 +422,20 @@ Nothing in the launch line reads `effort`.
 `nickname` is optional on a seat: the human name for it, such as `Ada`. It takes the same
 characters as the seat's `name` — a letter or digit first, then letters, digits, `.`, `_` and
 `-` — it must be unique in the team, and it must not be another seat's name. Either collision
-would make one address name two seats, so a file that writes one is refused when it loads, and
-`team register` and `team add` refuse it too (they load the file first). A nickname equal to its
+would make one address name two seats, so a record that writes one is refused when it loads, and
+`team register` and `team add` refuse it too (they load the record first). A nickname equal to its
 own seat's name is not a collision: both spellings reach one seat. A counted entry may not carry
 one: a nickname names one seat. It is not a capability — the role keeps the grants, and a nickname
 confers nothing. It is part of the seat's digest, so writing or changing one needs a new approval,
-and a file that writes none keeps every approval it had. The name is shown in `team seats` and
+and a record that writes none keeps every approval it had. The name is shown in `team seats` and
 `team status --all` (the `NICKNAME` column, and the `nickname` field of their JSON) and in
 `team send --list`.
 
 A name's trailing digits are its number, read as a number rather than as text: `builder-9` sorts
 before `builder-10` and `builder-100`, and the next free one is the next integer. Two seats of one
 role whose names carry one number at different widths — `builder-1` and `builder-01` — are one seat
-written twice, and the file is refused when it loads; `team add` and `team register` refuse it too,
-because they load the file first.
+written twice, and the record is refused when it loads; `team add` and `team register` refuse it too,
+because they load the record first.
 
 `delivery_order` is optional on a seat: its own word on the order a send to it walks, described
 [below](#delivery_order).
@@ -408,7 +448,7 @@ order whatever the seat's key says, and `team check` reports no difference for a
 The watch types no
 retry there and no nudge: a held send's marker is given up on with the reason, and its message
 waits in the drop file. `team send --wait` to such a seat writes the record on the `drop` leg with
-nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a file that marks no seat keeps every digest
+nothing typed and awaits a reply record on the thread. The key is part of the seat's digest, and a record that marks no seat keeps every digest
 it had.
 
 `inbound` is optional on a seat: its own word on cross-session socket frames. `accept`
@@ -416,11 +456,11 @@ authorizes a send's `socket` leg for any launch; `hold` and `refuse` never let i
 explicit opt-out — and an omitted key leaves the choice to the launch. A send always needs the
 seat's own launch to declare `crossSessionInbound: accept`; with no `inbound` word, a seat
 TeamCLI launched is authorized by that launch alone (its generated settings file carries the
-attestation), while a session launched some other way is dialed only when the file says
+attestation), while a session launched some other way is dialed only when the record says
 `accept`. A frame the receiver's box holds at its dialog is recorded once as
 `held (socket)`, and the walk falls through to the next route with the same message id; the
 socket is not dialed again until the declaration the hold sat under is re-confirmed, by its
-settings file being rewritten. The key is part of the seat's digest, and a file that writes none
+settings file being rewritten. The key is part of the seat's digest, and a record that writes none
 keeps every digest it had; a word other than the three is refused under the seat.
 
 `liveness` is optional on a seat: its own word on the three liveness windows —
@@ -437,7 +477,7 @@ section's `idle_first`, `idle_owner` and `blind_after` are the team's own, descr
 ## `delivery_order`
 
 The order a send to this team's seats walks. It is not an owner section: writing or changing it
-is an ordinary change, and a file that writes none reads as the default order.
+is an ordinary change, and a record that writes none reads as the default order.
 Omitted, the general order is `mcp-inbox`, then `typed`, then `drop`; neither `native` nor
 `headless-resume` is ever in that default. A Codex receiver with no declared order has an
 implicit runtime queue first while its signed `codex-daemon` setting is on, then the typed wake,
@@ -511,7 +551,7 @@ How a sender from this team reads in TeamCLI's own headlines: the first line of 
 [`team messages`](commands/messages.md), the `SEAT` cell of [`team feed`](commands/feed.md), and
 the display name a seat's own CLI session is launched with where the CLI takes one
 (`claude`'s `--name`). It is not an owner section: writing or changing it is an ordinary change,
-and a file that writes none reads as `auto`. It changes presentation only: every signed record
+and a record that writes none reads as `auto`. It changes presentation only: every signed record
 keeps the seat in `from` and the registry id in `from_id`, and the `--json` readings keep the
 record's own fields.
 
@@ -520,7 +560,7 @@ The four words:
 - `auto` — the sender's nickname inside its own team, and `seat@team` from another, because a
   nickname is unique only inside one team. A seat whose file writes no nickname reads as its seat
   name.
-- `nickname` — the nickname wherever the sender is, or the seat name when the file writes none.
+- `nickname` — the nickname wherever the sender is, or the seat name when the record writes none.
 - `seat` — the seat name, always.
 - `seat@team` — the address, `helper@labs`; the seat alone only when no team record names one.
 
@@ -551,7 +591,7 @@ sender_name: nickname
 - A sender's team is resolved by the registry id first: the id names the roster line, and that
   line gives the nickname and the team's own name; a record's own team field answers only when no
   roster holds the id. A team no registry record holds is no answer, so the nickname — or the seat
-  name when the file writes none — stands. A [history line](commands/feed.md) records the
+  name when the record writes none — stands. A [history line](commands/feed.md) records the
   sender's team as the send wrote it, so a cross-team sender whose seat name another team also
   uses reads by its address in the feed when the registry holds that team; a line from a build
   that recorded none reads the plain seat name, never a guessed nickname.
@@ -574,7 +614,7 @@ grant:
 ```
 
 - `session` is the team's own session: the `session` key, or `<entity>-<project>` when that key is
-  omitted and the file names an entity (the project name alone when it names none). Any other value
+  omitted and the record names an entity (the project name alone when it names none). Any other value
   is `grant.session must be the file's session "<session>": "<written>"`.
 - `seat` is the orchestrator's name, the one `coordinator:` or `leads: true` resolves. The
   operator's name, and any other name, is `grant.seat must name the orchestrator "<seat>":
@@ -589,7 +629,7 @@ grant:
   the pane its own call runs in — so the orchestrator's own swap stays the owner's or a
   delegate's whose entry lists `swap`. The grant itself stays an owner section.
 - `approve` is accepted in `scope` and acts on nothing: `team approve` was removed, and the word
-  stays so a file that already names it loads unchanged. A change to `grant` itself, and a
+  stays so a record that already names it loads unchanged. A change to `grant` itself, and a
   change to any other owner section, stays the owner's.
 - Any other key, including `path`, is an unknown field.
 - `team up` admits the orchestrator's seat when the live file's `grant` lists `up`. The run is this
@@ -598,12 +638,12 @@ grant:
   the orchestrator's seat and the operator's seat running. `team reload <seat>` admits that
   seat when the list includes `reload`: one named seat, closed only at an idle prompt when its
   declared model or effort differs from the launch, then launched again. It does not name the
-  caller's own seat. A file that omits `grant` keeps today's `down`.
+  caller's own seat. A record that omits `grant` keeps today's `down`.
 
 ## `delegates`
 
 Names panes outside the team's session that may run some operational commands as a delegate of
-this team file. It is an owner section: only the owner writes it. Omitted, it reads as `null`
+this team's record. It is an owner section: only the owner writes it. Omitted, it reads as `null`
 and nothing is delegated.
 
 ```yaml
@@ -618,7 +658,7 @@ delegates:
   pane are refused.
 - A pane is herdr's pane ID — `<session>/<pane id>`, such as `main/w1:p1` — one slash, no
   whitespace, matched on the whole string and case-sensitively. A pane closed and made again has
-  a new ID, so delegation is off until the owner writes that new ID into the file.
+  a new ID, so delegation is off until the owner writes that new ID into the record.
 - `commands` names at most one each of the six `up`, `down`, `add`, `remove`, `approve` and
   `swap`. `swap` admits `team remove <lead> --keep` and `team add <lead>` on the orchestrator's
   or the operator's seat — the swap of that seat's agent — and nothing else; `remove` never
@@ -626,9 +666,9 @@ delegates:
   Entry order and command order are part of the value the owner writes: a reorder is a change
   like any other.
 - `approve` is accepted in `commands` and acts on nothing: `team approve` was removed, the word
-  stays so a file that already names it loads unchanged, and `team check` prints a note above its
+  stays so a record that already names it loads unchanged, and `team check` prints a note above its
   findings asking for it to be dropped. Every other act reads the live file. A delegate's commands
-  write the file's roster alone: the owner's sections — `delegates`, `budgets`, `limits`, identity,
+  write the record's roster alone: the owner's sections — `delegates`, `budgets`, `limits`, identity,
   `trust`, the workspace, the operator and orchestrator — stay the owner's, and so does any
   section added later. A delegated act records one audit line naming the pane and what it did.
 - A pane several teams' live files name is a delegate of each — the files do not see or
@@ -663,8 +703,8 @@ tempo: urgent
 - An omitted `idle_repeat` stays off. `interval` is the pass rate and is not scaled, and
   neither are the quota marks, the check switches or the liveness windows `idle_owner` and
   `blind_after`.
-- `relaxed` and `urgent` take effect on the next pass once a verified record of the file is in
-  force; a file with no such record runs the default timings. A file that omits the key, and one
+- `relaxed` and `urgent` take effect on the next pass once a verified record of the record is in
+  force; a record with no such record runs the default timings. A record that omits the key, and one
   that sets `normal`, leave every wait as written.
 
 ## watch.queue_dir

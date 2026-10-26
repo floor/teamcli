@@ -17,7 +17,7 @@ rules line: no dialog key is pressed and no rules line is typed; left as it is.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--json` | — | print one JSON document and nothing on stderr; a failure is the structured error document |
 | `--help`, `-h` | — | the usage, and exit 0 |
 

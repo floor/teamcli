@@ -75,9 +75,9 @@ the bus; it is never typed into the orchestrator's pane.
 
 ## What it reads and writes
 
-Reads the team file — again on every pass, so a seat parked or stopped since is seen — this
+Reads the team's configuration — its registry record, or the team file on the legacy `file` source — again on every pass, so a seat parked or stopped since is seen — this
 machine's record store, the session's state (`.agents/team.state.json`) and herdr: the session's
-agents, each pane's screen and status. With no `--file`, that file is `.agents/team.yaml` of the
+agents, each pane's screen and status. On the legacy `file` source with no `--file`, that file is `.agents/team.yaml` of the
 repository's main checkout, found through git's common directory; a folder that is not a git
 repository is read from `.agents/team.yaml` in that folder only, not from a parent, and a link at
 `.agents` or at the file is not followed. A file at another path is what this command reads when `up` recorded it for the watch
@@ -178,7 +178,7 @@ repair is to stop it and run `team up`.
 | Flag | Meaning |
 | --- | --- |
 | `--session <name>` | the herdr session to watch, instead of `team.session` |
-| `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file <path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--no-nudge` | the owner's. Type nothing into any pane: no pause notice, no message ring, no held-send retry and no unread wake, and the dispatcher dispatches nothing at all. The reports still go to the log, and a report for the owner is still a desktop notification |
 | `--no-notify` | the owner's. No desktop notification for a report addressed to the operator. A report addressed to the owner is still notified, still written to the log, and still visible in `team status` |
 | `--json` | not used on the daemon loop: the flag is an invocation refusal, one `team.error` document on stdout with stderr empty, and exit 2 |

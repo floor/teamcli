@@ -23,7 +23,7 @@ writes nothing.
 | `--seat` | `<name>` | records a declared seat in the worktree's record |
 | `--branch` | `<name>` | `remove` only: the branch the worktree must be on; any other is refused |
 | `--session` | `<name>` | the session the caller is judged in, instead of the team's own; `new` and `remove` read and write that session; the owner's alone |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--json` | — | `list` prints its reading document; `new` and `remove` print their action envelope |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
