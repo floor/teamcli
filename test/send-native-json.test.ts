@@ -16,7 +16,7 @@ afterEach(() => {
 test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async () => {
   // A trigger the seat takes is a transport delivery, not a read: the box cleared and the
   // screen moved on, and no signed read receipt came back. The document therefore says
-  // `sent (unconfirmed)` with the trigger note, as docs/commands/send.md's typed-leg row says,
+  // `sent (unconfirmed)` with the trigger note, as docs/internal/commands/send.md's typed-leg row says,
   // and the exit is still 0 — the record is on disk.
   const made = world();
   cleanup = made.cleanup;

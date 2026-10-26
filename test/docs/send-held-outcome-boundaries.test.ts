@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 // day this page quietly lies.
 
 const FEED = readFileSync(new URL('../../docs/commands/feed.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
-const SEND_PAGE = readFileSync(new URL('../../docs/commands/send.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+const SEND_PAGE = readFileSync(new URL('../../docs/internal/commands/send.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
 const HISTORY_SRC = readFileSync(new URL('../../src/send/history.ts', import.meta.url), 'utf8');
 const SEND_SRC = readFileSync(new URL('../../src/commands/send.ts', import.meta.url), 'utf8');
 

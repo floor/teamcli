@@ -9,10 +9,15 @@ import type { Io } from '../src/io.ts';
 import { runPage } from './docs/run.ts';
 
 const DIR = join(import.meta.dir, '..', 'docs', 'commands');
+// A command's full reference — every flag, refusal, outcome and exit code — lives in
+// docs/internal/commands/<command>.md once its public page is the short human one; its
+// examples run here exactly as the public page's do.
+const REFERENCE = join(import.meta.dir, '..', 'docs', 'internal', 'commands');
 
-const pages = readdirSync(DIR)
-  .filter((name) => name.endsWith('.md') && name !== 'README.md')
-  .sort();
+const pages = [
+  ...readdirSync(DIR).filter((name) => name.endsWith('.md') && name !== 'README.md').map((name) => join(DIR, name)),
+  ...readdirSync(REFERENCE).filter((name) => name.endsWith('.md')).map((name) => join(REFERENCE, name)),
+].sort();
 
 function capture(): { io: Io; out(): string } {
   let out = '';
@@ -31,9 +36,10 @@ function capture(): { io: Io; out(): string } {
 }
 
 describe('the command reference', () => {
-  for (const page of pages) {
+  for (const path of pages) {
+    const page = path.startsWith(REFERENCE) ? `internal/commands/${path.slice(REFERENCE.length + 1)}` : path.slice(DIR.length + 1);
     test(`${page}`, async () => {
-      const markdown = readFileSync(join(DIR, page), 'utf8');
+      const markdown = readFileSync(path, 'utf8');
       const failures = await runPage(page, markdown);
       expect(failures.map((failure) => `${failure.page}:${failure.line}: ${failure.message}`).join('\n\n')).toBe('');
     });
@@ -48,6 +54,7 @@ describe('the command reference', () => {
       .filter((line) => /^  \S+$/.test(line))
       .map((line) => line.trim());
     expect(listed.length).toBeGreaterThan(0);
-    expect(listed.sort()).toEqual(pages.map((name) => name.replace(/\.md$/, '')).sort());
+    const publicPages = pages.filter((path) => path.startsWith(`${DIR}/`)).map((path) => path.slice(DIR.length + 1).replace(/\.md$/, ''));
+    expect(listed.sort()).toEqual(publicPages.sort());
   });
 });
