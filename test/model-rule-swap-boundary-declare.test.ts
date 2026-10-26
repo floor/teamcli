@@ -27,6 +27,7 @@ import { beginSession } from '../src/sessions/registry.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-19T09:00:00Z');
 const SESSION = 'lyra';
@@ -556,5 +557,24 @@ describe('a declaration write that returns ok:false aborts before hooks and laun
     expect(existsSync(join(fx.dir, 'hooks'))).toBe(false);
     const log = readFileSync(join(fx.dir, 'team.log'), 'utf8');
     expect(log).not.toContain('worker: swapped');
+  });
+});
+
+describe('under the registry source', () => {
+  test('the swap declares the new recipe in the registry record and leaves the file as it was', async () => {
+    const fx = makeFixture();
+    intoRegistry(fx.root, fx.home);
+    workerState(fx);
+    queue(fx);
+    const h = harness(fx, { status: 'done' });
+    const result = await underRegistry(() => run(fx, h));
+    expect(result.code).toBe(0);
+    expect(result.out).toContain('swapped: worker');
+    const record = storedTeam(fx.root, fx.home)!;
+    expect(record.edited_by).toBe('swap');
+    expect(record.text).not.toBe(fx.yaml);
+    expect(record.text).toContain(RECIPE.launch);
+    expect(readFileSync(fx.file, 'utf8')).toBe(fx.yaml);
+    expect(realRegistryTouched()).toBe(false);
   });
 });

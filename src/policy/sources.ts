@@ -36,7 +36,7 @@ import {
   type PolicyLevel,
   type PolicyValue,
 } from './types.ts';
-import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.ts';
 
 export type PolicyChainInput = {
   home?: string;
@@ -455,12 +455,15 @@ export function readTeamPolicySource(
   let rawPolicies: YamlValue | undefined = team?.policies;
   let rawLegacyDelivery: unknown = team?.deliveryOrder ?? undefined;
 
-  if (rawPolicies === undefined && teamRoot && existsSync(path)) {
+  // Without a team handed in, the team's text is read where its edits land: the registry's record
+  // under `team-config.source: registry`, the file otherwise (src/file/team-text.ts).
+  const onRegistry = rawPolicies === undefined && teamRoot !== null && teamTextTarget(path, { home }).kind === 'registry';
+  if (rawPolicies === undefined && teamRoot && (onRegistry || existsSync(path))) {
     let text: string;
     try {
-      text = readFileSync(path, 'utf8');
+      text = readTeamText(path, { home });
     } catch (error) {
-      return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${path}: ${(error as Error).message}` };
+      return { ok: false, level: 'team', target: primaryTarget, source: path, why: `${onRegistry ? 'the registry' : path}: ${(error as Error).message}` };
     }
     let root: YamlValue;
     try {
@@ -1073,7 +1076,7 @@ function writeTeamPolicyEntry(
   const where = { home, command: 'policy' };
   const text = readTeamText(path, where);
   const parsed = parseYaml(text);
-  if (parsed.kind !== 'map') throw new Error(`${path}: the team file must be a map`);
+  if (parsed.kind !== 'map') throw new Error(`${teamTextTarget(path, where).kind === 'registry' ? "the registry's record" : path}: the team must be a map`);
   const rootVal = toValue(parsed);
   const existingPolicies =
     isMap(rootVal) && isMap(rootVal.policies) ? { ...(rootVal.policies as Record<string, YamlValue>) } : {};
@@ -1106,7 +1109,7 @@ function writeTeamPolicyEntry(
   }
   const wrote = writeTeamText(path, nextText, where);
   if (!wrote.ok) {
-    throw new Error(wrote.errors[0]?.message ?? `${path}: cannot write team file`);
+    throw new Error(wrote.errors[0]?.message ?? `cannot write ${teamTextTarget(path, where).kind === 'registry' ? "the registry's record" : `the team file ${path}`}`);
   }
 }
 

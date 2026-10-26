@@ -69,7 +69,7 @@ import { watchLabel } from '../watch/pane.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart, type SeatStart } from '../worktree/place.ts';
 import { registerInbox } from '../mcp/register.ts';
-import { readTeamText, writeTeamText } from '../file/team-text.ts';
+import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
   home: string;
@@ -1043,7 +1043,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
       if (written.kind === 'changed') {
         refuse(io, json, 'add', {
           id: 'add.changed',
-          message: 'the file changed while add was checking; nothing was written',
+          message: `${teamPlace(path, { home: sources.home ?? homedir() }, 'the file')} changed while add was checking; nothing was written`,
           repair: null,
         });
         // exit: add.changed

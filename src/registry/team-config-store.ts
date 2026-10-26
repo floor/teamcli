@@ -31,11 +31,15 @@ export type StoredTeamConfig = {
   record_version: string;
   /** sha256 of the canonical record of the validated team at import. */
   record_sha256: string;
-  /** Where the definition came from: the team file's path at import. */
-  imported_from: string;
-  imported_at: string;
+  /** Where the definition came from: the team file's path at import. Absent for a team that
+   *  `team init` created in the registry, which carries `created_by` instead. */
+  imported_from?: string;
+  imported_at?: string;
   /** `migrate` for the one-time move, `import` for a later replacement. */
-  imported_by: 'migrate' | 'import';
+  imported_by?: 'migrate' | 'import';
+  /** The command that created the team in the registry, when no file was ever imported. */
+  created_by?: 'init';
+  created_at?: string;
   /** The last editing command that replaced the definition after the import (phase 3), and when.
    *  Absent until a writer edits the registry's record. */
   edited_by?: string;

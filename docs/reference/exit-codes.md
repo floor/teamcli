@@ -275,6 +275,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.not-owner` | `init` | 1 | not the owner | `team init` |
 | `init.nothing` | `init` | 1 | there is nothing to restore | `team init --restore` |
 | `init.refused` | `init` | 1 | the stored record does not verify | `team init --restore` |
+| `init.restore-invalid` | `init` | 1 | the stored copy doesn't validate | `team init --restore` |
 | `init.skeleton` | `init` | 1 | the skeleton doesn't validate | `team init` |
 | `init.tracked` | `init` | 1 | the team file is tracked | `team init` |
 | `init.invocation` | `init` | 2 | the invocation can't be read | `team init extra` |

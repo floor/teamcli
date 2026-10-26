@@ -67,6 +67,12 @@ export function teamTextTarget(path: string, options: TeamTextOptions = {}): Tea
   return { kind: 'registry', path, root, id, home };
 }
 
+/** How a message names where the team lives: `the registry's record` under the registry source,
+ *  `the team file` otherwise, so a refusal never names a file that is not read. */
+export function teamPlace(path: string, options: TeamTextOptions = {}, onFile = 'the team file'): string {
+  return teamTextTarget(path, options).kind === 'registry' ? "the registry's record" : onFile;
+}
+
 /** The team's text as an editing command reads it: the registry's record, or the file. Throws as
  *  `readFileSync` does when there is nothing to read, so callers keep their own refusal. */
 export function readTeamText(path: string, options: TeamTextOptions = {}): string {
@@ -77,6 +83,22 @@ export function readTeamText(path: string, options: TeamTextOptions = {}): strin
   return stored.text;
 }
 
+function provenanceOf(
+  previous: StoredTeamConfig | null,
+  now: string,
+): Pick<StoredTeamConfig, 'imported_from' | 'imported_at' | 'imported_by' | 'created_by' | 'created_at'> {
+  if (previous === null) return { created_by: 'init', created_at: now };
+  const kept: Pick<StoredTeamConfig, 'imported_from' | 'imported_at' | 'imported_by' | 'created_by' | 'created_at'> = {};
+  for (const key of ['imported_from', 'imported_at', 'imported_by', 'created_by', 'created_at'] as const) {
+    if (previous[key] !== undefined) (kept as Record<string, unknown>)[key] = previous[key];
+  }
+  return kept;
+}
+
+// Replace in place, for now (the owner's ruling for phase 3): an edit replaces the team's one
+// record atomically, and the previous version is not kept. The design's append-only, signed
+// ledger (one signed entry per edit, `team history`, `team diff`) replaces this write when it
+// lands; the record's `format` lets that change be read without a guess.
 /** The one write of an edited team: validated, then the registry's record or the file. */
 export function writeTeamText(path: string, text: string, options: TeamTextOptions = {}): { ok: true; target: TeamTextTarget['kind'] } | { ok: false; errors: Problem[] } {
   const target = teamTextTarget(path, options);
@@ -96,11 +118,10 @@ export function writeTeamText(path: string, text: string, options: TeamTextOptio
     text_sha256: sha256(text),
     record_version: CANONICAL_RECORD_VERSION,
     record_sha256: sha256(canonicalTeam(parsed.team)),
-    // A team written first by an editing command (team init under the registry) has no import:
-    // its provenance is the command itself.
-    imported_from: previous?.imported_from ?? `team ${options.command ?? 'edit'}`,
-    imported_at: previous?.imported_at ?? now,
-    imported_by: previous?.imported_by ?? 'import',
+    // The provenance is kept: an imported team keeps its import fields, and a team `team init`
+    // created here keeps `created_by`. A new record (`create`) is marked as created, never as an
+    // import that did not happen.
+    ...provenanceOf(previous, now),
     edited_by: options.command ?? 'edit',
     edited_at: now,
   };

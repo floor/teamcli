@@ -1887,6 +1887,13 @@
     {
       "code": 1,
       "command": "init",
+      "id": "init.restore-invalid",
+      "meaning": "the stored copy doesn't validate",
+      "trigger": "team init --restore"
+    },
+    {
+      "code": 1,
+      "command": "init",
       "id": "init.skeleton",
       "meaning": "the skeleton doesn't validate",
       "trigger": "team init"

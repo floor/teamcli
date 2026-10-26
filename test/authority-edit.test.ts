@@ -20,6 +20,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { Standing } from '../src/store/store.ts';
 import { testIo, type TestIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
+import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const HEAD = `# Preserve the file's spelling and comments.
 format: 1
@@ -740,5 +741,29 @@ describe('revocation reaches the real admission gates', () => {
     expect(delegateGate({ ...input('second'), command: 'up' }).kind).toBe('passed');
     expect(fs.readFileSync(stateFile, 'utf8')).toBe(state);
     expect(fs.readdirSync(place.home)).toEqual([]);
+  });
+});
+
+describe('under the registry source', () => {
+  test('grant, delegate and revoke edit the registry record and leave the file as it was', async () => {
+    const place = folder();
+    intoRegistry(place.root, place.home);
+    await underRegistry(async () => {
+      const granted = owner(place);
+      expect(await runGrant(['lead', '--scope', 'up,down'], granted, { home: place.home })).toBe(0);
+      expect(granted.out).toBe('grant: updated\n');
+      expect(parsed(storedTeam(place.root, place.home)!.text).grant).toEqual({ session: 'arena', seat: 'lead', scope: ['up', 'down'] });
+      expect(storedTeam(place.root, place.home)!.edited_by).toBe('grant');
+
+      const { result: delegated } = await edit(place, { kind: 'delegate', pane: 'outside/first', commands: ['up'] });
+      expect(delegated).toBe('ok');
+      expect(parsed(storedTeam(place.root, place.home)!.text).delegates).toEqual([{ pane: 'outside/first', commands: ['up'] }]);
+
+      const revoked = owner(place);
+      expect(await runRevoke(['grant'], revoked, { home: place.home })).toBe(0);
+      expect(parsed(storedTeam(place.root, place.home)!.text).grant ?? null).toBeNull();
+    });
+    expect(textAt(place)).toBe(BASE);
+    expect(realRegistryTouched()).toBe(false);
   });
 });

@@ -93,9 +93,10 @@ whose running model has drifted is held rather than delivered.
   `entity` and omits `session:` now runs in the herdr session `<entity>-<project>` instead of the
   project name alone, so two entities' teams of the same project no longer share one session. A
   file without an entity keeps the project name, and `session:` still overrides the default per
-  team. `session` is an owner section, so an affected team must be approved again: `team status`,
-  `team approve` and `team check` (as a note) name the move as `` `session` changed: "web" ->
-  "acme-web" `` and say to approve again, or to set `session: web` to keep the old one.
+  team. `session` is an owner section, so an affected team must be approved again: `team check`
+  (as a note) and the approval comparison name the move as `` `session` changed: "web" ->
+  "acme-web" `` and say to approve again, or to set `session: web` to keep the old one;
+  `team status` does not compare approvals, and `team approve` is gone.
 
 - **Admission is bound to the declared roster.** A caller reaches the targets the team file
   declares: the owner any agent; an orchestrator another orchestrator of its own team or

@@ -90,7 +90,7 @@ export function importTeamFile(options: ImportOptions): ImportOutcome {
       from,
       errors: [{
         line: 0,
-        message: `${loaded.team.project} was already moved to the registry (${existing.imported_at}); to replace the registry's record with this file, run \`team import\``,
+        message: `${loaded.team.project} was already moved to the registry (${existing.imported_at ?? existing.created_at ?? 'at an unknown time'}); to replace the registry's record with this file, run \`team import\``,
       }],
     };
   }

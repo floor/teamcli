@@ -39,6 +39,7 @@ import type { Live } from '../src/status/compare.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
 import { assertMatchesOutputSchema, validateAgainstJsonSchema } from './helpers/output.ts';
+import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-17T12:00:00Z');
 
@@ -1551,3 +1552,30 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
   });
 });
 
+
+describe('under the registry source', () => {
+  test('a team-level set writes the registry record, and the team policy is read back from it', async () => {
+    const fx = makeFixture();
+    try {
+      const before = readFileSync(join(fx.root, '.agents', 'team.yaml'), 'utf8');
+      intoRegistry(fx.root, fx.home);
+      await underRegistry(async () => {
+        const io = testIo(fx.root, { kind: 'owner' });
+        const code = await runPolicy(['set', 'team', 'dev-mode', 'on', '--until', '2026-10-19T00:00:00Z'], io, { home: fx.home, now: () => NOW });
+        expect(code).toBe(0);
+        const record = storedTeam(fx.root, fx.home)!;
+        expect(record.edited_by).toBe('policy');
+        expect(record.text).toContain('dev-mode');
+        // Read without a team handed in: the source reads the registry's record, not the file.
+        const read = readTeamPolicySource(fx.home, fx.root, null);
+        expect(read.ok).toBe(true);
+        expect(JSON.stringify(read)).toContain('dev-mode');
+      });
+      expect(readFileSync(join(fx.root, '.agents', 'team.yaml'), 'utf8')).toBe(before);
+      expect(before).not.toContain('dev-mode');
+      expect(realRegistryTouched()).toBe(false);
+    } finally {
+      fx.cleanup();
+    }
+  });
+});

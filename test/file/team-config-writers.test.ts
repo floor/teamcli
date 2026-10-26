@@ -13,7 +13,7 @@ import { runInit } from '../../src/commands/init.ts';
 import { runTeamImport } from '../../src/commands/migrate.ts';
 import { runTempo } from '../../src/commands/tempo.ts';
 import { readTeamConfig } from '../../src/file/team-config.ts';
-import { readTeamText, teamTextTarget, writeTeamText } from '../../src/file/team-text.ts';
+import { readTeamText, teamPlace, teamTextTarget, writeTeamText } from '../../src/file/team-text.ts';
 import { readStoredTeamConfig, sha256 } from '../../src/registry/team-config-store.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import { testIo } from '../helpers.ts';
@@ -123,6 +123,10 @@ describe('the commands write the registry', () => {
     expect(existsSync(at.file)).toBe(false);
     const record = stored(at);
     expect(record?.edited_by).toBe('init');
+    // A team init created is marked as created, never as an import that did not happen.
+    expect(record?.created_by).toBe('init');
+    expect(record?.imported_by).toBeUndefined();
+    expect(record?.imported_from).toBeUndefined();
     const back = readTeamConfig(at.root, { home: at.home, source: 'registry' });
     expect(back.ok).toBe(true);
     // A second init is refused: the registry already holds the team.
@@ -141,4 +145,17 @@ describe('a team read from a file under the registry source', () => {
     expect(readFileSync(at.file, 'utf8')).toBe(next);
     expect(stored(at)).toBeNull();
   });
+});
+
+describe('the messages name where the team lives', () => {
+  test("the registry's record under the registry, the team file otherwise", async () => {
+    const at = await migrated();
+    expect(teamPlace(at.file, { home: at.home })).toBe("the registry's record");
+    expect(teamPlace(at.file, { home: at.home, source: 'file' })).toBe('the team file');
+  });
+});
+
+test('no scene wrote the real registry folder', async () => {
+  const { realRegistryTouched } = await import('../helpers/registry-team.ts');
+  expect(realRegistryTouched()).toBe(false);
 });

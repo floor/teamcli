@@ -8,7 +8,7 @@ import { TEMPOS, type Tempo } from '../file/sections/tempo.ts';
 import { approvedRecordOf } from '../store/store.ts';
 import type { Command, Io } from '../io.ts';
 import { contextLine, hasJsonFlag, refuse, writeJson } from '../output/index.ts';
-import { writeTeamText } from '../file/team-text.ts';
+import { teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export const USAGE = `Usage: team tempo <word> [--json]
 
@@ -92,7 +92,7 @@ export async function runTempo(argv: string[], io: Io, sources: { home?: string 
       // exit: tempo.set
       return 0;
     }
-    failed = wrote.errors[0]?.message ?? 'the team file can\'t be read';
+    failed = wrote.errors[0]?.message ?? `${teamPlace(loaded.path, { home: sources.home ?? homedir() })} can't be written`;
   }
   refuse(io, json, 'tempo', {
     id: failed === NOT_A_REPO ? 'tempo.not-a-repo' : 'tempo.file',
