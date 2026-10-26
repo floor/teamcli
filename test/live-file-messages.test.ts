@@ -73,6 +73,9 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // record, signed once at setup, never a copy of the live file.
   { literal: /^(?:approval-mode|approval-modes|--approval-mode needs --scope <folder>)$/, why: "init's approval-mode flags and their invocation refusal" },
   { literal: /^team init: approval mode(?:s$| for team-create is )/, why: "init's owner-signed approval mode for team-create, not an approval copy" },
+  // `team migrate` reports the approval's standing across the move: the signed record's standing,
+  // never a copy of the live file.
+  { literal: /^the approval (?:is still in force: it is signed over the canonical record|no longer verifies \(\$\{after\}\); approve the team again)\\n$/, why: "migrate's line on the approval standing across the move" },
 ];
 
 function sources(dir: string): string[] {
