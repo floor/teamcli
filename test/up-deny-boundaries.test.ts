@@ -18,7 +18,7 @@ import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { CLAUDE_IDLE, gitEnv, testIo } from './helpers.ts';
 
-const PAGE = '../docs/commands/up.md';
+const PAGE = '../docs/internal/commands/up.md';
 const UP_SRC = '../src/commands/up.ts';
 
 // Whitespace runs collapse before the match, so a sentence survives line wrapping but not

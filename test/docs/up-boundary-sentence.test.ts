@@ -12,7 +12,7 @@ function prose(path: string): string {
   return readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\s+/g, ' ');
 }
 
-const PAGE = '../../docs/commands/up.md';
+const PAGE = '../../docs/internal/commands/up.md';
 const INTERNAL = '../../docs/internal/up.md';
 
 describe('the up pages boundary sentences', () => {

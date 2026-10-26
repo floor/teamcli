@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { runUp, type UpSources } from '../../src/commands/up.ts';
 import { testIo } from '../helpers.ts';
 
-const PAGE = '../../docs/commands/up.md';
+const PAGE = '../../docs/internal/commands/up.md';
 const INTERNAL = '../../docs/internal/up.md';
 const NOW = new Date('2026-10-15T05:00:00.000Z');
 
@@ -53,21 +53,9 @@ describe('the one-glance cut of the up page', () => {
     expect(page.includes(SIDEBAR), 'up.md lost the sidebar promise').toBe(true);
   });
 
-  test('the page stays one glance: its own refusal scene alone, and the rationale link lives', () => {
-    const page = raw(PAGE);
-    // The cut exists so the page carries one short scene; the yaml example and its skip lines
-    // moved to docs/internal/up.md. A block or line creeping back is the regression this pins.
-    expect(page.match(/```yaml\b/g) ?? [], 'up.md grew a yaml example back').toEqual([]);
-    expect((page.match(/```console\b/g) ?? []).length, 'up.md carries more than its one scene').toBe(1);
-    expect(page.includes('already ready; left as it is'), 'up.md grew the moved skip lines back').toBe(false);
-    // The rationale moved off the page; the line that points to it is the page's only route
-    // there, so it stands as written and its target exists.
-    expect(
-      prose(PAGE).includes('Rationale, behaviour, refusals and known limits: [docs/internal/up.md](../internal/up.md).'),
-      'up.md lost the rationale link',
-    ).toBe(true);
-    expect(() => raw(INTERNAL), 'docs/internal/up.md is missing').not.toThrow();
-  });
+  // The public page's shape is now the human template's, pinned in
+  // test/docs/human-command-pages.test.ts; the full reference these pins read is
+  // docs/internal/commands/up.md.
 
   test('the page’s refusal scene quotes the binary word for word', async () => {
     // The scene is the page's only example, and docs.test.ts executes it against fakes — but a
