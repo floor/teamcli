@@ -20,7 +20,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
-import { followBus, type BusFollow } from '../bus/follow.ts';
+import { followBus, followBusRetrying, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -283,7 +283,7 @@ function watchChannel(
   serving: Serving,
   write: (line: string) => void,
   notice?: () => boolean,
-  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number } = {},
+  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number; retryMinMs?: number; retryMaxMs?: number } = {},
 ): () => void {
   const seen = new Set<string>();
   let primed = false;
@@ -364,25 +364,27 @@ function watchChannel(
   // `message.arrived` routed to this seat pushes its one record at once, and the inbox is read
   // whole only on the slow safety pass, for a sender that could not reach the bus.
   every(options.fallbackMs ?? CHANNEL_TICK_MS);
-  const follow = options.follow ?? followBus;
-  const connectBus = (): void => {
-    if (stopped) return;
-    subscription = follow(serving.root, { seat: serving.seat, kinds: ['message.arrived'], skipBacklog: true }, {
-      onUp: () => every(options.safetyMs ?? CHANNEL_SAFETY_MS),
-      onEvent: (event) => {
-        if (halted()) return;
-        const payload = event.payload;
-        if (payload.kind !== 'message.arrived' || payload.to !== serving.seat || payload.session !== serving.session) return;
-        if (!MESSAGE_ID.test(payload.record_id)) return;
-        pushOne(payload.record_id);
-      },
-      onDown: () => {
-        subscription = null;
-        every(options.fallbackMs ?? CHANNEL_TICK_MS);
-      },
-    });
-  };
-  connectBus();
+  // A dropped or absent bus is dialled again with a doubling wait, so a seat that fell back to
+  // its poll returns to events when the bus comes back, without a server restart.
+  subscription = followBusRetrying(serving.root, { seat: serving.seat, kinds: ['message.arrived'], skipBacklog: true }, {
+    onUp: () => {
+      every(options.safetyMs ?? CHANNEL_SAFETY_MS);
+      // Whatever arrived while the bus was away is read once now, not on the next safety pass.
+      tick();
+    },
+    onEvent: (event) => {
+      if (halted()) return;
+      const payload = event.payload;
+      if (payload.kind !== 'message.arrived' || payload.to !== serving.seat || payload.session !== serving.session) return;
+      if (!MESSAGE_ID.test(payload.record_id)) return;
+      pushOne(payload.record_id);
+    },
+    onDown: () => every(options.fallbackMs ?? CHANNEL_TICK_MS),
+  }, {
+    ...(options.follow === undefined ? {} : { follow: options.follow }),
+    ...(options.retryMinMs === undefined ? {} : { minMs: options.retryMinMs }),
+    ...(options.retryMaxMs === undefined ? {} : { maxMs: options.retryMaxMs }),
+  });
   return stop;
 }
 
