@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.5] - YYYY-MM-DD
+## [0.5.5] - 2026-10-26
 
 0.5.5 moves the team's definition into the registry. The team is read from and written to
 `~/.config/team/team-config/`, approvals are signed over one canonical team record instead of
