@@ -387,10 +387,12 @@ describe('modelFlagFinding', () => {
 // shapes the rule can spell: a shape a carried row admits and the declaration accepts must read
 // back as that version, and the shapes the captures themselves show must all be accepted.
 describe('the declared models and versions, on the captured screens', () => {
-  const DIRS: [string, string][] = [
+  // A profile's carriers may span several tested folders: a later version can bring a model row
+  // only its own capture shows (Cursor's Gemini Argon row, captured at 2026.10.19 only).
+  const DIRS: [string, string | string[]][] = [
     ['claude-code', 'claude-code/2.1.289'],
     ['codex', 'codex/0.157.0'],
-    ['cursor', 'cursor/2026.10.01'],
+    ['cursor', ['cursor/2026.10.01', 'cursor/2026.10.19']],
     ['antigravity', 'antigravity/1.2.16'],
     ['gemini', 'gemini/0.64.0'],
     ['grok', 'grok/1.0.50'],
@@ -435,7 +437,15 @@ describe('the declared models and versions, on the captured screens', () => {
   // A captured fixture whose screen names a model through this rule: the first in name order,
   // carrying the reading the whole screen carries. Plain captures only — the row is rebuilt in
   // the capture's own text, so nothing may have to be stripped to find it.
-  function carrierFor(cli: string, dir: string, wanted: number): Carried | null {
+  function carrierFor(cli: string, dirs: string | string[], wanted: number): Carried | null {
+    for (const dir of typeof dirs === 'string' ? [dirs] : dirs) {
+      const found = carrierIn(cli, dir, wanted);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+
+  function carrierIn(cli: string, dir: string, wanted: number): Carried | null {
     const root = join(import.meta.dir, '../fixtures', dir);
     for (const file of readdirSync(root).filter((name) => name.endsWith('.txt')).sort()) {
       const screen = readFileSync(join(root, file), 'utf8');

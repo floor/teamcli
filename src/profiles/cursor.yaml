@@ -5,9 +5,13 @@ cli: cursor
 binary: cursor-agent
 process_names:
   - cursor-agent
+# 2026.10.19 extends the range on one retained screen: `cursor/2026.10.19/idle.txt`, the ready
+# frame the orchestrator captured read-only (the folder's README records its provenance). It is
+# the only screen captured at that version; the dialog and working shapes keep their 2026.10.16
+# captures.
 tested:
   from: '2026.10.01'
-  to: '2026.10.16'
+  to: '2026.10.19'
 unattended:
   - --force
   - --sandbox
@@ -128,6 +132,15 @@ models:
       ignore_case: true
       model: 'Gemini Flash'
       version: '{1}'
+    - match: '^gemini-4-argon(?:-(?:low|medium|high))?$'
+      ignore_case: true
+      model: 'Gemini Argon'
+      version: '4'
+      flag: gemini-4-argon-high
+    - match: '^gemini-([0-9]+(?:\.[0-9]+)*)-argon(?:-(?:low|medium|high))?$'
+      ignore_case: true
+      model: 'Gemini Argon'
+      version: '{1}'
     - match: '^composer-2\.5(?:-fast)?$'
       ignore_case: true
       model: Composer
@@ -160,6 +173,12 @@ status_model:
     version: '{1}'
     yields: [Gemini Flash]
     version_like: '^[0-9]+(?:\.[0-9]+)*$'
+  # The 2026.10.19 ready row: `Gemini 4 Argon High` then padding and `Run Everything`.
+  - match: '^  Gemini (\d+(?:\.\d+)*) Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+    model: 'Gemini Argon'
+    version: '{1}'
+    yields: [Gemini Argon]
+    version_like: '^[0-9]+(?:\.[0-9]+)*$'
   - match: '^  Composer (\d+(?:\.\d+)*)(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
     model: Composer
     version: '{1}'
@@ -184,6 +203,7 @@ screen:
           - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
           - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
           - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+          - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
           - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
   # A plan-mode switch. The bar is the dialog's own rule; the title, the selected
   # row, the reject row and the footer sit under it, in that order. The same
@@ -255,6 +275,7 @@ screen:
               - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
               - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
               - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+              - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
               - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
               - '^\s*<workspace>'
               - '^\s*~/'
@@ -262,15 +283,15 @@ screen:
   composer:
     mode: status-then-one
     # The status row is its shape, and its tokens are closed: exactly two spaces, then a known
-    # family and its version — Grok N, GPT-N Sol, Gemini N Flash, Composer N — then only tokens
-    # the captures show: a context size (256K, 272K), an effort word (the ones --list-models
-    # prints and the captures paint), the `· N%` quota, `· N files edited`, then padding and, for
-    # the new families, `Run Everything`, which every captured idle, unsent and working row
-    # carries. Every number is digits in closed runs — version \d+(?:\.\d+)*, quota
+    # family and its version — Grok N, GPT-N Sol, Gemini N Flash, Gemini N Argon, Composer N —
+    # then only tokens the captures show: a context size (256K, 272K), an effort word (the ones
+    # --list-models prints and the captures paint), the `· N%` quota, `· N files edited`, then
+    # padding and, for the new families, `Run Everything`, which every captured idle, unsent and
+    # working row carries. Every number is digits in closed runs — version \d+(?:\.\d+)*, quota
     # \d+(?:\.\d+)?%, files \d+ — and nothing else may appear on the line; a row the grammar
-    # does not know leaves the screen unknown. One expression covering all four families with
-    # closed tokens is 227 characters and the dialect refuses anything past 200, so the patterns
-    # are a list, read as the union: a line is a candidate when it matches any entry.
+    # does not know leaves the screen unknown. One expression covering every family with closed
+    # tokens runs past the dialect's 200-character limit, so the patterns are a list, read as the
+    # union: a line is a candidate when it matches any entry.
     #
     # The row's place is pinned too: the line directly under it is the workspace line the pane
     # draws (`  <workspace>` in the fixtures — the captures' paths replaced — `  ~/…` or
@@ -284,7 +305,7 @@ screen:
     # sat, and the follow-up-queue captures — transcribed rather than captured — draw Grok rows
     # without `Run Everything`; pinning those rows' place would move readings main makes and
     # every shipped Grok fixture keeps. The new families' rows have only ever been seen in
-    # place, so they carry the place test. The same four expressions are used, character for
+    # place, so they carry the place test. The same expressions are used, character for
     # character, in the trust dialog's none_after and in the working queue's exception, so the
     # three places that decide whether a line is the status row cannot disagree.
     status_line:
@@ -292,6 +313,7 @@ screen:
       - '^  Grok \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
       - '^  GPT-\d+(?:\.\d+)* Sol(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
       - '^  Gemini \d+(?:\.\d+)* Flash(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
+      - '^  Gemini \d+(?:\.\d+)* Argon(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
       - '^  Composer \d+(?:\.\d+)*(?: 256K| 272K)?(?: (?:None|Minimal|Low|Medium|High|Extra High|Max))?(?: · \d+(?:\.\d+)?%)?(?: · \d+ files edited)?  +Run Everything$'
     status_below:
       line: '^  (?:<workspace>|~?/)'

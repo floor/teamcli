@@ -1758,6 +1758,13 @@
       "provenance": "capture"
     },
     {
+      "file": "cursor/2026.10.19/idle.txt",
+      "cli": "cursor",
+      "classify": "idle",
+      "composer": "idle",
+      "provenance": "capture"
+    },
+    {
       "file": "claude-code/2.1.299/exit.txt",
       "cli": "claude-code",
       "classify": "unknown",

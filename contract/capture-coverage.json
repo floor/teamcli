@@ -197,7 +197,7 @@
     },
     "cursor": {
       "idle": {
-        "real": 13,
+        "real": 14,
         "constructed": 0,
         "undocumented": 0
       },
@@ -3071,6 +3071,12 @@
       "file": "cursor/2026.10.16/working.txt",
       "cli": "cursor",
       "kind": "working",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.19/idle.txt",
+      "cli": "cursor",
+      "kind": "idle",
       "provenance": "capture"
     },
     {

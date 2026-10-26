@@ -198,6 +198,7 @@ export const TRUST_CAPTURES: readonly string[] = [
   "cursor cursor/2026.10.16/trust.txt",
   "cursor cursor/2026.10.16/unsent.txt",
   "cursor cursor/2026.10.16/working.txt",
+  "cursor cursor/2026.10.19/idle.txt",
   "cursor exit-typing/cursor-idle-ansi.txt",
   "cursor exit-typing/cursor-unsent-ansi.txt",
   "gemini gemini/0.64.0/exit-typed.txt",
