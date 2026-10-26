@@ -325,7 +325,7 @@ describe('a walled seat takes no send effect', () => {
     expect(code).toBe(0);
     expect(host.typed.length).toBe(1);
     if (host.typed[0] === undefined) throw new Error('the trigger was not typed');
-    expect(host.typed[0].text).toContain(' and do that.');
+    expect(host.typed[0].text).toContain('Read it with: team drops --read.');
   });
 
   test('the daemon refuses before the drop file is staged', async () => {
