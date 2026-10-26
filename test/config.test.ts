@@ -91,13 +91,13 @@ describe('refusals', () => {
   test('no subcommand', async () => {
     const result = await run([]);
     expect(result.code).toBe(2);
-    expect(result.err).toBe(`team config: a subcommand is required (keys)\n${USAGE}`);
+    expect(result.err).toBe(`team config: a subcommand is required (keys, get, set, unset, edit)\n${USAGE}`);
   });
 
   test('an unknown subcommand', async () => {
-    const result = await run(['set']);
+    const result = await run(['bogus']);
     expect(result.code).toBe(2);
-    expect(result.err).toContain('team config: unknown subcommand "set"');
+    expect(result.err).toContain('team config: unknown subcommand "bogus"');
   });
 
   test('a word that is not a level', async () => {

@@ -62,7 +62,7 @@ function scene(text: string | null = TEAM): { home: string; root: string; file: 
 async function migrated(text = TEAM): Promise<{ home: string; root: string; file: string }> {
   const at = scene(text);
   const io = testIo(at.root, OWNER);
-  expect(await runTeamImport('migrate', [], readArgs([], [], ['json', 'dry-run']), io, { home: at.home, now: NOW })).toBe('done');
+  expect(await runTeamImport('migrate', ['--keep-file'], readArgs(['--keep-file'], [], ['json', 'dry-run', 'keep-file']), io, { home: at.home, now: NOW })).toBe('done');
   return at;
 }
 
