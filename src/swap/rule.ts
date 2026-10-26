@@ -13,10 +13,8 @@
 import { resolve } from 'node:path';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { modelRuleAllows, parseModelRuleValue, type ModelRuleEntry } from '../policy/model-rule.ts';
-import { normalizePolicyName } from '../policy/types.ts';
-import { resolvePolicy } from '../policy/resolve.ts';
-import { readEntityPolicySource } from '../policy/sources.ts';
+import { readEntityModelRule } from '../policy/entity-rule.ts';
+import { modelRuleAllows, type ModelRuleEntry } from '../policy/model-rule.ts';
 import { readTeams, type TeamRecord } from '../registry/teams.ts';
 
 /** The model fields a seat takes when it moves to another vendor's model. */
@@ -80,10 +78,6 @@ export type RuleInput = {
   teamId?: string | null;
 };
 
-function refusalText(source: { why: string }, level: string): string {
-  return `${level}: policy source cannot be read or verified (${source.why})`;
-}
-
 /**
  * Reads the rule in force and every breach of it in the entity's teams. The read fails closed:
  * an entity source that cannot be verified, or a rule that does not parse, is a refusal — never
@@ -98,17 +92,10 @@ export function listModelRuleBreaches(input: RuleInput): RuleLookup {
     };
   }
 
-  const source = readEntityPolicySource(input.home, entity);
-  if (!source.ok) return { ok: false, why: refusalText(source, 'entity') };
-  // The resolver takes one policy's declarations: another name's value would be parsed by
-  // this name's grammar (Policies rule 10).
-  const declarations = source.policies.filter((policy) => normalizePolicyName(policy.name) === 'model-rule');
-  const resolved = resolvePolicy('model-rule', declarations);
-  if (!resolved.ok) {
-    return { ok: false, why: resolved.refusals.map((refusal) => refusal.message).join('; ') };
-  }
-  const rule = typeof resolved.effective.value === 'string' ? resolved.effective.value : '';
-  const entries = parseModelRuleValue(rule);
+  const read = readEntityModelRule(input.home, input.team);
+  if (read.kind === 'unreadable') return { ok: false, why: read.why };
+  const rule = read.kind === 'rule' ? read.rule : '';
+  const entries = read.kind === 'rule' ? read.entries : [];
 
   const teams: RuleTeam[] = [
     {

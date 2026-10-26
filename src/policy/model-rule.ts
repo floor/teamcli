@@ -165,6 +165,20 @@ const MODEL_LABS: ReadonlyArray<readonly [string, string]> = [
 ];
 
 /**
+ * The sentence a model the rule does not allow on a seat is refused with, without the seat's
+ * name in front: `config set`, a launch line and the entity rule's listing say the same words.
+ */
+export function modelRuleSentence(model: string, lab: string): string {
+  return `the model ${JSON.stringify(model)} runs under the lab "${lab}", which the entity model rule in force does not allow on this seat`;
+}
+
+/** The sentence a model whose maker this version cannot name is refused with, when the rule
+ *  decides the seat, without the seat's name in front. */
+export function modelRuleUnknownSentence(model: string): string {
+  return `the model ${JSON.stringify(model)} names no lab this version knows, and the entity model rule decides this seat`;
+}
+
+/**
  * The lab a model runs under, read from the maker word its display name begins with (`Claude
  * Opus`, `GPT Sol`, `Gemini Pro`, `Grok 4.7`, `Muse Wonder`, `Composer`). Undefined when the
  * maker is not in the closed table: a caller that must judge a lab then decides its own answer

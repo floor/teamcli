@@ -122,6 +122,7 @@ describe('checkLogin with fake command results', () => {
       lastUsedModel: false,
       unreadModel: null,
       modelOf: () => null,
+      modelIdOf: () => null,
       startsOnLastModel: false,
       modelFlag: () => ({ option: '--model', id: null }),
       answers: [],

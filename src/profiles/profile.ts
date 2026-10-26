@@ -103,6 +103,9 @@ export interface Profile {
   unreadModel: 'launch' | null;
   /** The model and version a launch line's model id means, or null when unknown. */
   modelOf(launch: string): { model: string; version: string } | null;
+  /** The raw model id a launch line names, as this profile's model flags read it; the last
+   *  flag in the line wins, as `modelOf` reads one. Null when the line names none. */
+  modelIdOf(launch: string): string | null;
   /** A launch that names no model starts on whatever model this CLI used last. */
   startsOnLastModel: boolean;
   /** The model flag, and the id this profile maps to that model and version, when it knows one. */
@@ -1007,6 +1010,7 @@ function launchOf(root: YamlNode): Shipped {
       lastUsedModel: lastUsedEntry ? boolOf(lastUsedEntry.value, 'last_used_model') : false,
       unreadModel: unreadModelEntry ? unreadModelOf(unreadModelEntry) : null,
       modelOf: (launch) => modelOf(models, launch),
+      modelIdOf: (launch) => modelIdOf(models, launch),
       startsOnLastModel: models.absent === 'last-used',
       modelFlag: (model, version) => ({
         option: models.option[0] ?? '--model',
@@ -1049,7 +1053,7 @@ function quotaOf(node: YamlNode): QuotaPattern[] {
 }
 
 // The flag's value is the next token, after "=" or any whitespace. The last flag in the line wins.
-function modelOf(models: { option: string[]; ids: ModelRule[] }, launch: string): { model: string; version: string } | null {
+function modelIdOf(models: { option: string[] }, launch: string): string | null {
   let bestAt = -1;
   let id: string | null = null;
   for (const option of models.option) {
@@ -1059,6 +1063,11 @@ function modelOf(models: { option: string[]; ids: ModelRule[] }, launch: string)
       id = found.id;
     }
   }
+  return id;
+}
+
+function modelOf(models: { option: string[]; ids: ModelRule[] }, launch: string): { model: string; version: string } | null {
+  const id = modelIdOf(models, launch);
   if (id === null) return null;
   const hit = apply(models.ids, id);
   return hit === 'unreadable' ? null : hit;

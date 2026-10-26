@@ -7,7 +7,15 @@
 import type { Seat } from '../file/types.ts';
 import { nicknameProblem } from '../file/sections/seats.ts';
 import type { PolicyChainResult } from '../policy/index.ts';
-import { labOfModel, modelRuleAllows, modelRuleEntryFor, modelRuleProblem, parseModelRule } from '../policy/model-rule.ts';
+import {
+  labOfModel,
+  modelRuleAllows,
+  modelRuleEntryFor,
+  modelRuleProblem,
+  modelRuleSentence,
+  modelRuleUnknownSentence,
+  parseModelRule,
+} from '../policy/model-rule.ts';
 import { profileFor, resolveEffortOverride, resolveModelOverride } from '../profiles/profile.ts';
 import { checkConfigValue } from './guard.ts';
 import type { ConfigKey, ConfigValue } from './registry.ts';
@@ -62,11 +70,9 @@ function modelRuleRefusal(model: string, seat: Seat, chain: PolicyChainResult): 
   }
   if (modelRuleEntryFor(entries, { name: seat.name, role: seat.role }) === undefined) return null;
   const lab = labOfModel(model);
-  if (lab === undefined) {
-    return `${seat.name}: the model ${JSON.stringify(model)} names no lab this version knows, and the entity model rule decides this seat`;
-  }
+  if (lab === undefined) return `${seat.name}: ${modelRuleUnknownSentence(model)}`;
   if (modelRuleAllows(entries, { name: seat.name, role: seat.role, vendor: lab })) return null;
-  return `${seat.name}: the model ${JSON.stringify(model)} runs under the lab "${lab}", which the entity model rule in force does not allow on this seat`;
+  return `${seat.name}: ${modelRuleSentence(model, lab)}`;
 }
 
 /**
