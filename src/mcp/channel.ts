@@ -40,8 +40,12 @@ export const CHANNEL_HELD_RECEIPT = 'channel-held';
  *  timer, so this is several polls, never a wait on the seat. */
 export const CHANNEL_PUSH_GRACE_MS = 2_000;
 
-/** How often the serving inbox looks for a record it has not pushed yet. */
+/** How often the serving inbox looks for a record it has not pushed yet when no bus is running. */
 export const CHANNEL_TICK_MS = 250;
+
+/** How often a serving inbox with a live bus subscription still reads its inbox whole: the bus
+ *  carries each arrival at once, and this slow pass catches a sender that could not reach it. */
+export const CHANNEL_SAFETY_MS = 5_000;
 
 /** How long a pushed message waits for its signed read receipt before the watch redelivers it
  *  through the next leg. Three minutes is long enough for a handling turn, short enough that a

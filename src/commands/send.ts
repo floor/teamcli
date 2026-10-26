@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve, sep } from 'node:path';
 import { deliver as relayDeliver, stage as relayStage } from '../../packages/relay/index.js';
 import { readArgs, type Args } from '../args.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
+import { publishToBus } from '../bus/server.ts';
 import { runClientSend, type ClientSendDelivery, type ResolvedClientTarget } from '../client/send.ts';
 import { CLIENT_SLICE_DISPLAY_NAME, KEY_ISOLATION_LINE } from '../client/records.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, judgeCallerIn, logTag, noPaneRefusal, standingOf, type Caller, type SeatStanding } from '../caller.ts';
@@ -2080,7 +2081,38 @@ async function writeSendRecord(dropDir: string, payload: RecordPayload, home: st
     if (!held.ok) return { ok: false, reason: held.reason };
     return { ok: true, path: held.path, existing: true, record };
   }
+  await announceArrival(payload, now);
   return { ok: true, path: staged.receipt.copy ?? join(dropDir, payload.id), record };
+}
+
+/** How long a send waits on the bus to take its `message.arrived`. A bus that is not running
+ *  refuses the connection at once; one that is running answers within a few milliseconds. */
+export const ARRIVAL_PUBLISH_MS = 250;
+
+/**
+ * Tells the project's event bus that a signed record has landed, so a seat subscribed to it (the
+ * serving inbox's channel, a watch) reads that one record now instead of on its next poll. The
+ * event names the record and carries no body. Best effort: no bus, a refusal or a slow answer
+ * leaves the send exactly as it was, and the reader's own poll still finds the record.
+ */
+export async function announceArrival(payload: RecordPayload, now: () => Date): Promise<void> {
+  try {
+    await publishToBus(
+      payload.root,
+      {
+        ts: now().toISOString(),
+        kind: 'message.arrived',
+        session: payload.session,
+        record_id: payload.id,
+        from: payload.from,
+        to: payload.to,
+        ...(payload.thread === undefined ? {} : { thread: payload.thread }),
+      },
+      { deadlineMs: ARRIVAL_PUBLISH_MS },
+    );
+  } catch {
+    // The announcement is an optimisation; the record is already where its reader looks.
+  }
 }
 
 async function handOff(

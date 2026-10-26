@@ -20,6 +20,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { followBus, type BusFollow } from '../bus/follow.ts';
 import { raiseRefusalEvent } from '../bus/refusals.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
@@ -40,6 +41,7 @@ import {
   CHANNEL_METHOD,
   CHANNEL_PUSH_STATUS,
   CHANNEL_READ_BY,
+  CHANNEL_SAFETY_MS,
   CHANNEL_TICK_MS,
   channelLaunchEnabled,
   channelPushHeld,
@@ -277,55 +279,111 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
  * to run an install that is no longer on disk, so it stops pushing and never writes another
  * notification.
  */
-function watchChannel(serving: Serving, write: (line: string) => void, notice?: () => boolean): () => void {
+function watchChannel(
+  serving: Serving,
+  write: (line: string) => void,
+  notice?: () => boolean,
+  options: { follow?: typeof followBus; fallbackMs?: number; safetyMs?: number } = {},
+): () => void {
   const seen = new Set<string>();
   let primed = false;
-  const tick = (): void => {
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let subscription: BusFollow | null = null;
+  const stop = (): void => {
+    stopped = true;
+    if (timer !== null) clearInterval(timer);
+    timer = null;
+    subscription?.close();
+    subscription = null;
+  };
+  const halted = (): boolean => {
+    if (stopped) return true;
     if (notice !== undefined && notice()) {
-      clearInterval(timer);
+      stop();
+      return true;
+    }
+    return false;
+  };
+  /** One id, verified on its own: the signed record is read and checked, and pushed once. */
+  const pushOne = (id: string): void => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    if (legacyDropAt(join(serving.dropDir, id))) return;
+    // An earlier server may have pushed this id before this one started, and a sender whose own
+    // walk takes the message leaves a held marker at the same name: either marker says this id
+    // is not to be pushed, and a second notification is a duplicate wake.
+    if (channelPushHeld(serving.dropDir, id)) return;
+    const push = channelPushOf(serving, id);
+    if (push === null) {
+      // Not this seat's signed record yet (or never): a later read may still find it.
+      seen.delete(id);
       return;
     }
+    // The marker is the reservation: it is written exclusively before the notification, so a
+    // sender's held marker that lands after the check above wins the name and this server
+    // never pushes the id; a marker this server cannot write means no push at all.
+    const reserved = recordChannelPush(serving.dropDir, {
+      v: 1,
+      kind: 'channel-push',
+      id,
+      seat: serving.seat,
+      session: serving.session,
+      root: serving.root,
+      at: new Date().toISOString(),
+      meta: push.meta as { id: string; from: string; seat: string; team: string },
+      content_sha256: createHash('sha256').update(push.content).digest('hex'),
+      status: CHANNEL_PUSH_STATUS,
+    });
+    if (!reserved) return;
+    write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
+  };
+  /** The whole inbox, read and verified: the startup prime, the fallback poll without a bus, and
+   *  the slow safety pass beside a live one. */
+  const tick = (): void => {
+    if (halted()) return;
     const unread = listUnread(
       serving.dropDir,
       { to: serving.seat, root: serving.root, session: serving.session },
       serving.home,
-    ).filter((message) => !legacyDropAt(join(serving.dropDir, message.id)));
+    );
     if (!primed) {
       for (const message of unread) seen.add(message.id);
       primed = true;
       return;
     }
-    for (const message of unread) {
-      if (seen.has(message.id)) continue;
-      seen.add(message.id);
-      // An earlier server may have pushed this id before this one started, and a sender whose own
-      // walk takes the message leaves a held marker at the same name: either marker says this id
-      // is not to be pushed, and a second notification is a duplicate wake.
-      if (channelPushHeld(serving.dropDir, message.id)) continue;
-      const push = channelPushOf(serving, message.id);
-      if (push === null) continue;
-      // The marker is the reservation: it is written exclusively before the notification, so a
-      // sender's held marker that lands after the check above wins the name and this server
-      // never pushes the id; a marker this server cannot write means no push at all.
-      const reserved = recordChannelPush(serving.dropDir, {
-        v: 1,
-        kind: 'channel-push',
-        id: message.id,
-        seat: serving.seat,
-        session: serving.session,
-        root: serving.root,
-        at: new Date().toISOString(),
-        meta: push.meta as { id: string; from: string; seat: string; team: string },
-        content_sha256: createHash('sha256').update(push.content).digest('hex'),
-        status: CHANNEL_PUSH_STATUS,
-      });
-      if (!reserved) continue;
-      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
-    }
+    for (const message of unread) pushOne(message.id);
   };
-  const timer = setInterval(tick, CHANNEL_TICK_MS);
+  const every = (ms: number): void => {
+    if (stopped) return;
+    if (timer !== null) clearInterval(timer);
+    timer = setInterval(tick, ms);
+  };
   tick();
-  return () => clearInterval(timer);
+  // Without a bus the inbox is polled on the short tick, as before. With one, each
+  // `message.arrived` routed to this seat pushes its one record at once, and the inbox is read
+  // whole only on the slow safety pass, for a sender that could not reach the bus.
+  every(options.fallbackMs ?? CHANNEL_TICK_MS);
+  const follow = options.follow ?? followBus;
+  const connectBus = (): void => {
+    if (stopped) return;
+    subscription = follow(serving.root, { seat: serving.seat, kinds: ['message.arrived'], skipBacklog: true }, {
+      onUp: () => every(options.safetyMs ?? CHANNEL_SAFETY_MS),
+      onEvent: (event) => {
+        if (halted()) return;
+        const payload = event.payload;
+        if (payload.kind !== 'message.arrived' || payload.to !== serving.seat || payload.session !== serving.session) return;
+        if (!MESSAGE_ID.test(payload.record_id)) return;
+        pushOne(payload.record_id);
+      },
+      onDown: () => {
+        subscription = null;
+        every(options.fallbackMs ?? CHANNEL_TICK_MS);
+      },
+    });
+  };
+  connectBus();
+  return stop;
 }
 
 /** The `ack` tool: the signed read receipt `team ack` writes, marked `read_by: channel`. */
