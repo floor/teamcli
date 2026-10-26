@@ -10,6 +10,11 @@ export function watchLabel(project: string): string {
   return `Watch · ${project}`;
 }
 
+/** The event bus's workspace label for a team, beside the watch's. */
+export function busLabel(project: string): string {
+  return `Bus · ${project}`;
+}
+
 /** A recorded watch's health, from the record and the process table alone. `live` carries a
  *  process that is alive with a heartbeat no older than two in-force intervals, or — before its
  *  pane's first pass records a pid — a pane with a fresh beat. `dead` is a recorded pid that is

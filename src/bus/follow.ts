@@ -88,3 +88,79 @@ export function followBus(
 }
 
 export const BUS_ABSENT = 'the event bus is not running or closed the subscription';
+
+/** The first wait before a dropped follower dials the bus again, and the longest. */
+export const FOLLOW_RETRY_MIN_MS = 250;
+export const FOLLOW_RETRY_MAX_MS = 10_000;
+
+/**
+ * A follower that comes back: when the bus is absent or drops the subscription, `onDown` is
+ * called (the caller falls back to its own reading), and the bus is dialled again after a wait
+ * that doubles from `minMs` up to `maxMs`. A subscription that the bus answers resets the wait
+ * and calls `onUp`, so a seat returns from polling to events without restarting. Each new
+ * subscription skips its backlog when the request asks, so a reconnect never replays old events;
+ * the caller's own safety read covers what arrived while it was down.
+ */
+export function followBusRetrying(
+  root: string,
+  request: Parameters<typeof followBus>[1],
+  handlers: FollowHandlers,
+  options: { minMs?: number; maxMs?: number; follow?: typeof followBus } = {},
+): BusFollow {
+  const minMs = options.minMs ?? FOLLOW_RETRY_MIN_MS;
+  const maxMs = options.maxMs ?? FOLLOW_RETRY_MAX_MS;
+  const follow = options.follow ?? followBus;
+  let wait = minMs;
+  let stopped = false;
+  let current: BusFollow | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let wasUp = false;
+  const dial = (): void => {
+    timer = null;
+    if (stopped) return;
+    current = follow(root, request, {
+      onEvent: handlers.onEvent,
+      onUp: () => {
+        wait = minMs;
+        wasUp = true;
+        handlers.onUp?.();
+      },
+      onDown: (why) => {
+        current = null;
+        if (stopped) return;
+        if (wasUp) {
+          wasUp = false;
+          handlers.onDown(why);
+        }
+        timer = setTimeout(dial, wait);
+        wait = Math.min(maxMs, wait * 2);
+      },
+    });
+  };
+  dial();
+  return {
+    close: () => {
+      stopped = true;
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      current?.close();
+      current = null;
+    },
+  };
+}
+
+/** Whether a bus answers on this checkout's socket: a connection that opens within `ms`. A
+ *  socket file left by a bus that died refuses the connection, so it reads as no bus. */
+export function busAnswers(root: string, ms = 300): Promise<boolean> {
+  return new Promise((done) => {
+    const socket = connect(busSocket(root));
+    const finish = (answer: boolean): void => {
+      clearTimeout(timer);
+      socket.destroy();
+      done(answer);
+    };
+    const timer = setTimeout(() => finish(false), ms);
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}

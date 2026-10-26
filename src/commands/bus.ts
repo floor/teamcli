@@ -45,10 +45,12 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
   const detached = detachedRefusal(caller);
   if (detached !== undefined) return refuse(io, detached);
 
-  if (!isOwner(caller)) {
+  // The owner at a terminal, or the agentless pane `team up` starts the bus in — the same
+  // admission the watch's own pane has. A seat's pane is never this pane: it carries an agent.
+  if (!isOwner(caller) && caller.kind !== 'pane') {
     return refuse(
       io,
-      `only the owner runs \`bus\`, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
+      `only the owner runs \`bus\`, from a terminal outside herdr or the pane team up starts it in; this call is ${describeCaller(caller)}`,
     );
   }
 

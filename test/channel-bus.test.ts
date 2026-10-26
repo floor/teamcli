@@ -261,4 +261,24 @@ describe('the channel on the event bus', () => {
     await new Promise((r) => setTimeout(r, 400));
     expect(worker.pushed).toHaveLength(0);
   }, 10_000);
+  test('a bus that comes back: the server re-subscribes on its own and pushes from events again', async () => {
+    const at = place();
+    const first = await bus(at);
+    const worker = server(at, 'worker');
+    await worker.ready;
+    await first.close();
+    const during = await deliver(at, 'lead', 'worker', 'while down');
+    await worker.next(during.id);
+    await bus(at);
+    // The retry waits double from 250 ms; two seconds is several dials.
+    await new Promise((r) => setTimeout(r, 2000));
+    const times: number[] = [];
+    for (let i = 0; i < 10; i += 1) {
+      const sent = await deliver(at, 'lead', 'worker', `back ${i}`);
+      times.push((await worker.next(sent.id)).at - sent.t0);
+    }
+    console.log(`channel-bus: after reconnect p95 ${p(times, 0.95).toFixed(1)} ms`);
+    expect(p(times, 0.95)).toBeLessThan(20);
+    expect(new Set(worker.pushed.map((one) => one.id)).size).toBe(worker.pushed.length);
+  }, 20_000);
 });

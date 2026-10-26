@@ -28,7 +28,7 @@ export type Op =
   | { do: 'wait-session'; session: string; seconds: number }
   | { do: 'create'; seat: string; label: string; cwd: string; repairLine: string; notice?: string; lobby?: true; watcher?: CliWatcher }
   /** The watchdog's workspace: no seat, so no seat repair either. */
-  | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined }
+  | { do: 'create'; seat?: undefined; label: string; cwd: string; notice?: string; lobby?: undefined; bus?: true }
   /** `cli` and `cwd` let the launch register the seat's team inbox in its folder before the
    *  command runs (`execute.ts`); `teamFile` is the team file the run read, which the seat's
    *  inbox server resolves the team from when the folder is a lobby. `watcher` is how the seat
@@ -132,6 +132,8 @@ export type Op =
       reload?: { detail: string };
     }
   | { do: 'watch'; label: string; command: string; file?: string }
+  /** The event bus's pane: `team bus` in its own workspace, recorded like the watch's. */
+  | { do: 'bus'; label: string; command: string }
   | {
       do: 'type';
       seat: string;
@@ -175,6 +177,8 @@ export type Op =
       said?: string;
     }
   | { do: 'kill'; pid: number }
+  /** The event bus's workspace `team up` recorded: closed, which ends `team bus` in it. */
+  | { do: 'close-bus'; workspace: string }
   | { do: 'stop'; session: string };
 
 /** One thing `up` or `down` does, in order. */
@@ -371,6 +375,15 @@ export interface UpInput {
   startWatch?: boolean;
   /** The command the watch's pane runs. Defaults to `team watch`. */
   watchLine?: string;
+  /** Start the team's event bus in its own workspace (`bus.autostart`, on unless the file sets
+   *  it false). Absent means no bus step at all: a plan built by hand starts none. */
+  startBus?: boolean;
+  /** The bus answers on its socket, so no second one is started. */
+  busAlive?: boolean;
+  /** The bus's workspace label: the one `busLabel` makes for this team. */
+  busLabel?: string;
+  /** The command the bus's pane runs. Defaults to `team bus`. */
+  busLine?: string;
   /**
    * The team file a flagless watch in `root` would not read. Recorded for the watch's pane
    * before its command runs. Absent when that flagless watch already reads the file.
@@ -883,6 +896,20 @@ export function upPlan(input: UpInput): Step[] {
     }
   }
 
+  if (input.startBus === true && input.busAlive !== true && input.busLabel !== undefined) {
+    const busLine = input.busLine ?? 'team bus';
+    steps.push({
+      kind: 'run',
+      argv: herdr(session, 'workspace', 'create', '--cwd', input.root, '--label', input.busLabel, '--no-focus'),
+      do: { do: 'create', label: input.busLabel, cwd: input.root, bus: true },
+    });
+    steps.push({
+      kind: 'run',
+      argv: herdr(session, 'pane', 'run', paneOf(input.busLabel), busLine),
+      note: 'seats follow it for message.arrived; without it they poll',
+      do: { do: 'bus', label: input.busLabel, command: busLine },
+    });
+  }
   if (input.watchAlive || input.startWatch === false) return steps;
   if (input.watchUnknown) {
     steps.push({
@@ -966,6 +993,8 @@ export interface DownInput {
   extra: number;
   /** The watch's pid, when its state records one that is alive. */
   watchPid: number | null;
+  /** The bus's workspace, when `team up` recorded one for this session. */
+  busWorkspace?: string | null;
   /** The caller's own seat, and the orchestrator's and operator's, when a seat calls. */
   keep: readonly string[];
   /** The owner is closing workspaces that are not free, without typing into them. */
@@ -1163,6 +1192,15 @@ export function downPlan(input: DownInput): Step[] {
       argv: ['kill', String(input.watchPid)],
       note: 'the watch',
       do: { do: 'kill', pid: input.watchPid },
+    });
+  }
+
+  if (input.busWorkspace) {
+    steps.push({
+      kind: 'run',
+      argv: herdr(session, 'workspace', 'close', input.busWorkspace),
+      note: 'the event bus',
+      do: { do: 'close-bus', workspace: input.busWorkspace },
     });
   }
 
