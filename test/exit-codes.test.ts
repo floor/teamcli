@@ -1458,6 +1458,10 @@ scene('doctor.invocation', async (place) => {
   const io = testIo(place.root, owner);
   return show({ code: await runDoctor(['extra'], io, doctor(place.home)), out: io.out, err: io.err }, 'unexpected');
 });
+scene('doctor.both-modes', async (place) => {
+  const io = testIo(place.root, owner);
+  return show({ code: await runDoctor(['--login', '--jules'], io, doctor(place.home)), out: io.out, err: io.err }, 'ask one at a time');
+});
 scene('doctor.not-a-repo', async (place) => {
   const io = testIo(place.root, owner);
   return show({ code: await runDoctor([], io, doctor(place.home)), out: io.out, err: io.err }, 'not inside a git repository');

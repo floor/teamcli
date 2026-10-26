@@ -694,7 +694,7 @@ Hidden: no
 
 Usage:
 
-    team doctor [--session <name>] [--file <path>] [--login] [--json]
+    team doctor [--session <name>] [--file <path>] [--login] [--jules] [--json]
 
 ### Who may run it
 
@@ -707,6 +707,7 @@ Usage:
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--jules` | no | no | no |
 | `--login` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |

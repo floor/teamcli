@@ -47,6 +47,9 @@
     "login_only": {
       "type": "boolean"
     },
+    "jules_only": {
+      "type": "boolean"
+    },
     "findings": {
       "type": "array",
       "items": {
