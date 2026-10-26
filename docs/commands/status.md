@@ -115,7 +115,7 @@ repair.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's |
 | `--project` | `<name>` | cover the project the name holds — its teams, read from the registry — instead of one team's reading; anyone may aim it, from any folder |
 | `--all` | — | render the expanded seat registry columns (`SEAT`, `NICKNAME`, `ID`, `ROLE`, `CLI`, `MODEL`, `EFFORT`, `STATUS`, `STATE`, `SOURCE`, `LAST ACTIVE`, `PANE`); those expanded columns print in the table under `--all` alone, while every `--json` row carries the seat's own reading as `seat_state` and `seat_state_source` either way |
 | `--client` | `<grant-file>` | the client form: an owner-signed bundle grant that carries `status`, see [A client's status](#a-clients-status) |

@@ -1,6 +1,6 @@
 # team rename
 
-Renames a seat in `.agents/team.yaml` — or with `--renumber`, renumbers every numbered seat to match
+Renames a seat in the team's configuration — or with `--renumber`, renumbers every numbered seat to match
 the `seat_numbering` in force — and carries over the seat's identity and records across the team file,
 the approval record, the state, the registry, herdr, and on-disk seat files.
 
@@ -13,7 +13,7 @@ the approval record, the state, the registry, herdr, and on-disk seat files.
 
 Renaming `<seat>` to `<new-seat>` moves the seat's name while keeping the same seat and agent identity:
 
-- **Team file and approval record**: rewrites the seat declaration and every seat reference in `.agents/team.yaml` (`coordinator`, `operator`, `like`, `delegates`, `grant`, `delivery_order`) and updates the stored approval record when one is in force.
+- **Team file and approval record**: rewrites the seat declaration and every seat reference in the team's record (`coordinator`, `operator`, `like`, `delegates`, `grant`, `delivery_order`) and updates the stored approval record when one is in force.
 - **Agent registry (`id`) and grants**: updates the seat's record in `~/.config/team/agents.yaml` and the team's roster in `~/.config/team/teams.yaml` while preserving its immutable `agt_…` agent id and `seat_…` handle, so standing grants and delegations keyed by agent id continue to apply.
 - **Session state**: moves the seat's entry in `.agents/team.state.json` (`seats`, `retained_seats`, `swapping`, `worktrees`, `procs`, temporary `like` targets, and budget readings).
 - **Herdr pane title**: renames the live agent in its recorded herdr pane (`pane <pane>`).
@@ -30,7 +30,7 @@ Renaming `<seat>` to `<new-seat>` moves the seat's name while keeping the same s
 | `--renumber` | — | renumber every numbered seat (such as `builder-1` -> `builder-01`) to match the `seat_numbering` policy in force (`min_width`, `pad_char`, `separator`), leaving unnumbered single seats untouched |
 | `--dry-run` | — | with `--renumber`, print the planned renames (`<from> -> <to> (dry run)`) without writing any file or state |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--json` | — | print `{ "dryRun": boolean, "renames": [...] }` on stdout |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
@@ -116,7 +116,7 @@ builder-1 -> builder-01 (dry run)
 exit 0
 ```
 
-Renaming `builder-1` updates `.agents/team.yaml`, the session state, and the live pane in one step:
+Renaming `builder-1` updates the team's record, the session state, and the live pane in one step:
 
 ```console
 $ team rename builder-1 builder-01 ; echo "exit $?"

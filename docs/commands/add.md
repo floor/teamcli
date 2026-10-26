@@ -126,7 +126,7 @@ that proceeds is attributed in the log before its effects, as
 | `--key <client-key>` | the client's private key file; required with `--client`, refused without it |
 | `--team <team>` | with `--client`, the team the grant is for; required |
 | `--dry-run` | print whether this seat would launch or be refused. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) |
-| `--file <path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file <path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | the usage, and exit 0 |
 

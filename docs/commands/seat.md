@@ -37,7 +37,7 @@ position: `team seat add` is the lifecycle command, never a read of a seat calle
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's |
 | `--client` | `<grant-file>` | the client form of the read: an owner-signed manager bundle grant that carries `seat`; it reads that one team. `--file` and `--session` are refused with it. A refusal is `seat.client-refused` (exit 1) |
 | `--key` | `<client-key>` | the client's private key file; required with `--client` |
 | `--team` | `<team>` | with `--client`, the team the grant is for |

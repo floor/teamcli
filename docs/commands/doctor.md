@@ -15,7 +15,7 @@ them are done; the last line counts those.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to report on, instead of `team.session` |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml` |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record |
 | `--login` | — | the seats' CLIs' logins alone, one line per CLI, instead of the whole report; herdr, the session and the machine are not read |
 | `--jules` | — | the Jules CLI's own steps alone — installed, logged in with GitHub linked, and this project's repository connected to it — instead of the whole report; herdr, the session, the machine and the seats' CLIs are not read |
 | `--json` | — | the report as one JSON document on stdout |

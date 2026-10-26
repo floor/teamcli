@@ -70,7 +70,7 @@ never whether an envelope exists: the run prints the `team.error` document (`fee
 
 ## What it reads and writes
 
-Reads `.agents/team.yaml` to resolve the project name and checkout root (or scans all
+Reads the team's configuration (its registry record; `.agents/team.yaml` on the legacy `file` source) to resolve the project name and checkout root (or scans all
 `~/.config/team/<project>-<hash>/` folders when `--all` is given or when run outside a checkout),
 then reads `messages.jsonl` (and `.1`, `.2`) with `O_NOFOLLOW`, together with `briefs/*-to-*.md`
 and any Desk guard or bridge `audit.jsonl` and signed answer files under `~/.config/team/lobby/`.

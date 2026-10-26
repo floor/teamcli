@@ -183,7 +183,7 @@ repair.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--session` | `<name>` | the herdr session to read, instead of `team.session`; the owner's alone |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--repair` | — | the owner's repair, one write: drop the state's leftovers (a record for a seat the file no longer declares, a session with no seat of the team in it), re-record a seat an agent registered under dev mode with the caller gate in force, and set herdr's drifted sidebar lines back from the file; the owner's alone |
 | `--json` | — | emit the structured `team.check` JSON document on stdout (`schema/check.schema.json`) |
 

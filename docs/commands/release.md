@@ -22,7 +22,7 @@ splits at the final `@`: `@scope/name@1.2.3`.
 | Flag | Value | Effect |
 | --- | --- | --- |
 | `--json` | — | print the result as one JSON object on standard output, and nothing else |
-| `--file <path>` | a team file | the team file to read, instead of the main checkout's `.agents/team.yaml` |
+| `--file <path>` | a team file | deprecated: a legacy team file to read instead of the team's registry record |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 `--file` takes its value even when the value looks like another option: `--file --json` names a

@@ -1,6 +1,6 @@
 # team restart
 
-Restarts one declared seat in place without editing `.agents/team.yaml`: prints the seat's input-box,
+Restarts one declared seat in place without editing the team's configuration: prints the seat's input-box,
 turn and context facts, asks a free seat to exit and waits for its pane to return to its shell,
 closes its workspace, and launches the seat again in a fresh workspace. A seat that is busy —
 working, blocked at a prompt, at its own exit question, or holding unsent text — is left as it is
@@ -41,7 +41,7 @@ the restart goes on; [`team check`](check.md) names the seat.
 | `--abandon` | — | close the workspace of a stuck seat without typing into its pane, and replace a `replaced` pane herdr still names as the seat; a seat caller cannot abandon a `working` seat or a lead seat |
 | `--dry-run` | — | check the seat and print the stop and launch plan without touching the session |
 | `--session` | `<name>` | the herdr session, instead of `team.session`; the owner's alone |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file` | `<path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
 | `--client` | `<grant-file>` | the client form: an owner-signed manager bundle grant that carries `restart`, see [A client's restart](#a-clients-restart) |
 | `--key` | `<client-key>` | the client's private key file; required with `--client`, refused without it |
 | `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |

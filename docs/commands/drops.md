@@ -77,7 +77,7 @@ no-op.
 
 ## What it reads and writes
 
-Reads `.agents/team.yaml` to resolve the project, the session, and the calling seat, then reads
+Reads the team's configuration (its registry record; `.agents/team.yaml` on the legacy `file` source) to resolve the project, the session, and the calling seat, then reads
 `.agents/send-drops/<session>/<seat>/`. The file is the one the checkout git names, or, in a
 folder that is not a repository, this folder's own team root — a team whose file lives outside
 any checkout reads exactly the same way. A drop's file name is the send's id. A record's payload
