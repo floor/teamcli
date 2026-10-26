@@ -225,10 +225,14 @@ function legacyCandidates(root: string): Candidate[] {
 
 /** The marker names left beside a record; none of them is a message. A send leaves the pending,
  *  taken, read and receipt names; the unread watch leaves `.wake` beside a message whose one wake
- *  line it typed and `.reported` beside one whose sender and lead it told. */
+ *  line it typed and `.reported` beside one whose sender and lead it told. A `.new` name is the
+ *  private temp `publishReadReceipt` writes in this folder before it links the receipt: it is
+ *  JSON, and it matches a record's name shape, but it is not a record. Listing it would refuse
+ *  a message that was never sent whenever a read and `team messages` cross. */
 function isMarkerName(name: string): boolean {
   return name.endsWith('.pending') || name.endsWith('.taken') || name.endsWith('.read')
-    || name.endsWith('.wake') || name.endsWith('.reported') || name.endsWith('.json');
+    || name.endsWith('.wake') || name.endsWith('.reported') || name.endsWith('.json')
+    || name.endsWith('.new');
 }
 
 /** The prefix a work nudge's file carries: the watch writes it into the same folder, and it is a
@@ -237,7 +241,7 @@ const WORK_PREFIX = 'work-';
 
 /** The signed records in `<root>/.agents/send-drops/<session>/<seat>/<id>`. A name that is not a
  *  record's id — a pending marker, a taken marker, an inbox receipt, the unread watch's wake or
- *  report marker, a work nudge — is not a candidate. */
+ *  report marker, a receipt publisher's `.new` temp, a work nudge — is not a candidate. */
 function recordCandidates(root: string, session: string): Candidate[] {
   const dir = join(root, '.agents', 'send-drops', session);
   if (!isDir(dir)) return [];
