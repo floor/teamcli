@@ -339,17 +339,17 @@ describe('the daemon restore sweep for one route', () => {
 
   test('a run that refuses before it plans a seat reports refused, not a false 0/0/0', async () => {
     recordSeat();
-    // A legacy trust block: the real run refuses `up.doctor` before the host is built, so no
-    // report exists and the sweep must not invent a summary for it.
-    writeFileSync(teamFile, teamText().replace(/trust:\n(  - .*\n)+/, 'trust:\n  - .\n'));
+    // A disk too full to launch on: the real run refuses before the host is built, so no report
+    // exists and the sweep must not invent a summary for it. (A legacy trust block no longer
+    // refuses: the run trusts the lobby and the project root and says so.)
     const made = world();
-    const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: sources(made) });
+    const result = await runRestoreSweepForRoute({ home, root, teamFile, sources: sources(made, { machine: () => ({ ...AMPLE, diskFree: 1e6 }) }) });
     expect(result.kind).toBe('refused');
     if (result.kind !== 'refused') throw new Error('the run should have been refused');
     expect(result.exit).toBe(1);
-    // The daemon's log line carries the run's own last line, so it names the refusal (here the
-    // legacy trust block the doctor replaces) rather than only its exit code.
-    expect(result.detail).toContain('machine lobby');
+    // The daemon's log line carries the run's own last line, so it names the refusal rather
+    // than only its exit code.
+    expect(result.detail).toContain('disk');
     expect(made.starts).toBe(0);
     expect(made.runs).toEqual([]);
     expect(made.creates).toEqual([]);

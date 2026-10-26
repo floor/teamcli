@@ -1480,7 +1480,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   const derived = derivedTrust({ ...team, session }, root, sources.home);
   if (derived !== null) {
     team = { ...team, trust: derived.trust };
-    stderrLine(`team up: ${plainText(derived.warning)}\n`);
+    // Said to a run that may launch; a caller the gate refused is told only its refusal.
+    if (named) stderrLine(`team up: ${plainText(derived.warning)}\n`);
   }
 
   const recorded = readState(dir).sessions[session];
