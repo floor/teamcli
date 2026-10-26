@@ -2,6 +2,7 @@ import { format } from './format.ts';
 import { project } from './project.ts';
 import { inProject } from './in_project.ts';
 import { projectLead } from './project_lead.ts';
+import { bus } from './bus.ts';
 import { entity } from './entity.ts';
 import { lobby } from './lobby.ts';
 import { trust } from './trust.ts';
@@ -49,6 +50,8 @@ export const SECTIONS: readonly Section[] = [
   // and read by the registry's writers. Non-owner and additive too, and it reads `in_project`, so
   // it runs after it.
   projectLead,
+  // The team's event bus: whether `team up` starts it. Non-owner and additive.
+  bus,
   // Where this team's lobby lives. Both non-owner and additive: a file that sets neither keeps the
   // machine-global lobby, so they change no approval digest and sit outside the owner-section list.
   entity,

@@ -148,3 +148,19 @@ export function followBusRetrying(
     },
   };
 }
+
+/** Whether a bus answers on this checkout's socket: a connection that opens within `ms`. A
+ *  socket file left by a bus that died refuses the connection, so it reads as no bus. */
+export function busAnswers(root: string, ms = 300): Promise<boolean> {
+  return new Promise((done) => {
+    const socket = connect(busSocket(root));
+    const finish = (answer: boolean): void => {
+      clearTimeout(timer);
+      socket.destroy();
+      done(answer);
+    };
+    const timer = setTimeout(() => finish(false), ms);
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}

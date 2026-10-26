@@ -325,6 +325,8 @@ export type SessionState = {
    * the read door.
    */
   watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string };
+  /** The event bus `team up` started for this session: its pane and workspace, for `team down`. */
+  bus?: { pane: string; workspace?: string; started: string };
   /**
    * The team file this session was launched from. A lead in the lobby resolves it from a pane
    * the state records, and from no other path. Absent on a session started before it was written.

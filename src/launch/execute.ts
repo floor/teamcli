@@ -99,6 +99,8 @@ export type Host = {
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
+  /** Forgets the bus record once its workspace closed. */
+  dropBus?(): void;
   stopSession(session: string): boolean;
   /** Clears the session this run has just stopped. Present on `down` only: `up` never deletes. */
   deleteSession?(session: string): boolean | Promise<boolean>;
@@ -186,6 +188,8 @@ export type Host = {
   noteWatchFile?(pane: string, file: string): void;
   /** Records the watch's pane once its command has started. */
   noteWatch?(pane: string, workspace?: string): void;
+  /** Records the bus's pane and workspace once its command started, so `team down` can close it. */
+  noteBus?(pane: string, workspace?: string): void;
   /** The seat's line: first drawn before its workspace is created, rewritten in place as it
    *  advances. Present on `up` and `add`; `down` has none, and its records keep their old lines. */
   progress?(seat: string, state: ProgressState): void;
@@ -1025,6 +1029,9 @@ export async function executePlan(
             host.record(op.seat, { stage: 'launched' });
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: 'its workspace was not created; left at launched' });
+          } else if ('bus' in op && op.bus) {
+            host.say('bus: its workspace was not created; seats poll their inboxes\n');
+            host.log('bus', 'its workspace was not created');
           } else {
             watchFailed = true;
             host.say('watch: its workspace was not created\n');
@@ -1521,6 +1528,18 @@ export async function executePlan(
         host.log('watch', 'started');
         break;
       }
+      case 'bus': {
+        const here = places.get(op.label);
+        if (!here || !host.paneRun(session, here.pane, op.command)) {
+          host.say('bus: it did not start; seats poll their inboxes\n');
+          host.log('bus', 'it did not start');
+          break;
+        }
+        host.noteBus?.(here.pane, here.workspace);
+        host.say('bus: started\n');
+        host.log('bus', 'started');
+        break;
+      }
       case 'type': {
         const typed = await host.typeLine(session, op.pane, op.text);
         if (typed === 'no-agent') {
@@ -1813,6 +1832,15 @@ export async function executePlan(
         finish(op.seat, op.said ?? 'stopped');
         break;
       }
+      case 'close-bus': {
+        if (!host.closeWorkspace(session, op.workspace)) {
+          host.say('bus: its workspace did not close\n');
+          break;
+        }
+        host.dropBus?.();
+        host.say('bus: stopped\n');
+        break;
+      }
       case 'kill': {
         if (!host.kill(op.pid)) {
           watchHeld = true;
@@ -1880,7 +1908,7 @@ export async function executePlan(
     let end = steps.length;
     while (end > start) {
       const op = steps[end - 1]?.do;
-      if ((op?.do === 'create' && !op.seat) || op?.do === 'watch' || op?.do === 'kill' || op?.do === 'watch-gone' || op?.do === 'hold' || op?.do === 'stop') end--;
+      if ((op?.do === 'create' && !op.seat) || op?.do === 'watch' || op?.do === 'bus' || op?.do === 'kill' || op?.do === 'watch-gone' || op?.do === 'hold' || op?.do === 'stop') end--;
       else break;
     }
 

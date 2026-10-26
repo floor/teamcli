@@ -84,6 +84,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     project: valueOf<string>(ctx, 'project'),
     inProject: valueOf<string | null>(ctx, 'in_project'),
     projectLead: valueOf<boolean>(ctx, 'project_lead'),
+    bus: valueOf<NonNullable<TeamFile['bus']>>(ctx, 'bus'),
     entity: valueOf<string | null>(ctx, 'entity'),
     lobby: valueOf<string | null>(ctx, 'lobby'),
     visibility: valueOf<TeamFile['visibility']>(ctx, 'visibility'),

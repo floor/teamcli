@@ -181,6 +181,9 @@ export type TeamFile = {
    * project sets it (`team check` refuses two), and the file must name the project it leads.
    */
   projectLead: boolean;
+  /** The team's event bus: whether `team up` starts `team bus` and `team down` stops it. Absent in
+   *  a team built by hand, which reads as autostart on. */
+  bus?: { autostart: boolean };
   /** The entity the team belongs to, or null. Sets the team's lobby to
    *  `~/.config/team/lobbies/<slug>` unless `lobby` names one outright. */
   entity: string | null;

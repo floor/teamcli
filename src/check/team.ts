@@ -91,6 +91,7 @@ import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import type { Attention } from '../watch/check.ts';
 import { watchSitting } from '../watch/liveness.ts';
+import { busProblemNotes } from '../bus/notes.ts';
 import { attentionOf } from '../watch/pass.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
 
@@ -483,6 +484,13 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...paneWatchCheckNotes(watch, {
       known: sources.daemon !== undefined && sources.daemon.state !== 'unknown',
       running: live?.running === true,
+    }),
+    // The event bus: a dead one, or one `team up` started that is gone. Notes only.
+    ...busProblemNotes({
+      root,
+      alive: (pid) => sources.alive?.(pid) ?? pidAlive(pid),
+      recorded: state.bus,
+      autostart: team.bus?.autostart !== false,
     }),
   ];
   // The notes print above the differences, as `team status` prints them: a note names something

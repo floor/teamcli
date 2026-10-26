@@ -58,6 +58,48 @@ import { reconcilePass } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 
+/** The serving bus's process marker, beside its socket. */
+export function busMarkerPath(root: string): string {
+  return join(root, '.agents', 'bus.pid');
+}
+
+export type BusMarker = { pid: number; started: string };
+
+function writeBusMarker(root: string, at: Date): void {
+  try {
+    writeFileSync(busMarkerPath(root), `${JSON.stringify({ pid: process.pid, started: at.toISOString() })}\n`, { mode: 0o600 });
+  } catch {
+    // A marker that cannot be written leaves status unable to name the bus; the bus still serves.
+  }
+}
+
+function clearBusMarker(root: string): void {
+  try {
+    const held = readBusMarker(root);
+    if (held !== null && held.pid === process.pid) unlinkSync(busMarkerPath(root));
+  } catch {
+    // Already gone.
+  }
+}
+
+export function readBusMarker(root: string): BusMarker | null {
+  try {
+    const parsed = JSON.parse(readFileSync(busMarkerPath(root), 'utf8')) as Partial<BusMarker>;
+    if (typeof parsed.pid !== 'number' || !Number.isInteger(parsed.pid) || typeof parsed.started !== 'string') return null;
+    return { pid: parsed.pid, started: parsed.started };
+  } catch {
+    return null;
+  }
+}
+
+/** The bus as status and check read it: serving (its marker's pid lives), dead (a marker whose
+ *  pid is gone), or absent (no marker). */
+export function busHealth(root: string, alive: (pid: number) => boolean): { kind: 'running'; pid: number } | { kind: 'dead'; pid: number } | { kind: 'absent' } {
+  const marker = readBusMarker(root);
+  if (marker === null) return { kind: 'absent' };
+  return alive(marker.pid) ? { kind: 'running', pid: marker.pid } : { kind: 'dead', pid: marker.pid };
+}
+
 export function busSocket(root: string): string {
   return join(root, '.agents', 'bus.sock');
 }
@@ -667,6 +709,10 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
 
     server.on('error', (error) => input.stderr(`team bus: ${error.message}\n`));
 
+    // The process marker `team status` and `team check` read without dialling the socket: this
+    // pid, while it serves. A marker whose pid is gone is a bus that died; `team up` starts one.
+    writeBusMarker(input.root, now());
+
     const timer =
       reconcileIntervalMs > 0
         ? setInterval(() => {
@@ -686,6 +732,7 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
           if (timer !== undefined) clearInterval(timer);
           subscribers.clear();
           for (const socket of sockets) socket.destroy();
+          clearBusMarker(input.root);
           server.close(() => done());
         }),
     };
