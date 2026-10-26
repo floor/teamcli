@@ -229,6 +229,127 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "approvals",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "list",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team approvals list [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the list reads team-create and owner-action always rules and writes nothing"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--request",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "revoke",
+          "positionals": [
+            {
+              "name": "id...",
+              "optional": false,
+              "repeatable": false
+            }
+          ],
+          "subcommands": [],
+          "usage": [
+            "team approvals revoke <id...> [--json]",
+            "team approvals revoke <id...> --request [--json]",
+            "team approvals revoke <id...> --approval <request-id> [--json]"
+          ],
+          "who": {
+            "gate": "owner-only",
+            "terminal": {
+              "where": "a terminal outside herdr",
+              "who": "the owner"
+            },
+            "why": "removing an always rule is the owner's, from a terminal outside herdr or by an owner-seat answer for that revoke"
+          }
+        }
+      ],
+      "usage": [
+        "team approvals list [--json]",
+        "team approvals revoke <id...> [--json]",
+        "team approvals revoke <id...> --request [--json]",
+        "team approvals revoke <id...> --approval <request-id> [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "listing approval rules reads the owner's folder and changes nothing; revoking one is the owner's, or an owner-seat answer for that revoke"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--abandon",
           "repeatable": false,
           "takesValue": false
@@ -355,6 +476,64 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--do",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "batch",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team batch --request --do <command> [--json]",
+        "team batch --approval <request-id> [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -467,7 +646,25 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "--inherited",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--request",
           "repeatable": false,
           "takesValue": false
         },
@@ -483,11 +680,17 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team bus"
+        "team bus",
+        "team bus --request",
+        "team bus --approval <request-id>"
       ],
       "who": {
-        "gate": "owner-only",
-        "why": "the bus reconciles the project's event log, and the owner runs it, one per clone, from a terminal outside herdr"
+        "gate": "owner-or-leads",
+        "terminal": {
+          "where": "a terminal outside herdr or its own pane",
+          "who": "the owner or a `leads` seat"
+        },
+        "why": "the bus reconciles the project's event log, one per clone: the owner from a terminal outside herdr, or a seat that holds `leads` from its own pane"
       }
     },
     {
@@ -1387,6 +1590,12 @@
         },
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--client",
           "repeatable": false,
           "takesValue": true
@@ -1423,6 +1632,12 @@
         },
         {
           "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -1452,7 +1667,9 @@
       "subcommands": [],
       "usage": [
         "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]",
-        "team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]"
+        "team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]",
+        "team down --request [--dry-run] [--wait] [--json]",
+        "team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]"
       ],
       "who": {
         "gate": "owner-or-leads",
@@ -1590,6 +1807,63 @@
       "who": {
         "gate": "seat-record",
         "why": "a read surface of the Runtime and the modules: any seat with a registry record, and the `read` scope is not enforced in 0.5.0"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "forget",
+      "positionals": [
+        {
+          "name": "id...",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team forget <id...> [--json]",
+        "team forget <id...> --request [--json]",
+        "team forget <id...> --approval <request-id> [--json]"
+      ],
+      "who": {
+        "gate": "owner-only",
+        "terminal": {
+          "where": "a terminal outside herdr",
+          "who": "the owner"
+        },
+        "why": "removing a team registry record is the owner's, from a terminal outside herdr or by an owner-seat answer for that forget; it does not stop panes or delete the team file"
       }
     },
     {
@@ -4830,6 +5104,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--brief",
           "repeatable": false,
           "takesValue": true
@@ -4902,6 +5182,12 @@
         },
         {
           "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--request-id",
           "repeatable": false,
           "takesValue": true
@@ -4960,7 +5246,9 @@
         "team send --confirm <id> [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> [<message>] [--json] [--dry-run]",
         "team send --record <seat> --channel <native> --ms <N> --file <path> [--json] [--dry-run]",
-        "team send --list [--json]"
+        "team send --list [--json]",
+        "team send <seat> <message> --request [--json]",
+        "team send <seat> <message> --approval <request-id> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "admission",

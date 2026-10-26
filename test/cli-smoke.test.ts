@@ -47,6 +47,9 @@ const allCommandNames = Array.from(
  */
 export const EXCUSED_SIDE_EFFECT_COMMANDS: Record<string, string> = {
   ack: "writes one signed read receipt into the addressee's folder",
+  approvals: 'lists or revokes owner-seat always rules under the owner home',
+  forget: 'removes a team registry record from the owner home',
+  batch: 'records several owner-seat actions as one request, or runs a batch the owner seat already signed',
   answer: 'types an answer into a live herdr pane dialog',
   archive: 'stops the team as down does and moves its state into an archive folder, with no registered output schema',
   client: 'writes an Ed25519 client key pair into an owner folder and reads no project state',

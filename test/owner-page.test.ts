@@ -10,8 +10,9 @@ import { join } from 'node:path';
 import { readOwnerSeat, registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { createTeamCreateRequest, actionRequestsFolder } from '../src/client/team-create.ts';
 import { admitOwnerAction, createOwnerActionRequest } from '../src/client/owner-action.ts';
+import { presentOwnerRequest } from '../src/client/owner-page-link.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
-import { serveOwnerPage, spkiToPoint } from '../src/security/owner-page.ts';
+import { OWNER_PAGE_HTML, serveOwnerPage, spkiToPoint } from '../src/security/owner-page.ts';
 import { proposeSecurityProfile, readSecurityProfile } from '../src/security/profile.ts';
 import { keyOf } from '../src/store/keys.ts';
 
@@ -164,6 +165,24 @@ describe('owner page', () => {
     expect(admitOwnerAction(s.home, id, ask('team-up'), s.store, new Date()).ok).toBe(false);
   });
 
+  test('a passkey the owner-signers policy does not name is refused before a challenge is issued', async () => {
+    const s = await setup();
+    const p = phone();
+    expect((await registerPhone(s, p)).status).toBe(200);
+    const wrote = writePolicySet(s.home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['mac'] }, { now: new Date() });
+    if (!wrote.ok) throw new Error(wrote.why);
+    const root = join(s.base, 'code', 'docs');
+    mkdirSync(root, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+    const made = createTeamCreateRequest(s.home, root, null, new Date());
+    if (!made.ok) throw new Error(made.why);
+    const id = made.record.request_id;
+    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
+    expect(ch.status).toBe(400);
+    expect(String(ch.body.error)).toContain('not accepted by the owner-signers policy');
+    expect(existsSync(join(actionRequestsFolder(s.home), `${id}.seat-answer.json`))).toBe(false);
+  });
+
   test('a passkey the owner does not confirm with Touch ID is not added', async () => {
     const s = await setup();
     const p = phone();
@@ -175,6 +194,42 @@ describe('owner page', () => {
     s.store.sign = sign;
     expect((await registerPhone(s, p)).status).toBe(200);
     expect(readFileSync(join(s.home, '.config', 'team', 'security-profile.log'), 'utf8')).toContain('"act":"add-passkey-signer"');
+  });
+
+  test('an open page is not opened again, and the next read shows the new card', async () => {
+    const s = await setup();
+    const link = JSON.parse(readFileSync(join(s.home, '.config', 'team', 'owner-page.json'), 'utf8')) as { pid: number; port: number };
+    expect(link.pid).toBe(process.pid);
+    expect(link.port).toBe(s.page.port);
+    expect(presentOwnerRequest(s.home, () => { throw new Error('opened a browser'); })).toBe('live');
+    expect(OWNER_PAGE_HTML).toContain('setInterval');
+    expect(OWNER_PAGE_HTML).toContain('if (busy) return');
+    const first = await s.call('GET', '/api/state');
+    const before = Array.isArray(first.body.requests) ? first.body.requests.length : 0;
+    const root = join(s.base, 'repo');
+    mkdirSync(root);
+    const made = createOwnerActionRequest(s.home, {
+      actions: ['team-revoke-approval', 'team-forget'],
+      root,
+      team: 'floor',
+      head: null,
+      args: { 'team-revoke-approval': ['revoke', `oa_${'ab'.repeat(12)}`], 'team-forget': ['abc123abc123'] },
+      requestedBy: 'seat:iris',
+    });
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    expect(made.page).toBe('live');
+    const second = await s.call('GET', '/api/state');
+    const requests = second.body.requests as { id: string; text: string }[];
+    expect(requests).toHaveLength(before + 1);
+    const card = requests.find((item) => item.id === made.record.request_id);
+    expect(card?.text).toContain('revoke an approval rule');
+    expect(card?.text).toContain('forget a team record');
+    const at = servers.findIndex((item) => item === s.page.server);
+    if (at >= 0) servers.splice(at, 1);
+    await new Promise<void>((resolve, reject) => s.page.server.close((error) => (error ? reject(error) : resolve())));
+    expect(existsSync(join(s.home, '.config', 'team', 'owner-page.json'))).toBe(false);
+    expect(presentOwnerRequest(s.home, () => { throw new Error('opened a browser'); })).toBe('closed');
   });
 
   test('a request from another Host is refused even with the token', async () => {

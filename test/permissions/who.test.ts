@@ -322,7 +322,9 @@ describe('each mapped row pins the module function its kind names', () => {
     const { root, home, id } = world();
     const team = fileTeam(id);
     const rows = Object.entries(COMMAND_GATES).filter(([, gate]) => gate.terminal !== undefined);
-    expect(rows.map(([command]) => command).sort()).toEqual(['ack', 'pause', 'proc', 'proc:add', 'proc:done', 'resume', 'swap:now', 'watch']);
+    expect(rows.map(([command]) => command).sort()).toEqual([
+      'ack', 'approvals:revoke', 'bus', 'forget', 'pause', 'proc', 'proc:add', 'proc:done', 'resume', 'swap:now', 'watch',
+    ]);
     const noTty: Caller = { kind: 'owner-no-tty' };
     for (const [command, gate] of rows) {
       const sentence = detachedRefusal(noTty, gate.terminal);
@@ -333,8 +335,9 @@ describe('each mapped row pins the module function its kind names', () => {
       expect(decision.why, command).toBe(sentence as string);
       // A caller with a terminal, and a seat on its recorded pane, are judged by the row itself.
       expect(gateVerdict({ kind: 'owner' }, team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'ok' });
-      if (gate.kind === 'team-pause') {
-        // The orchestrator's seat is admitted, and a plain seat is not.
+      if (gate.kind === 'team-pause' || gate.kind === 'owner-or-leads') {
+        // The orchestrator's seat is admitted, and a plain seat is not. `bus` is owner-or-leads:
+        // the file's lead runs it from its own pane, and a seat that holds no `leads` does not.
         expect(gateVerdict(seatCaller('lead'), team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'ok' });
         expect(gateVerdict(seatCaller('worker'), team, root, home, command, placement(), () => NOW), command).toEqual({ kind: 'refused' });
       } else if (gate.kind === 'owner-only') {

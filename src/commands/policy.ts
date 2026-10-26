@@ -593,7 +593,8 @@ function executePolicySet(
   }
 
   const caller = walkCaller(rawIo);
-  if (!isOwner(caller)) {
+  // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
+  if (!flags.has('dry-run') && !isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
     const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });
@@ -826,7 +827,8 @@ function executePolicyUnset(
   }
 
   const caller = walkCaller(rawIo);
-  if (!isOwner(caller)) {
+  // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
+  if (!flags.has('dry-run') && !isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
     // The owner's dev-mode admission for exactly this gate.
     const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'policy', refusal: msg, home: options.home ?? homedir() });

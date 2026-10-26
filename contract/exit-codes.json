@@ -619,6 +619,48 @@
     },
     {
       "code": 0,
+      "command": "approvals",
+      "id": "approvals.approval-requested",
+      "meaning": "an owner-seat request for this revoke was recorded and sent to the owner seat",
+      "trigger": "team approvals revoke <id...> --request"
+    },
+    {
+      "code": 0,
+      "command": "approvals",
+      "id": "approvals.listed",
+      "meaning": "the always rules were listed",
+      "trigger": "team approvals list"
+    },
+    {
+      "code": 0,
+      "command": "approvals",
+      "id": "approvals.revoked",
+      "meaning": "the always rules were removed",
+      "trigger": "team approvals revoke <id...>"
+    },
+    {
+      "code": 1,
+      "command": "approvals",
+      "id": "approvals.approval-refused",
+      "meaning": "the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team approvals revoke <id...> --approval <request-id>"
+    },
+    {
+      "code": 1,
+      "command": "approvals",
+      "id": "approvals.refused",
+      "meaning": "the revoke was refused",
+      "trigger": "team approvals revoke <id...>"
+    },
+    {
+      "code": 2,
+      "command": "approvals",
+      "id": "approvals.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team approvals"
+    },
+    {
+      "code": 0,
       "command": "archive",
       "id": "archive.keep-running",
       "meaning": "the snapshot was written and the team was left running",
@@ -714,6 +756,34 @@
       "id": "ask-show.invocation",
       "meaning": "the invocation cannot be read",
       "trigger": "team ask-show"
+    },
+    {
+      "code": 0,
+      "command": "batch",
+      "id": "batch.done",
+      "meaning": "the signed batch ran, or a dry run verified it and changed nothing",
+      "trigger": "team batch --approval <request-id>"
+    },
+    {
+      "code": 0,
+      "command": "batch",
+      "id": "batch.requested",
+      "meaning": "several owner-seat actions were recorded as one request",
+      "trigger": "team batch --request --do <command>"
+    },
+    {
+      "code": 1,
+      "command": "batch",
+      "id": "batch.refused",
+      "meaning": "the batch was refused: not a repository, a bad answer, or a command in the list failed",
+      "trigger": "team batch --approval <request-id>"
+    },
+    {
+      "code": 2,
+      "command": "batch",
+      "id": "batch.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team batch"
     },
     {
       "code": 0,
@@ -872,6 +942,13 @@
     {
       "code": 0,
       "command": "bus",
+      "id": "bus.approval-requested",
+      "meaning": "an owner-seat request for this bus start was recorded and sent to the owner seat",
+      "trigger": "team bus --request"
+    },
+    {
+      "code": 0,
+      "command": "bus",
       "id": "bus.started",
       "meaning": "the bus started and served on .agents/bus.sock",
       "trigger": "team bus"
@@ -886,8 +963,15 @@
     {
       "code": 1,
       "command": "bus",
+      "id": "bus.approval-refused",
+      "meaning": "the owner-seat request or approval for this bus start was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team bus --approval <request-id>"
+    },
+    {
+      "code": 1,
+      "command": "bus",
       "id": "bus.refused",
-      "meaning": "the caller is not the owner at a terminal outside herdr, a bus is already running or starting, or the socket could not be bound",
+      "meaning": "the caller is not the owner or a leads seat at the right terminal, a bus is already running or starting, the inheritance token does not match, or the socket could not be bound",
       "trigger": "team bus"
     },
     {
@@ -1551,6 +1635,13 @@
     {
       "code": 0,
       "command": "down",
+      "id": "down.approval-requested",
+      "meaning": "an owner-seat request for this stop was recorded and sent to the owner seat",
+      "trigger": "team down --request"
+    },
+    {
+      "code": 0,
+      "command": "down",
       "id": "down.dry-run",
       "meaning": "a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch)",
       "trigger": "team down --dry-run"
@@ -1582,6 +1673,13 @@
       "id": "down.another-pane",
       "meaning": "the state records another pane for the caller's seat",
       "trigger": "team down"
+    },
+    {
+      "code": 1,
+      "command": "down",
+      "id": "down.approval-refused",
+      "meaning": "the owner-seat request or approval for this stop was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team down --approval <request-id>"
     },
     {
       "code": 1,
@@ -1841,6 +1939,48 @@
       "id": "feed.usage",
       "meaning": "the invocation can't be read",
       "trigger": "team feed extra"
+    },
+    {
+      "code": 0,
+      "command": "forget",
+      "id": "forget.approval-requested",
+      "meaning": "an owner-seat request for this forget was recorded and sent to the owner seat",
+      "trigger": "team forget <id...> --request"
+    },
+    {
+      "code": 0,
+      "command": "forget",
+      "id": "forget.forgotten",
+      "meaning": "the team registry records were removed; panes were not stopped and the team files were not deleted",
+      "trigger": "team forget <id...>"
+    },
+    {
+      "code": 1,
+      "command": "forget",
+      "id": "forget.approval-refused",
+      "meaning": "the owner-seat request or approval for this forget was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team forget <id...> --approval <request-id>"
+    },
+    {
+      "code": 1,
+      "command": "forget",
+      "id": "forget.missing",
+      "meaning": "no team record matches an id",
+      "trigger": "team forget <id...>"
+    },
+    {
+      "code": 1,
+      "command": "forget",
+      "id": "forget.refused",
+      "meaning": "the forget was refused",
+      "trigger": "team forget <id...>"
+    },
+    {
+      "code": 2,
+      "command": "forget",
+      "id": "forget.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team forget"
     },
     {
       "code": 0,
@@ -4302,6 +4442,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.approval-requested",
+      "meaning": "an owner-seat request for this send was recorded and sent to the owner seat",
+      "trigger": "team send <seat> <message> --request"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.client-sent",
       "meaning": "a client grant's signed drop was written to the entity orchestrator's drop folder",
       "trigger": "team send --client grant.json --key client.key orchestrator@floor hello"
@@ -4368,6 +4515,13 @@
       "id": "send.sent-unconfirmed",
       "meaning": "the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back",
       "trigger": "team send worker hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
+      "id": "send.approval-refused",
+      "meaning": "the owner-seat request or approval for this send was refused: missing, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team send <seat> <message> --approval <request-id>"
     },
     {
       "code": 1,

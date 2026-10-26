@@ -210,6 +210,30 @@ export function findTeam(home: string, key: string): TeamRecord | null {
   return found.length === 1 ? (found[0] as TeamRecord) : null;
 }
 
+/**
+ * Removes one team registry record and drops that id from every project that names it. Does not
+ * stop panes, delete the team file, or touch seats. Returns the record that was removed, or null
+ * when the registry has no team with that id.
+ */
+export function forgetTeam(home: string, id: string): TeamRecord | null {
+  const removed = locked(home, () => {
+    const teams = readTeams(home);
+    const prior = teams[id];
+    if (!prior) return null;
+    delete teams[id];
+    write(home, teams);
+    return { ...prior, id };
+  });
+  if (removed === null) return null;
+  for (const [projectId, record] of Object.entries(projects.readProjects(home))) {
+    if (!record.teams.includes(id)) continue;
+    const patch: projects.ProjectPatch = { teams: record.teams.filter((team) => team !== id) };
+    if (record.lead !== null && removed.roster.some((line) => line.agent === record.lead)) patch.lead = null;
+    projects.upsertProject(home, projectId, patch);
+  }
+  return removed;
+}
+
 /** What of a team file the registry keeps. */
 export type TeamSeed = {
   project: string;

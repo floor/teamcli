@@ -782,6 +782,19 @@ console.log(JSON.stringify(readMessage({ dropDir, root, seat, session }, id, hom
     });
   }
 
+  test('a receipt publisher temp beside a record is not a message', async () => {
+    const scene = recordScene();
+    const temp = join(scene.dropDir, `${ID}.read.json.5277.6ab5ce3fc4a8.new`);
+    writeFileSync(temp, '{}\n');
+    const result = await run();
+    expect(result.code).toBe(0);
+    expect(result.err).toBe('');
+    expect(result.out).toContain(BODY);
+    expect(result.out).not.toContain('.new');
+    expect(existsSync(temp)).toBe(true);
+    expect(statusOf(scene.dropDir, ID, scene.context, messageKey())).toBe('read');
+  });
+
   test('team messages and an automatic read racing one record expose exactly one body', async () => {
     const scene = recordScene();
     const barrier = join(base, 'go');

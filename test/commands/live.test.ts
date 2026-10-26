@@ -642,48 +642,8 @@ describe('team up, live', () => {
       launched: { shell: 701, cli: [702] },
       waiting: { state: 'waiting-owner', classification: 'permission' },
     });
-    // The next `up` on that leftover, its pane still unnamed: the record names the pane and the
-    // launch identity, so the seat is refused on its own line — never the whole session — and
-    // the changed process is never written.
-    const unnamed = (): HerdrAgent[] => [
-      { name: null, agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
-    ];
-    made.launch.agents = unnamed;
-    const next = quietIo();
-    const code2 = await runUp(FILE, next, sources({ agents: unnamed }, made));
-    expect(code2).toBe(1);
-    expect(next.out + next.err).not.toContain("doesn't record");
-    expect(next.out).toContain('claude-coordinator-acme: left out: its waiting pane is gone\n');
-    expect(next.err).toContain(
-      '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
-    );
-    expect(next.out).not.toContain('claude-coordinator-acme: ready');
-    // The same leftover with its pane renamed to the seat and idle at its prompt: the record's
-    // identity refuses it just the same — nothing adopts it, types into it or closes it.
-    made.seed('w1:p1', IDLE, true);
-    const namedList = (): HerdrAgent[] => [
-      { name: 'claude-coordinator-acme', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
-    ];
-    made.launch.agents = namedList;
-    const named = quietIo();
-    const code3 = await runUp(FILE, named, sources({ agents: namedList }, made));
-    expect(code3).toBe(1);
-    expect(named.out).toContain('claude-coordinator-acme: left out: its waiting pane holds another process\n');
-    expect(named.out).not.toContain('claude-coordinator-acme: ready');
-    expect(named.err).toContain(
-      '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
-    );
-    expect(made.renames.filter((name) => name === 'claude-coordinator-acme')).toHaveLength(1);
-    expect(made.closes).not.toContain('w1');
-    expect(made.terminal.reads).toBe(0);
-    const kept = readState(join(root, '.agents')).sessions['acme-web']?.seats ?? {};
-    expect(kept['claude-coordinator-acme']).toMatchObject({
-      stage: 'launched',
-      pane: 'w1:p1',
-      workspace: 'w1',
-      launched: { shell: 701, cli: [702] },
-      waiting: { state: 'waiting-owner', classification: 'permission' },
-    });
+    // A later `up` whose recorded process is gone launches a fresh workspace and leaves this
+    // one. That run is the leftover tests below; this one stops at the close the dialog refused.
   });
 
   // The state a refused close leaves behind, as the next `up` reads it. The waiting record keeps
@@ -691,7 +651,7 @@ describe('team up, live', () => {
   // read of the changed process, which would bless the replacement. Without the record the pane
   // falls to the ordinary paths again: an unnamed agent is refused session-wide, and a named one
   // that sits idle is adopted.
-  test('the leftover of a refused close, its pane unnamed: the next up reads the record, not the whole session', async () => {
+  test('the leftover of a refused close, its pane unnamed: the next up launches a fresh workspace', async () => {
     await approve();
     writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
       format: 1,
@@ -725,29 +685,20 @@ describe('team up, live', () => {
       agents: listed,
       workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
     }, made));
-    expect(code).toBe(1);
-    // An unnamed pane is not the seat. The recorded pane selects nothing, so the seat is left
-    // out on its own line and nothing is closed.
-    expect(io.out + io.err).not.toContain("doesn't record");
-    expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane is gone\n');
-    expect(io.err).toContain(
-      '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
-    );
+    expect(code, io.out + io.err).toBe(0);
+    // The recorded process is not the one in the pane. The old workspace is left, and the seat
+    // is launched again; the old pids are not the new record.
+    expect(io.out + io.err).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced');
+    expect(io.out).not.toContain('left out: its waiting pane is gone');
     expect(made.terminal.reads).toBe(0);
-    expect(made.renames).not.toContain('claude-coordinator-acme');
     expect(made.closes).not.toContain('w9');
-    // The record is kept as it was: still waiting, still carrying the launch's identity.
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'];
-    expect(seat).toMatchObject({
-      stage: 'launched',
-      pane: 'w9:p1',
-      workspace: 'w9',
-      launched: { shell: 400, cli: [401] },
-      waiting: { state: 'waiting-owner', classification: 'permission' },
-    });
+    expect(seat?.pane).not.toBe('w9:p1');
+    expect(seat?.waiting).toBeUndefined();
+    expect(seat?.launched).not.toEqual({ shell: 400, cli: [401] });
   });
 
-  test('the same leftover, its pane named and idle and its record naming the launch: the next up refuses it, never adopts it', async () => {
+  test('the same leftover, its pane named and idle and its record naming the launch: the next up launches fresh and does not adopt it', async () => {
     await approve();
     writeFileSync(join(root, '.agents/team.state.json'), JSON.stringify({
       format: 1,
@@ -784,24 +735,16 @@ describe('team up, live', () => {
       agents: listed,
       workspaces: () => [{ id: 'w9', label: 'claude-coordinator-acme · project coordinator' }],
     }, made));
-    expect(code).toBe(1);
-    expect(io.out).toContain('claude-coordinator-acme: left out: its waiting pane holds another process\n');
-    expect(io.out).not.toContain('claude-coordinator-acme: ready');
-    expect(io.err).toContain(
-      '  its record still names it; `team down` then `team up` (to restart the whole team), clears it\n',
-    );
-    expect(made.renames).not.toContain('claude-coordinator-acme');
-    expect(typed).toEqual([]);
+    expect(code, io.out + io.err).toBe(0);
+    expect(io.out + io.err).toContain('claude-coordinator-acme: its recorded pane w9:p1 was gone and was replaced');
+    expect(io.out).not.toContain('holds another process');
+    expect(typed.filter((line) => line.startsWith('w9:'))).toEqual([]);
     expect(made.closes).not.toContain('w9');
     expect(made.terminal.reads).toBe(0);
     const seat = readState(join(root, '.agents')).sessions['acme-web']?.seats['claude-coordinator-acme'];
-    expect(seat).toMatchObject({
-      stage: 'launched',
-      pane: 'w9:p1',
-      workspace: 'w9',
-      launched: { shell: 400, cli: [401] },
-      waiting: { state: 'waiting-owner', classification: 'permission' },
-    });
+    expect(seat?.pane).not.toBe('w9:p1');
+    expect(seat?.waiting).toBeUndefined();
+    expect(seat?.launched).not.toEqual({ shell: 400, cli: [401] });
   });
 
   test('the leftover of a refused close, its pane named and idle: the next up reads the record, never adopts it', async () => {

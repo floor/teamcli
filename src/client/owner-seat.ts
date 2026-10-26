@@ -410,6 +410,12 @@ export function signOwnerAnswer(home: string, answer: OwnerSeatAnswer, signerNam
     ? (record.signers.length === 1 ? record.signers[0] : undefined)
     : record.signers.find((s) => s.name === signerName);
   if (signer === undefined) return { ok: false, why: signerName === undefined ? `name the signer with --signer (${record.signers.map((s) => s.name).join(', ')})` : `"${signerName}" is not a registered owner signer` };
+  // Before any Touch ID prompt or passkey challenge: a signer the owner-signers policy does not
+  // name cannot produce an answer `--approval` would accept. The page reads this refusal as the
+  // challenge error and never starts the ceremony.
+  const accepted = acceptedSigners(home, record);
+  if ('why' in accepted) return { ok: false, why: accepted.why };
+  if (!accepted.names.includes(signer.name)) return { ok: false, why: `signer "${signer.name}" is not accepted by the owner-signers policy (${accepted.names.join(', ') || 'none'})` };
   if (signer.type === 'webauthn') {
     if (assertion === undefined) return { ok: false, why: `signer "${signer.name}" is a passkey: sign challenge ${webauthnChallenge(answer)} and pass --assertion <file>` };
     return { ok: true, signed: { owner_seat_answer: answer, signer: signer.name, signature: assertion.signature, webauthn: { authenticator_data: assertion.authenticator_data, client_data_json: assertion.client_data_json } } };

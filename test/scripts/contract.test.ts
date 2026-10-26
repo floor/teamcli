@@ -173,7 +173,11 @@ test('every command and subcommand carries who may run it, and the map rows are 
   expect(byName('answer')?.who?.gate).toBe('pane-authority');
   // The map now names every word, including those whose modules refuse non-owners outright.
   expect(byName('broker')?.who?.gate).toBe('owner-only');
-  expect(byName('bus')?.who?.gate).toBe('owner-only');
+  expect(byName('bus')?.who?.gate).toBe('owner-or-leads');
+  expect(byName('bus')?.who?.terminal).toEqual({
+    who: 'the owner or a `leads` seat',
+    where: 'a terminal outside herdr or its own pane',
+  });
   expect(byName('tempo')?.who?.gate).toBe('owner-only');
   expect(byName('help')?.who?.gate).toBe('any-caller');
   expect(byName('drops')?.who?.gate).toBe('seat-only');

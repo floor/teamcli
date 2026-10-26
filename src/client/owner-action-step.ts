@@ -1,4 +1,4 @@
-// The owner-seat door of `team import`, `team add` and `team up` (src/client/owner-action.ts):
+// The owner-seat door of the lifecycle commands (src/client/owner-action.ts):
 // `--request` records what the caller will run and asks the owner seat; `--approval <id>` runs it
 // once the owner seat signed for exactly that. The owner never types a command and never answers
 // a pane: the answer is a signature from the owner page (passkey or Touch ID). Each command keeps
@@ -42,7 +42,7 @@ export function teamNameAt(root: string, home: string): string {
 
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed. */
 export function ownerSeatStep(
-  command: 'up' | 'add' | 'import',
+  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget',
   action: OwnerAction,
   argv: readonly string[],
   ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean },
@@ -66,14 +66,15 @@ export function ownerSeatStep(
     const made = createOwnerActionRequest(home, { actions: [action], root, team, head, args: { [action]: words }, requestedBy: callerLabel(callerOf(io)) }, now);
     if (!made.ok) return refused(made.why);
     const run = `team ${command} ${[...words, '--approval', made.record.request_id].join(' ')}`.replace(/\s+/g, ' ');
-    if (ask.json) io.stdout(`${JSON.stringify({ format: 1, status: 'requested', request_id: made.record.request_id, expires_at: made.record.expires_at, text: made.text, run })}\n`);
-    else io.stdout(`team ${command}: owner-seat request ${made.record.request_id} recorded; the owner answers it on the owner page\nthen run: ${run}\n`);
+    const where = made.page === 'live' ? 'the owner page is already open and will show this card' : 'the owner answers it on the owner page';
+    if (ask.json) io.stdout(`${JSON.stringify({ format: 1, status: 'requested', request_id: made.record.request_id, expires_at: made.record.expires_at, text: made.text, page: made.page, run })}\n`);
+    else io.stdout(`team ${command}: owner-seat request ${made.record.request_id} recorded; ${where}\nthen run: ${run}\n`);
     return { kind: 'requested' };
   }
   const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
   const admitted = admitOwnerAction(home, ask.approval!, { action, root, team, head, words, claim: !ask.dry }, store, now);
   if (!admitted.ok) return refused(admitted.why);
-  if (!ask.json) io.stderr(`team ${command}: owner-seat approval ${ask.approval} (signed by ${admitted.signer}${admitted.via === 'rule' ? `, always rule ${admitted.ruleId}` : ''})\n`);
+  if (!ask.dry && !ask.json) io.stderr(`team ${command}: owner-seat approval ${ask.approval} (signed by ${admitted.signer}${admitted.via === 'rule' ? `, always rule ${admitted.ruleId}` : ''})\n`);
   return { kind: 'admitted', admission: admitted };
 }
 

@@ -75,7 +75,7 @@ seats:
     launch: claude --model claude-opus-5-5
 ```
 
-A pull request's body signs on its last line:
+A pull request's body signs on its last line. A trailing Cursor publication block is not that line: the end marker `<!-- CURSOR_AGENT_PR_BODY_END -->`, then the one open-in-web / open-in-cursor `<div>`. Any other line after the signature still refuses the body.
 
 ```file file=pr.md
 The metrics page is ready for review.

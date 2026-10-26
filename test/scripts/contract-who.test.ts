@@ -127,9 +127,10 @@ test('every subcommand states its own row, and a module that admits only the own
   }
   // Words whose own module refuses every non-owner at the door: the map names the gate the
   // module enforces, and the contract repeats it — `unlisted` would leave the adapter guessing.
-  for (const name of ['bus', 'broker', 'tempo']) {
+  for (const name of ['broker', 'tempo']) {
     expect(commandNamed(name)?.who?.gate, `${name} admits only the owner`).toBe('owner-only');
   }
+  expect(commandNamed('bus')?.who?.gate, 'bus admits the owner or a leads seat').toBe('owner-or-leads');
 });
 
 test('the words the integration tip brought state rows, and pause and resume name their verdict function', () => {

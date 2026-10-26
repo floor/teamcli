@@ -2,7 +2,7 @@
 // pinned, and git's own configuration is shut out, so commit hashes and messages come out the same
 // on every machine — the pages print them.
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -79,6 +79,9 @@ export function createFixture(project: string, clock: { at: number }): Fixture {
   const init = git('init', '--quiet', '--initial-branch=main');
   if (init.code !== 0) throw new Error(`git init: ${init.stderr}`);
 
+  // A page writes its files in the order it shows them. Commands that sort by mtime (team drops)
+  // must see that order even when two writes land in the same clock tick.
+  let writtenAt = Date.now();
   return {
     base,
     root,
@@ -92,6 +95,9 @@ export function createFixture(project: string, clock: { at: number }): Fixture {
       const path = join(root, relative);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, text, exec ? { mode: 0o755 } : {});
+      writtenAt += 1000;
+      const at = new Date(writtenAt);
+      utimesSync(path, at, at);
     },
     remove: () => rmSync(base, { recursive: true, force: true }),
   };

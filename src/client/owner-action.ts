@@ -15,18 +15,20 @@
 //
 // An `always` answer stands as a rule for the same actions under the repository's parent folder,
 // inside the owner's approval-rule-ttl. Fail-closed: a missing, expired, mismatched, unsigned,
-// replayed or self-signed answer admits nothing. The actions are lifecycle actions only: no grant,
-// owner-signer or approval-mode change can be requested here, so no principal widens its own
-// authority through it.
+// replayed or self-signed answer admits nothing. The actions never grant, never change
+// owner-signers and never change approval-mode, so no principal widens its own authority
+// through them. Revoking an always rule and forgetting a registry record are asked here too:
+// they remove a standing the owner already gave, and they do not hand a new one out.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
+import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
-export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-add', 'team-up'] as const;
+export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget'] as const;
 export type OwnerAction = (typeof OWNER_ACTIONS)[number];
 export const OWNER_ACTION_TTL_MS = 15 * 60 * 1000;
 export const OWNER_ACTION_ID_PATTERN = /^oa_[0-9a-f]{24}$/;
@@ -39,6 +41,8 @@ export type OwnerActionParams = {
   head: string | null;
   /** Per action, the hash of the arguments it will run with (`actionArgsHash`). */
   args: Partial<Record<OwnerAction, string>>;
+  /** Per action, the arguments that hash names. Present on a request recorded by this build. */
+  words?: Partial<Record<OwnerAction, string[]>>;
   /** Who asked: the caller's log label. A signer of that name cannot answer it. */
   requested_by: string;
 };
@@ -64,9 +68,15 @@ export function actionArgsHash(action: OwnerAction, words: readonly string[]): s
 export function ownerActionHash(p: OwnerActionParams): string {
   const args: Record<string, string> = {};
   for (const key of Object.keys(p.args).sort()) args[key] = p.args[key as OwnerAction]!;
-  return createHash('sha256')
-    .update(JSON.stringify({ kind: p.kind, actions: [...p.actions], root: p.root, team: p.team, head: p.head, args, requested_by: p.requested_by }), 'utf8')
-    .digest('hex');
+  // `words` is part of the hash when the request carries it, so one signature binds each
+  // action's argument list. A record written before the field existed hashes as it did then.
+  const body: Record<string, unknown> = { kind: p.kind, actions: [...p.actions], root: p.root, team: p.team, head: p.head, args, requested_by: p.requested_by };
+  if (p.words !== undefined) {
+    const words: Record<string, string[]> = {};
+    for (const key of Object.keys(p.words).sort()) words[key] = [...(p.words[key as OwnerAction] ?? [])];
+    body.words = words;
+  }
+  return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
 }
 
 export function canonicalRoot(root: string): string {
@@ -109,10 +119,18 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
   'team-import': 'import the team file',
   'team-add': 'add a seat',
   'team-up': 'start the team',
+  'team-send': 'send a message',
+  'team-down': 'stop the team',
+  'team-bus': 'start the bus',
+  'team-revoke-approval': 'revoke an approval rule',
+  'team-forget': 'forget a team record',
 };
 
 export function ownerActionSummary(p: OwnerActionParams): string {
-  const what = p.actions.map((a) => ACTION_WORDS[a]).join(', then ');
+  const what = p.actions.map((action) => {
+    const words = p.words?.[action] ?? [];
+    return words.length > 0 ? `${ACTION_WORDS[action]} (${words.join(' ')})` : ACTION_WORDS[action];
+  }).join(', then ');
   return `${p.requested_by} asks to ${what} — team "${p.team}" in ${p.root}${p.head ? ` (HEAD ${p.head.slice(0, 12)})` : ''}.`;
 }
 
@@ -126,13 +144,17 @@ export type OwnerActionRequestInput = {
 };
 
 /** Records one request and drops its confirmation in the owner seat inbox. Refused with no owner seat. */
-export function createOwnerActionRequest(home: string, input: OwnerActionRequestInput, now: Date = new Date()): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string } | { ok: false; why: string } {
+export function createOwnerActionRequest(home: string, input: OwnerActionRequestInput, now: Date = new Date()): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string; page: 'live' | 'closed' } | { ok: false; why: string } {
   if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered, so no owner-seat approval is possible; the owner registers one on the owner page (team owner-seat serve)' };
   const actions = [...new Set(input.actions)];
   if (actions.length === 0 || actions.some((a) => !(OWNER_ACTIONS as readonly string[]).includes(a))) return { ok: false, why: `an owner-seat request names one or more of ${OWNER_ACTIONS.join(', ')}` };
   const args: Partial<Record<OwnerAction, string>> = {};
-  for (const action of actions) args[action] = actionArgsHash(action, input.args[action] ?? []);
-  const params: OwnerActionParams = { kind: 'owner-action', actions, root: canonicalRoot(input.root), team: input.team, head: input.head, args, requested_by: input.requestedBy };
+  const words: Partial<Record<OwnerAction, string[]>> = {};
+  for (const action of actions) {
+    words[action] = [...(input.args[action] ?? [])];
+    args[action] = actionArgsHash(action, words[action]!);
+  }
+  const params: OwnerActionParams = { kind: 'owner-action', actions, root: canonicalRoot(input.root), team: input.team, head: input.head, args, words, requested_by: input.requestedBy };
   const record: OwnerActionRecord = {
     request_id: `oa_${randomBytes(12).toString('hex')}`,
     params,
@@ -144,7 +166,9 @@ export function createOwnerActionRequest(home: string, input: OwnerActionRequest
   if (writeExclusive(join(actionRequestsFolder(home), `${record.request_id}.json`), `${JSON.stringify(record, null, 2)}\n`) !== 'written') return { ok: false, why: 'the request could not be recorded' };
   const text = `Request ${record.request_id}: ${ownerActionSummary(params)} Authorized? oui, always, or non.`;
   const inbox = deliverToOwnerSeat(home, { kind: 'owner-action-confirmation', request_id: record.request_id, params_sha256: record.params_sha256, text, summary: params, at: now.toISOString() });
-  return { ok: true, record, inbox, text };
+  // The open page polls for this card. A request never opens a second window over it.
+  const page = presentOwnerRequest(home);
+  return { ok: true, record, inbox, text, page };
 }
 
 export function readOwnerActionRecord(home: string, id: string): OwnerActionRecord | string {
@@ -316,6 +340,19 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
 function ruleFor(home: string, ask: Pick<OwnerActionAsk, 'action' | 'root' | 'team'>, store: OwnerSeatKeyStore, now: Date): OwnerActionRule | undefined {
   const root = canonicalRoot(ask.root);
   return listOwnerActionRules(home, store, now).rules.find((r) => r.actions.includes(ask.action) && r.scope === dirname(root));
+}
+
+/** Removes one owner-action `always` rule (`oa_…`). A missing file is a refusal; nothing else is touched. */
+export function revokeOwnerActionRule(home: string, ruleId: string): { ok: true } | { ok: false; why: string } {
+  if (!OWNER_ACTION_ID_PATTERN.test(ruleId)) return { ok: false, why: `"${ruleId}" is not an owner-action rule id` };
+  try {
+    const path = join(actionApprovalsFolder(home), `${ruleId}.json`);
+    if (!lstatSync(path).isFile()) return { ok: false, why: `no owner-action rule ${ruleId}` };
+    unlinkSync(path);
+    return { ok: true };
+  } catch {
+    return { ok: false, why: `no owner-action rule ${ruleId}` };
+  }
 }
 
 /** With no request id: a verified `always` rule for this action whose scope holds the repository. */

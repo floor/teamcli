@@ -94,6 +94,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.version` | `answer` | 1 | this version has no trust answer | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust | `team answer` |
+| `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id...> --request` |
+| `approvals.listed` | `approvals` | 0 | the always rules were listed | `team approvals list` |
+| `approvals.revoked` | `approvals` | 0 | the always rules were removed | `team approvals revoke <id...>` |
+| `approvals.approval-refused` | `approvals` | 1 | the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team approvals revoke <id...> --approval <request-id>` |
+| `approvals.refused` | `approvals` | 1 | the revoke was refused | `team approvals revoke <id...>` |
+| `approvals.invocation` | `approvals` | 2 | the invocation cannot be read | `team approvals` |
 | `archive.keep-running` | `archive` | 0 | the snapshot was written and the team was left running | `team archive --keep-running` |
 | `archive.detached` | `archive` | 1 | a run with no terminal | `team archive` |
 | `archive.exists` | `archive` | 1 | the archive folder already exists | `team archive, when this run’s folder is already there` |
@@ -108,6 +114,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
+| `batch.done` | `batch` | 0 | the signed batch ran, or a dry run verified it and changed nothing | `team batch --approval <request-id>` |
+| `batch.requested` | `batch` | 0 | several owner-seat actions were recorded as one request | `team batch --request --do <command>` |
+| `batch.refused` | `batch` | 1 | the batch was refused: not a repository, a bad answer, or a command in the list failed | `team batch --approval <request-id>` |
+| `batch.invocation` | `batch` | 2 | the invocation can't be read | `team batch` |
 | `brief.current` | `brief` | 0 | --apply left every live or human seat current; the read is not demanded here | `team brief rollout --apply` |
 | `brief.plan` | `brief` | 0 | the dry run found every live or human seat current, and wrote nothing | `team brief rollout` |
 | `brief.file-owner` | `brief` | 1 | --file is the owner's | `team brief rollout --file .agents/team.yaml` |
@@ -130,9 +140,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `broker.source` | `broker` | 1 | the team file declares no task source, or one the broker does not serve | `team broker` |
 | `broker.invocation` | `broker` | 2 | the invocation can't be read | `team broker extra` |
 | `broker.not-a-repo` | `broker` | 2 | not inside a git repository | `team broker` |
+| `bus.approval-requested` | `bus` | 0 | an owner-seat request for this bus start was recorded and sent to the owner seat | `team bus --request` |
 | `bus.started` | `bus` | 0 | the bus started and served on .agents/bus.sock | `team bus` |
 | `bus.stopped` | `bus` | 0 | the bus served until it was stopped | `team bus` |
-| `bus.refused` | `bus` | 1 | the caller is not the owner at a terminal outside herdr, a bus is already running or starting, or the socket could not be bound | `team bus` |
+| `bus.approval-refused` | `bus` | 1 | the owner-seat request or approval for this bus start was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team bus --approval <request-id>` |
+| `bus.refused` | `bus` | 1 | the caller is not the owner or a leads seat at the right terminal, a bus is already running or starting, the inheritance token does not match, or the socket could not be bound | `team bus` |
 | `bus.configuration` | `bus` | 2 | not inside a git repository or the team file cannot be read | `team bus` |
 | `bus.usage` | `bus` | 2 | the invocation cannot be read | `team bus extra` |
 | `check.ok` | `check` | 0 | nothing needs acting on | `team check` |
@@ -227,11 +239,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `doctor.file-invalid` | `doctor` | 2 | the team file can't be parsed | `team doctor --file team.yaml` |
 | `doctor.invocation` | `doctor` | 2 | the invocation can't be read | `team doctor extra` |
 | `doctor.not-a-repo` | `doctor` | 2 | not inside a git repository | `team doctor` |
+| `down.approval-requested` | `down` | 0 | an owner-seat request for this stop was recorded and sent to the owner seat | `team down --request` |
 | `down.dry-run` | `down` | 0 | a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) | `team down --dry-run` |
 | `down.idle` | `down` | 0 | there was nothing to stop | `team down` |
 | `down.stopped` | `down` | 0 | the seats that could be stopped were stopped | `team down` |
 | `down.abandon` | `down` | 1 | only the owner abandons a team | `team down --abandon` |
 | `down.another-pane` | `down` | 1 | the state records another pane for the caller's seat | `team down` |
+| `down.approval-refused` | `down` | 1 | the owner-seat request or approval for this stop was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team down --approval <request-id>` |
 | `down.caller` | `down` | 1 | the caller may not change the team | `team down` |
 | `down.client-refused` | `down` | 1 | the owner-signed down grant, or the client run it admits, did not verify | `team down --client grant.json --key client.key` |
 | `down.delegate` | `down` | 1 | the caller is not the approved delegate of any entry | `team down, from a pane no delegate entry names` |
@@ -269,6 +283,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
+| `forget.approval-requested` | `forget` | 0 | an owner-seat request for this forget was recorded and sent to the owner seat | `team forget <id...> --request` |
+| `forget.forgotten` | `forget` | 0 | the team registry records were removed; panes were not stopped and the team files were not deleted | `team forget <id...>` |
+| `forget.approval-refused` | `forget` | 1 | the owner-seat request or approval for this forget was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team forget <id...> --approval <request-id>` |
+| `forget.missing` | `forget` | 1 | no team record matches an id | `team forget <id...>` |
+| `forget.refused` | `forget` | 1 | the forget was refused | `team forget <id...>` |
+| `forget.invocation` | `forget` | 2 | the invocation cannot be read | `team forget` |
 | `grant.done` | `grant` | 0 | the authority was written or already matched — the team file's grant, or a standing grant record — or a write-free preview passed | `team grant lead --scope up,down` |
 | `grant.refused` | `grant` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team grant lead --capabilities gate,merge` |
 | `grant.invalid` | `grant` | 2 | the team file, the named seat or team, or the proposed authority record is invalid, unknown or cannot be read | `team grant @team --capabilities create` |
@@ -620,6 +640,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `seats.not-a-repo` | `seats` | 2 | not inside a git repository | `team seats` |
 | `seats.not-yours` | `seats` | 2 | the caller may not read this team | `team seats` |
 | `send.answered` | `send` | 0 | a reply record on the thread arrived within the window | `team send worker hello --wait` |
+| `send.approval-requested` | `send` | 0 | an owner-seat request for this send was recorded and sent to the owner seat | `team send <seat> <message> --request` |
 | `send.client-sent` | `send` | 0 | a client grant's signed drop was written to the entity orchestrator's drop folder | `team send --client grant.json --key client.key orchestrator@floor hello` |
 | `send.confirmed` | `send` | 0 | a native handoff was recorded to the history and its pending record cleared | `team send --confirm 11111111-1111-4111-8111-111111111111` |
 | `send.delivered` | `send` | 0 | the record is written and the seat's channel took the message | `team send worker hello` |
@@ -630,6 +651,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
+| `send.approval-refused` | `send` | 1 | the owner-seat request or approval for this send was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team send <seat> <message> --approval <request-id>` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
 | `send.client-pane` | `send` | 1 | a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team send --client client-grant.json --key client.key orchestrator@floor hello` |
 | `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |

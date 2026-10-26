@@ -273,7 +273,7 @@ describe('the map names every word the contract exposes, and no more', () => {
   });
 
   test('a row carrying a terminal requirement refuses here without the bridge\'s proof', () => {
-    for (const command of ['watch', 'proc', 'proc:add', 'proc:done']) {
+    for (const command of ['watch', 'proc', 'proc:add', 'proc:done', 'bus', 'approvals:revoke', 'forget']) {
       for (const caller of [null, OWNER, seat({ leads: true })]) {
         const decision = resolvePermission(caller, { id: TEAM }, command, [], TARGET);
         expect(decision, `${command} should refuse without the proof`).toMatchObject({ effect: 'deny', rule: 'terminal' });
@@ -293,6 +293,27 @@ describe('the map names every word the contract exposes, and no more', () => {
     expect(resolvePermission(OWNER, { id: TEAM }, 'proc', [], TARGET, { terminal: true })).toMatchObject({
       effect: 'allow',
       rule: 'owner',
+    });
+    // `bus` is the owner or a lead, and only once a terminal is shown. A plain seat stays out.
+    expect(resolvePermission(OWNER, { id: TEAM }, 'bus', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'owner',
+    });
+    expect(resolvePermission(seat({ leads: true }), { id: TEAM }, 'bus', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'leads',
+    });
+    expect(resolvePermission(seat(), { id: TEAM }, 'bus', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'deny',
+      rule: 'owner-or-leads',
+    });
+    expect(resolvePermission(OWNER, { id: TEAM }, 'forget', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'allow',
+      rule: 'owner',
+    });
+    expect(resolvePermission(seat(), { id: TEAM }, 'approvals:revoke', [], TARGET, { terminal: true })).toMatchObject({
+      effect: 'deny',
+      rule: 'owner-only',
     });
   });
 
@@ -365,7 +386,7 @@ describe('the map names every word the contract exposes, and no more', () => {
   });
 
   test('the words whose modules refuse non-owners outright say `owner-only`', () => {
-    for (const command of ['bus', 'broker', 'tempo']) {
+    for (const command of ['broker', 'tempo']) {
       expect(resolvePermission(OWNER, { id: TEAM }, command, [], TARGET)).toMatchObject({
         effect: 'allow',
         rule: 'owner',

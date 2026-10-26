@@ -52,4 +52,17 @@ describe('team policy set approved on the owner device', () => {
     s.presence = false;
     expect(await runPolicy(['set', 'entity', 'grant-emission', 'conversational', '--entity', 'floor'], agent(h), { home: h, ownerSeatStore: s })).toBe(1);
   });
+
+  test('a dry run with an owner seat prints the plan and does not ask for Touch ID', async () => {
+    const h = home();
+    const s = store();
+    expect(registerOwnerSeat(h, { team: 'floor', signer: 'mac' }, s).ok).toBe(true);
+    const lines: string[] = [];
+    const io: Io = { stdout: (text) => lines.push(text), stderr: () => {}, cwd: h, env: {}, stdinIsTTY: false };
+    expect(await runPolicy(['set', 'entity', 'owner-signers', 'mac', '--entity', 'floor', '--dry-run'], io, { home: h, ownerSeatStore: s })).toBe(0);
+    expect(s.prompts).toEqual([]);
+    expect(lines.join('')).toContain('would set');
+    expect(await runPolicy(['unset', 'entity', 'owner-signers', '--entity', 'floor', '--dry-run'], io, { home: h, ownerSeatStore: s })).toBe(0);
+    expect(s.prompts).toEqual([]);
+  });
 });

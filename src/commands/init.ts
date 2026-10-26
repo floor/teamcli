@@ -32,7 +32,7 @@ import { readStoredTeamConfig, teamConfigRecordPath } from '../registry/team-con
 // the services included: the socket and its lock, the lock's takeover claim (a killed
 // claim-holder can leave it), and the private temps an atomic write keeps only while it runs —
 // the team file's own and the state's included, which a killed process can leave behind.
-export const EXCLUDED = [TEAM_FILE, `${TEAM_FILE}.*.tmp`, `.agents/${STATE_FILE}`, `.agents/${STATE_FILE}.*.tmp`, `.agents/${LOG_FILE}*`, `.agents/${LOCK_FILE}`, '.agents/seat-locks', '.agents/messages/', '.agents/send-drops/', '.agents/leases/', '.agents/hooks/', '.agents/seat-state/', '.agents/broker.sock', '.agents/broker.sock.lock', '.agents/broker.sock.lock.takeover', '.agents/broker.sock.lock.*.new', '.agents/bus.sock', '.agents/bus.sock.lock', '.agents/bus.sock.lock.takeover', '.agents/bus.sock.lock.*.new'];
+export const EXCLUDED = [TEAM_FILE, `${TEAM_FILE}.*.tmp`, `.agents/${STATE_FILE}`, `.agents/${STATE_FILE}.*.tmp`, `.agents/${LOG_FILE}*`, `.agents/${LOCK_FILE}`, '.agents/seat-locks', '.agents/messages/', '.agents/send-drops/', '.agents/leases/', '.agents/hooks/', '.agents/seat-state/', '.agents/broker.sock', '.agents/broker.sock.lock', '.agents/broker.sock.lock.takeover', '.agents/broker.sock.lock.*.new', '.agents/bus.sock', '.agents/bus.sock.lock', '.agents/bus.sock.lock.takeover', '.agents/bus.sock.lock.*.new', '.cursor/mcp.json', '.gemini/settings.json'];
 
 export const PRIVACY = `The team file is private to this clone: it is listed in .git/info/exclude, never in .gitignore,
 so git doesn't see it and a fresh clone doesn't carry it. A collaborator writes their own, or

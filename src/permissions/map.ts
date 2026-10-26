@@ -89,6 +89,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-or-leads',
       why: '`stop`: the owner or `leads` for its own team, and the owner may always stop',
     },
+    approvals: {
+      kind: 'any-caller',
+      why: 'listing approval rules reads the owner\'s folder and changes nothing; revoking one is the owner\'s, or an owner-seat answer for that revoke',
+    },
     archive: {
       kind: 'owner-or-leads',
       why: '`stop` first, as `down`, then a move of the team\'s own state; `--out` stays the owner\'s',
@@ -166,8 +170,9 @@ function buildGates(): Record<string, Gate> {
       why: 'the command\'s only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat\'s claim and its signed drop',
     },
     bus: {
-      kind: 'owner-only',
-      why: 'the bus reconciles the project\'s event log, and the owner runs it, one per clone, from a terminal outside herdr',
+      kind: 'owner-or-leads',
+      why: 'the bus reconciles the project\'s event log, one per clone: the owner from a terminal outside herdr, or a seat that holds `leads` from its own pane',
+      terminal: { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' },
     },
     daemon: {
       kind: 'owner-only',
@@ -424,6 +429,24 @@ function buildGates(): Record<string, Gate> {
     'mcp:status': {
       kind: 'any-caller',
       why: 'the report writes nothing and asks for no caller',
+    },
+    'approvals:list': {
+      kind: 'any-caller',
+      why: 'the list reads team-create and owner-action always rules and writes nothing',
+    },
+    'approvals:revoke': {
+      kind: 'owner-only',
+      why: 'removing an always rule is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that revoke',
+      terminal: { who: 'the owner', where: 'a terminal outside herdr' },
+    },
+    forget: {
+      kind: 'owner-only',
+      why: 'removing a team registry record is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that forget; it does not stop panes or delete the team file',
+      terminal: { who: 'the owner', where: 'a terminal outside herdr' },
+    },
+    batch: {
+      kind: 'any-caller',
+      why: 'it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode',
     },
     'policy:set': {
       kind: 'owner-only',

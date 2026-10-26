@@ -18,6 +18,8 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
     team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]
+    team down --request [--dry-run] [--wait] [--json]
+    team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]
 
 ## Flags
 
@@ -39,7 +41,8 @@ reads idle, whatever herdr's status says, and it is stopped on its own exit key 
 | Caller | May |
 | --- | --- |
 | the owner | run it, from a terminal outside herdr; `--abandon`, `--session` and `--file` are the owner's own |
-| a run with no terminal | nothing, including `--dry-run`: ``team down: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
+| a run with no terminal | nothing, including `--dry-run`, unless it carries `--request`, a signed `--approval`, or an always rule for `team-down`: ``team down: only the owner or a `leads` seat runs this, from a terminal outside herdr or its own pane`` |
+| the owner seat | `--request` records the stop and the owner answers on the owner page; `--approval` runs that answer once. The owner types nothing in a terminal |
 | the orchestrator's seat — and any seat the record marks a lead: the map's `leads` | stop the other seats; never the orchestrator's or the operator's own seat |
 | the approved delegate, when the file's `delegates` section names it | stop the whole team, the orchestrator's and the operator's seats included; never `--abandon`, `--session` or `--file` |
 | a client with no terminal that holds an owner-signed down grant for this team | stop the whole team the grant names, with `--client`; never `--abandon`, `--session` or `--file` |

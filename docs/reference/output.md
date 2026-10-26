@@ -6,7 +6,7 @@ Every `team` command in 0.5.2 follows one output contract across its human-reada
 
 ## 1. Command Scope and Structure Matrix
 
-The CLI contract covers **50 command names** in `src/cli.ts` order: top-level `team`, the 48 subcommands in the `commands` table, and the hidden protocol entry `conformance-adapter`.
+The CLI contract covers **51 command names** in `src/cli.ts` order: top-level `team`, the 49 subcommands in the `commands` table, and the hidden protocol entry `conformance-adapter`.
 
 Every command falls into one of four surface shapes:
 
@@ -15,7 +15,7 @@ Every command falls into one of four surface shapes:
 - **Top-level CLI** (`team`): prints `--help`, `--version`, or `--about` (which prints the version, licence, docs link, and the `what 0.5.0 must not pretend` block).
 - **Daemon / protocol surfaces** (`watch`, `broker`, `bus`, `conformance-adapter`): long-running foreground loops or wire-protocol adapters; human-readable startup/refusal lines follow the error contract on stderr, and `--json` is not used on the daemon loop itself.
 
-### 1.1 Per-Command Output Matrix (All 50 Contract Commands)
+### 1.1 Per-Command Output Matrix (All 51 Contract Commands)
 
 In `src/cli.ts` command order (`contract/exit-codes.json` is authoritative for the exit rows and row IDs):
 
@@ -64,7 +64,7 @@ In `src/cli.ts` command order (`contract/exit-codes.json` is authoritative for t
 | 40 | `resume` | action | — (per-team summary; stop lines below) | — | `resumed <project> (<pause line>)` and one `stop <seat>: …` line each for one team | `team.resume` | `schema/resume.schema.json` | `0, 1, 2` (8 rows) | `Exits 0 when the team resumes, 1 when it is refused or state I/O fails, 2 when the invocation or team file can't be read.` |
 | 41 | `raise` | action (`--dry-run`) | `team <project>, session "<session>"` | — | `raise: <kind> delivered to the owner at once` / `raise: <kind> merged into the owner's record (×N)` (`action_summary`) | `team.raise` | `schema/raise.schema.json` | `0, 1, 2` (8 rows) | `Exits 0 when the line is delivered or merged into one already open, 1 when it is refused or the log or the owner's record can't be written, 2 when the invocation or team file can't be read.` |
 | 42 | `broker` | daemon | `team <project>, session "<session>"` | — | foreground loop; refusals on stderr | — (daemon loop) | — | `0, 1, 2` (12 rows) | `Exits 0 when it stopped, 1 when it refused to start or lost its socket, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.` |
-| 43 | `bus` | daemon | — (stderr only) | — | foreground loop; `team bus: answering on .agents/bus.sock` / `team bus: stopped` on stderr | — (daemon loop) | — | `0, 1, 2` (5 rows) | `Exits 0 when it started and stopped cleanly, 1 when it refused to start or could not bind its socket, 2 when the invocation or team configuration can't be read.` |
+| 43 | `bus` | daemon | — (stderr only) | — | foreground loop; `team bus: answering on .agents/bus.sock` / `team bus: stopped` on stderr | — (daemon loop) | — | `0, 1, 2` (7 rows) | `Exits 0 when it started and stopped cleanly, or when a request was recorded, 1 when it refused to start or could not bind its socket, 2 when the invocation or team configuration can't be read.` |
 | 44 | `mcp` | reading (`status` / `doctor`) | `mcp <lobby>` | `NAME  STATE  DETAIL` (one table per leg on `status`) | `state: …` / `<n> missing` summary | `team.mcp` | `schema/mcp.schema.json` | `0, 1, 2` (8 rows) | `Exits 0 when every observed leg is up (status) or nothing is missing (doctor), 1 when a leg is down, the bridge is not set up, or doctor finds something missing, 2 when the invocation can't be read.` |
 | 45 | `proc` | reading (`list`) + action (`add`/`clear`) | `team <project>, session "<session>"` | `NAME  BY  SINCE  PID  NOTE` (on `list`) | `<n> process` / `<n> processes` on `list`; `action_summary` on `add`/`clear` | `team.proc` | `schema/proc.schema.json` | `0, 1, 2` (13 rows) | `Exits 0 when the process is recorded, listed, or cleared, 1 when the operation is refused, 2 when the invocation or team file can't be read.` |
 | 46 | `projects` | reading | — (machine registry) | `ID  NAME  ENTITY  LEAD  TEAMS` | `<n> project` / `<n> projects` summary | `team.projects` | `schema/projects.schema.json` | `0, 1, 2` (3 rows) | `Exits 0 when the projects are listed, 1 when the project registry cannot be read, 2 when the invocation can't be read.` |
@@ -252,7 +252,7 @@ Every command ends its plain-text reading or action with **one summary line** us
 ## 4. Exit Codes, Refusal Rules, and `--help`
 
 1. **Authoritative contract (`contract/exit-codes.json`)**:
-   - `contract/exit-codes.json` (622 rows across the 50 command names, verified by `bun scripts/exit-codes.ts --check` and `test/exit-codes.test.ts`) is the single source of truth.
+   - `contract/exit-codes.json` (626 rows across the 51 command names, verified by `bun scripts/exit-codes.ts --check` and `test/exit-codes.test.ts`) is the single source of truth.
    - Standard convention across commands:
      - `0`: work finished, reading agrees with the file, or `--dry-run` plan printed.
      - `1`: differences/findings found, caller/policy/lock gate refused, or runtime step failed.

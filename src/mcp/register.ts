@@ -147,6 +147,10 @@ export function registerInbox(input: {
   const run = input.run ?? ((command, argv) => runIn(folder)(command, argv));
   const result = run(profile.binary, args, folder);
   if (result.code !== 0) {
+    // A JSON project file is the shape `writeConfigFile` already writes. When the CLI's own
+    // `mcp add` fails, write that file instead of leaving the seat without an inbox. A non-JSON
+    // target (a toml, for one) is still the CLI's to write, and the exit is reported.
+    if (target.endsWith('.json')) return writeConfigFile(folder, target, place);
     return { ok: false, reason: `\`${profile.binary} mcp add\` exited ${result.code === null ? 'without running' : result.code}` };
   }
   const path = join(folder, block.target!);
@@ -169,11 +173,34 @@ function ignoreProblem(folder: string, target: string): string | null {
   // tracked file to protect. A repository with no work tree is neither.
   if (inside === null || inside.code !== 0) return null;
   if (inside.stdout.trim() !== 'true') return 'its folder is inside a git repository with no work tree';
+  if (isIgnored(folder, target)) return null;
+  // A tracked file is never ignored. Do not pretend, and do not append it to exclude.
+  const tracked = runGit(folder, ['ls-files', '--error-unmatch', '--', target]);
+  if (tracked !== null && tracked.code === 0) return `its project tracks ${target}`;
+  if (!excludeTarget(folder, target)) return `its project does not ignore ${target}`;
+  if (isIgnored(folder, target)) return null;
+  return `its project does not ignore ${target}`;
+}
+
+function isIgnored(folder: string, target: string): boolean {
   const ignored = runGit(folder, ['check-ignore', '-q', '--', target]);
-  if (ignored === null) return `git could not say whether ${target} is ignored`;
-  if (ignored.code === 0) return null;
-  if (ignored.code === 1) return `its project does not ignore ${target}`;
-  return `git could not say whether ${target} is ignored`;
+  return ignored !== null && ignored.code === 0;
+}
+
+/** Appends `target` to the common git dir's info/exclude, the same place `team init` writes. */
+function excludeTarget(folder: string, target: string): boolean {
+  const common = runGit(folder, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (common === null || common.code !== 0) return false;
+  const path = join(common.stdout.trim(), 'info', 'exclude');
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
+    if (current.split('\n').some((line) => line.trim() === target)) return true;
+    writeFileSync(path, `${current}${current !== '' && !current.endsWith('\n') ? '\n' : ''}${target}\n`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function runGit(folder: string, args: readonly string[]): { code: number; stdout: string } | null {

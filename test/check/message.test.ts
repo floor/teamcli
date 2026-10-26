@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { forbiddenPatterns } from '../../src/check/config.ts';
 import { DEFAULT_FORBIDDEN } from '../../src/file/signature.ts';
 import type { Position } from '../../src/file/types.ts';
-import { checkSignature, findForbidden, splitLines } from '../../src/check/message.ts';
+import { checkSignature, findForbidden, splitLines, withoutPublicationTrailer } from '../../src/check/message.ts';
 import { render, renderings, shape } from '../../src/check/signature.ts';
 import { config, OPUS, PR_SIGNATURE, SIGNATURE, SOL } from './fixtures.ts';
 
@@ -165,5 +165,33 @@ describe('a pull request signature', () => {
 
   test('an empty body is missing it', () => {
     expect(kinds(signed(''))).toEqual(['signature-missing']);
+  });
+});
+
+const FOOTER_DIV = '<div><img src="https://cursor.com/assets/images/open-in-web-dark.png"><img src="https://cursor.com/assets/images/open-in-cursor-dark.png"></div>';
+
+describe('a Cursor publication trailer', () => {
+  const trailer = `\n\n<!-- CURSOR_AGENT_PR_BODY_END -->\n\n${FOOTER_DIV}\n`;
+
+  test('drops the end marker and the open-in div, and nothing else', () => {
+    expect(withoutPublicationTrailer(`The page is ready.\n\n${PR_SIGNATURE}${trailer}`))
+      .toBe(`The page is ready.\n\n${PR_SIGNATURE}`);
+  });
+
+  test('leaves a body that does not end with that div', () => {
+    const body = `text\n\n${PR_SIGNATURE}\n`;
+    expect(withoutPublicationTrailer(body)).toBe(body);
+  });
+
+  test('leaves prose after the div, and prose between the signature and the marker', () => {
+    const after = `text\n\n${PR_SIGNATURE}${trailer}\nmore prose\n`;
+    expect(withoutPublicationTrailer(after)).toBe(after);
+    const between = `text\n\n${PR_SIGNATURE}\n\nmore prose${trailer}`;
+    expect(withoutPublicationTrailer(between)).toBe(`text\n\n${PR_SIGNATURE}\n\nmore prose`);
+  });
+
+  test('leaves a last div that is not the publication line', () => {
+    const body = `text\n\n<div>notes</div>\n`;
+    expect(withoutPublicationTrailer(body)).toBe(body);
   });
 });
