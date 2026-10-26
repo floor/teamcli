@@ -262,8 +262,8 @@ function channelPushOf(serving: Serving, id: string): { content: string; meta: R
 /**
  * Watches the inbox for signed records that arrive after this server starts, and writes one
  * channel notification per new record. Mail already waiting at startup is left to `inbox_check`,
- * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker after
- * the notification; the signed record is never touched, and only `ack` (or `inbox_read`) writes
+ * so a fresh session starts quiet. Each push writes its `<id>.channel-push.json` marker before
+ * the notification, as the id's exclusive reservation; the signed record is never touched, and only `ack` (or `inbox_read`) writes
  * a read receipt.
  *
  * `notice`, when given, is read at the top of every tick: true means this process has been found
@@ -297,8 +297,10 @@ function watchChannel(serving: Serving, write: (line: string) => void, notice?: 
       if (channelPushHeld(serving.dropDir, message.id)) continue;
       const push = channelPushOf(serving, message.id);
       if (push === null) continue;
-      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
-      recordChannelPush(serving.dropDir, {
+      // The marker is the reservation: it is written exclusively before the notification, so a
+      // sender's held marker that lands after the check above wins the name and this server
+      // never pushes the id; a marker this server cannot write means no push at all.
+      const reserved = recordChannelPush(serving.dropDir, {
         v: 1,
         kind: 'channel-push',
         id: message.id,
@@ -310,6 +312,8 @@ function watchChannel(serving: Serving, write: (line: string) => void, notice?: 
         content_sha256: createHash('sha256').update(push.content).digest('hex'),
         status: CHANNEL_PUSH_STATUS,
       });
+      if (!reserved) continue;
+      write(JSON.stringify({ jsonrpc: '2.0', method: CHANNEL_METHOD, params: push }));
     }
   };
   const timer = setInterval(tick, CHANNEL_TICK_MS);
