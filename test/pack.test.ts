@@ -27,6 +27,7 @@ test('package.json files allows the shipped entries only', () => {
     'dist',
     'examples',
     'schema',
+    'helpers',
     'packages/relay/index.js',
     'packages/relay/index.d.ts',
     'packages/relay/host',
@@ -57,7 +58,7 @@ test('the packed tarball ships the schema and nothing it should not', () => {
     const paths = files.map((f) => f.path);
 
     // Required in every package, and the CLI itself whenever dist has been built.
-    for (const required of ['schema/team.schema.json', 'package.json', 'README.md', 'LICENSE']) {
+    for (const required of ['schema/team.schema.json', 'helpers/owner-seat-keystore.swift', 'package.json', 'README.md', 'LICENSE']) {
       expect(paths).toContain(required);
     }
     if (existsSync(join(repo, 'dist'))) {
@@ -67,7 +68,7 @@ test('the packed tarball ships the schema and nothing it should not', () => {
     }
 
     // Every packed path under the allowed top-level entries…
-    const allowed = ['dist/', 'examples/', 'schema/', 'packages/relay/', 'package.json', 'README.md', 'LICENSE'];
+    const allowed = ['dist/', 'examples/', 'schema/', 'helpers/', 'packages/relay/', 'package.json', 'README.md', 'LICENSE'];
     for (const path of paths) {
       expect(allowed.some((prefix) => path === prefix || path.startsWith(prefix))).toBe(true);
     }

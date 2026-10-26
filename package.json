@@ -28,6 +28,7 @@
     "dist",
     "examples",
     "schema",
+    "helpers",
     "packages/relay/index.js",
     "packages/relay/index.d.ts",
     "packages/relay/host",

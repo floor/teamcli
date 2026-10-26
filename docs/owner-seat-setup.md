@@ -30,8 +30,8 @@ the signed profile lists, until its expiry.
 
 ## Morning checklist (three Touch IDs, nothing to type)
 
-1. **Iris starts the setup** (`scripts/morning-owner-setup.sh`). It builds the owner-seat helper,
-   installs this branch as `~/.local/bin/team-branch` next to the global `team` (the global one is
+1. **Iris starts the setup** (`scripts/morning-owner-setup.sh`). The owner-seat helper needs no
+   step of its own (see [The helper prepares itself](#the-helper-prepares-itself)). The script installs this branch as `~/.local/bin/team-branch` next to the global `team` (the global one is
    left alone), registers your owner seat with a Secure Enclave key, and writes `owner-signers=mac`
    and `grant-emission=conversational` for the entities `floor` (Atlas's grant, Floor Docs) and `teamcli` (Agamemnon's grant).
    **You approve with Touch ID** once. The prompt reads:
@@ -137,6 +137,18 @@ token is per run). Iris opens it on the Mac. There you can:
 The relying party is `localhost`, which browsers treat as a secure context, so no certificate is
 needed. The phone cannot open `localhost` itself: the approval goes through the Mac browser's
 "use a phone or tablet" QR code (hybrid transport, Bluetooth proximity).
+
+## The helper prepares itself
+
+Nobody builds, signs or installs the owner-seat helper by hand. The first TeamCLI command that needs
+the owner seat (`team owner-seat setup`, a policy write, an owner answer, `team status`) compiles the
+helper source shipped in the package (`helpers/owner-seat-keystore.swift`), ad-hoc signs it
+(`codesign --sign -`: no identity, no keychain dialog), self-tests it and places it in
+`~/.config/team-owner-seat/` (0700). Everything is at user level: no `/usr/local`, no `sudo`.
+A stamp (`owner-seat-keystore.stamp.json`) records the source hash, so an upgrade that changes the
+helper rebuilds it silently on next use. A helper you installed yourself without that stamp (the
+codesigned `--identity` build) is never replaced. The only prerequisite is the Xcode Command Line
+Tools (`swiftc`); `TEAMCLI_NO_HELPER_AUTOBUILD=1` turns the automatic build off.
 
 ## Why no codesigning
 

@@ -22,6 +22,7 @@ import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, re
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { loadAndResolvePolicyChain, writePolicySet } from '../policy/sources.ts';
+import { ensureOwnerSeatHelper, type ProvisionOptions } from './owner-seat-provision.ts';
 
 /** One credential store: user-presence signing keys, plus pins for keys held elsewhere. */
 export type OwnerSeatKeyStore = {
@@ -44,13 +45,14 @@ export function ownerSeatHelperPath(home: string = homedir()): string {
 }
 
 /** The system adapter: the compiled helper (`helpers/owner-seat-keystore.swift`). */
-export function systemOwnerSeatKeyStore(helper: string = ownerSeatHelperPath()): OwnerSeatKeyStore {
+export function systemOwnerSeatKeyStore(helper: string = ownerSeatHelperPath(), provision: ProvisionOptions = {}): OwnerSeatKeyStore {
   const run = (args: string[], input?: string, timeout = 120_000): string =>
     execFileSync(helper, args, { encoding: 'utf8', stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], timeout, ...(input !== undefined ? { input } : {}) }).trim();
   const point = (out: string) => /^04[0-9a-f]{128}$/.test(out);
   return {
     name: 'system-credential-store',
-    available: () => platform() === 'darwin' && existsSync(helper),
+    // First use builds, ad-hoc signs and self-tests the helper at user level: no manual step, no dialog.
+    available: () => platform() === 'darwin' && ensureOwnerSeatHelper(helper, provision).ok && existsSync(helper),
     create: (label) => {
       try {
         const out = run(['create', label]);
@@ -187,7 +189,7 @@ export function registerOwnerSeat(
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(input.team)) return { ok: false, why: `"${input.team}" is not a team name` };
   if (!SIGNER_NAME.test(input.signer)) return { ok: false, why: `"${input.signer}" is not a signer name` };
   if (existsSync(ownerSeatFile(home))) return { ok: false, why: `an owner seat is already registered (${ownerSeatFile(home)}); add a signer with --add-owner-signer` };
-  if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available; build the helper: swiftc helpers/owner-seat-keystore.swift -o ${ownerSeatHelperPath(home)}` };
+  if (!store.available()) return { ok: false, why: `the ${store.name} adapter is not available (macOS with the Xcode Command Line Tools is needed; TeamCLI prepares ${ownerSeatHelperPath(home)} itself)` };
   const label = ownerSignerLabel(home, input.team, input.signer);
   const created = store.create(label);
   if (!created.ok) return created;
