@@ -3,15 +3,18 @@
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approveOwnerAction } from '../../src/client/owner-action.ts';
-import { actionApprovalsFolder } from '../../src/client/team-create.ts';
+import { ownerSeatMessages } from '../../src/client/owner-seat.ts';
+import { presentOwnerRequest, writeOwnerPageLink } from '../../src/client/owner-page-link.ts';
+import { actionApprovalsFolder, actionRequestsFolder } from '../../src/client/team-create.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus } from '../../src/bus/supervise.ts';
 import { busSocket } from '../../src/bus/server.ts';
 import type { Caller } from '../../src/caller.ts';
 import { runApprovals } from '../../src/commands/approvals.ts';
+import { runBatch } from '../../src/commands/batch.ts';
 import { runBus } from '../../src/commands/bus.ts';
 import { runDown, type DownSources } from '../../src/commands/down.ts';
 import { runForget } from '../../src/commands/forget.ts';
@@ -298,6 +301,235 @@ describe('approvals and forget', () => {
     const seat = ioOf(p.root, detached);
     expect(await runForget([b, '--request'], seat, { home: p.home, now: () => NOW, ownerSeatStore: p.store })).toBe(0);
     expect(getTeam(p.home, b)).not.toBeNull();
+  });
+});
+
+function ruleFile(home: string, id: string): void {
+  mkdirSync(actionApprovalsFolder(home), { recursive: true });
+  writeFileSync(join(actionApprovalsFolder(home), `${id}.json`), '{}\n');
+}
+
+function deadPid(): number {
+  for (let pid = 1_000_000; pid < 1_000_200; pid++) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return pid;
+    }
+  }
+  throw new Error('no unused pid');
+}
+
+describe('several actions, one owner-seat request', () => {
+  test('revoke takes every id in one request, and a bad id revokes nothing and spends nothing', async () => {
+    const p = place();
+    const a = `oa_${'ab'.repeat(12)}`;
+    const b = `oa_${'cd'.repeat(12)}`;
+    const missing = `oa_${'ef'.repeat(12)}`;
+    ruleFile(p.home, a);
+    ruleFile(p.home, b);
+    const sources = { home: p.home, now: () => NOW, ownerSeatStore: p.store };
+    const ask = ioOf(p.root, detached);
+    expect(await runApprovals(['revoke', a, b, '--request'], ask, sources), ask.err).toBe(0);
+    expect(ownerSeatMessages(p.home)).toHaveLength(1);
+    expect(ask.out).toContain(a);
+    expect(ask.out).toContain(b);
+    const id = requestId(ask.out);
+    const record = JSON.parse(readFileSync(join(actionRequestsFolder(p.home), `${id}.json`), 'utf8')) as { params: { actions: string[]; words: Record<string, string[]> } };
+    expect(record.params.actions).toEqual(['team-revoke-approval']);
+    expect(record.params.words['team-revoke-approval']).toEqual(['revoke', a, b]);
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const ran = ioOf(p.root, detached);
+    expect(await runApprovals(['revoke', a, b, '--approval', id], ran, sources), ran.err + ran.out).toBe(0);
+    expect(ran.out).toContain(`revoked ${a}, ${b}`);
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(false);
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${b}.json`))).toBe(false);
+    ruleFile(p.home, a);
+    ruleFile(p.home, b);
+    const again = ioOf(p.root, detached);
+    expect(await runApprovals(['revoke', a, b, '--approval', id], again, sources)).toBe(1);
+    expect(again.err).toContain('single-use');
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(true);
+
+    ruleFile(p.home, a);
+    const badAsk = ioOf(p.root, detached);
+    expect(await runApprovals(['revoke', a, missing, '--request'], badAsk, sources), badAsk.err).toBe(0);
+    const badId = requestId(badAsk.out);
+    expect(approveOwnerAction(p.home, badId, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const blocked = ioOf(p.root, detached);
+    expect(await runApprovals(['revoke', a, missing, '--approval', badId], blocked, sources)).toBe(1);
+    expect(blocked.err).toContain('nothing was revoked');
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(true);
+    ruleFile(p.home, missing);
+    const retry = ioOf(p.root, detached);
+    expect(await runApprovals(['revoke', a, missing, '--approval', badId], retry, sources), retry.err + retry.out).toBe(0);
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(false);
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${missing}.json`))).toBe(false);
+    const repeated = ioOf(p.root, owner);
+    ruleFile(p.home, a);
+    expect(await runApprovals(['revoke', a, a], repeated, sources)).toBe(1);
+    expect(repeated.err).toContain('is repeated');
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(true);
+  });
+
+  test('forget takes every id in one request, and a bad word forgets nothing', async () => {
+    const p = place();
+    const a = 'abc123abc123';
+    const b = 'def456def456';
+    const other = join(p.base, 'code', 'beta');
+    mkdirSync(other, { recursive: true });
+    upsertTeam(p.home, a, { project: 'alpha', session: 'alpha', root: p.root, by: 'test' });
+    upsertTeam(p.home, b, { project: 'beta', session: 'beta', root: other, by: 'test' });
+    const sources = { home: p.home, now: () => NOW, ownerSeatStore: p.store };
+    const ask = ioOf(p.root, detached);
+    expect(await runForget([a, b, '--request'], ask, sources), ask.err).toBe(0);
+    expect(ownerSeatMessages(p.home)).toHaveLength(1);
+    const id = requestId(ask.out);
+    const record = JSON.parse(readFileSync(join(actionRequestsFolder(p.home), `${id}.json`), 'utf8')) as { params: { words: Record<string, string[]> } };
+    expect(record.params.words['team-forget']).toEqual([a, b]);
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const ran = ioOf(p.root, detached);
+    expect(await runForget([a, b, '--approval', id], ran, sources), ran.err + ran.out).toBe(0);
+    expect(ran.out).toContain(`forgot ${a}`);
+    expect(ran.out).toContain(`forgot ${b}`);
+    expect(getTeam(p.home, a)).toBeNull();
+    expect(getTeam(p.home, b)).toBeNull();
+
+    upsertTeam(p.home, a, { project: 'alpha', session: 'alpha', root: p.root, by: 'test' });
+    const badAsk = ioOf(p.root, detached);
+    expect(await runForget([a, 'missing-team', '--request'], badAsk, sources)).toBe(0);
+    const badId = requestId(badAsk.out);
+    expect(approveOwnerAction(p.home, badId, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const blocked = ioOf(p.root, detached);
+    expect(await runForget([a, 'missing-team', '--approval', badId], blocked, sources)).toBe(1);
+    expect(blocked.err).toContain('no team record');
+    expect(getTeam(p.home, a)).not.toBeNull();
+    upsertTeam(p.home, 'missing-team', { project: 'gone', session: 'gone', root: other, by: 'test' });
+    const retry = ioOf(p.root, detached);
+    expect(await runForget([a, 'missing-team', '--approval', badId], retry, sources), retry.err + retry.out).toBe(0);
+    expect(getTeam(p.home, a)).toBeNull();
+    expect(getTeam(p.home, 'missing-team')).toBeNull();
+
+    upsertTeam(p.home, a, { project: 'alpha', session: 'alpha', root: p.root, by: 'test' });
+    const dup = ioOf(p.root, owner);
+    expect(await runForget([a, 'alpha'], dup, { home: p.home })).toBe(1);
+    expect(dup.err).toContain('already in this forget');
+    expect(getTeam(p.home, a)).not.toBeNull();
+    upsertTeam(p.home, b, { project: 'alpha', session: 'beta', root: other, by: 'test' });
+    const ambiguous = ioOf(p.root, owner);
+    expect(await runForget(['alpha', b], ambiguous, { home: p.home })).toBe(1);
+    expect(ambiguous.err).toContain('names 2 teams');
+    expect(getTeam(p.home, a)).not.toBeNull();
+    expect(getTeam(p.home, b)).not.toBeNull();
+  });
+
+  test('one batch request is one card, and one answer runs every action', async () => {
+    const p = place();
+    const a = `oa_${'ab'.repeat(12)}`;
+    const b = `oa_${'cd'.repeat(12)}`;
+    const team = 'abc123abc123';
+    ruleFile(p.home, a);
+    ruleFile(p.home, b);
+    upsertTeam(p.home, team, { project: 'acme', session: 'acme', root: p.root, by: 'test' });
+    const sources = { home: p.home, now: () => NOW, ownerSeatStore: p.store };
+    const ask = ioOf(p.root, detached);
+    expect(await runBatch(['--request', '--do', 'approvals', 'revoke', a, b, '--do', 'forget', team], ask, sources), ask.err).toBe(0);
+    expect(ownerSeatMessages(p.home)).toHaveLength(1);
+    expect(ask.out).toContain('one signature covers 2 actions');
+    const id = requestId(ask.out);
+    const text = ownerSeatMessages(p.home)[0]?.text ?? '';
+    expect(text).toContain('revoke an approval rule');
+    expect(text).toContain(a);
+    expect(text).toContain(b);
+    expect(text).toContain('forget a team record');
+    expect(text).toContain(team);
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const dry = ioOf(p.root, detached);
+    expect(await runBatch(['--approval', id, '--dry-run'], dry, sources), dry.err + dry.out).toBe(0);
+    expect(dry.out).toContain('nothing was run');
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(true);
+    expect(getTeam(p.home, team)).not.toBeNull();
+    const ran = ioOf(p.root, detached);
+    expect(await runBatch(['--approval', id], ran, sources), ran.err + ran.out).toBe(0);
+    expect(ran.out).toContain(`revoked ${a}, ${b}`);
+    expect(ran.out).toContain(`forgot ${team}`);
+    expect(ran.out).toContain('ran 2 actions');
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(false);
+    expect(getTeam(p.home, team)).toBeNull();
+    ruleFile(p.home, a);
+    ruleFile(p.home, b);
+    upsertTeam(p.home, team, { project: 'acme', session: 'acme', root: p.root, by: 'test' });
+    const replay = ioOf(p.root, detached);
+    expect(await runBatch(['--approval', id], replay, sources)).toBe(1);
+    expect(replay.err).toContain('single-use');
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(true);
+    expect(getTeam(p.home, team)).not.toBeNull();
+  });
+
+  test('a bad id in a batch runs nothing, and the same answer still works once the id exists', async () => {
+    const p = place();
+    const a = `oa_${'ab'.repeat(12)}`;
+    const missing = `oa_${'ef'.repeat(12)}`;
+    const team = 'abc123abc123';
+    ruleFile(p.home, a);
+    upsertTeam(p.home, team, { project: 'acme', session: 'acme', root: p.root, by: 'test' });
+    const sources = { home: p.home, now: () => NOW, ownerSeatStore: p.store };
+    const ask = ioOf(p.root, detached);
+    expect(await runBatch(['--request', '--do', 'approvals', 'revoke', a, missing, '--do', 'forget', team], ask, sources)).toBe(0);
+    const id = requestId(ask.out);
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const blocked = ioOf(p.root, detached);
+    expect(await runBatch(['--approval', id], blocked, sources)).toBe(1);
+    expect(blocked.err).toContain('nothing was run');
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(true);
+    expect(getTeam(p.home, team)).not.toBeNull();
+    ruleFile(p.home, missing);
+    const retry = ioOf(p.root, detached);
+    expect(await runBatch(['--approval', id], retry, sources), retry.err + retry.out).toBe(0);
+    expect(existsSync(join(actionApprovalsFolder(p.home), `${a}.json`))).toBe(false);
+    expect(getTeam(p.home, team)).toBeNull();
+  });
+
+  test('two revoke segments merge, a repeated action does not, and the requester cannot approve', async () => {
+    const p = place();
+    const a = `oa_${'ab'.repeat(12)}`;
+    const b = `oa_${'cd'.repeat(12)}`;
+    const sources = { home: p.home, now: () => NOW, ownerSeatStore: p.store };
+    const merged = ioOf(p.root, detached);
+    expect(await runBatch(['--request', '--do', 'approvals', 'revoke', a, '--do', 'approvals', 'revoke', b], merged, sources), merged.err).toBe(0);
+    const id = requestId(merged.out);
+    const record = JSON.parse(readFileSync(join(actionRequestsFolder(p.home), `${id}.json`), 'utf8')) as { params: { actions: string[]; words: Record<string, string[]> } };
+    expect(record.params.actions).toEqual(['team-revoke-approval']);
+    expect(record.params.words['team-revoke-approval']).toEqual(['revoke', a, b]);
+    const duplicate = ioOf(p.root, detached);
+    expect(await runBatch(['--request', '--do', 'up', '--do', 'up'], duplicate, sources)).toBe(2);
+    expect(duplicate.err).toContain('already in this batch');
+    const self = ioOf(p.root, { kind: 'seat', name: 'mac', pane: 'w9:p1', session: 'acme' });
+    expect(await runBatch(['--request', '--do', 'forget', 'abc123abc123'], self, sources)).toBe(0);
+    const own = requestId(self.out);
+    expect(approveOwnerAction(p.home, own, 'oui', p.store, NOW)).toEqual({ ok: false, why: `signer "mac" asked for request ${own}; no principal approves its own request` });
+  });
+
+  test('a request does not open a browser when the owner page is already up', () => {
+    const p = place();
+    const a = `oa_${'ab'.repeat(12)}`;
+    ruleFile(p.home, a);
+    writeOwnerPageLink(p.home, { pid: process.pid, port: 9, url: 'http://localhost:9/?t=tok' });
+    const live = ioOf(p.root, detached);
+    expect(presentOwnerRequest(p.home, () => { throw new Error('opened a browser'); })).toBe('live');
+    return runApprovals(['revoke', a, '--request'], live, { home: p.home, now: () => NOW, ownerSeatStore: p.store }).then((code) => {
+      expect(code, live.err).toBe(0);
+      expect(live.out).toContain('the owner page is already open and will show this card');
+      expect(live.out).not.toContain('http://');
+      writeOwnerPageLink(p.home, { pid: deadPid(), port: 9, url: 'http://localhost:9/?t=tok' });
+      expect(presentOwnerRequest(p.home, () => { throw new Error('opened a browser'); })).toBe('closed');
+      const closed = ioOf(p.root, detached);
+      return runApprovals(['revoke', a, '--request'], closed, { home: p.home, now: () => NOW, ownerSeatStore: p.store }).then((again) => {
+        expect(again, closed.err).toBe(0);
+        expect(closed.out).toContain('the owner answers it on the owner page');
+        expect(closed.out).not.toContain('http://');
+      });
+    });
   });
 });
 

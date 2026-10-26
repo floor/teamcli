@@ -24,6 +24,7 @@ import { runBroker, type BrokerSources } from '../src/commands/broker.ts';
 import { runBrief } from '../src/commands/brief.ts';
 import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
+import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
 import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
@@ -5700,6 +5701,26 @@ scene('forget.approval-requested', async (place) => {
 });
 scene('forget.approval-refused', async (place) =>
   show(await forgetRun(place, ['abc123abc123', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id'));
+async function batchRun(place: Place, argv: string[], caller: Caller = owner, store?: ReturnType<typeof seatOwner>): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runBatch(argv, io, { home: place.home, ...(store ? { ownerSeatStore: store } : {}) }), out: io.out, err: io.err };
+}
+scene('batch.invocation', async (place) => show(await batchRun(place, []), 'pass --request'));
+scene('batch.requested', async (place) => {
+  seatOwner(place.home);
+  return show(await batchRun(place, ['--request', '--do', 'approvals', 'revoke', `oa_${'ab'.repeat(12)}`, '--do', 'forget', 'something']), 'owner-seat request');
+});
+scene('batch.refused', async (place) => show(await batchRun(place, ['--approval', 'oa_nope']), 'is not an owner-seat request id'));
+scene('batch.done', async (place) => {
+  const rule = `oa_${'ab'.repeat(12)}`;
+  mkdirSync(actionApprovalsFolder(place.home), { recursive: true });
+  writeFileSync(join(actionApprovalsFolder(place.home), `${rule}.json`), '{}\n');
+  const store = seatOwner(place.home);
+  const asked = await batchRun(place, ['--request', '--do', 'approvals', 'revoke', rule], owner, store);
+  const id = /owner-seat request (oa_[0-9a-f]{24})/.exec(asked.out)?.[1] ?? '';
+  expect(approveOwnerAction(place.home, id, 'oui', store, new Date())).toMatchObject({ ok: true });
+  return show(await batchRun(place, ['--approval', id], owner, store), 'revoked');
+});
 scene('up.detached', async (place) => show(await up(place, ['--session', 'elsewhere'], detachedCaller, upSources(place)), LEADS));
 scene('watch.caller', async (place) => show(await watched(place, [], detachedCaller), PLACED));
 scene('worktree.detached', async (place) => show(await worktree(place, ['list'], detachedCaller), ORCH));

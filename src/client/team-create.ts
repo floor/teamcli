@@ -13,6 +13,7 @@ import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, r
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
+import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { readSecurityProfile, ruleRelaxed } from '../security/profile.ts';
 
@@ -80,6 +81,7 @@ export function createTeamCreateRequest(home: string, root: string, head: string
   }
   const text = `Team request ${record.request_id}: ${teamCreateSummary(params)} Authorized? reply oui/approved, always, or non/deny (team init --approve-as-owner-seat ${record.request_id} <oui|always|non>)`;
   const inbox = deliverToOwnerSeat(home, { kind: 'team-create-confirmation', request_id: record.request_id, params_sha256: record.params_sha256, text, summary: params, at: now.toISOString() });
+  presentOwnerRequest(home);
   return { ok: true, record, inbox, text };
 }
 

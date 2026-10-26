@@ -26,7 +26,9 @@ See [owner-seat setup](../owner-seat-setup.md) for the morning checklist.
   `dev` is an alias of `relaxed`.
 - `serve`: the owner page on `http://localhost:<port>/?t=<token>` (default port 7391, bound to
   127.0.0.1, one token per run): add a passkey, sign the waiting profile, answer team requests.
-  Refused while no owner seat is registered.
+  The page asks `/api/state` every two seconds, so a request recorded while it is open appears
+  on that page. A command that records a request does not open a browser. Refused while no
+  owner seat is registered.
 
 ## Flags
 

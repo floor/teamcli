@@ -444,6 +444,10 @@ function buildGates(): Record<string, Gate> {
       why: 'removing a team registry record is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that forget; it does not stop panes or delete the team file',
       terminal: { who: 'the owner', where: 'a terminal outside herdr' },
     },
+    batch: {
+      kind: 'any-caller',
+      why: 'it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode',
+    },
     'policy:set': {
       kind: 'owner-only',
       why: 'the owner alone sets the policy, from a terminal outside herdr, signed and logged',

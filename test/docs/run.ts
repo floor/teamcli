@@ -16,6 +16,7 @@ import { runApprove, type Waiting } from '../../src/approve/command.ts';
 import { runBrief } from '../../src/commands/brief.ts';
 import { runBroker } from '../../src/commands/broker.ts';
 import { runApprovals } from '../../src/commands/approvals.ts';
+import { runBatch } from '../../src/commands/batch.ts';
 import { runBus } from '../../src/commands/bus.ts';
 import { runForget } from '../../src/commands/forget.ts';
 import { check, loadConfig } from '../../src/commands/check.ts';
@@ -329,6 +330,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runBroker(rest, io, { home: fixture.home });
     case 'approvals':
       return runApprovals(rest, io, { home: fixture.home });
+    case 'batch':
+      return runBatch(rest, io, { home: fixture.home });
     case 'bus':
       return runBus(rest, io, { home: fixture.home });
     case 'forget':

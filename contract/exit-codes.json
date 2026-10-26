@@ -622,7 +622,7 @@
       "command": "approvals",
       "id": "approvals.approval-requested",
       "meaning": "an owner-seat request for this revoke was recorded and sent to the owner seat",
-      "trigger": "team approvals revoke <id> --request"
+      "trigger": "team approvals revoke <id...> --request"
     },
     {
       "code": 0,
@@ -635,22 +635,22 @@
       "code": 0,
       "command": "approvals",
       "id": "approvals.revoked",
-      "meaning": "the always rule was removed",
-      "trigger": "team approvals revoke <id>"
+      "meaning": "the always rules were removed",
+      "trigger": "team approvals revoke <id...>"
     },
     {
       "code": 1,
       "command": "approvals",
       "id": "approvals.approval-refused",
       "meaning": "the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used",
-      "trigger": "team approvals revoke <id> --approval <request-id>"
+      "trigger": "team approvals revoke <id...> --approval <request-id>"
     },
     {
       "code": 1,
       "command": "approvals",
       "id": "approvals.refused",
       "meaning": "the revoke was refused",
-      "trigger": "team approvals revoke <id>"
+      "trigger": "team approvals revoke <id...>"
     },
     {
       "code": 2,
@@ -756,6 +756,34 @@
       "id": "ask-show.invocation",
       "meaning": "the invocation cannot be read",
       "trigger": "team ask-show"
+    },
+    {
+      "code": 0,
+      "command": "batch",
+      "id": "batch.done",
+      "meaning": "the signed batch ran, or a dry run verified it and changed nothing",
+      "trigger": "team batch --approval <request-id>"
+    },
+    {
+      "code": 0,
+      "command": "batch",
+      "id": "batch.requested",
+      "meaning": "several owner-seat actions were recorded as one request",
+      "trigger": "team batch --request --do <command>"
+    },
+    {
+      "code": 1,
+      "command": "batch",
+      "id": "batch.refused",
+      "meaning": "the batch was refused: not a repository, a bad answer, or a command in the list failed",
+      "trigger": "team batch --approval <request-id>"
+    },
+    {
+      "code": 2,
+      "command": "batch",
+      "id": "batch.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team batch"
     },
     {
       "code": 0,
@@ -1917,35 +1945,35 @@
       "command": "forget",
       "id": "forget.approval-requested",
       "meaning": "an owner-seat request for this forget was recorded and sent to the owner seat",
-      "trigger": "team forget <id> --request"
+      "trigger": "team forget <id...> --request"
     },
     {
       "code": 0,
       "command": "forget",
       "id": "forget.forgotten",
-      "meaning": "the team registry record was removed; panes were not stopped and the team file was not deleted",
-      "trigger": "team forget <id>"
+      "meaning": "the team registry records were removed; panes were not stopped and the team files were not deleted",
+      "trigger": "team forget <id...>"
     },
     {
       "code": 1,
       "command": "forget",
       "id": "forget.approval-refused",
       "meaning": "the owner-seat request or approval for this forget was refused: missing, expired, mismatched, unsigned, self-approved or already used",
-      "trigger": "team forget <id> --approval <request-id>"
+      "trigger": "team forget <id...> --approval <request-id>"
     },
     {
       "code": 1,
       "command": "forget",
       "id": "forget.missing",
-      "meaning": "no team record matches the id",
-      "trigger": "team forget <id>"
+      "meaning": "no team record matches an id",
+      "trigger": "team forget <id...>"
     },
     {
       "code": 1,
       "command": "forget",
       "id": "forget.refused",
       "meaning": "the forget was refused",
-      "trigger": "team forget <id>"
+      "trigger": "team forget <id...>"
     },
     {
       "code": 2,

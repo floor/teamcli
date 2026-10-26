@@ -6,7 +6,7 @@ Every `team` command in 0.5.2 follows one output contract across its human-reada
 
 ## 1. Command Scope and Structure Matrix
 
-The CLI contract covers **50 command names** in `src/cli.ts` order: top-level `team`, the 48 subcommands in the `commands` table, and the hidden protocol entry `conformance-adapter`.
+The CLI contract covers **51 command names** in `src/cli.ts` order: top-level `team`, the 49 subcommands in the `commands` table, and the hidden protocol entry `conformance-adapter`.
 
 Every command falls into one of four surface shapes:
 
@@ -15,7 +15,7 @@ Every command falls into one of four surface shapes:
 - **Top-level CLI** (`team`): prints `--help`, `--version`, or `--about` (which prints the version, licence, docs link, and the `what 0.5.0 must not pretend` block).
 - **Daemon / protocol surfaces** (`watch`, `broker`, `bus`, `conformance-adapter`): long-running foreground loops or wire-protocol adapters; human-readable startup/refusal lines follow the error contract on stderr, and `--json` is not used on the daemon loop itself.
 
-### 1.1 Per-Command Output Matrix (All 50 Contract Commands)
+### 1.1 Per-Command Output Matrix (All 51 Contract Commands)
 
 In `src/cli.ts` command order (`contract/exit-codes.json` is authoritative for the exit rows and row IDs):
 
@@ -252,7 +252,7 @@ Every command ends its plain-text reading or action with **one summary line** us
 ## 4. Exit Codes, Refusal Rules, and `--help`
 
 1. **Authoritative contract (`contract/exit-codes.json`)**:
-   - `contract/exit-codes.json` (622 rows across the 50 command names, verified by `bun scripts/exit-codes.ts --check` and `test/exit-codes.test.ts`) is the single source of truth.
+   - `contract/exit-codes.json` (626 rows across the 51 command names, verified by `bun scripts/exit-codes.ts --check` and `test/exit-codes.test.ts`) is the single source of truth.
    - Standard convention across commands:
      - `0`: work finished, reading agrees with the file, or `--dry-run` plan printed.
      - `1`: differences/findings found, caller/policy/lock gate refused, or runtime step failed.

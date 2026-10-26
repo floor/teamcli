@@ -137,9 +137,9 @@ Hidden: no
 Usage:
 
     team approvals list [--json]
-    team approvals revoke <id> [--json]
-    team approvals revoke <id> --request [--json]
-    team approvals revoke <id> --approval <request-id> [--json]
+    team approvals revoke <id...> [--json]
+    team approvals revoke <id...> --request [--json]
+    team approvals revoke <id...> --approval <request-id> [--json]
 
 ### Who may run it
 
@@ -186,9 +186,9 @@ Hidden: no
 
 Usage:
 
-    team approvals revoke <id> [--json]
-    team approvals revoke <id> --request [--json]
-    team approvals revoke <id> --approval <request-id> [--json]
+    team approvals revoke <id...> [--json]
+    team approvals revoke <id...> --request [--json]
+    team approvals revoke <id...> --approval <request-id> [--json]
 
 #### Who may run it
 
@@ -210,7 +210,7 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `id` | no | no |
+| `id...` | no | no |
 
 ## `archive`
 
@@ -270,6 +270,35 @@ Usage:
 | Name | Optional | Repeatable |
 | --- | --- | --- |
 | `request_id` | no | no |
+
+## `batch`
+
+Hidden: no
+
+Usage:
+
+    team batch --request --do <command> [--json]
+    team batch --approval <request-id> [--dry-run] [--json]
+
+### Who may run it
+
+`any-caller` — it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--approval` | yes | no | no |
+| `--do` | yes | no | no |
+| `--dry-run` | no | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--request` | no | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
 
 ## `brief`
 
@@ -1046,9 +1075,9 @@ Hidden: no
 
 Usage:
 
-    team forget <id> [--json]
-    team forget <id> --request [--json]
-    team forget <id> --approval <request-id> [--json]
+    team forget <id...> [--json]
+    team forget <id...> --request [--json]
+    team forget <id...> --approval <request-id> [--json]
 
 ### Who may run it
 
@@ -1070,7 +1099,7 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 
 | Name | Optional | Repeatable |
 | --- | --- | --- |
-| `id` | no | no |
+| `id...` | no | no |
 
 ## `grant`
 

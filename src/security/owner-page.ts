@@ -12,6 +12,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { clearOwnerPageLink, writeOwnerPageLink } from '../client/owner-page-link.ts';
 import { addOwnerSigner, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { actionRequestsFolder, approveTeamCreate } from '../client/team-create.ts';
 import { approveOwnerAction, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
@@ -174,7 +175,10 @@ export function serveOwnerPage(options: OwnerPageOptions): Promise<{ server: Ser
       const address = server.address();
       const port = typeof address === 'object' && address !== null ? address.port : (options.port ?? 7391);
       server.on('request', ownerPageHandler({ ...options, port, token }));
-      resolve({ server, url: `http://localhost:${port}/?t=${token}`, port, token });
+      const link = { pid: process.pid, port, url: `http://localhost:${port}/?t=${token}` };
+      writeOwnerPageLink(options.home, link);
+      server.on('close', () => clearOwnerPageLink(options.home, link));
+      resolve({ server, url: link.url, port, token });
     });
   });
 }
@@ -218,9 +222,16 @@ async function answer(id, word) {
   const a = await assertOver(ch.challenge);
   const r = await api('POST', '/api/team-create/answer', { ...a, id, word }); log('Réponse enregistrée : ' + r.choice); load();
 }
-const run = (f) => (...a) => f(...a).catch(e => log('Refusé : ' + e.message));
+let busy = 0;
+const run = (f) => (...a) => { busy++; return f(...a).catch(e => log('Refusé : ' + e.message)).finally(() => { busy--; }); };
+let stamp = '';
 async function load() {
-  S = await api('GET', '/api/state');
+  if (busy) return;
+  const next = await api('GET', '/api/state');
+  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + r.text), next.seat]);
+  S = next;
+  if (mark === stamp) return;
+  stamp = mark;
   const p = document.getElementById('profile'); p.textContent = S.profile; p.className = /RELAXED/.test(S.profile) ? 'relaxed' : '';
   const cards = document.getElementById('cards'); cards.innerHTML = '';
   const card = (html) => { const d = document.createElement('div'); d.className = 'card'; d.innerHTML = html; cards.appendChild(d); return d; };
@@ -231,5 +242,6 @@ async function load() {
   for (const r of S.requests) { if (!hasPasskey) break; const d = card(r.text.replace(/</g,'&lt;') + '<br><button data-w="oui">Oui</button><button data-w="always">Toujours</button><button data-w="non">Non</button>'); d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w))); }
 }
 load().catch(e => log(e.message));
+setInterval(() => { load().catch(() => {}); }, 2000);
 </script></body></html>
 `;

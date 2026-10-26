@@ -24,6 +24,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
+import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
@@ -40,6 +41,8 @@ export type OwnerActionParams = {
   head: string | null;
   /** Per action, the hash of the arguments it will run with (`actionArgsHash`). */
   args: Partial<Record<OwnerAction, string>>;
+  /** Per action, the arguments that hash names. Present on a request recorded by this build. */
+  words?: Partial<Record<OwnerAction, string[]>>;
   /** Who asked: the caller's log label. A signer of that name cannot answer it. */
   requested_by: string;
 };
@@ -65,9 +68,15 @@ export function actionArgsHash(action: OwnerAction, words: readonly string[]): s
 export function ownerActionHash(p: OwnerActionParams): string {
   const args: Record<string, string> = {};
   for (const key of Object.keys(p.args).sort()) args[key] = p.args[key as OwnerAction]!;
-  return createHash('sha256')
-    .update(JSON.stringify({ kind: p.kind, actions: [...p.actions], root: p.root, team: p.team, head: p.head, args, requested_by: p.requested_by }), 'utf8')
-    .digest('hex');
+  // `words` is part of the hash when the request carries it, so one signature binds each
+  // action's argument list. A record written before the field existed hashes as it did then.
+  const body: Record<string, unknown> = { kind: p.kind, actions: [...p.actions], root: p.root, team: p.team, head: p.head, args, requested_by: p.requested_by };
+  if (p.words !== undefined) {
+    const words: Record<string, string[]> = {};
+    for (const key of Object.keys(p.words).sort()) words[key] = [...(p.words[key as OwnerAction] ?? [])];
+    body.words = words;
+  }
+  return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
 }
 
 export function canonicalRoot(root: string): string {
@@ -118,7 +127,10 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
 };
 
 export function ownerActionSummary(p: OwnerActionParams): string {
-  const what = p.actions.map((a) => ACTION_WORDS[a]).join(', then ');
+  const what = p.actions.map((action) => {
+    const words = p.words?.[action] ?? [];
+    return words.length > 0 ? `${ACTION_WORDS[action]} (${words.join(' ')})` : ACTION_WORDS[action];
+  }).join(', then ');
   return `${p.requested_by} asks to ${what} — team "${p.team}" in ${p.root}${p.head ? ` (HEAD ${p.head.slice(0, 12)})` : ''}.`;
 }
 
@@ -132,13 +144,17 @@ export type OwnerActionRequestInput = {
 };
 
 /** Records one request and drops its confirmation in the owner seat inbox. Refused with no owner seat. */
-export function createOwnerActionRequest(home: string, input: OwnerActionRequestInput, now: Date = new Date()): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string } | { ok: false; why: string } {
+export function createOwnerActionRequest(home: string, input: OwnerActionRequestInput, now: Date = new Date()): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string; page: 'live' | 'closed' } | { ok: false; why: string } {
   if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered, so no owner-seat approval is possible; the owner registers one on the owner page (team owner-seat serve)' };
   const actions = [...new Set(input.actions)];
   if (actions.length === 0 || actions.some((a) => !(OWNER_ACTIONS as readonly string[]).includes(a))) return { ok: false, why: `an owner-seat request names one or more of ${OWNER_ACTIONS.join(', ')}` };
   const args: Partial<Record<OwnerAction, string>> = {};
-  for (const action of actions) args[action] = actionArgsHash(action, input.args[action] ?? []);
-  const params: OwnerActionParams = { kind: 'owner-action', actions, root: canonicalRoot(input.root), team: input.team, head: input.head, args, requested_by: input.requestedBy };
+  const words: Partial<Record<OwnerAction, string[]>> = {};
+  for (const action of actions) {
+    words[action] = [...(input.args[action] ?? [])];
+    args[action] = actionArgsHash(action, words[action]!);
+  }
+  const params: OwnerActionParams = { kind: 'owner-action', actions, root: canonicalRoot(input.root), team: input.team, head: input.head, args, words, requested_by: input.requestedBy };
   const record: OwnerActionRecord = {
     request_id: `oa_${randomBytes(12).toString('hex')}`,
     params,
@@ -150,7 +166,9 @@ export function createOwnerActionRequest(home: string, input: OwnerActionRequest
   if (writeExclusive(join(actionRequestsFolder(home), `${record.request_id}.json`), `${JSON.stringify(record, null, 2)}\n`) !== 'written') return { ok: false, why: 'the request could not be recorded' };
   const text = `Request ${record.request_id}: ${ownerActionSummary(params)} Authorized? oui, always, or non.`;
   const inbox = deliverToOwnerSeat(home, { kind: 'owner-action-confirmation', request_id: record.request_id, params_sha256: record.params_sha256, text, summary: params, at: now.toISOString() });
-  return { ok: true, record, inbox, text };
+  // The open page polls for this card. A request never opens a second window over it.
+  const page = presentOwnerRequest(home);
+  return { ok: true, record, inbox, text, page };
 }
 
 export function readOwnerActionRecord(home: string, id: string): OwnerActionRecord | string {

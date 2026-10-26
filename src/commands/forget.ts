@@ -14,19 +14,21 @@ import { hasJsonFlag } from '../output/index.ts';
 import type { Command, Io } from '../io.ts';
 import { findTeams, forgetTeam } from '../registry/teams.ts';
 
-export const USAGE = `Usage: team forget <id> [--json]
-       team forget <id> --request [--json]
-       team forget <id> --approval <request-id> [--json]
+export const USAGE = `Usage: team forget <id...> [--json]
+       team forget <id...> --request [--json]
+       team forget <id...> --approval <request-id> [--json]
 
-Removes one team from this machine's registry. <id> is a team id, a project name, or a session
-name; a word that names more than one team is refused. The team's place in any project record is
-dropped with it. Panes are not stopped and the team file is not deleted.
+Removes every named team from this machine's registry, in one command. Each word is a team id,
+a project name, or a session name; a word that names more than one team is refused, and so is a
+repeated team. Each team's place in any project record is dropped with it. Panes are not stopped
+and the team file is not deleted. A bad word removes nothing.
 
-The owner runs it from a terminal outside herdr. --request records the forget for the owner seat
-and removes nothing; --approval <request-id> runs it once the owner has answered on the owner
-page. A signed always rule for team-forget covering this folder admits the run with no request.
+The owner runs it from a terminal outside herdr. --request records every id as one request and
+removes nothing; --approval <request-id> runs it once the owner has answered on the owner page.
+One card and one Touch ID cover the whole list. A signed always rule for team-forget covering
+this folder admits the run with no request.
 
-Exits 0 when the record is removed or a request is recorded, 1 when it is refused or the record
+Exits 0 when the records are removed or a request is recorded, 1 when it is refused or a record
 is not there, 2 when the invocation can't be read.
 `;
 
@@ -38,57 +40,86 @@ export default forget;
 export async function runForget(argv: string[], io: Io, sources: ForgetSources = {}): Promise<number> {
   const args = readArgs(argv, ['approval'], ['json', 'request']);
   const json = hasJsonFlag(argv);
-  if (args.error || args.rest.length !== 1) {
-    io.stderr(`team forget: ${args.error ?? (args.rest.length === 0 ? 'a team id is required' : `unexpected "${args.rest[1]}"`)}\n${USAGE}`);
+  if (args.error || args.rest.length === 0) {
+    io.stderr(`team forget: ${args.error ?? 'a team id is required'}\n${USAGE}`);
     // exit: forget.invocation
     return 2;
   }
-  const key = args.rest[0]!;
+  const keys = args.rest;
   const home = sources.home ?? homedir();
   const now = sources.now?.() ?? new Date();
   const seatSources = { home, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
+  const caller = callerOf(io);
   let seatApproved = false;
-  if (args.flags.has('request') || args.values.approval !== undefined) {
-    const seat = ownerSeatStep('forget', 'team-forget', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, seatSources);
+  let seatRefused = false;
+  if (args.flags.has('request')) {
+    const seat = ownerSeatStep('forget', 'team-forget', argv, { request: true, approval: undefined, dry: false, json }, io, seatSources);
     if (seat.kind === 'requested') {
       // exit: forget.approval-requested
       return 0;
     }
-    if (seat.kind === 'refused') {
-      // exit: forget.approval-refused
-      return 1;
-    }
-    seatApproved = seat.kind === 'admitted';
+    seatRefused = true;
+  } else if (args.values.approval !== undefined) {
+    const preview = ownerSeatStep('forget', 'team-forget', argv, { request: false, approval: args.values.approval, dry: true, json }, io, seatSources);
+    seatApproved = preview.kind === 'admitted';
+    if (!seatApproved) seatRefused = true;
+  } else if (!isOwner(caller)) {
+    seatApproved = ownerSeatRuleAdmits('team-forget', io.cwd, false, seatSources);
   }
-  const caller = callerOf(io);
-  if (!seatApproved && !isOwner(caller)) seatApproved = ownerSeatRuleAdmits('team-forget', io.cwd, false, seatSources);
-  if (!seatApproved) {
+  if (!seatRefused && !seatApproved && args.values.approval === undefined) {
     const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside herdr' });
     if (detached !== undefined) return refused(io, json, detached);
     if (!isOwner(caller)) return refused(io, json, `only the owner forgets a team record, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
+    seatApproved = true;
   }
-  let found;
-  try {
-    found = findTeams(home, key);
-  } catch (error) {
-    return refused(io, json, `the team registry cannot be read: ${error instanceof Error ? error.message : String(error)}`);
+  // Every key is resolved before the approval is claimed, so one bad word removes nothing.
+  const resolved = seatRefused ? { ok: true as const, teams: [] } : resolveKeys(home, keys);
+  if (!resolved.ok) return resolved.missing ? missing(io, json, resolved.key) : refused(io, json, `${resolved.why}; nothing was forgotten`);
+  if (args.values.approval !== undefined && !seatRefused) {
+    const seat = ownerSeatStep('forget', 'team-forget', argv, { request: false, approval: args.values.approval, dry: false, json }, io, seatSources);
+    if (seat.kind !== 'admitted') seatRefused = true;
   }
-  if (found.length === 0) return missing(io, json, key);
-  if (found.length > 1) return refused(io, json, `"${key}" names ${String(found.length)} teams (${found.map((team) => team.id).join(', ')}); name one team id`);
-  const id = found[0]!.id;
-  if (id === undefined) return refused(io, json, 'the team record has no id');
-  let removed;
-  try {
-    removed = forgetTeam(home, id);
-  } catch (error) {
-    return refused(io, json, `the team registry was not updated: ${error instanceof Error ? error.message : String(error)}`);
+  if (seatRefused) {
+    // exit: forget.approval-refused
+    return 1;
   }
-  if (removed === null) return missing(io, json, id);
-  const line = `forgot ${id} (${removed.project}); panes were not stopped and the team file was not deleted`;
-  if (json) io.stdout(`${JSON.stringify({ format: 1, forgot: id, project: removed.project })}\n`);
-  else io.stdout(`team forget: ${line}\n`);
+  const forgot: { id: string; project: string }[] = [];
+  for (const team of resolved.teams) {
+    let removed;
+    try {
+      removed = forgetTeam(home, team.id);
+    } catch (error) {
+      return refused(io, json, `the team registry was not updated: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (removed === null) return missing(io, json, team.id);
+    forgot.push({ id: team.id, project: removed.project });
+    const line = `forgot ${team.id} (${removed.project}); panes were not stopped and the team file was not deleted`;
+    if (!json) io.stdout(`team forget: ${line}\n`);
+  }
+  if (json) io.stdout(`${JSON.stringify({ format: 1, forgot })}\n`);
   // exit: forget.forgotten
   return 0;
+}
+
+function resolveKeys(home: string, keys: string[]): { ok: true; teams: { id: string }[] } | { ok: false; missing?: boolean; key: string; why: string } {
+  const teams: { id: string }[] = [];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    let found;
+    try {
+      found = findTeams(home, key);
+    } catch (error) {
+      return { ok: false, key, why: `the team registry cannot be read: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (found.length === 0) return { ok: false, missing: true, key, why: `no team record for "${key}"` };
+    if (found.length > 1) return { ok: false, key, why: `"${key}" names ${String(found.length)} teams (${found.map((team) => team.id).join(', ')}); name one team id` };
+    const id = found[0]!.id;
+    if (id === undefined) return { ok: false, key, why: 'the team record has no id' };
+    if (seen.has(id)) return { ok: false, key, why: `"${key}" names ${id}, which is already in this forget` };
+    seen.add(id);
+    teams.push({ id });
+  }
+  return { ok: true, teams };
 }
 
 function missing(io: Io, json: boolean, key: string): number {

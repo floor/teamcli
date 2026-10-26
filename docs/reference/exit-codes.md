@@ -94,11 +94,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `answer.version` | `answer` | 1 | this version has no trust answer | `team answer lead trust` |
 | `answer.configuration` | `answer` | 2 | the team file cannot be read | `team answer lead trust --file missing.yaml` |
 | `answer.usage` | `answer` | 2 | the invocation is not a seat and trust | `team answer` |
-| `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id> --request` |
+| `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id...> --request` |
 | `approvals.listed` | `approvals` | 0 | the always rules were listed | `team approvals list` |
-| `approvals.revoked` | `approvals` | 0 | the always rule was removed | `team approvals revoke <id>` |
-| `approvals.approval-refused` | `approvals` | 1 | the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team approvals revoke <id> --approval <request-id>` |
-| `approvals.refused` | `approvals` | 1 | the revoke was refused | `team approvals revoke <id>` |
+| `approvals.revoked` | `approvals` | 0 | the always rules were removed | `team approvals revoke <id...>` |
+| `approvals.approval-refused` | `approvals` | 1 | the owner-seat request or approval for this revoke was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team approvals revoke <id...> --approval <request-id>` |
+| `approvals.refused` | `approvals` | 1 | the revoke was refused | `team approvals revoke <id...>` |
 | `approvals.invocation` | `approvals` | 2 | the invocation cannot be read | `team approvals` |
 | `archive.keep-running` | `archive` | 0 | the snapshot was written and the team was left running | `team archive --keep-running` |
 | `archive.detached` | `archive` | 1 | a run with no terminal | `team archive` |
@@ -114,6 +114,10 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `ask-show.expired` | `ask-show` | 1 | the marker matches and the ask is past expires_at plus 5 seconds | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.refused` | `ask-show` | 1 | the marker does not verify, or a file cannot be read | `team ask-show req-ask-show-v1 --ask ask.txt --marker marker.json --key key.txt` |
 | `ask-show.invocation` | `ask-show` | 2 | the invocation cannot be read | `team ask-show` |
+| `batch.done` | `batch` | 0 | the signed batch ran, or a dry run verified it and changed nothing | `team batch --approval <request-id>` |
+| `batch.requested` | `batch` | 0 | several owner-seat actions were recorded as one request | `team batch --request --do <command>` |
+| `batch.refused` | `batch` | 1 | the batch was refused: not a repository, a bad answer, or a command in the list failed | `team batch --approval <request-id>` |
+| `batch.invocation` | `batch` | 2 | the invocation can't be read | `team batch` |
 | `brief.current` | `brief` | 0 | --apply left every live or human seat current; the read is not demanded here | `team brief rollout --apply` |
 | `brief.plan` | `brief` | 0 | the dry run found every live or human seat current, and wrote nothing | `team brief rollout` |
 | `brief.file-owner` | `brief` | 1 | --file is the owner's | `team brief rollout --file .agents/team.yaml` |
@@ -279,11 +283,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `feed.unreadable` | `feed` | 1 | the history log cannot be read | `team feed` |
 | `feed.configuration` | `feed` | 2 | the team file can't be read | `team feed` |
 | `feed.usage` | `feed` | 2 | the invocation can't be read | `team feed extra` |
-| `forget.approval-requested` | `forget` | 0 | an owner-seat request for this forget was recorded and sent to the owner seat | `team forget <id> --request` |
-| `forget.forgotten` | `forget` | 0 | the team registry record was removed; panes were not stopped and the team file was not deleted | `team forget <id>` |
-| `forget.approval-refused` | `forget` | 1 | the owner-seat request or approval for this forget was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team forget <id> --approval <request-id>` |
-| `forget.missing` | `forget` | 1 | no team record matches the id | `team forget <id>` |
-| `forget.refused` | `forget` | 1 | the forget was refused | `team forget <id>` |
+| `forget.approval-requested` | `forget` | 0 | an owner-seat request for this forget was recorded and sent to the owner seat | `team forget <id...> --request` |
+| `forget.forgotten` | `forget` | 0 | the team registry records were removed; panes were not stopped and the team files were not deleted | `team forget <id...>` |
+| `forget.approval-refused` | `forget` | 1 | the owner-seat request or approval for this forget was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team forget <id...> --approval <request-id>` |
+| `forget.missing` | `forget` | 1 | no team record matches an id | `team forget <id...>` |
+| `forget.refused` | `forget` | 1 | the forget was refused | `team forget <id...>` |
 | `forget.invocation` | `forget` | 2 | the invocation cannot be read | `team forget` |
 | `grant.done` | `grant` | 0 | the authority was written or already matched — the team file's grant, or a standing grant record — or a write-free preview passed | `team grant lead --scope up,down` |
 | `grant.refused` | `grant` | 1 | the caller is not the owner, the file changed during the edit, or the write failed | `team grant lead --capabilities gate,merge` |

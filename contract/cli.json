@@ -314,16 +314,16 @@
           "name": "revoke",
           "positionals": [
             {
-              "name": "id",
+              "name": "id...",
               "optional": false,
               "repeatable": false
             }
           ],
           "subcommands": [],
           "usage": [
-            "team approvals revoke <id> [--json]",
-            "team approvals revoke <id> --request [--json]",
-            "team approvals revoke <id> --approval <request-id> [--json]"
+            "team approvals revoke <id...> [--json]",
+            "team approvals revoke <id...> --request [--json]",
+            "team approvals revoke <id...> --approval <request-id> [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -337,9 +337,9 @@
       ],
       "usage": [
         "team approvals list [--json]",
-        "team approvals revoke <id> [--json]",
-        "team approvals revoke <id> --request [--json]",
-        "team approvals revoke <id> --approval <request-id> [--json]"
+        "team approvals revoke <id...> [--json]",
+        "team approvals revoke <id...> --request [--json]",
+        "team approvals revoke <id...> --approval <request-id> [--json]"
       ],
       "who": {
         "gate": "any-caller",
@@ -470,6 +470,64 @@
       "who": {
         "gate": "any-caller",
         "why": "it verifies signed ask and marker files under a key the caller already holds: no team file, no seat and no terminal is read"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--do",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--dry-run",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "batch",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team batch --request --do <command> [--json]",
+        "team batch --approval <request-id> [--dry-run] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode"
       }
     },
     {
@@ -1788,16 +1846,16 @@
       "name": "forget",
       "positionals": [
         {
-          "name": "id",
+          "name": "id...",
           "optional": false,
           "repeatable": false
         }
       ],
       "subcommands": [],
       "usage": [
-        "team forget <id> [--json]",
-        "team forget <id> --request [--json]",
-        "team forget <id> --approval <request-id> [--json]"
+        "team forget <id...> [--json]",
+        "team forget <id...> --request [--json]",
+        "team forget <id...> --approval <request-id> [--json]"
       ],
       "who": {
         "gate": "owner-only",

@@ -17,6 +17,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   archive: () => import('./commands/archive.ts'),
   approvals: () => import('./commands/approvals.ts'),
   forget: () => import('./commands/forget.ts'),
+  batch: () => import('./commands/batch.ts'),
   down: () => import('./commands/down.ts'),
   drops: () => import('./commands/drops.ts'),
   init: () => import('./commands/init.ts'),
