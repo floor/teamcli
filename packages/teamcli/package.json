@@ -1,6 +1,6 @@
 {
   "name": "@teamcli/cli",
-  "version": "0.5.4-rc.4",
+  "version": "0.5.5",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
   "engines": { "node": ">=22" },
   "type": "module",
   "publishConfig": { "access": "public" },
-  "dependencies": { "team": "0.5.4-rc.4" },
+  "dependencies": { "team": "0.5.5" },
   "bin": { "teamcli": "cli.js", "team": "cli.js" },
   "files": ["cli.js", "README.md"]
 }

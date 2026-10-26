@@ -66,32 +66,25 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 Every command, flag, refusal and exit code is in
 [the command reference](https://github.com/floor/teamcli/blob/main/docs/commands/README.md).
 
-## What's new in 0.5.3
+## What's new in 0.5.5
 
-0.5.3 adds a client send path. An owner issues a send-only grant with `team grant --client`;
-`team client keygen --out <dir>` writes the client's Ed25519 key pair, and the client signs each
-request with it through `team send --client <grant-file> --key <key-file> <address>`. A send is
-one signed record on disk, written to the orchestrator the grant names; the run prints
-`sent: <seat>@<entity> (drop <id>)` and types nothing. Every `send --client` and
-`messages --client` invocation prints `key isolation: enforced against team panes (key file still readable by same-user processes)`.
+0.5.5 moves the team's definition out of the project and into the registry
+(`~/.config/team/team-config/`). Run `team migrate` once in each project: it imports
+`.agents/team.yaml`, verifies the import, and moves the file to the Trash (`--keep-file` keeps
+it). From then on, `team config get|set|unset|edit` edits the team. Approvals are signed over
+one canonical team record, so they stay in force across the move. See
+[UPGRADE-0.5.5.md](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.5.md).
 
-This release admits client `grok-bot` for entity `floor`, addressed to
-`orchestrator@floor`; a grant written with `--inbox` also admits the client's own read and
-`--ack` through `team messages --client` (see
-[the grant reference](https://github.com/floor/teamcli/blob/main/docs/commands/grant.md)).
+A team that names an `entity` and no `session:` now runs in the session `<entity>-<project>`;
+`team check` names the move, and the team is approved again once.
 
-Client reply publication is deferred to 0.5.4; the client send and read/ack paths remain
-available in 0.5.3. Seat replies and `--close` are unchanged.
+Clients gain the `observer`, `operator`, `manager` and `developer` grant bundles, replies through
+`team reply` and `team messages --client`, and a pane guard that refuses client commands inside a
+team pane. A seat stopped at a usage wall reads as `blocked: quota`, and `team pause` can pause one
+seat.
 
-`team brief rollout` delivers the built-in general seat brief to the declared seats without a
-launch; the dry run is the default and `--apply` writes. Client grant revocation is recorded as
-owner-signed events, and a client request is revalidated against them when it lands.
-
-Key isolation is not enforced in 0.5.3, and the pane guard is deferred to 0.5.4.
-
-cross-session protection is NOT in this release.
-
-Downgrading to 0.5.2 after 0.5.3 has written revocations is NOT authority-preserving: 0.5.2 does not read those revocations, and a revoked grant can act again. No validated recovery; prefer a forward fix (0.5.3.x) over a downgrade.
+Downgrading to 0.5.3 after a team has been migrated is NOT supported: 0.5.3 reads only the file.
+Keep the file with `team migrate --keep-file` if you may need to go back.
 
 The full list is in [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
 

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-26
+
+0.5.5 moves the team's definition into the registry. The team is read from and written to
+`~/.config/team/team-config/`, approvals are signed over one canonical team record instead of
+the file's text, and `team migrate` imports `.agents/team.yaml` and retires it. It also brings
+client grant bundles and replies, the message-display wake line, a usage wall read as
+`blocked`, and the dry workflow runner. 0.5.4 was never published as a stable release: its
+release candidates are folded in here.
+
+### Upgrade notes
+
+- Run `team migrate` in each project, from a terminal outside herdr. It verifies the import,
+  then moves `.agents/team.yaml` to the Trash (or renames it `.migrated`); `--keep-file` keeps
+  it. A team not yet migrated is imported by the first owner `team up`.
+- Approve the team again once with the owner seat if `team check` says so: the default session
+  moved to `<entity>-<project>`, and approvals made before canonical signing are rewritten in
+  the canonical form at the next approval. An approval made on 0.5.5 stays in force across
+  `team migrate`.
+- See [UPGRADE-0.5.5.md](UPGRADE-0.5.5.md).
+
+### Breaking changes
+
+- **Behavior change: the default session is `<entity>-<project>`.** A team file that names an
+  `entity` and omits `session:` now runs in the herdr session `<entity>-<project>` instead of the
+  project name alone, so two entities' teams of the same project no longer share one session. A
+  file without an entity keeps the project name, and `session:` still overrides the default per
+  team. `session` is an owner section, so an affected team must be approved again: `team check`
+  (as a note) and the approval comparison name the move as `` `session` changed: "web" ->
+  "acme-web" `` and say to approve again, or to set `session: web` to keep the old one;
+  `team status` does not compare approvals, and `team approve` is gone.
+- **The team is read from the registry.** Under the registry source (`team-config.source: registry`)
+  `.agents/team.yaml` is no longer read; a leftover file is named by one
+  line in `team up`, `team check` and `team status`. Edit the team with `team config`.
+
 ### Added
 
 - **The `manager` client grant bundle.** `team grant --client <id> --entity <entity> --public-key <file>
@@ -35,6 +69,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values read as YAML, and `edit` opens the whole record in `$EDITOR`. Every write is validated
   first, is the owner's, and names what the approval no longer covers. See
   [team config](docs/commands/config.md).
+- **The registry read and write path.** `team-config.source`, `team import` and `team migrate`
+  read the team from the registry; `team init`, `team add`, `team remove` and the other writers
+  write the registry record, with `created_by`, the restore check and the policy read.
+- **Client grant bundles.** `observer` and `operator` bundles, client `up`/`down`/`send`/`status`
+  forms, and a policy cap on a client grant's duration.
+- **Seat-to-client replies** through `team reply` and `team messages --client`; client commands
+  are refused inside a team pane.
+- **The message-display wake line.** A send's wake line names how the message is displayed.
+- **A usage wall reads as `blocked: quota`**, and `team pause` can pause one seat.
+- **`team archive`** snapshots a team into an archive, and `team init` can start from one.
+- **`team status` counts unclaimed backlog items** beside the queue depths.
+- **`team doctor --jules`** names the Jules CLI's missing step.
+- **Workflows:** the definition schema, the statechart core, `team workflow check`, waits and
+  timers, the dry runner, and `team workflow run --dry` and replay.
+- **Watch:** the aggregate watch report, ownership that survives a restart, recovery of a hosted
+  watch that leaves, and the scoped fault-watch diagnostic.
+- **Restore:** every drifted seat restored in one pass, with a one-line summary.
+- An optional `issue_tracker` field on the team record; a real-CLI capture corpus per tested
+  version; recognition of the Cursor 2026.10.19 and Muse 1.4.11 ready screens.
 
 ### Changed
 
@@ -51,10 +104,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Deprecated: the `file` source and `--file`.** `team-config.source: file` and `--file` remain
   as a legacy and test path only. `team init` writes the registry and never a file under the
   registry source.
+- **Behavior change: approvals are signed over one canonical team record**
+  (`team-record-c14n-v1`), not the file text, so formatting and comments do not invalidate an
+  approval. Older approvals verify through a compatibility path.
+- The team's configuration is read through one seam; pull-request CI runs diff-targeted tests,
+  and the full suite runs on main.
+- The installer refuses an older version unless a rollback is declared, and reports what it
+  actually did after dispatch. The CLI package ships no type declarations and a reproducible gzip
+  layer.
+- Seats never run commands that print credentials.
 
 ### Fixed
 
 - A team file's `clients:` section added or edited after the last approval is honoured as the live file writes it while the approval standing is verified, like `watch` and `budgets`; an unverified standing falls back to the default seats. It was refused since `team approve` was removed.
+- The team's own writes land whole, and a torn read is retried.
+- A registry model is marked declared when the screen is unread; a launch line the entity model
+  rule disallows is refused.
+- Faint text in every profile's input box counts as empty; Muse 1.4.11's typed line is read back.
+- A client-origin unread message is reported to the lead alone; a client grant's drop goes through
+  the coordinator's order.
+- An error above a completed turn and a ready composer is history, not the seat state; a missing
+  completion keeps an error on the live screen.
+- `team up` keeps the bound registry record and cleans a partial relaunch; a non-working restored
+  identity is held, not reported ready.
+- `team check` names the default-session move; the current project's approval store is read.
 
 ## [0.5.3] - 2026-10-21
 
@@ -110,15 +183,6 @@ whose running model has drifted is held rather than delivered.
   until its next start.
 
 ### Changed
-
-- **Behavior change: the default session is `<entity>-<project>`.** A team file that names an
-  `entity` and omits `session:` now runs in the herdr session `<entity>-<project>` instead of the
-  project name alone, so two entities' teams of the same project no longer share one session. A
-  file without an entity keeps the project name, and `session:` still overrides the default per
-  team. `session` is an owner section, so an affected team must be approved again: `team check`
-  (as a note) and the approval comparison name the move as `` `session` changed: "web" ->
-  "acme-web" `` and say to approve again, or to set `session: web` to keep the old one;
-  `team status` does not compare approvals, and `team approve` is gone.
 
 - **Admission is bound to the declared roster.** A caller reaches the targets the team file
   declares: the owner any agent; an orchestrator another orchestrator of its own team or
