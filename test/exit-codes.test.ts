@@ -3700,7 +3700,7 @@ scene('pause.io', async (place) => {
 scene('pause.file', async (place) => show(await pausedTeam(place, []), 'no team file'));
 scene('pause.team', async (place) => {
   write(place, TEAM);
-  return show(await pausedTeam(place, ['other']), 'no team named "other" is registered on this machine');
+  return show(await pausedTeam(place, ['other']), 'no seat named "other" is declared in acme, and no registered team has that name');
 });
 scene('pause.invocation', async (place) => {
   write(place, TEAM);
@@ -3738,7 +3738,7 @@ scene('resume.io', async (place) => {
 scene('resume.file', async (place) => show(await resumedTeam(place, []), 'no team file'));
 scene('resume.team', async (place) => {
   write(place, TEAM);
-  return show(await resumedTeam(place, ['other']), 'no team named "other" is registered on this machine');
+  return show(await resumedTeam(place, ['other']), 'no seat named "other" is declared in acme, and no registered team has that name');
 });
 scene('resume.invocation', async (place) => {
   write(place, TEAM);
