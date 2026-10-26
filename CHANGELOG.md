@@ -30,6 +30,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `register`, `client`, `init`) stay out of every bundle. The other developer ops are listed in the grant and
   admit nothing until their route is wired. See [Client grant bundles](docs/concepts/client-grant-bundles.md#the-developer-bundle).
 
+- **`team config get|set|unset|edit` edits the team's record.** One schema-validated editor for
+  what `.agents/team.yaml` used to hold: dotted paths (`seats.lead.model`, `watch.unread_after`),
+  values read as YAML, and `edit` opens the whole record in `$EDITOR`. Every write is validated
+  first, is the owner's, and names what the approval no longer covers. See
+  [team config](docs/commands/config.md).
+
+### Changed
+
+- **Behavior change: `team migrate` retires `.agents/team.yaml`.** After the import is read back
+  and verified, the file is moved to the system Trash, or renamed to
+  `.agents/team.yaml.migrated` when no Trash can be reached; it is never deleted. `--keep-file`
+  leaves it. A second run retires a leftover that matches the registry and refuses one that
+  does not. The approval stays in force: it is signed over the canonical record. See
+  [UPGRADE-0.5.5.md](UPGRADE-0.5.5.md).
+- **A team still in its file is imported by `team up`.** The owner's `team up` on a team the
+  registry does not hold imports `.agents/team.yaml` first and says so on one line; the file is
+  kept until `team migrate`. A leftover file beside a registry team is named by one line in
+  `team up`, `team check` and `team status`, which do not refuse.
+- **Deprecated: the `file` source and `--file`.** `team-config.source: file` and `--file` remain
+  as a legacy and test path only. `team init` writes the registry and never a file under the
+  registry source.
+
 ### Fixed
 
 - A team file's `clients:` section added or edited after the last approval is honoured as the live file writes it while the approval standing is verified, like `watch` and `budgets`; an unverified standing falls back to the default seats. It was refused since `team approve` was removed.

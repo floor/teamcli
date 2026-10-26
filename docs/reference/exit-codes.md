@@ -169,7 +169,20 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
+| `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
+| `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
+| `config.written` | `config` | 0 | the change validated and was written | `team config set watch.unread_after 5m` |
+| `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
+| `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
+| `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
+| `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
+| `config.path` | `config` | 1 | the path cannot be set (a value on the way, or no such list item); nothing was written | `team config set seats.ghost.cli claude` |
+| `config.editor` | `config` | 2 | the editor exited non-zero; nothing was written | `team config edit` |
 | `config.invocation` | `config` | 2 | the invocation is not one of the command's forms | `team config` |
+| `config.no-record` | `config` | 2 | the team's record could not be read for an edit | `team config get project` |
+| `config.no-team` | `config` | 2 | no team is found for this folder to read or edit | `team config get project` |
+| `config.unreadable` | `config` | 2 | the team's record cannot be read | `team config get project` |
+| `config.usage` | `config` | 2 | a get, set, unset or edit invocation is not one of its forms, or the path does not parse | `team config set watch` |
 | `conformance-adapter.finished` | `conformance-adapter` | 0 | the protocol finished | `team conformance-adapter` |
 | `daemon.already-running` | `daemon` | 0 | a machine daemon is already answering; nothing second was started | `team daemon run` |
 | `daemon.dry-run` | `daemon` | 0 | the install plan was printed and nothing was written | `team daemon install --dry-run` |
@@ -337,8 +350,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.client-usage` | `messages` | 2 | the client invocation can't be read | `team messages --client client-grant.json` |
 | `messages.invocation` | `messages` | 2 | the invocation can't be read | `team messages extra` |
 | `messages.not-a-repo` | `messages` | 2 | not inside a git repository | `team messages` |
-| `migrate.done` | `migrate` | 0 | the team is in the registry, or would be with --dry-run | `team migrate` |
-| `migrate.already-migrated` | `migrate` | 1 | the team was already moved to the registry; team import replaces the record | `team migrate` |
+| `migrate.done` | `migrate` | 0 | the team is in the registry (or would be, with --dry-run), and its team file was moved to the Trash, renamed, kept with --keep-file, or already gone | `team migrate` |
+| `migrate.already-migrated` | `migrate` | 1 | the registry already holds the team and the file left beside it says something else; team import replaces the record | `team migrate` |
 | `migrate.detached` | `migrate` | 1 | the owner-only act was run with no terminal | `team migrate` |
 | `migrate.not-owner` | `migrate` | 1 | the caller is not the owner | `team migrate` |
 | `migrate.invalid` | `migrate` | 2 | the team file is missing or does not validate | `team migrate` |

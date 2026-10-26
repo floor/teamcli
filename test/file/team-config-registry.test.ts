@@ -7,7 +7,7 @@ import { runTeamImport as run } from '../../src/commands/migrate.ts';
 import { readArgs } from '../../src/args.ts';
 const EXIT = { done: 0, detached: 1, 'not-owner': 1, 'already-migrated': 1, invocation: 2, invalid: 2, registry: 2, 'round-trip': 2 } as const;
 const runTeamImport = async (mode: 'migrate' | 'import', argv: string[], io: Parameters<typeof run>[3], sources: Parameters<typeof run>[4]) =>
-  EXIT[await run(mode, argv, readArgs(argv, [], ['json', 'dry-run']), io, sources)];
+  EXIT[await run(mode, argv, readArgs(argv, [], ['json', 'dry-run', 'keep-file']), io, sources)];
 import {
   DEFAULT_TEAM_CONFIG_SOURCE,
   leftoverDifferences,
@@ -102,7 +102,7 @@ describe('reading from the registry', () => {
   test('team migrate imports once, reads back, and every read then comes from the registry', async () => {
     const { home, root } = scene();
     const io = testIo(root, OWNER);
-    expect(await runTeamImport('migrate', [], io, { home, now: NOW })).toBe(0);
+    expect(await runTeamImport('migrate', ['--keep-file'], io, { home, now: NOW })).toBe(0);
     expect(io.out).toContain('read back and verified');
     const read = readTeamConfig(root, registry(home));
     expect(read.ok).toBe(true);
@@ -111,13 +111,15 @@ describe('reading from the registry', () => {
     expect(read.team.project).toBe('acme');
     expect(read.leftover).toEqual({ path: join(root, '.agents', 'team.yaml'), matches: true });
     expect(leftoverDifferences(read.leftover)).toEqual([]);
-    // The file stays; nothing is deleted.
+    // With --keep-file the file stays; without it, it is retired, never deleted (test/registry-only.test.ts).
     expect(existsSync(join(root, '.agents', 'team.yaml'))).toBe(true);
   });
 
-  test('a second migrate is refused and names team import', async () => {
+  test('a second migrate over a file that now differs is refused and names team import', async () => {
     const { home, root } = scene();
-    await runTeamImport('migrate', [], testIo(root, OWNER), { home, now: NOW });
+    await runTeamImport('migrate', ['--keep-file'], testIo(root, OWNER), { home, now: NOW });
+    const file = join(root, '.agents', 'team.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('project: acme', 'project: acme-two'));
     const io = testIo(root, OWNER);
     expect(await runTeamImport('migrate', [], io, { home, now: NOW })).toBe(1);
     expect(io.err).toContain('team import');

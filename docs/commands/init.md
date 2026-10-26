@@ -1,5 +1,10 @@
 # team init
 
+Under the registry source (the default since 0.5.5), `team init` writes the new team into the
+registry and never writes `.agents/team.yaml`; edit it afterwards with [`team config`](config.md).
+The file it describes below is written only on the legacy `file` source (`team-config.source:
+file`), which is deprecated and kept for tests and snapshots.
+
 Writes the team file: a skeleton for this project, or with `--restore` the copy of
 `.agents/team.yaml` this machine stored. It also lists the team file and its runtime
 files in `.git/info/exclude`, so git never sees them and a fresh clone never carries them. The owner

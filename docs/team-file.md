@@ -1,5 +1,12 @@
 # The team file
 
+> **Since 0.5.5 the team lives in the registry, not in this file.** Run [`team migrate`](commands/migrate.md)
+> once in each project: it imports `.agents/team.yaml`, verifies it, and moves the file to the
+> Trash. Edit the team afterwards with [`team config get|set|unset|edit`](commands/config.md).
+> This page still documents the record's format — the registry holds the same YAML — and the
+> legacy `file` source (`team-config.source: file`) and `--file`, which are deprecated and kept for
+> tests and snapshots. See [UPGRADE-0.5.5.md](../UPGRADE-0.5.5.md).
+
 `team` reads one team file per clone: `.agents/team.yaml` under the project root, or the path
 `--file` names. It is a documented subset of YAML, read by the library's own parser — maps, lists,
 one-line `{ }` and `[ ]`, plain and quoted values, comments; anchors, aliases, merge keys, tags,

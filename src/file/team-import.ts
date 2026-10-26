@@ -7,11 +7,12 @@
 // the registry source and compared with the file by canonical record (`team-record-c14n-v1`):
 // the round trip either verifies or the command says it did not. The file is never deleted here.
 
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { CANONICAL_RECORD_VERSION } from './canonical-record.ts';
 import { findRoot, loadTeamText, TEAM_FILE } from './load.ts';
-import { canonicalTeam, readTeamConfig } from './team-config.ts';
+import { canonicalTeam, readTeamConfig, resolveTeamConfigSource } from './team-config.ts';
 import type { Problem } from './types.ts';
 import {
   readStoredTeamConfig,
@@ -123,4 +124,25 @@ export function importTeamFile(options: ImportOptions): ImportOutcome {
     };
   }
   return { ok: true, action: 'imported', ...base, record, replaced: existing !== null, verified: true };
+}
+
+/** `team up` on a team the registry does not hold yet, whose definition is still in this
+ *  checkout's `.agents/team.yaml`: the owner's run imports it first, as `team migrate` would, and
+ *  says so; the file is kept (team migrate retires it). Null when there is nothing to do, or when
+ *  the import does not verify — the read that follows then refuses in its own words. */
+export function importForUp(cwd: string, home: string | undefined, dryRun: boolean, now: Date = new Date()): string | null {
+  const where = home ?? homedir();
+  const resolution = resolveTeamConfigSource({ home: where });
+  if (!resolution.ok || resolution.source !== 'registry') return null;
+  const root = findRoot(cwd) ?? real(cwd);
+  if (!existsSync(join(root, TEAM_FILE))) return null;
+  try {
+    if (readStoredTeamConfig(where, teamIdOf(root)) !== null) return null;
+  } catch {
+    return null;
+  }
+  if (dryRun) return `this team is not in the registry yet: a real run imports ${TEAM_FILE} first (team migrate)`;
+  const moved = importTeamFile({ cwd, home: where, mode: 'migrate', now });
+  if (!moved.ok) return null;
+  return `this team was not in the registry yet: imported ${TEAM_FILE} (team ${moved.id}), read back and verified; the file is no longer read: run \`team migrate\` to move it to the Trash`;
 }

@@ -211,11 +211,15 @@ function buildGates(): Record<string, Gate> {
     },
     config: {
       kind: 'any-caller',
-      why: 'it lists the settings registry the release ships and changes nothing: the registry is the same for every project, and no team file, seat or terminal is read',
+      why: 'with no subcommand it only prints its usage; each subcommand carries its own gate: keys and get read and change nothing, set, unset and edit are the owner\'s',
     },
     'config:keys': {
       kind: 'any-caller',
-      why: 'the listing is the command\'s only verb and reads the registry only: no team file, seat or terminal is read',
+      why: 'the listing reads the settings registry only: no team, seat or terminal is read',
+    },
+    'config:get': {
+      kind: 'any-caller',
+      why: 'it prints one value of the team\'s record and changes nothing, as reading the team file did',
     },
     'development-mode': {
       kind: 'any-caller',
@@ -367,6 +371,18 @@ function buildGates(): Record<string, Gate> {
     import: {
       kind: 'owner-only',
       why: 'the team\'s configuration is the owner\'s: making a file its registry record is the owner\'s act, from a terminal outside herdr',
+    },
+    'config:set': {
+      kind: 'owner-only',
+      why: 'the team\'s record is the owner\'s: editing it is the owner\'s act, as editing the team file was, from a terminal outside herdr',
+    },
+    'config:unset': {
+      kind: 'owner-only',
+      why: 'the team\'s record is the owner\'s: editing it is the owner\'s act, as editing the team file was, from a terminal outside herdr',
+    },
+    'config:edit': {
+      kind: 'owner-only',
+      why: 'the team\'s record is the owner\'s: editing it is the owner\'s act, as editing the team file was, from a terminal outside herdr',
     },
     migrate: {
       kind: 'owner-only',

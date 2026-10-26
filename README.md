@@ -100,6 +100,7 @@ The full list is in [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CH
 - [The team file](https://github.com/floor/teamcli/blob/main/docs/team-file.md) — the format by example, then every section field by field.
 - [The command reference](https://github.com/floor/teamcli/blob/main/docs/commands/README.md) — every command, flag, refusal and exit code.
 - [Upgrading to 0.5](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.md) — from 0.3.5 or 0.4.x.
+- [Moving to 0.5.5](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.5.md) — run `team migrate` once in each project.
 - [Security](https://github.com/floor/teamcli/blob/main/SECURITY.md) — report a weakness in private.
 
 The project is TeamCLI; the site is [teamcli.io](https://teamcli.io) and the founding text is

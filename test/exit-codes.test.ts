@@ -2273,6 +2273,55 @@ scene('seats.not-yours', async (place) => {
   }
   scene('config.invocation', async (place) => show(await configRun(place, []), 'a subcommand is required'));
   scene('config.shown', async (place) => show(await configRun(place, ['keys']), 'delivery_order'));
+  async function recordRun(place: Place, argv: readonly string[], caller: Caller = owner, editor?: (path: string) => number, registry = false): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    const env = { ...process.env, TEAM_CONFIG_SOURCE: registry ? 'registry' : 'file' };
+    return { code: await runConfig([...argv], io, { home: place.home, env, now: () => NOW, ...(editor ? { editor } : {}) }), out: io.out, err: io.err };
+  }
+  scene('config.usage', async (place) => show(await recordRun(place, ['set', 'watch']), 'a value is required'));
+  scene('config.no-team', async (place) => show(await recordRun(place, ['get', 'project']), 'no team is registered'));
+  scene('config.unreadable', async (place) => {
+    write(place, TEAM);
+    await imported(place, 'migrate', []);
+    corruptTeamRecord(place);
+    return show(await recordRun(place, ['get', 'project'], owner, undefined, true), 'cannot be read');
+  });
+  scene('config.no-value', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['get', 'watch.missing']), 'watch.missing is not set');
+  });
+  scene('config.value', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['get', 'project']), 'acme');
+  });
+  scene('config.detached', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'project', 'other'], detachedCaller), 'terminal');
+  });
+  scene('config.not-owner', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'project', 'other'], other), "only the owner edits the team's record");
+  });
+  scene('config.editor', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['edit'], owner, () => 3), 'the editor exited 3');
+  });
+  scene('config.path', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'seats.ghost.cli', 'claude-code']), 'has no item named "ghost"');
+  });
+  scene('config.unchanged', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'project', 'acme']), 'nothing changed');
+  });
+  scene('config.invalid', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'format', '9']), 'does not validate');
+  });
+  scene('config.written', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'seats.lead.label', 'boss']), 'set seats.lead.label');
+  });
 }
 
 /** A home whose registry holds the owner's key and one registered `lead` agent in the roster,
@@ -6210,7 +6259,8 @@ scene('migrate.done', async (place) => {
 });
 scene('migrate.already-migrated', async (place) => {
   write(place, TEAM);
-  await imported(place, 'migrate', []);
+  await imported(place, 'migrate', ['--keep-file']);
+  write(place, TEAM.replace('project: acme', 'project: acme-other'));
   return show(await imported(place, 'migrate', []), 'team import');
 });
 scene('migrate.detached', async (place) => {
@@ -6250,7 +6300,7 @@ scene('import.invalid', async (place) => {
 });
 scene('import.invocation', async (place) => show(await imported(place, 'import', ['a', 'b']), 'unexpected "b"'));
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write']);
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));

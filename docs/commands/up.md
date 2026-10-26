@@ -40,6 +40,24 @@ expected id by another file, a link, a folder or a FIFO is refused, never replac
 only [`team brief rollout --apply`](brief.md) recovers that delivery at the claim's next attempt.
 [`team check`](check.md) names a seat the session launched without a verified delivery record.
 
+## A team still in its file
+
+Since 0.5.5 the team lives in the registry. When the owner runs `team up` in a project whose
+team the registry does not hold yet, and `.agents/team.yaml` is there, the run imports the file
+first — the same import, read-back and canonical-record check as `team migrate` — and says so on
+one line: `team up: this team was not in the registry yet: imported .agents/team.yaml (team
+<id>), read back and verified; the file is no longer read: run team migrate to move it to the
+Trash`. The file is kept; `team migrate` retires it. A dry run says a real run would import, and
+imports nothing. A seat's run, or a run with `--file`, never imports.
+
+When the registry holds the team and a `.agents/team.yaml` is still beside it, the run prints one
+line naming `team migrate`, and goes on: the file is not read. `team check` and `team status`
+print the same line as a note. A leftover file that says something else than the registry is a
+difference in `team check` and `team status`, with `team import` as the repair.
+
+`--file` is a deprecated legacy path, kept for tests and snapshots: it reads the file it names,
+whatever the source.
+
 ## Synopsis
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
@@ -52,7 +70,7 @@ only [`team brief rollout --apply`](brief.md) recovers that delivery at the clai
 | `--dry-run` | — | prints the plan and runs nothing; prints the refusals the real run would stop on as `! up would refuse: …` above it, and, for a caller the run does not admit, `! to unblock: …` with the command that admits it |
 | `--serial` | — | launches and waits on one seat at a time instead of concurrently |
 | `--session` | `<name>` | the herdr session to start, instead of `team.session`; the owner's alone |
-| `--file` | `<path>` | the team file, instead of `.agents/team.yaml`; the owner's alone |
+| `--file` | `<path>` | deprecated: read the team from this file instead of the registry (tests, snapshots); the owner's alone |
 | `--client` | `<grant-file>` | the client form: an owner-signed up grant for one team, see [A client's up grant](#a-clients-up-grant) |
 | `--key` | `<client-key>` | the client's private key file, which proves the client holds the key the grant names; required with `--client`, refused without it |
 | `--team` | `<team>` | with `--client`, the team the grant is for, so the run can be made from outside its folder |

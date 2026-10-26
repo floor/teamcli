@@ -30,7 +30,7 @@ import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
 import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
-import { leftoverDifferences } from '../file/team-config.ts';
+import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -461,7 +461,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     swaps: Object.keys(whole.swaps ?? {}),
   });
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);
+  const leftoverLine = leftoverNote(current.leftover);
   const idleNotes = [
+    ...(leftoverLine !== null ? [leftoverLine] : []),
     ...(idleWork !== undefined ? idleWorkNotes(idleWork) : []),
     ...greenNotes(green),
     // The daemon's reading: a note only when there is something to act on. A daemon that is
