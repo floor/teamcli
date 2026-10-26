@@ -14,7 +14,7 @@
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
-import { notInForce } from '../approve/approval.ts';
+import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -485,6 +485,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...delegateNotes(team),
     ...leadNameNotes(team),
     ...leadRoleNotes(team),
+    // The default session moved to <entity>-<project>: the line the approval's own comparison
+    // names, so the owner sees the old and the new session before the next launch.
+    ...sessionDefaultMoveNotes(standing, team),
     ...lobbyNotes(team, root, sources.home, session),
     ...policyChecked.notes,
     ...modelRule.notes,
