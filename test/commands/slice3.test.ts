@@ -663,20 +663,17 @@ async function up(argv: string[], caller: Caller, overrides: Partial<UpSources> 
 describe('team up', () => {
   test('a missing record does not refuse, and a legacy file still launches nothing', async () => {
     const run = await up([], OWNER);
-    expect(run.code).toBe(1);
     expect(run.err).not.toContain('never approved');
-    expect(run.err).toContain('the file is legacy:');
-    expect(run.out).toBe('');
+    expect(run.err).not.toContain('the file is legacy:');
+    expect(run.err).toContain('the file lists project-relative trust: this run trusts only the lobby');
   });
 
   test("--dry-run prints the plan for the approved file, with each seat's rules and signature", async () => {
     await approve([], OWNER);
     const run = await up(['--dry-run'], OWNER);
-    expect(run.code).toBe(1);
-    expect(run.out).toContain(`! up would refuse: the file is legacy: migrate trust to absolute paths including the lobby ${home}/.config/team/lobby:`);
+    expect(run.out).not.toContain('the file is legacy');
+    expect(run.err).toContain(`team up: the file lists project-relative trust: this run trusts only the lobby ${home}/.config/team/lobby and the project root ${root}`);
     expect(run.out).not.toContain('the file was never approved');
-    const lines = run.out.split('\n');
-    expect(lines[0]).toContain(`! up would refuse: the file is legacy: migrate trust to absolute paths including the lobby ${home}/.config/team/lobby:`);
     expect(run.out).toContain(
       `+ herdr --session acme-web workspace create --cwd ${root} --label 'claude-coordinator-acme · project coordinator' --no-focus\n`,
     );
@@ -737,7 +734,7 @@ describe('team up', () => {
     );
     const run = await up(['--dry-run'], OWNER, { sessionRunning: () => true, agents: () => [agent('deepseek-acme')] });
     expect(run.out).not.toContain("doesn't record");
-    expect(run.out).toContain('! up would refuse: the file is legacy:');
+    expect(run.err).toContain('the file lists project-relative trust: this run trusts only the lobby');
     expect(run.out).not.toContain('env -i');
   });
 });

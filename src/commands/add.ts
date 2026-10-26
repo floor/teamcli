@@ -26,7 +26,7 @@ import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts
 import { placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { migrationText } from '../file/migrate.ts';
+import { derivedTrust, migrationText } from '../file/migrate.ts';
 import { isLegacyTrust, isMigratedTrust } from '../file/paths.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
@@ -47,7 +47,9 @@ import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBin
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule } from '../launch/model-guard.ts';
-import { lobbyPretrustLine } from '../launch/pretrust.ts';
+import { lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
+import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { formatPlan, upPlan, type UpSeat } from '../launch/plan.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
@@ -73,6 +75,8 @@ import { registerInbox } from '../mcp/register.ts';
 import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 
 export type AddSources = {
+  /** The credential store an owner-seat answer's signer key is confirmed against. Absent: the system one. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   home: string;
   getuid?(): number;
   fs?: FsReader;
@@ -150,6 +154,10 @@ export const USAGE = `Usage: team add <name> [--like <seat>] [--model <model>] [
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+       team add <name> [--like <seat>] --request [--json]
+       team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
+
+The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, never starts the orchestrator or the operator, and does not touch the approval record: the roster change is for the owner to approve with the owner seat, and the run says so.
 
@@ -196,7 +204,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Every line this run writes goes through the cleaned writers from here; the raw pair stays
   // reachable for the progress writer alone, which draws its own `\r\x1b[K` on a TTY.
   const out = cleanedIo(wantsJson ? { ...io, stdout: collectInto(finalRecords), stderr: collectInto(jsonNotes) } : io);
-  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team'], ['temporary', 'dry-run', 'json']);
+  const args = readArgs(argv, ['like', 'until', 'worktree', 'model', 'effort', 'session', 'file', 'client', 'key', 'team', 'approval'], ['temporary', 'dry-run', 'json', 'request']);
   const json = wantsJson;
   // The one refusal of the client form, at every site.
   const clientRefused = (message: string): number => {
@@ -236,11 +244,25 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     if (!wantsJson) io.stderr(`client grant ${clientRun.grant.grantId}: ${clientRun.grant.clientId} for team ${clientRun.grant.up.project} at ${clientRun.root}, until ${clientRun.grant.expires}\n`);
   }
   const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
+  // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
+  // returns; `--approval <id>` admits this run when the owner seat signed for exactly it.
+  const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
+    ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
+    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, sources);
+  if (seatStep.kind === 'requested') {
+    // exit: add.approval-requested
+    return 0;
+  }
+  if (seatStep.kind === 'refused') {
+    // exit: add.approval-refused
+    return 1;
+  }
+  const seatApproved = seatStep.kind === 'admitted';
   // No create-grant admits a run with no terminal: the record matches the caller's own registry
   // record, and a caller outside herdr has none. This sentence is answered before any file is
   // read, as `down` and `init` ask it; the route names who may run it, so the sentence does not
   // send every reader to the owner.
-  const detached = clientRun !== null ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
+  const detached = clientRun !== null || seatApproved ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or an approved delegate', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'add', { id: 'add.detached', message: detached, repair: null });
     // exit: add.detached
@@ -386,7 +408,9 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // granted seat's or an approved delegate's, as `remove`'s own gate says, so a run naming a
   // lead seat is not admitted by the record and the ordinary caller refusal below stands.
   const leadSeat = !temporary && isLeadSeat(team, args.rest[0] ?? '');
-  const createGranted = clientRun !== null || (mayChange.kind !== 'ok'
+  // An owner-seat approval for this run, or a signed always rule asked only where the ordinary
+  // rule refused, admits it the way a create-grant does.
+  const createGranted = clientRun !== null || seatApproved || (mayChange.kind !== 'ok' && !leadSeat && ownerSeatRuleAdmits('team-add', root, dry, sources)) || (mayChange.kind !== 'ok'
     && !leadSeat
     && readEntityCreateGrants(sources.home).length > 0
     && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));
@@ -728,8 +752,14 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // Paths a shipped CLI reads at start. The lobby is checked only when this seat is about
   // to launch there, after `wouldLaunch` is known, so a dry run refuses in the same words.
   const startupReads = shippedStartupReads();
-  if (!prepared.team.trust || prepared.team.trust.length === 0 || isLegacyTrust(prepared.team.trust)) {
-    startProblem = `the file is legacy: migrate trust to absolute paths including the lobby ${lobby}:\n${migrationText(runTeam, root, sources.home)}`;
+  // Missing or project-relative trust is not a refusal: this run trusts the lobby and the project
+  // root, both absolute, and says so once (src/file/migrate.ts derivedTrust). The file is not edited for it.
+  const derived = derivedTrust(runTeam, root, sources.home);
+  if (derived !== null) {
+    prepared.team.trust = derived.trust;
+    runTeam.trust = derived.trust;
+    if (json) jsonNotes.push(`team add: ${derived.warning}`);
+    else out.stderr(`team add: ${plainText(derived.warning)}\n`);
   }
   // Where the seat waits: the lobby the gate verified, or a refusal — before the file is edited.
   const start: SeatStart = startProblem
@@ -1032,6 +1062,8 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         { write: true, now: sources.now() },
       );
       if (line) return refusePretrust(io, json, built.name, line, false);
+      // A seat that starts in the project root: its CLI's folder question is pre-accepted too.
+      projectRootPretrust(seatForPlan, sources.home ?? homedir(), { now: sources.now(), root });
     }
     if (decision.kind === 'unknown') out.stderr(`${plainLine(built.name)}: ${plainText(decision.text)}\n`);
     // The audit line, exactly at the effects boundary: a delegated run that reaches here is

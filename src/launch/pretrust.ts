@@ -71,6 +71,27 @@ function startsFresh(seat: PretrustSeat): boolean {
   return seat.budget?.kind !== 'refuse';
 }
 
+/** Writes the trust record of a launching seat that starts in the team's project root, in the
+ *  record its CLI already reads (the file `--trust` or the CLI's own dialog writes), so no folder
+ *  question waits in its pane and nothing is ever typed into it. Only the project root: a seat
+ *  starting anywhere else, a lobby seat (`lobbyPretrustLine` owns that), a seat that does not
+ *  start now, or a CLI with no captured record writes nothing. A record that cannot be written is
+ *  not a refusal: the seat starts, and its dialog is handled the way it was before. True when the
+ *  record is written or already held. */
+export function projectRootPretrust(seat: PretrustSeat, home: string, opts: { now: Date; root: string }): boolean {
+  if (seat.lobby || !isAbsolute(seat.cwd) || !startsFresh(seat)) return false;
+  const writer = WRITERS[seat.cli];
+  if (!writer) return false;
+  try {
+    const folder = realpathSync(seat.cwd);
+    if (folder !== realpathSync(opts.root)) return false;
+    writer(folder, home, opts.now);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** What a create-grant run may trust beyond the lobby: the seat's own start folder (the
  *  project, for a lead). `covers` says the grant that admitted the run names the folder in its
  *  paths; `listed` says the team file's `trust:` does. Both must hold. */

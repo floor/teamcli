@@ -74,6 +74,26 @@ when already done). Before running it, Iris can show you the exact prompts with 
 Under the relaxed profile step 2 disappears: Iris runs `--request` then `--execute`, and the audit
 records `via: security-profile`.
 
+## A test team, created and started with one answer (no terminal)
+
+What Iris runs, in the new repository (say `~/Code/floor/demo`):
+
+1. `team owner-seat serve` (if the page is not already up) and sends you its link.
+2. `team init --request --then-up` — one request for "create the team, then start the team".
+3. Waits for your answer, then `team init --execute <id>` and `team up --approval <id>`.
+
+What you see, and all you do: the owner page shows one card,
+*"Request oa_…: seat:iris asks to create the team, then start the team — team "demo" in
+/Users/…/floor/demo (HEAD …). Authorized? oui, always, or non."*, with **Oui**, **Toujours** and
+**Non**. You tap **Oui** and confirm with Touch ID on the Mac, or with your iPhone (the browser's
+QR code for the passkey). The card disappears. Nothing else: no terminal, no code, no question in
+a pane — the seats' folder-trust questions for the lobby and the project are pre-accepted at
+launch, and a file without absolute `trust:` no longer stops `up`.
+
+`team import --request`, `team add <name> --request` and `team up --request` work the same way for
+an existing team ([team up](commands/up.md#owner-seat-approval-no-owner-terminal)). **Toujours**
+covers every sibling repository of the parent folder for that action from then on.
+
 ## Security profile
 
 `security-profile` is a policy with two values, `strict` (default) and `relaxed` (alias `dev`).

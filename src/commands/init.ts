@@ -4,7 +4,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
-import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -183,7 +184,7 @@ export const init: Command = (argv, io) => runInit(argv, io, undefined, undefine
 export default init;
 
 export const USAGE = `Usage: team init [--restore] [--from-archive <folder>] [--json]
-       team init --request [--json]
+       team init --request [--then-up] [--json]
        team init --execute <request-id> [--json]
        team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
        team init --approvals [--json]
@@ -208,7 +209,7 @@ export async function runInit(
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope'], ['restore', 'json', 'request', 'approvals', 'approval-modes']);
+  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope'], ['restore', 'json', 'request', 'approvals', 'approval-modes', 'then-up']);
   const approving = args.values['approve-as-owner-seat'] !== undefined;
   if (args.error || (args.rest.length && !(approving && args.rest.length === 1))) {
     refuse(io, json, 'init', {
@@ -246,7 +247,14 @@ export async function runInit(
     if (root === null) actionRefusal('not inside a git repository');
     else if (existsSync(join(root, TEAM_FILE))) actionRefusal(`${TEAM_FILE} exists already`);
     else {
-      const made = createTeamCreateRequest(actionHome, root, git(root, 'rev-parse', 'HEAD'), now);
+      // `--then-up` bundles the first `team up` into the same request: one owner-seat answer
+      // creates the team and starts it (src/client/owner-action.ts).
+      const made = args.flags.has('then-up')
+        ? createOwnerActionRequest(actionHome, {
+          actions: ['team-create', 'team-up'], root, team: basename(root), head: git(root, 'rev-parse', 'HEAD'),
+          args: { 'team-create': [], 'team-up': [] }, requestedBy: callerLabel(callerOf(io)),
+        }, now)
+        : createTeamCreateRequest(actionHome, root, git(root, 'rev-parse', 'HEAD'), now);
       if (!made.ok) actionRefusal(made.why);
       else actionDone('requested', `team init: request recorded`, { request_id: made.record.request_id, text: made.text, ...(made.inbox !== null ? { inbox: made.inbox } : {}) });
       actionOutcome = made.ok ? 'done' : 'refused';
@@ -254,7 +262,8 @@ export async function runInit(
     actionOutcome ??= 'refused';
   } else if (approving) {
     const assertion = assertionFile(args.values.assertion, io.cwd);
-    const answered = approveTeamCreate(actionHome, args.values['approve-as-owner-seat']!, args.rest[0]!, store, now, {
+    const answerId = args.values['approve-as-owner-seat']!;
+    const answered = (OWNER_ACTION_ID_PATTERN.test(answerId) ? approveOwnerAction : approveTeamCreate)(actionHome, answerId, args.rest[0] ?? '', store, now, {
       ...(args.values.signer !== undefined ? { signer: args.values.signer } : {}),
       ...(assertion !== undefined ? { assertion } : {}),
     });
@@ -291,7 +300,12 @@ export async function runInit(
   let seatApproved = false;
   if (actionOutcome === null && args.values.execute !== undefined) {
     const root = findRoot(io.cwd);
-    const admitted = root === null ? { ok: false as const, why: 'not inside a git repository' } : admitTeamCreate(actionHome, args.values.execute, root, store, now);
+    const id = args.values.execute;
+    const admitted = root === null
+      ? { ok: false as const, why: 'not inside a git repository' }
+      : OWNER_ACTION_ID_PATTERN.test(id)
+        ? admitOwnerAction(actionHome, id, { action: 'team-create', root, team: basename(root), head: git(root, 'rev-parse', 'HEAD'), words: [], claim: true }, store, now)
+        : admitTeamCreate(actionHome, id, root, store, now);
     if (!admitted.ok) {
       actionRefusal(admitted.why);
       actionOutcome = 'refused';

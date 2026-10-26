@@ -68,6 +68,9 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^(?:approve|approvals|approve-as-owner-seat|revoke-approval)$/, why: 'a grant or init flag name: an owner answer or a standing rule, not an approval copy' },
   { literal: /^--approvals takes no other arguments$/, why: "the grant flag's invocation refusal" },
   { literal: /^init\.approval-refused$/, why: "init's owner-seat refusal id, a key in the JSON envelope" },
+  { literal: /^(?:(?:up|add|import)\.)?approval-(?:requested|refused)$/, why: "the owner-seat door's outcome and refusal ids (src/client/owner-action.ts): keys, not an approval copy" },
+  { literal: /^owner-seat-approved$/, why: "up's log word for a run an owner-seat answer admitted" },
+  { literal: /^Usage: team up .*--approval <request-id>/s, why: "up's usage, naming the owner-seat door's --approval flag" },
   { literal: /^team init: (?:team-create approval rules|approval rule revoked)/, why: "init's standing team-create rules: an owner-seat answer, not an approval copy" },
   // The approval mode of team-create (`none | always-rule | per-action`): an owner-signed policy
   // record, signed once at setup, never a copy of the live file.

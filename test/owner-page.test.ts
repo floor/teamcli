@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync 
 import { join } from 'node:path';
 import { readOwnerSeat, registerOwnerSeat, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { createTeamCreateRequest, actionRequestsFolder } from '../src/client/team-create.ts';
+import { admitOwnerAction, createOwnerActionRequest } from '../src/client/owner-action.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { serveOwnerPage, spkiToPoint } from '../src/security/owner-page.ts';
 import { proposeSecurityProfile, readSecurityProfile } from '../src/security/profile.ts';
@@ -134,6 +135,33 @@ describe('owner page', () => {
     const done = await s.call('POST', '/api/team-create/answer', { ...p.assert(String(ch.body.challenge)), id, word: 'oui' });
     expect(done.status).toBe(200);
     expect(existsSync(join(actionRequestsFolder(s.home), `${id}.seat-answer.json`))).toBe(true);
+  });
+
+  test('an init-and-up request is answered oui from the phone, shown once, and admits both actions', async () => {
+    const s = await setup();
+    const p = phone();
+    expect((await registerPhone(s, p)).status).toBe(200);
+    const wrote = writePolicySet(s.home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['mac', 'iphone'] }, { now: new Date() });
+    if (!wrote.ok) throw new Error(wrote.why);
+    const root = join(s.base, 'code', 'demo');
+    mkdirSync(root, { recursive: true });
+    const made = createOwnerActionRequest(s.home, { actions: ['team-create', 'team-up'], root, team: 'demo', head: null, args: {}, requestedBy: 'seat:iris' }, new Date());
+    if (!made.ok) throw new Error(made.why);
+    const id = made.record.request_id;
+    const state = await s.call('GET', '/api/state');
+    const shown = state.body.requests as Array<{ id: string; text: string }>;
+    expect(shown.map((r) => r.id)).toEqual([id]);
+    expect(shown[0]!.text).toContain('seat:iris asks to create the team, then start the team');
+    const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
+    expect(ch.status).toBe(200);
+    const done = await s.call('POST', '/api/team-create/answer', { ...p.assert(String(ch.body.challenge)), id, word: 'oui' });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    // Answered: the card is gone, and the signed answer admits init then up, once each.
+    expect(((await s.call('GET', '/api/state')).body.requests as unknown[]).length).toBe(0);
+    const ask = (action: 'team-create' | 'team-up') => ({ action, root, team: 'demo', head: null, words: [], claim: true });
+    expect(admitOwnerAction(s.home, id, ask('team-create'), s.store, new Date())).toMatchObject({ ok: true, signer: 'iphone' });
+    expect(admitOwnerAction(s.home, id, ask('team-up'), s.store, new Date())).toMatchObject({ ok: true, signer: 'iphone' });
+    expect(admitOwnerAction(s.home, id, ask('team-up'), s.store, new Date()).ok).toBe(false);
   });
 
   test('a passkey the owner does not confirm with Touch ID is not added', async () => {

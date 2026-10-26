@@ -218,18 +218,18 @@ describe('team up with an out-of-band owner token', () => {
     // denies on (this file's real runs are the boundary scenes').
     const without = await upDry(p, SEAT, {}, standing);
     expect(without.code).toBe(1);
-    expect(without.err).toBe('');
+    expect(without.err.replace(/^team up: the file lists no trust[^]*$/, '')).toBe('');
     expect(without.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
     expect(without.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
 
     const wrong = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: `${fp}00` }, standing);
     expect(wrong.code).toBe(1);
-    expect(wrong.err).toBe('');
+    expect(wrong.err.replace(/^team up: the file lists no trust[^]*$/, '')).toBe('');
     expect(wrong.out).toContain('! up would refuse: only the owner or `leads` starts the team; this call is ');
     expect(wrong.out).toContain('! to unblock: a `leads` seat runs `team up` from its own pane (the owner runs it from this folder, at a terminal outside herdr)\n');
 
     const withToken = await upDry(p, SEAT, { TEAM_OWNER_APPROVAL: fp }, standing);
-    expect(withToken.err).toBe('');
+    expect(withToken.err.replace(/^team up: the file lists no trust[^]*$/, '')).toBe('');
     expect(withToken.out).not.toContain('deny');
   });
 });

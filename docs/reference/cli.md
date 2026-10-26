@@ -65,6 +65,8 @@ Usage:
     team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+    team add <name> [--like <seat>] --request [--json]
+    team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -74,6 +76,7 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--effort` | yes | no | no |
@@ -83,6 +86,7 @@ Usage:
 | `--key` | yes | no | no |
 | `--like` | yes | no | no |
 | `--model` | yes | no | no |
+| `--request` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |
 | `--temporary` | no | no | no |
@@ -1092,6 +1096,8 @@ Hidden: no
 Usage:
 
     team import [<file>] [--dry-run] [--json]
+    team import [<file>] --request [--json]
+    team import [<file>] --approval <request-id> [--dry-run] [--json]
 
 ### Who may run it
 
@@ -1101,9 +1107,11 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1119,7 +1127,7 @@ Hidden: no
 Usage:
 
     team init [--restore] [--from-archive <folder>] [--json]
-    team init --request [--json]
+    team init --request [--then-up] [--json]
     team init --execute <request-id> [--json]
     team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
     team init --approvals [--json]
@@ -1149,6 +1157,7 @@ Usage:
 | `--revoke-approval` | yes | no | no |
 | `--scope` | yes | no | no |
 | `--signer` | yes | no | no |
+| `--then-up` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -3018,6 +3027,8 @@ Usage:
 
     team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]
+    team up --request [--serial] [--json]
+    team up --approval <request-id> [--dry-run] [--serial] [--json]
 
 ### Who may run it
 
@@ -3027,12 +3038,14 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--request` | no | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |
 | `--team` | yes | no | no |

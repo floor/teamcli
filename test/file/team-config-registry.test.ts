@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { runTeamImport as run } from '../../src/commands/migrate.ts';
 import { readArgs } from '../../src/args.ts';
-const EXIT = { done: 0, detached: 1, 'not-owner': 1, 'already-migrated': 1, invocation: 2, invalid: 2, registry: 2, 'round-trip': 2 } as const;
+const EXIT = { 'approval-requested': 0, 'approval-refused': 1, done: 0, detached: 1, 'not-owner': 1, 'already-migrated': 1, invocation: 2, invalid: 2, registry: 2, 'round-trip': 2 } as const;
 const runTeamImport = async (mode: 'migrate' | 'import', argv: string[], io: Parameters<typeof run>[3], sources: Parameters<typeof run>[4]) =>
   EXIT[await run(mode, argv, readArgs(argv, [], ['json', 'dry-run', 'keep-file']), io, sources)];
 import {

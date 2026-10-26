@@ -47,6 +47,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--client",
           "repeatable": false,
           "takesValue": true
@@ -101,6 +107,12 @@
         },
         {
           "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--session",
           "repeatable": false,
           "takesValue": true
@@ -150,7 +162,9 @@
         "team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]",
         "team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]",
-        "team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]"
+        "team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]",
+        "team add <name> [--like <seat>] --request [--json]",
+        "team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",
@@ -1977,6 +1991,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -1990,6 +2010,12 @@
         {
           "hidden": false,
           "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--request",
           "repeatable": false,
           "takesValue": false
         },
@@ -2011,7 +2037,9 @@
       ],
       "subcommands": [],
       "usage": [
-        "team import [<file>] [--dry-run] [--json]"
+        "team import [<file>] [--dry-run] [--json]",
+        "team import [<file>] --request [--json]",
+        "team import [<file>] --approval <request-id> [--dry-run] [--json]"
       ],
       "who": {
         "gate": "owner-only",
@@ -2105,6 +2133,12 @@
           "takesValue": true
         },
         {
+          "hidden": false,
+          "name": "--then-up",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -2123,7 +2157,7 @@
       "subcommands": [],
       "usage": [
         "team init [--restore] [--from-archive <folder>] [--json]",
-        "team init --request [--json]",
+        "team init --request [--then-up] [--json]",
         "team init --execute <request-id> [--json]",
         "team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]",
         "team init --approvals [--json]",
@@ -5529,6 +5563,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--client",
           "repeatable": false,
           "takesValue": true
@@ -5565,6 +5605,12 @@
         },
         {
           "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--serial",
           "repeatable": false,
           "takesValue": false
@@ -5594,7 +5640,9 @@
       "subcommands": [],
       "usage": [
         "team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]",
-        "team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]"
+        "team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]",
+        "team up --request [--serial] [--json]",
+        "team up --approval <request-id> [--dry-run] [--serial] [--json]"
       ],
       "who": {
         "gate": "owner-or-leads",

@@ -10,10 +10,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `ack.refused` | `ack` | 1 | the message can't be marked read, or the call is not the record's addressee | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `ack.configuration` | `ack` | 2 | the team file can't be read | `team ack 3a3b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d` |
 | `ack.usage` | `ack` | 2 | the invocation can't be read | `team ack` |
+| `add.approval-requested` | `add` | 0 | an owner-seat request for this add was recorded and sent to the owner seat | `team add <name> --request` |
 | `add.dry-run` | `add` | 0 | a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) | `team add worker --dry-run` |
 | `add.ready` | `add` | 0 | the seat is ready | `team add worker` |
 | `add.agents` | `add` | 1 | the agents can't be read | `team add worker` |
 | `add.already-running` | `add` | 1 | the seat is already running | `team add worker` |
+| `add.approval-refused` | `add` | 1 | the owner-seat request or approval for this add was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team add <name> --approval <request-id>` |
 | `add.branch-missing` | `add` | 1 | the merged branch doesn't exist | `team add --temporary --like lead --until merged:missing` |
 | `add.budget` | `add` | 1 | the budget refuses the seat | `team add worker` |
 | `add.caller` | `add` | 1 | the caller may not change the team | `team add worker` |
@@ -282,7 +284,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `hold.until` | `hold` | 1 | --until is not a clock or an instant | `team hold "freeze deploys" --until tomorrow` |
 | `hold.file` | `hold` | 2 | the team file can't be read | `team hold "freeze deploys"` |
 | `hold.invocation` | `hold` | 2 | the invocation can't be read | `team hold` |
+| `import.approval-requested` | `import` | 0 | an owner-seat request for this import was recorded and sent to the owner seat | `team import --request` |
 | `import.done` | `import` | 0 | the registry holds the file, or would with --dry-run | `team import` |
+| `import.approval-refused` | `import` | 1 | the owner-seat request or approval for this import was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team import --approval <request-id>` |
 | `import.detached` | `import` | 1 | the owner-only act was run with no terminal | `team import` |
 | `import.not-owner` | `import` | 1 | the caller is not the owner | `team import` |
 | `import.invalid` | `import` | 2 | the team file is missing or does not validate | `team import missing.yaml` |
@@ -719,9 +723,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `unlock.unknown-holder` | `unlock` | 1 | the lock's holder can't be read | `team unlock heavy-run` |
 | `unlock.invocation` | `unlock` | 2 | the invocation can't be read | `team unlock` |
 | `unlock.project` | `unlock` | 2 | the caller's project can't be read | `team unlock heavy-run` |
+| `up.approval-requested` | `up` | 0 | an owner-seat request for this launch was recorded and sent to the owner seat | `team up --request` |
 | `up.dry-run` | `up` | 0 | a dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) | `team up --dry-run` |
 | `up.ready` | `up` | 0 | the launch finished | `team up` |
 | `up.agents` | `up` | 1 | the agents can't be read | `team up` |
+| `up.approval-refused` | `up` | 1 | the owner-seat request or approval for this launch was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team up --approval <request-id>` |
 | `up.clear` | `up` | 1 | a stopped session this team records did not clear | `team up` |
 | `up.client-refused` | `up` | 1 | the owner-signed up grant, or the client run it admits, did not verify | `team up --client grant.json --key client.key` |
 | `up.delegate` | `up` | 1 | only the owner or the approved delegate runs up | `team up` |

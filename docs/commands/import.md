@@ -8,9 +8,14 @@ a terminal outside herdr.
 ## Synopsis
 
     team import [<file>] [--dry-run] [--json]
+    team import [<file>] --request [--json]
+    team import [<file>] --approval <request-id> [--dry-run] [--json]
 
 `<file>` is the team file to import for this checkout's team. `--dry-run` says what would be
 imported and writes nothing. `--json` prints the `team.import` document instead of the plain lines.
+`--request` records this import for the owner seat and `--approval <request-id>` runs it once the
+owner seat signed for it, with no owner terminal: see
+[team up: Owner-seat approval](up.md#owner-seat-approval-no-owner-terminal).
 
 ## What it reads and writes
 

@@ -23,6 +23,13 @@ needs it, and refuses the same folders `up` refuses, before it writes anything.
              [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
     team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
     team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+    team add <name> [--like <seat>] --request [--json]
+    team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
+
+`--request` and `--approval <request-id>` are the owner-seat door, with no owner terminal: see
+[team up: Owner-seat approval](up.md#owner-seat-approval-no-owner-terminal). A missing, empty or
+project-relative `trust:` does not stop `add`: it trusts only the lobby and the project root for
+this run and says so once ([team up: Trust at launch](up.md#trust-at-launch)).
 
 ## What it reads and writes
 
@@ -127,6 +134,8 @@ that proceeds is attributed in the log before its effects, as
 | `--team <team>` | with `--client`, the team the grant is for; required |
 | `--dry-run` | print whether this seat would launch or be refused. A dry run that reaches a refusal the real run would give before doing anything returns that refusal's status and exit id; a dry run that reaches its plan exits 0 and promises nothing about what happens after (the run lock, a launch, the watch) |
 | `--file <path>` | deprecated: a legacy team file to read instead of the team's registry record; the owner's alone |
+| `--request` | record this add and send it to the owner seat |
+| `--approval <request-id>` | run the add the owner seat signed for, once |
 | `--json` | one `team.add` document instead of the closing line; a refusal is the `team.error` document on stdout, with stderr empty |
 | `--help`, `-h` | the usage, and exit 0 |
 
@@ -250,7 +259,6 @@ and nothing on stderr: the run's own lines ride in the document's `notes`.
 | `team add: workspace.base is required to read a merged end` / `team add: "<branch>" is not a branch name` / `team add: branch <branch> doesn't exist` | 1 |
 | `team add: no worktree named "<task>" is recorded` | 1 |
 | `team add: worktree <task> has a failed setup; team worktree remove <task>` | 1 |
-| ``team add: the file is legacy: migrate trust to absolute paths including the lobby <lobby>: ...`` | 1 |
 | ``team add: trust: must list the lobby <lobby>`` | 1 |
 | ``team add: the lobby <lobby>: <check>`` | 1 |
 | `team add: refused: the lobby is not trusted for <cli>: run <cli> in <lobby> and accept the folder` — the CLI's own record for the lobby can't be written, so the seat would open that folder untrusted; `grok` and `cursor` seats are told their own flag instead (`run grok --trust in <lobby>`, `run cursor-agent --trust in <lobby>`) | 1 |
@@ -401,6 +409,10 @@ Usage: team add <name> [--like <seat>] [--model <model>] [--effort <effort>] [--
        team add --temporary --like <seat> --until <result:path|merged:branch> [--worktree <task>] [--model <model>] [--effort <effort>] [--dry-run] [--session <name>] [--file <path>] [--json]
        team add <name> [--like <seat>] --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
        team add --temporary --like <seat> --until <result:path|merged:branch> --client <grant-file> --key <client-key> --team <team> [--dry-run] [--json]
+       team add <name> [--like <seat>] --request [--json]
+       team add <name> [--like <seat>] --approval <request-id> [--dry-run] [--json]
+
+The owner-seat form needs no owner terminal: --request records this add (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs the same add, once, as signed. A signed always rule for team-add covering this folder admits the run with no request.
 
 The --client form is for a client with no terminal that the owner signed a manager bundle grant carrying add for one team (team grant --client <id> --entity <entity> --public-key <file> --team <team> --bundle manager --request): it adds a seat to that one team, as signed, and nothing else. It never prompts, is never the owner, and takes no --file, --session, --model or --effort. It never adds a human's pane, never starts the orchestrator or the operator, and does not touch the approval record: the roster change is for the owner to approve with the owner seat, and the run says so.
 

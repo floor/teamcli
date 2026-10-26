@@ -4,6 +4,8 @@ import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
+import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { retireTeamFile, type Retired } from '../file/retire.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { importTeamFile, type ImportMode, type ImportOutcome } from '../file/team-import.ts';
@@ -68,7 +70,7 @@ export async function runMigrate(argv: string[], io: Io, sources: { home?: strin
 export default migrate;
 
 /** How a run ended: each command turns it into its own exit code. */
-export type ImportEnd = 'done' | 'detached' | 'not-owner' | 'already-migrated' | 'invocation' | 'invalid' | 'registry' | 'round-trip';
+export type ImportEnd = 'approval-requested' | 'approval-refused' | 'done' | 'detached' | 'not-owner' | 'already-migrated' | 'invocation' | 'invalid' | 'registry' | 'round-trip';
 
 /** The one runner for `team migrate` and `team import` (src/commands/import.ts). It prints and
  *  says how the run ended; the exit code is each command's own. */
@@ -77,7 +79,7 @@ export async function runTeamImport(
   argv: string[],
   args: ReturnType<typeof readArgs>,
   io: Io,
-  sources: { home?: string; now?: () => Date } = {},
+  sources: { home?: string; now?: () => Date; ownerSeatStore?: OwnerSeatKeyStore } = {},
 ): Promise<ImportEnd> {
   const usage = mode === 'migrate' ? USAGE : (await import('./import.ts')).USAGE;
   const json = hasJsonFlag(argv);
@@ -88,12 +90,21 @@ export async function runTeamImport(
   }
   const file = mode === 'import' ? args.rest[0] : undefined;
   const caller = callerOf(io);
-  const detached = detachedRefusal(caller);
+  // The owner-seat door, for `import` (src/client/owner-action-step.ts): `--request` asks the owner
+  // seat; `--approval <id>` runs the import the owner seat signed for, with no owner terminal.
+  const seat = mode === 'import'
+    ? ownerSeatStep('import', 'team-import', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, sources)
+    : { kind: 'none' as const };
+  if (seat.kind === 'requested') return 'approval-requested';
+  if (seat.kind === 'refused') return 'approval-refused';
+  const seatApproved = seat.kind === 'admitted'
+    || (mode === 'import' && !isOwner(caller) && ownerSeatRuleAdmits('team-import', io.cwd, args.flags.has('dry-run'), sources));
+  const detached = seatApproved ? undefined : detachedRefusal(caller);
   if (detached !== undefined) {
     refuse(io, json, mode, { id: `${mode}.detached`, message: detached, repair: null });
     return 'detached';
   }
-  if (!isOwner(caller)) {
+  if (!isOwner(caller) && !seatApproved) {
     // The team's configuration is the owner's: moving it is the owner's act, as writing it is.
     refuse(io, json, mode, {
       id: `${mode}.not-owner`,

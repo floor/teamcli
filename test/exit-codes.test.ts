@@ -1,12 +1,14 @@
 // One run per row of contract/exit-codes.json. Each trigger is a temporary directory and the
 // injectable stand-ins the other command tests use: no herdr session, no user-level store.
+import { seatOwner } from './helpers/owner-seat.ts';
+import { approveOwnerAction } from '../src/client/owner-action.ts';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from 'bun:test';
+import { expect, test, describe } from 'bun:test';
 import { approvalOf } from '../src/approve/approval.ts';
 import { startBroker } from '../src/broker/server.ts';
 import { saveReadings, type Seen } from '../src/budgets/readings.ts';
@@ -6300,6 +6302,36 @@ scene('import.invalid', async (place) => {
 });
 scene('import.invocation', async (place) => show(await imported(place, 'import', ['a', 'b']), 'unexpected "b"'));
 
+// The owner-seat door of import, add and up (src/client/owner-action.ts): a request recorded for
+// the owner seat, and an approval id that is no request.
+scene('import.approval-requested', async (place) => {
+  write(place, TEAM);
+  seatOwner(place.home);
+  return show(await imported(place, 'import', ['--request'], other), 'owner-seat request');
+});
+scene('import.approval-refused', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'import', ['--approval', 'oa_nope'], other), 'is not an owner-seat request id');
+});
+scene('add.approval-requested', async (place) => {
+  approve(place, TWO);
+  seatOwner(place.home);
+  return show(await added(place, ['worker', '--request'], other, addSources(place)), 'owner-seat request');
+});
+scene('add.approval-refused', async (place) => {
+  approve(place, TWO);
+  return show(await added(place, ['worker', '--approval', 'oa_nope'], other, addSources(place)), 'is not an owner-seat request id');
+});
+scene('up.approval-requested', async (place) => {
+  approve(place, TEAM);
+  seatOwner(place.home);
+  return show(await up(place, ['--request'], other, upSources(place)), 'owner-seat request');
+});
+scene('up.approval-refused', async (place) => {
+  approve(place, TEAM);
+  return show(await up(place, ['--approval', 'oa_nope'], other, upSources(place)), 'is not an owner-seat request id');
+});
+
 const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record']);
 
 const contract = loadContract();
@@ -6889,4 +6921,120 @@ leadTest('under the registry source, remove takes the seat out of the registry r
   expect(record.text).not.toContain('name: worker');
   expect(readFileSync(place.file, 'utf8')).toBe(file);
   expect(realRegistryTouched()).toBe(false);
+});
+
+// The owner-seat door end to end, with no owner terminal: the caller is a seat, the owner answers
+// from the owner seat (the in-memory credential store stands in for Touch ID or the phone), and
+// the run is admitted for exactly what was asked, once.
+describe('owner-seat approval admits import, add and up for a seat', () => {
+  const requestId = (ran: Ran) => /owner-seat request (oa_[0-9a-f]{24})/.exec(ran.out)?.[1] ?? '';
+
+  test('up: request, answer, a dry run that spends nothing, the launch, and a refused replay', async () => {
+    const place = layout(true);
+    try {
+      approve(place, TEAM);
+      const store = seatOwner(place.home);
+      const asked = await up(place, ['--request'], other, upSources(place, { ownerSeatStore: store }));
+      expect(asked.code, asked.err).toBe(0);
+      const id = requestId(asked);
+      expect(asked.out).toContain(`then run: team up --approval ${id}`);
+      // Before the answer: refused, in plain words.
+      const early = await up(place, ['--approval', id], other, upSources(place, { ownerSeatStore: store }));
+      expect(early.code).toBe(1);
+      expect(early.err).toContain('has no owner-seat answer yet');
+      expect(approveOwnerAction(place.home, id, 'oui', store, NOW)).toMatchObject({ ok: true });
+      const dry = await up(place, ['--approval', id, '--dry-run'], other, upSources(place, { ownerSeatStore: store }));
+      expect(dry.code, dry.err + dry.out).toBe(0);
+      expect(dry.out).not.toContain('would refuse');
+      const ran = await up(place, ['--approval', id], other, upSources(place, { ownerSeatStore: store, launch: launching(IDLE) }));
+      expect(ran.code, ran.err + ran.out).toBe(0);
+      expect(ran.err).toContain(`owner-seat approval ${id} (signed by mac)`);
+      const again = await up(place, ['--approval', id], other, upSources(place, { ownerSeatStore: store, launch: launching(IDLE) }));
+      expect(again.code).toBe(1);
+      expect(again.err).toContain('single-use');
+    } finally {
+      rmSync(place.base, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test('up: an approval for other arguments is refused, and the seat without one is denied as before', async () => {
+    const place = layout(true);
+    try {
+      approve(place, TEAM);
+      const store = seatOwner(place.home);
+      const asked = await up(place, ['--request', '--serial'], other, upSources(place, { ownerSeatStore: store }));
+      const id = requestId(asked);
+      expect(approveOwnerAction(place.home, id, 'oui', store, NOW)).toMatchObject({ ok: true });
+      const mismatch = await up(place, ['--approval', id, '--dry-run'], other, upSources(place, { ownerSeatStore: store }));
+      expect(mismatch.code).toBe(1);
+      expect(mismatch.err).toContain('approved for other team-up arguments');
+      const none = await up(place, ['--dry-run'], other, upSources(place, { ownerSeatStore: store }));
+      expect(none.code).toBe(1);
+    } finally {
+      rmSync(place.base, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test('add: request, answer, the add as asked', async () => {
+    const place = layout(true);
+    try {
+      approve(place, TWO);
+      const store = seatOwner(place.home);
+      const asked = await added(place, ['worker', '--request'], other, addSources(place, { ownerSeatStore: store }));
+      expect(asked.code, asked.err).toBe(0);
+      const id = requestId(asked);
+      expect(approveOwnerAction(place.home, id, 'oui', store, NOW)).toMatchObject({ ok: true });
+      const other2 = await added(place, ['helper', '--approval', id, '--dry-run'], other, addSources(place, { ownerSeatStore: store }));
+      expect(other2.code).toBe(1);
+      const dry = await added(place, ['worker', '--approval', id, '--dry-run'], other, addSources(place, { ownerSeatStore: store }));
+      expect(dry.code, dry.err + dry.out).toBe(0);
+    } finally {
+      rmSync(place.base, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test('import: request, answer, the import, and a refused replay', async () => {
+    const place = layout(true);
+    try {
+      write(place, TEAM);
+      const store = seatOwner(place.home);
+      const run = (argv: string[]) => {
+        const io = testIo(place.root, other);
+        return runImport(argv, io, { home: place.home, now: () => new Date(), ownerSeatStore: store }).then((code) => ({ code, out: io.out, err: io.err }));
+      };
+      const asked = await run(['--request']);
+      expect(asked.code, asked.err).toBe(0);
+      const id = requestId(asked);
+      expect(approveOwnerAction(place.home, id, 'oui', store, NOW)).toMatchObject({ ok: true });
+      const done = await run(['--approval', id]);
+      expect(done.code, done.err + done.out).toBe(0);
+      expect((await run(['--approval', id])).code).toBe(1);
+    } finally {
+      rmSync(place.base, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  test('init and up in one request: one answer creates the team and starts it', async () => {
+    const place = layout(true);
+    try {
+      const store = seatOwner(place.home);
+      const init = (argv: string[]) => {
+        const io = testIo(place.root, other);
+        return runInit(argv, io, place.home, undefined, { loggedIn: () => true, ownerSeatStore: store }).then((code) => ({ code, out: io.out, err: io.err }));
+      };
+      const asked = await init(['--request', '--then-up']);
+      expect(asked.code, asked.err).toBe(0);
+      const id = /request_id: (oa_[0-9a-f]{24})/.exec(asked.out)?.[1] ?? '';
+      expect(id).not.toBe('');
+      expect(approveOwnerAction(place.home, id, 'oui', store, NOW)).toMatchObject({ ok: true });
+      const made = await init(['--execute', id]);
+      expect(made.code, made.err + made.out).toBe(0);
+      expect(existsSync(join(place.root, '.agents', 'team.yaml'))).toBe(true);
+      const dry = await up(place, ['--approval', id, '--dry-run'], other, upSources(place, { ownerSeatStore: store }));
+      expect(dry.code, dry.err + dry.out).toBe(0);
+      expect((await init(['--execute', id])).code).toBe(1);
+    } finally {
+      rmSync(place.base, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
