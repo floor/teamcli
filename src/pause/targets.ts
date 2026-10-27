@@ -199,7 +199,7 @@ function seatTarget(target: PauseTarget, name: string): TargetResult {
  *  when there is one, and without the `--file` offer — neither command takes that flag. */
 function problemsOf(loaded: { errors: Array<{ line?: number; message: string }> }): string {
   return loaded.errors
-    .map((problem) => `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${withoutFileOffer(plainText(problem.message))}`)
+    .map((problem) => `${problem.line ? `team config line ${problem.line}: ` : ''}${withoutFileOffer(plainText(problem.message))}`)
     .join('; ');
 }
 

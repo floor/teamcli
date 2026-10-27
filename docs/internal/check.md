@@ -418,7 +418,7 @@ legacy `coordinator:` deprecation warning and the note its lead's 0.3.5/0.4 role
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
-warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from team config
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0
@@ -429,7 +429,7 @@ A seat of the team runs it too, and reads the same answer:
 ```console caller=claude-beacon
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
-warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from team config
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 no differences
 exit 0
@@ -441,7 +441,7 @@ them, and both repairs are the owner's:
 ```console herdr=absent
 $ team check ; echo "exit $?"
 team beacon, session "beacon"
-warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from team config
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
 difference: claude-keeper is in the file and is not running
   repair: team up
@@ -541,7 +541,7 @@ Usage: team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
   --pr <file>      also check a pull request's body ("-" reads standard input)
   --since <ref>    skip this commit and everything reachable from it, for this
                    run; overrides identity.since
-  --file <path>    the team file, instead of .agents/team.yaml
+  --file <path>    a team file, instead of the registry record (team config)
 
 Exits 0 when every commit passes, 1 when one is refused, 2 when the check
 can't run.

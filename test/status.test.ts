@@ -468,7 +468,7 @@ describe('team status', () => {
     expect(readState(join(dir, '.agents')).last_valid?.file).toBe(example);
     writeFileSync(file, example.replace('format: 1', 'format: 9'));
     const { code, out } = await status();
-    expect(out.split('\n')[0]).toBe('team.yaml is invalid (line 1: format must be 1: this version of team reads no other); using the copy of 2026-10-03T14:10:00.000Z');
+    expect(out.split('\n')[0]).toBe('team config is invalid (line 1: format must be 1: this version of team reads no other); using the copy of 2026-10-03T14:10:00.000Z');
     expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
@@ -476,7 +476,7 @@ describe('team status', () => {
   test('a broken file with no valid copy: the problems, with their lines', async () => {
     writeFileSync(file, 'format: 9\n');
     const { code, err } = await status();
-    expect(err).toContain('team.yaml line 1: format must be 1');
+    expect(err).toContain('team config line 1: format must be 1');
     expect(code).toBe(2);
   });
 
@@ -750,7 +750,7 @@ describe('team status', () => {
     expect(code).toBe(0);
     const doc = JSON.parse(out);
     expect(doc.format).toBe(1);
-    expect(doc.notice).toContain('team.yaml is invalid');
+    expect(doc.notice).toContain('team config is invalid');
     expect(doc.differences).toEqual([]);
   });
 

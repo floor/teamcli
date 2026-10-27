@@ -539,7 +539,7 @@ describe('status: --file reads for any caller, and writes for the owner alone', 
       const seat = testIo(flagged.root, placed(OTHER, COORDINATOR, COORDINATOR_PANE));
       const code = await runStatus(['--file', flagged.file], seat, statusSources());
       expect(code).toBe(1);
-      expect(seat.out.split('\n')[0]).toBe('team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 1970-01-01T00:00:00.000Z');
+      expect(seat.out.split('\n')[0]).toBe('team config is invalid (line 1: "[" is not closed on its line); using the copy of 1970-01-01T00:00:00.000Z');
       expect(seat.out).toContain('team acme');
       expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
       expect(flagged.bytes()).toBe('format: [\n');
@@ -606,7 +606,7 @@ describe('status: --file reads for any caller, and writes for the owner alone', 
       const seat = testIo(flagged.root, placed(SESSION, COORDINATOR, COORDINATOR_PANE));
       const code = await runStatus([], seat, statusSources());
       expect(code).toBe(1);
-      expect(seat.out.split('\n')[0]).toBe('team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 1970-01-01T00:00:00.000Z');
+      expect(seat.out.split('\n')[0]).toBe('team config is invalid (line 1: "[" is not closed on its line); using the copy of 1970-01-01T00:00:00.000Z');
       expect(seat.out).toContain('team acme');
       expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
       expect(flagged.bytes()).toBe('format: [\n');

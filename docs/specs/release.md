@@ -12,11 +12,11 @@ public: not yet; staged in the private docs; ported after review with no private
 
 ## 1. Scope
 
-This specification defines the `.agents/team.yaml` `releases` section, the `team release check <package@version>` command and its human and JSON output contracts, the SemVer 2.0.0 version and channel rules, the four base public-record checks (`npm`, `tag`, `github`, `changelog`) and the `dist-tags` warning, the optional `linear` and `activity` release-record checks, the bounded HTTP and macOS Keychain contracts, and the `scripts/check-release-date.ts` pre-publish check. It lifts the contract of archived internal RFCs 0004 (`0004-releases.md`) and 0005 (`0005-release-records.md`) as built at `v0.5.0 (52db9b75)`. It does not publish packages, create or push tags, edit GitHub releases, modify npm `dist-tags`, mutate Linear milestones or status updates, or write activity files; every operation in this specification is read-only and stateless.
+This specification defines the `team config` `releases` section, the `team release check <package@version>` command and its human and JSON output contracts, the SemVer 2.0.0 version and channel rules, the four base public-record checks (`npm`, `tag`, `github`, `changelog`) and the `dist-tags` warning, the optional `linear` and `activity` release-record checks, the bounded HTTP and macOS Keychain contracts, and the `scripts/check-release-date.ts` pre-publish check. It lifts the contract of archived internal RFCs 0004 (`0004-releases.md`) and 0005 (`0005-release-records.md`) as built at `v0.5.0 (52db9b75)`. It does not publish packages, create or push tags, edit GitHub releases, modify npm `dist-tags`, mutate Linear milestones or status updates, or write activity files; every operation in this specification is read-only and stateless.
 
 ## 2. Terms
 
-- **Release declaration (`ReleaseDecl`):** one entry in the top-level `releases` sequence of `.agents/team.yaml`, binding an npm `package` name to a `github` `owner/repo` and optional `trusted_publishing`, `linear_*`, and `activity_*` settings (`src/file/sections/releases.ts`).
+- **Release declaration (`ReleaseDecl`):** one entry in the top-level `releases` sequence of `team config`, binding an npm `package` name to a `github` `owner/repo` and optional `trusted_publishing`, `linear_*`, and `activity_*` settings (`src/file/sections/releases.ts`).
 - **SemVer 2.0.0 version:** a version string matching `SEMVER_PATTERN` (`major.minor.patch` with optional `-<prerelease>` and `+<build>`, and no leading `v` prefix; `src/release/grammar.ts`).
 - **Prerelease channel:** the classification determined by `hasPrerelease(version)` — `true` when the version carries a `-<prerelease>` part before any `+<build>` metadata, `false` otherwise (`src/release/grammar.ts`).
 - **Check status (`Status`):** one of `pass`, `missing`, or `unknown` (`src/release/checks.ts`). `missing` means a completed, interpretable read disproved a required condition; `unknown` means a required read failed, timed out, exceeded a budget cap, or returned an unexpected HTTP status or malformed structure.
@@ -28,9 +28,9 @@ This specification defines the `.agents/team.yaml` `releases` section, the `team
 
 ## 3. Formats
 
-### 3.1 `.agents/team.yaml` `releases` section (`src/file/sections/releases.ts`, `src/release/grammar.ts`)
+### 3.1 `team config` `releases` section (`src/file/sections/releases.ts`, `src/release/grammar.ts`)
 
-`releases` is an optional top-level sequence in `.agents/team.yaml` (`owner: false`: it names public records and a Keychain service name, never a secret, and grants no seat authority, so editing it requires no owner approval digest update). When present, it MUST be a non-empty list of map entries (`minItems: 1`) with no unknown keys.
+`releases` is an optional top-level sequence in `team config` (`owner: false`: it names public records and a Keychain service name, never a secret, and grants no seat authority, so editing it requires no owner approval digest update). When present, it MUST be a non-empty list of map entries (`minItems: 1`) with no unknown keys.
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
@@ -43,7 +43,7 @@ This specification defines the `.agents/team.yaml` `releases` section, the `team
 | `releases[].activity_file` | string | paired with `activity_marker` | — | 0.5.0 | printable ASCII (`0x20`–`0x7e`) slash-separated repository-relative path, at most `512` UTF-8 bytes (`ACTIVITY_FILE_BYTES`), each segment matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` (`ACTIVITY_SEGMENT`) |
 | `releases[].activity_marker` | string | paired with `activity_file` | — | 0.5.0 | non-empty printable ASCII (`0x20`–`0x7e`) line template, at most `200` UTF-8 bytes (`ACTIVITY_MARKER_BYTES`), no control characters, containing `<package>` exactly once and `<version>` exactly once |
 
-Example `.agents/team.yaml` `releases` configuration:
+Example `team config` `releases` configuration:
 
 ```yaml
 releases:
@@ -166,13 +166,13 @@ team release check <package@version> [--json] [--file <path>]
 | `check` | yes | — | the only subcommand of `team release` |
 | `<package@version>` | yes | — | target package name and SemVer 2.0.0 version separated at the last `@` (`at = target.lastIndexOf('@')`, with `at > 0`) |
 | `--json` | no | `false` | emit `team.release` v1 (or `team.error` v1 on exit `64`) as JSON on stdout; recognized anywhere in `argv` except immediately after `--file` |
-| `--file <path>` | no | main checkout's `.agents/team.yaml` | load the team file from `<path>` (`loadTeamFile(io.cwd, { file, checkOnly: true })`) |
+| `--file <path>` | no | main checkout's `team config` | load the team file from `<path>` (`loadTeamFile(io.cwd, { file, checkOnly: true })`) |
 
 Exit codes: `0` (`release.passed`), `1` (`release.missing`), `2` (`release.unknown`), `64` (`release.usage` or `release.configuration`).
 
 ### 4.2 `team check` / `team doctor` (`src/file/sections/releases.ts`)
 
-Validates the `.agents/team.yaml` `releases` section against the schema and rules in §3.1 and §5 Rule 1 without making any network or Keychain calls.
+Validates the `team config` `releases` section against the schema and rules in §3.1 and §5 Rule 1 without making any network or Keychain calls.
 
 ### 4.3 `scripts/check-release-date.ts`
 
@@ -185,7 +185,7 @@ Reads `CHANGELOG.md` from the repository root (`process.cwd()`). Invoked in `.gi
 ## 5. Rules
 
 1. **Configuration validation and pair completeness (`src/file/sections/releases.ts`, `src/release/grammar.ts`).**
-   - When `releases` is present in `.agents/team.yaml`, it MUST be a non-empty sequence of maps containing only the allowed keys (`package`, `github`, `trusted_publishing`, `linear_project`, `linear_keychain_service`, `activity_file`, `activity_marker`).
+   - When `releases` is present in `team config`, it MUST be a non-empty sequence of maps containing only the allowed keys (`package`, `github`, `trusted_publishing`, `linear_project`, `linear_keychain_service`, `activity_file`, `activity_marker`).
    - Every entry MUST supply a valid `package` (`PACKAGE_PATTERN`, `<= 214` bytes) and `github` (`GITHUB_PATTERN`), and no two entries in `releases` may name the same `package` (`releases names "<pkg>" twice`).
    - `trusted_publishing`, when present, MUST be an unquoted YAML boolean literal `true` or `false` (`a release's trusted_publishing must be the boolean true or false`).
    - `linear_project` and `linear_keychain_service` MUST appear together or not at all (`a release's linear_project and linear_keychain_service come together`); `activity_file` and `activity_marker` MUST likewise appear together or not at all (`a release's activity_file and activity_marker come together`).

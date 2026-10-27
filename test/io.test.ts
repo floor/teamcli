@@ -129,7 +129,7 @@ describe('doctor and status cleaning', () => {
         home: dir,
       };
       expect(await runStatus(['--file', file], badIo, baseSources)).toBe(2);
-      expect(badIo.err).toBe('team status: team.yaml line 5: coordinator "xy" names no declared seat\n');
+      expect(badIo.err).toBe('team status: team config line 5: coordinator "xy" names no declared seat\n');
       expect(badIo.err).not.toContain('\x1b');
 
       const dirtyFile = example.replace(

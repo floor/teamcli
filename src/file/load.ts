@@ -11,7 +11,10 @@ import { validateTeamFile } from './validate.ts';
 import { readPolicyChain } from '../policy/sources.ts';
 import { fileDeclaresWorkspaceMode, resolveWorkSettings } from '../policy/work-settings.ts';
 import { ofTeam as projectOfTeam } from '../registry/projects.ts';
+import { readStoredTeamConfig, TeamConfigStoreError, teamConfigRecordPath } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { listedTeam, withRecordedSession } from './recorded-session.ts';
+import { noteRegistryRead, resolveTeamConfigSource } from './team-config.ts';
 
 export const TEAM_FILE = '.agents/team.yaml';
 
@@ -86,6 +89,14 @@ function plainFolderTeam(cwd: string): { root: string; path: string } | 'link' |
 
 // The project's root: the main checkout, found through git's common directory, so a command run
 // in a subfolder or in a linked worktree reads the same `.agents/`.
+function realOrResolved(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 export function findRoot(cwd: string): string | null {
   try {
     const common = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
@@ -99,9 +110,106 @@ export function findRoot(cwd: string): string | null {
   }
 }
 
+/** Said once, on a read that had to use the team file because the registry holds no config record. */
+export const FILE_FALLBACK_LISTED =
+  'the registry lists this team but holds no config record yet, so .agents/team.yaml was read; run `team migrate` to import it, then edit the team with `team config`';
+
+/** The same sentence when the registry does not list the root either. */
+export const FILE_FALLBACK_UNLISTED =
+  'no team config record exists yet, so .agents/team.yaml was read; run `team migrate` to import it, then edit the team with `team config`';
+
+export type LoadTeamFileOptions = {
+  file?: string;
+  home?: string;
+  checkOnly?: boolean;
+  fs?: FsReader;
+  session?: string;
+  /** This read's source. Absent: the `team-config.source` resolution (registry by default). */
+  source?: 'registry' | 'file';
+  env?: Record<string, string | undefined>;
+};
+
+// Finds, reads and validates the team. The registry's config record is the definition. The team
+// file is read only when that record does not exist — and then one sentence says so — or when
+// the caller names a file (`--file`, a snapshot, `team migrate`).
+export function loadTeamFile(cwd: string, options: LoadTeamFileOptions = {}): LoadResult {
+  if (options.file !== undefined) return readTeamYaml(cwd, options);
+  const source = options.source ?? configSource(options);
+  if (typeof source !== 'string') return source;
+  if (source === 'file') return readTeamYaml(cwd, options);
+  return readRegistryThenFile(cwd, options);
+}
+
+function configSource(options: LoadTeamFileOptions): 'registry' | 'file' | LoadResult {
+  const resolved = resolveTeamConfigSource({
+    ...(options.home !== undefined ? { home: options.home } : {}),
+    ...(options.env !== undefined ? { env: options.env } : {}),
+  });
+  if (!resolved.ok) return { ok: false, errors: [{ line: 0, message: resolved.message }] };
+  return resolved.source;
+}
+
+function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadResult {
+  const home = options.home ?? homedir();
+  // A checkout's team is the git root's. A folder that is not a repository is its own root, the
+  // same root `team migrate` imports: the registry is still looked up there, and only a folder
+  // with no record falls through to the plain team file.
+  const found = findRoot(cwd);
+  const root = found ?? realOrResolved(cwd);
+  const path = join(root, TEAM_FILE);
+  const id = teamIdOf(root);
+  let stored;
+  try {
+    stored = readStoredTeamConfig(home, id);
+  } catch (error) {
+    if (error instanceof TeamConfigStoreError) {
+      return { ok: false, path, errors: [{ line: 0, message: `the registry's record of this team cannot be read: ${error.message}` }] };
+    }
+    throw error;
+  }
+  if (stored !== null) {
+    const loaded = loadTeamText(stored.text, root, path, options);
+    return noteRegistryRead(loaded, path, root, options);
+  }
+  if (!found) return readTeamYaml(cwd, options);
+  const listed = listedTeam(home, root) != null;
+  const file = readTeamYaml(cwd, options);
+  if (!file.ok) {
+    if (listed) {
+      return {
+        ok: false,
+        path: file.path ?? path,
+        errors: [{
+          line: 0,
+          message: `the registry lists this team but holds no config record, and ${TEAM_FILE} is not here to import: restore the file and run \`team migrate\`, or recreate the team with \`team init\``,
+        }],
+      };
+    }
+    const missing = file.errors.some((problem) => problem.message.startsWith('no team file'));
+    if (missing) {
+      return {
+        ok: false,
+        path: file.path ?? path,
+        errors: [{
+          line: 0,
+          message: `no team is registered for ${root} (${teamConfigRecordPath(home, id)}): run \`team init\`, then \`team migrate\``,
+        }],
+      };
+    }
+    return file;
+  }
+  const team = withRecordedSession(file.team, file.text, home, root);
+  return {
+    ...file,
+    team,
+    source: 'team-file',
+    notice: listed ? FILE_FALLBACK_LISTED : FILE_FALLBACK_UNLISTED,
+  };
+}
+
 // Finds, reads and validates the team file. With `file`, the root is the folder that holds the
 // file's `.agents/`, or the file's own folder when it sits elsewhere.
-export function loadTeamFile(cwd: string, options: { file?: string; home?: string; checkOnly?: boolean; fs?: FsReader; session?: string } = {}): LoadResult {
+function readTeamYaml(cwd: string, options: LoadTeamFileOptions = {}): LoadResult {
   let path: string;
   let root: string;
   // A named file is read and only that file: an empty name is not "no name", it names the

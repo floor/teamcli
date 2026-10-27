@@ -152,7 +152,7 @@ export function resolveCodexDaemonPolicy(context: CodexDaemonContext = {}): Code
         return {
           ok: false,
           value: 'off',
-          why: loaded.errors.map((e) => e.message).join('; ') || 'team.yaml could not be read',
+          why: loaded.errors.map((e) => e.message).join('; ') || 'team config could not be read',
           refusals: [],
         };
       }

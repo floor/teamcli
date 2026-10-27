@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { readState, updateState } from '../state.ts';
-import { readTeamConfig } from './team-config.ts';
+import { readTeamConfig, resolveTeamConfigSource } from './team-config.ts';
+import { listedTeam, withRecordedSession } from './recorded-session.ts';
 import type { Deprecation, Problem, TeamFile } from './types.ts';
 import { validateTeamFile } from './validate.ts';
 
@@ -50,20 +51,35 @@ export function currentTeam(
     if (remember) rememberLastValid(dir, loaded.path, now);
     return { ok: true, team: loaded.team, root: loaded.root, dir, warnings: loaded.warnings, deprecations: loaded.deprecations ?? [], path: loaded.path,
       ...(loaded.source !== undefined ? { source: loaded.source } : {}),
-      ...(loaded.leftover !== undefined ? { leftover: loaded.leftover } : {}) };
+      ...(loaded.leftover !== undefined ? { leftover: loaded.leftover } : {}),
+      ...(loaded.notice !== undefined ? { notice: loaded.notice } : {}) };
   }
   if (!loaded.path || !existsSync(loaded.path)) return { ok: false, errors: loaded.errors };
   const dir = dirname(loaded.path);
   const saved = lastValid(dir);
   if (!saved) return { ok: false, errors: loaded.errors };
   const first = loaded.errors[0];
+  const root = dir.endsWith('.agents') ? dirname(dir) : dir;
+  const where = home ?? undefined;
+  const registry = resolveTeamConfigSource(where !== undefined ? { home: where } : {});
+  const team = saved.file !== undefined && registry.ok && registry.source === 'registry' && where !== undefined
+    ? withRecordedSession(saved.team, saved.file, where, root)
+    : saved.team;
+  let why = first?.message ?? 'unreadable';
+  if (
+    why.includes('not in the registry')
+    && where !== undefined
+    && listedTeam(where, root) != null
+  ) {
+    why = 'the registry lists this team; its config record was not read';
+  }
   return {
     ok: true,
-    team: saved.team,
-    root: dir.endsWith('.agents') ? dirname(dir) : dir,
+    team,
+    root,
     dir,
     warnings: [],
-    notice: `team.yaml is invalid (${first && first.line ? `line ${first.line}: ` : ''}${first?.message ?? 'unreadable'}); using the copy of ${saved.readAt}`,
+    notice: `team config is invalid (${first && first.line ? `line ${first.line}: ` : ''}${why}); using the copy of ${saved.readAt}`,
   };
 }
 
@@ -85,12 +101,12 @@ function rememberLastValid(dir: string, path: string, now: Date): void {
   }
 }
 
-function lastValid(dir: string): { team: TeamFile; readAt: string } | null {
+function lastValid(dir: string): { team: TeamFile; file: string; readAt: string } | null {
   try {
     const saved = readState(dir).last_valid;
     if (!saved) return null;
     const result = validateTeamFile(saved.file);
-    return result.ok ? { team: result.team, readAt: saved.read_at } : null;
+    return result.ok ? { team: result.team, file: saved.file, readAt: saved.read_at } : null;
   } catch {
     return null;
   }

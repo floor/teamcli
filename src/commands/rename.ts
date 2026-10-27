@@ -56,7 +56,7 @@ import { readTeamText, teamPlace, writeTeamText } from '../file/team-text.ts';
 export const USAGE = `Usage: team rename <seat> <new-seat> [--session <name>] [--file <path>] [--json]
        team rename --renumber [--dry-run] [--session <name>] [--file <path>] [--json]
 
-Renames a seat in .agents/team.yaml and carries over its registry record,
+Renames a seat in the team record (team config) and carries over its registry record,
 grants, task leases, pending send-drops, mailbox messages, rules file, queue
 and notes files, state records, and message history.
 
@@ -383,7 +383,7 @@ function computeRenumberPlan(
     }
     seenTargets.add(to);
     if (!movingFrom.has(to) && team.seats.some((s) => s.name === to)) {
-      return { ok: false, reason: `seat "${to}" is already declared in .agents/team.yaml` };
+      return { ok: false, reason: `seat "${to}" is already declared in team config` };
     }
     const nickErr = nicknameProblem(team.seats, to, from);
     if (nickErr) {
@@ -554,7 +554,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
     const toName = args.rest[1] ?? '';
     const seat = team.seats.find((s) => s.name === fromName);
     if (!seat) {
-      io.stderr(`team rename: "${fromName}" is not a declared seat in .agents/team.yaml\n`);
+      io.stderr(`team rename: "${fromName}" is not a declared seat in team config\n`);
       return 'refused';
     }
     if (seat.count > 1) {
@@ -574,7 +574,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
       return 'refused';
     }
     if (team.seats.some((s) => s.name === toName)) {
-      io.stderr(`team rename: seat "${toName}" is already declared in .agents/team.yaml\n`);
+      io.stderr(`team rename: seat "${toName}" is already declared in team config\n`);
       return 'refused';
     }
     const nickClash = nicknameProblem(team.seats, toName, fromName);
@@ -618,7 +618,7 @@ async function executeRename(argv: string[], io: Io, sources: RenameSources): Pr
 
   const results: SeatRenameResult[] = [];
   for (const { from, to } of renames) {
-    const moved: string[] = ['.agents/team.yaml'];
+    const moved: string[] = ['team config'];
     if (stateMoved) moved.push('.agents/team.state.json');
 
     let seatSession = session;

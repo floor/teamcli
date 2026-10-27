@@ -88,7 +88,7 @@ export async function runQueue(argv: string[], io: Io, sources: QueueSources = {
     const message = problem?.message ?? 'the team file can\'t be read';
     if (problem !== undefined && isNoRepository(problem)) {
       const shown = withoutFileOffer(message);
-      if (json) writeJsonError(io, 'queue.not-a-repo', shown, 'run team queue from inside a checkout, or from the folder that holds .agents/team.yaml');
+      if (json) writeJsonError(io, 'queue.not-a-repo', shown, 'run team queue from inside a checkout');
       else out.stderr(`team queue: ${shown}\n`);
       // exit: queue.not-a-repo
       return 2;

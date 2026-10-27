@@ -55,7 +55,7 @@ One signed source per level, each read as a `policies:` map (`src/policy/sources
 |---|---|---|
 | entity | `entities.yaml` | `<home>/.config/team/entities.yaml`, under `<entity>.policies` |
 | project | `projects.yaml` | `<home>/.config/team/projects.yaml`, under `projects.<projectId>.policies` |
-| team | `team.yaml` | the team root's `.agents/team.yaml`, owner `policies:` section |
+| team | `team.yaml` | the team root's `team config`, owner `policies:` section |
 | seat | agent file | `<home>/.config/team/agents/<agentId>.yaml`, under `policies` |
 
 Writer: the owner only, at `team policy set` / `team policy unset` (§4). A source that cannot be read, verified or ordered fails closed: nothing is lifted on it, the default does not silently stand in, and the run says why in its log.
@@ -110,7 +110,7 @@ team policy unset <level> <name> [--entity <id>] [--project <id>] [--seat <name>
 ## 5. Rules
 
 1. **Only the owner sets and unsets.** A non-owner's `policy set` or `policy unset` MUST be refused with `policy.refused`; in 0.5.0 there is no grant that carries the setter. *Source:* `src/commands/policy.ts`, `contract/exit-codes.json`. *Proof:* `test/policy.test.ts`.
-2. **One signed source per level.** An entity policy lives under its entity, a project under its project id, a team in its `.agents/team.yaml` owner section, a seat in its agent file; every write is signed under `POLICY_DOMAIN` with the target and generation covered. *Source:* `src/policy/sources.ts`. *Proof:* `test/policy.test.ts`.
+2. **One signed source per level.** An entity policy lives under its entity, a project under its project id, a team in its `team config` owner section, a seat in its agent file; every write is signed under `POLICY_DOMAIN` with the target and generation covered. *Source:* `src/policy/sources.ts`. *Proof:* `test/policy.test.ts`.
 3. **A lower level may only tighten.** A declaration that is not within every outer level's MUST be refused at write with `policy.refused`; the tightness direction is per name (§3.3). The exception is the names whose defining text says a lower level chooses (`development-mode`, `seat-numbering`). *Source:* `POLICY_CATALOGUE`'s `isWithin`, `lowerLevelChooses`. *Proof:* `test/policy.test.ts`.
 4. **The innermost unexpired declaration wins.** An expired declaration is unset at its level; the chain reads the next one out. *Source:* `src/policy/resolve.ts`. *Proof:* `test/policy.test.ts`.
 5. **Gate-lifting policies fail to off.** A gate-lifting name with no effective value reads as `off` — the default never silently stands in for a level that spoke and expired. *Source:* `gateLifting` in the catalogue, `src/dev_mode.ts`. *Proof:* `test/dev-mode-gates-matrix.test.ts`.

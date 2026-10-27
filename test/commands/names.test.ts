@@ -159,7 +159,7 @@ describe('the old spelling is the new run, one notice line first', () => {
       expect(ran.stdout).toBe(
         'team acme-web, session "acme-web"\n' +
           `${KEY_ISOLATION_LINE}\n` +
-          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
+          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from team config\n' +
           'difference: lead is in the file and is not running\n' +
           '  repair: team up\n' +
           '  who: the owner\n' +
@@ -179,7 +179,7 @@ describe('the old spelling is the new run, one notice line first', () => {
       expect(refused.stdout).toBe(
         'team acme-web, session "acme-web"\n' +
           `${KEY_ISOLATION_LINE}\n` +
-          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from .agents/team.yaml\n' +
+          'warning: the file, line 3: `coordinator:` is now `leads: true` on the lead\'s seat, and is still read; repair: set `leads: true` on the lead\'s seat and remove `coordinator:` from team config\n' +
           `difference: ${REFUSED_WHY}\n` +
           '  repair: the live file is what the commands read\n' +
           '  who: the owner\n' +

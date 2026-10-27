@@ -2,9 +2,9 @@
 
 ## Summary
 
-Restarting a seat today requires either `team remove <seat> && team add <seat>` (which edits `.agents/team.yaml` twice and cannot be used to cycle a seat whose declaration stays in place) or `team down && team up` (which stops every other seat in the session).
+Restarting a seat today requires either `team remove <seat> && team add <seat>` (which edits `team config` twice and cannot be used to cycle a seat whose declaration stays in place) or `team down && team up` (which stops every other seat in the session).
 
-`team restart` stops and relaunches seats in place without editing `.agents/team.yaml`:
+`team restart` stops and relaunches seats in place without editing `team config`:
 
 ```
 team restart <seat> [--abandon] [--dry-run] [--session <name>] [--file <path>]
@@ -30,7 +30,7 @@ team restart --changed [--abandon] [--dry-run] [--session <name>] [--file <path>
 ### Caller invariants for `team restart <seat>`
 
 1. **Detached calls**: a run with no terminal (`caller.kind === 'owner-no-tty'`) is refused before reading any file (`restart.detached`, exit 1).
-2. **Owner-only flags**: `--session` and `--file` are the owner's alone (`restart.session-owner`, `restart.file-owner`, exit 1). When a lead runs `team restart <seat>` from its lobby without `--file`, `launchedTeamFile` resolves the project's `.agents/team.yaml`.
+2. **Owner-only flags**: `--session` and `--file` are the owner's alone (`restart.session-owner`, `restart.file-owner`, exit 1). When a lead runs `team restart <seat>` from its lobby without `--file`, `launchedTeamFile` resolves the project's `team config`.
 3. **Recorded pane verification**: a lead caller must run from the pane recorded for its seat in `.agents/state.json` (`standingOf(dir, session, caller)`). Missing or mismatched pane records are refused (`restart.caller`, exit 1).
 4. **No self-restart from a seat**: a seat caller cannot restart its own recorded pane because closing the workspace kills the calling shell mid-command before the relaunch runs (`restart.self`, exit 1: ``team restart: the <seat> cannot restart its own recorded pane; another `leads` seat (or the owner) restarts it``).
 5. **No seat-initiated `--abandon` on lead seats**: a seat caller may not pass `--abandon` when targeting the orchestrator's or the operator's seat (`restart.lead`, exit 1: `team restart: a seat caller does not abandon the orchestrator's or the operator's seat; this call is <caller>`).

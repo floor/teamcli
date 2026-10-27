@@ -266,7 +266,7 @@ may not read the team gets the fixed sentence on stderr and nothing on stdout, w
 | `team status: --session is the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team status: only the owner runs this, from a terminal outside herdr` — a run with no terminal aiming either flag; judged before the caller gate, so it is this line and not the fixed sentence below | 1 |
 | `team status: this team is not yours to read` | 2 |
-| `team status: team.yaml line <n>: <message>` | 2 |
+| `team status: team config line <n>: <message>` | 2 |
 | `team status: herdr doesn't answer; is it installed and running?` | 2 |
 
 `status` prints no warning the team file loads with — the `coordinator:` notice included: a

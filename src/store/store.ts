@@ -5,6 +5,8 @@ import { basename, join } from 'node:path';
 import type { Fingerprints } from '../approve/fingerprint.ts';
 import { canonicalRecord, teamRecordOf } from '../file/canonical-record.ts';
 import { validateTeamFile } from '../file/validate.ts';
+import { readStoredTeamConfig } from '../registry/team-config-store.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { parseYaml } from '../yaml.ts';
 import { bumpGeneration, keyOf, keyState, recordedGeneration, SAFE_GENERATION, signDomain, verifyDomain, verifyPayload, type Json } from './keys.ts';
 
@@ -107,8 +109,14 @@ export function otherStoreNote(name: string): string {
   return `another approval store matches this project root and was left in place: ${name}`;
 }
 
-/** The current project's name, from a real team file. A link is not a project. */
-function projectAt(root: string): string | null {
+/** The current project's name: the registry's config record, then a real team file. A link is not a project. */
+function projectAt(root: string, home: string): string | null {
+  try {
+    const stored = readStoredTeamConfig(home, teamIdOf(root));
+    if (stored !== null) return projectName(stored.text);
+  } catch {
+    // A record that cannot be read is not a project name; the file is the fallback.
+  }
   const agents = join(root, '.agents');
   try {
     const stat = lstatSync(agents);
@@ -129,6 +137,10 @@ function projectAt(root: string): string | null {
   } catch {
     return null;
   }
+  return projectName(text);
+}
+
+function projectName(text: string): string | null {
   try {
     const node = parseYaml(text);
     if (node.kind !== 'map') return null;
@@ -155,7 +167,7 @@ function locateStores(root: string, home: string): { store: string | null; other
   const names = matchingNames(root, home);
   if (names === null || names.length === 0) return { store: null, others: [] };
   const folder = storesFolder(home);
-  const project = projectAt(root);
+  const project = projectAt(root, home);
   const expected = project === null ? null : basename(storePath(project, root, home));
   const approved = names.filter((name) => existsSync(join(folder, name, APPROVAL)));
   if (expected !== null && approved.includes(expected)) {

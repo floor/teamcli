@@ -12,7 +12,7 @@ export const USAGE = `Usage: team release check <package@version> [--json] [--fi
 
   <package@version>   a package of the file's releases, and its SemVer version
   --json              print the result as one JSON object
-  --file <path>       the team file, instead of the main checkout's .agents/team.yaml
+  --file <path>       a team file, instead of the registry record (team config)
 
 Checks the public npm and GitHub records of one release: the exact version and
 its checksums (with provenance when the file declares trusted publishing), the

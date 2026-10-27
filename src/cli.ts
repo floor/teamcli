@@ -98,7 +98,7 @@ Options:
   --about     print what this release is and what 0.5.0 must not pretend
   --help      print this text
 
-The team is declared in <project>/.agents/team.yaml.
+The team is the registry record. Edit it with team config. .agents/team.yaml is only an input to team migrate.
 
 Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error, 2 when no command or an unknown command is given.
 `;

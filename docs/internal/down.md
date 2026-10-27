@@ -350,7 +350,7 @@ seats: [
 
 ```console
 $ team down ; echo "exit $?"
-team.yaml is invalid (line 3: "[" is not closed on its line); using the copy of 2026-10-04T09:00:00.000Z
+team config is invalid (line 3: "[" is not closed on its line); using the copy of 2026-10-04T09:00:00.000Z
 session beacon is not running: nothing to stop
 exit 0
 ```

@@ -65,7 +65,7 @@ shape, not a JSON schema shipped at the tag.
 Illustrative proposed report (no corresponding test fixture at the tag):
 
 ```json
-{"format":1,"clis":[{"cli":"codex","binary":"codex","installed":true,"version":null,"logged_in":null,"login_check":"codex login status"}],"project":{"root":".","git":true,"visibility":{"value":null,"source":"not found"},"checks":[{"command":"npm test","source":"package.json scripts.test"}],"check_search":["package.json","Makefile","justfile","pyproject.toml","go.mod",".github/workflows"],"ci":[".github/workflows/test.yml"],"team_file":{"present":false,"path":".agents/team.yaml"}}}
+{"format":1,"clis":[{"cli":"codex","binary":"codex","installed":true,"version":null,"logged_in":null,"login_check":"codex login status"}],"project":{"root":".","git":true,"visibility":{"value":null,"source":"not found"},"checks":[{"command":"npm test","source":"package.json scripts.test"}],"check_search":["package.json","Makefile","justfile","pyproject.toml","go.mod",".github/workflows"],"ci":[".github/workflows/test.yml"],"team_file":{"present":false,"path":"team config"}}}
 ```
 
 ### 3.2 Proposed presets and model package
@@ -180,7 +180,7 @@ This is an illustrative future transcript; the first four commands are absent at
 1. A person asks an agent already authorized to read the project to propose a team.
 2. The agent runs `team detect --json`; no discovered test or workflow runs.
 3. It runs `team presets --json`, then `team preset small --yaml`; both print only.
-4. It writes a candidate `.agents/team.yaml` within its existing write authority, examines the
+4. It writes a candidate `team config` within its existing write authority, examines the
    project and explains its selected roles, resources, checks, scope and review compromises.
 5. The principal authorized to create receives the proposal and reads the complete preview.
    A required grant is obtained through the existing owner-controlled grant mechanism; where

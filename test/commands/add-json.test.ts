@@ -258,7 +258,7 @@ describe('team add --json', () => {
     const doc = assertJsonErrorShape(io.out, { id: 'add.caller', messageContains: 'only the owner or a standing grant' });
     expect(made.creates).toEqual([]);
     // The repair names the command a delegate runs, or the owner's: this run's --json is not part of it.
-    expect(doc.error.repair).toBe('an approved delegate runs `team add …` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr');
+    expect(doc.error.repair).toBe('an approved delegate runs `team add …` from its own pane when team config names one; otherwise the owner runs it from this folder, at a terminal outside herdr');
     expect(doc.error.repair).not.toContain('--json');
 
     // The dry answer's line is the command itself, without the dry run's own flag.

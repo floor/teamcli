@@ -28,8 +28,7 @@ keys prints the settings registry: each key's levels, allowed values, release de
 governing policy and how a change applies. <level> is entity, project, team or seat;
 without one, every key is listed.
 
-get, set, unset and edit read and edit this team's record, what .agents/team.yaml used
-to hold. <path> is dotted keys; under a list, a segment names the item by its name or
+get, set, unset and edit read and edit this team's record. <path> is dotted keys; under a list, a segment names the item by its name or
 index: watch.unread_after, seats.lead.model, seats.0.cli. <value> is read as YAML (a
 number, true, a one-line [list] or {map}), else as text. edit opens the record as YAML
 in $VISUAL or $EDITOR and writes it back once it validates. Every write is validated

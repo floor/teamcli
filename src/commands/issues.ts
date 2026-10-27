@@ -113,7 +113,7 @@ export async function runIssues(argv: string[], io: Io, sources: IssuesSources =
     const message = problem?.message ?? 'the team file can\'t be read';
     if (problem !== undefined && isNoRepository(problem)) {
       const shown = withoutFileOffer(message);
-      if (json) writeJsonError(io, 'issues.not-a-repo', shown, 'run team issues from inside a checkout, or from the folder that holds .agents/team.yaml');
+      if (json) writeJsonError(io, 'issues.not-a-repo', shown, 'run team issues from inside a checkout');
       else out.stderr(`team issues: ${shown}\n`);
       // exit: issues.not-a-repo
       return 2;

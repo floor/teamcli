@@ -12,7 +12,7 @@ public: not yet; staged in the private docs; ported after review with no private
 
 ## 1. Scope
 
-The project root is the directory that holds the selected `.agents/team.yaml`; this spec covers how a
+The project root is the directory that holds the selected `team config`; this spec covers how a
 command finds it, including a folder that is not a Git repository, and what changes there. It covers
 the team file's `knowledge` section — the default folder, the explicit folder, the off form, their
 validation, the historical approval observation and the automatic observation of the fixed default — and what a seat is
@@ -49,7 +49,7 @@ the checkout selection are built, and §7 says exactly where the code stops.
 
 ### 3.1 The team file's `knowledge` section
 
-It lives in the selected team file, `.agents/team.yaml`. It is an owner section, beside `trust` and
+It lives in the selected team file, `team config`. It is an owner section, beside `trust` and
 `dialogs`, written by the owner; the historical `team approve` recorded the observation, while a
 change today is authorized by the grant/create flow (OD-20261015-03).
 
@@ -138,9 +138,9 @@ changes; it does not change the file's `rules:` fingerprint.
 Root selection writes these to `stderr`, never to `--json` standard output:
 
 ```text
-team: using <checkout>/.agents/team.yaml; this file is the team for that checkout and its linked worktrees
-team: using <root>/.agents/team.yaml; this file is the team for this directory and for every descendant that has no nearer .agents/team.yaml
-team: init: creation root is <root>; writing <root>/.agents/team.yaml
+team: using the registry record of <checkout>; that record is the team for that checkout and its linked worktrees
+team: using the registry record of <root>; that record is the team for this directory and for every descendant that has no nearer record
+team: init: creation root is <root>; writing the registry record
 ```
 
 The end of the walk, with the tag's wording where it exists:
@@ -253,14 +253,14 @@ is the loader's, and the lines are the ones `status`, `doctor`, `init`, `check`,
 Root selection, from the invocation directory:
 
 1. **A checkout file wins.** Ask Git for the invocation directory's checkout (the checkout itself,
-   a subdirectory, or a linked worktree). When its main checkout has `.agents/team.yaml`, that file
+   a subdirectory, or a linked worktree). When its main checkout has `team config`, that file
    is the root, and the rule 1 announcement goes to `stderr`.
 2. **`init` creates.** For `team init` only, a discovered checkout's main checkout is the creation
    root even when it holds no team file; with no checkout, the invocation directory is. A parent
    team file never takes `init` over. When the creation root differs from the invocation directory,
    the rule 2 announcement goes to `stderr`.
 3. **The lexical walk.** Otherwise, walk the invocation directory and its existing ancestors
-   lexically, nearest first; the first `.agents/team.yaml` wins. A symbolic-link candidate
+   lexically, nearest first; the first `team config` wins. A symbolic-link candidate
    directory is searched for the file, and the walk then ends without continuing through its
    target; a file that exists only on a parent of that target is not selected. A missing candidate
    is not a root. The rule 3 announcement goes to `stderr`.
@@ -302,7 +302,7 @@ from a folder root: their tag read is remote.
 
 2. **Checkout selection.** Without `--file`, a command **MUST** first ask Git for the invocation
    directory's checkout, including a subdirectory and a linked worktree, and **MUST** select the
-   main checkout's `.agents/team.yaml` when it exists. *Source:* `src/file/load.ts` (`findRoot`).
+   main checkout's `team config` when it exists. *Source:* `src/file/load.ts` (`findRoot`).
    *Proof:* `test/load.test.ts` (the main-checkout, subfolder and linked-worktree cases).
 
 3. **`init`'s creation root.** `team init` **MUST** use the discovered main checkout as its
@@ -315,11 +315,11 @@ from a folder root: their tag read is remote.
 
 4. **The lexical walk.** Otherwise, a command **MUST** walk the invocation directory and its
    existing ancestors lexically, nearest first, and **MUST** select the first
-   `.agents/team.yaml`. A symbolic-link candidate **MUST** be searched for the file, and the walk
+   `team config`. A symbolic-link candidate **MUST** be searched for the file, and the walk
    **MUST** then end without continuing through its target; a missing candidate is not a root.
    When rule 3 chooses the root, the rule 3 announcement **MUST** go to `stderr`, and no
    announcement may reach `--json` standard output. *Source:* the decision, § Root selection, step
-   3. The tag stops earlier: it reads `.agents/team.yaml` in the invocation directory only, and
+   3. The tag stops earlier: it reads `team config` in the invocation directory only, and
    never in a parent (`src/file/load.ts`, `plainFolderTeam`). *Proof of the tag's narrower rule:*
    `test/load.test.ts` (a folder with no Git; a parent folder's file is not found) and
    `test/commands/plain-folder.test.ts`.

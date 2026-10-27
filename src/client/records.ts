@@ -20,6 +20,8 @@ import { chmodSync, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, link
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { declaredEntityClients, declaredRoots } from '../entities.ts';
+import { loadTeamText } from '../file/load.ts';
+import { withRecordedSession } from '../file/recorded-session.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat } from '../file/sections/lead.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
@@ -27,7 +29,8 @@ import type { Fingerprints } from '../approve/fingerprint.ts';
 import { approvalStanding } from '../store/store.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { getAgent } from '../registry/agents.ts';
-import { readTeams, type TeamRecord } from '../registry/teams.ts';
+import { readStoredTeamConfig, TeamConfigStoreError } from '../registry/team-config-store.ts';
+import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { STATE_FILE } from '../state.ts';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { DAY_MS, GRANT_DURATION_DEFAULT_DAYS, endsAtMs } from './duration-policy.ts';
@@ -326,15 +329,31 @@ type DeclaredTeam =
   | { kind: 'read'; team: TeamFile };
 
 function readDeclarations(root: string, home: string): DeclaredTeam {
-  if (!existsSync(join(root, '.agents', 'team.yaml'))) return { kind: 'absent' };
+  // The registry's config record is this team's definition. The file at this root is only the
+  // fallback, read by its own path: a team root that sits inside another checkout must not be
+  // replaced by that checkout's file.
+  const file = join(root, '.agents', 'team.yaml');
+  let stored: ReturnType<typeof readStoredTeamConfig>;
+  try {
+    stored = readStoredTeamConfig(home, teamIdOf(root));
+  } catch (error) {
+    if (error instanceof TeamConfigStoreError) return { kind: 'unreadable' };
+    throw error;
+  }
+  if (stored !== null) {
+    const loaded = loadTeamText(stored.text, root, file, { home, checkOnly: true });
+    if (loaded.ok) return { kind: 'read', team: withRecordedSession(loaded.team, loaded.text, home, root) };
+    return loaded.errors.some((problem) => problem.unreadable) ? { kind: 'unreadable' } : { kind: 'invalid' };
+  }
+  if (!existsSync(file)) return { kind: 'absent' };
   let loaded: ReturnType<typeof readTeamConfig>;
   try {
-    loaded = readTeamConfig(root, { file: join(root, '.agents', 'team.yaml'), home, checkOnly: true });
+    loaded = readTeamConfig(root, { file, home, checkOnly: true });
   } catch {
     return { kind: 'unreadable' };
   }
-  if (!loaded.ok) return { kind: 'invalid' };
-  return { kind: 'read', team: loaded.team };
+  if (!loaded.ok) return loaded.errors.some((problem) => problem.unreadable) ? { kind: 'unreadable' } : { kind: 'invalid' };
+  return { kind: 'read', team: withRecordedSession(loaded.team, loaded.text, home, root) };
 }
 
 /** The folder a declaration launches its seat in, resolved from recorded and declared placement
@@ -467,7 +486,7 @@ export function clientKeyPlacementProblem(home: string, dir: string): string | n
             const absent = `the recorded seat "${seatName}" carries no start folder`;
             const file = declaredTeam();
             if (file.kind === 'absent') {
-              return `${absent} and team "${team.project}" declares no seats (there is no .agents/team.yaml): client key placement cannot be checked`;
+              return `${absent} and team "${team.project}" declares no seats (team config has no record): client key placement cannot be checked`;
             }
             if (file.kind === 'unreadable') {
               return `${absent} and the team file of "${team.project}" cannot be read: client key placement cannot be checked`;

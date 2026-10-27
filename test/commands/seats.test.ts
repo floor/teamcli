@@ -327,7 +327,7 @@ describe('team seats', () => {
     const ioNotice = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file, '--json'], ioNotice, statusSources)).toBe(0);
     const parsedNotice = assertMatchesOutputSchema<SeatsJson>(ioNotice.out, SEATS_OUTPUT_SCHEMA);
-    expect(parsedNotice.notice).toContain('team.yaml is invalid');
+    expect(parsedNotice.notice).toContain('team config is invalid');
 
     for (const [argv, messageContains] of [
       [['--nope', '--json'], 'unknown option --nope'],

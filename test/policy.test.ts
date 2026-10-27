@@ -788,7 +788,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
     }
   });
 
-  test('sources: readTeamPolicySource reads owner policies: section from .agents/team.yaml and refuses tampered or malformed entries naming team', () => {
+  test('sources: readTeamPolicySource reads owner policies: section from team config and refuses tampered or malformed entries naming team', () => {
     const fx = makeFixture();
     try {
       const wrote = writePolicySet(
@@ -1385,13 +1385,13 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       // line taking effect.
       expect(out1).toContain(
         'difference: policy "delivery-order" at level team ("mcp-inbox, typed") loosens level project ("typed")\n' +
-          '  repair: remove or narrow delivery_order in .agents/team.yaml\n' +
+          '  repair: remove or narrow delivery_order in team config\n' +
           "  who: the team's lead\n",
       );
       expect(out1).toContain('1 difference\n');
       expect(out1).not.toContain('for the owner');
 
-      // Apply the printed repair: remove delivery_order from .agents/team.yaml, then check is clean.
+      // Apply the printed repair: remove delivery_order from team config, then check is clean.
       writeFileSync(teamYamlPath, baseYaml);
       let out2 = '';
       const io2: Io = {
@@ -1445,7 +1445,7 @@ describe('Policy object and catalogue interface (Kernel amendment 02 §2.1, §2.
       });
       expect(code3).toBe(0);
       expect(out3).toContain(
-        'note: delivery_order [native, typed] in .agents/team.yaml is shadowed by the signed team delivery-order policy; remove delivery_order from .agents/team.yaml so team policy unset does not bring it back\n',
+        'note: delivery_order [native, typed] in team config is shadowed by the signed team delivery-order policy; remove delivery_order from team config so team policy unset does not bring it back\n',
       );
       expect(out3).toContain('no differences\n');
     } finally {

@@ -183,7 +183,7 @@ function refuseFile(io: Io, json: boolean, current: Extract<Current, { ok: false
       ? 'settings.file-invalid'
       : 'settings.file';
   if (json) {
-    const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; ');
+    const msg = current.errors.map((p) => `${p.line ? `team config line ${p.line}: ` : ''}${p.message}`).join('; ');
     writeJsonError(io, id, msg, null);
   } else {
     printProblems(io, current.errors);
@@ -1114,6 +1114,6 @@ function recordRemovals(
 
 function printProblems(io: Io, problems: Problem[]): void {
   for (const problem of problems) {
-    io.stderr(`team settings: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
+    io.stderr(`team settings: ${problem.line ? `team config line ${problem.line}: ` : ''}${problem.message}\n`);
   }
 }

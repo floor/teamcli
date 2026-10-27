@@ -207,7 +207,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
           : current.errors.some(isParseError)
             ? 'check.file-invalid'
             : 'check.file';
-        writeJsonError(io, id, current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; '));
+        writeJsonError(io, id, current.errors.map((p) => `${p.line ? `team config line ${p.line}: ` : ''}${p.message}`).join('; '));
       } else {
         printProblems(io, current.errors);
       }
@@ -563,11 +563,12 @@ function notYours(io: Io, json?: boolean): number {
   return 2;
 }
 
-/** The team file as a repair names it: `.agents/team.yaml` under the root the load found, or
- *  the path itself when `--file` aimed the run at another folder. */
+/** The team record as a repair names it: `team config` for this checkout's own record, or the
+ *  path itself when `--file` aimed the run at another file. */
 export function shownTeamFile(path: string | undefined, root: string): string {
-  if (path === undefined) return TEAM_FILE;
+  if (path === undefined) return 'team config';
   const rel = relative(root, path);
+  if (rel === TEAM_FILE) return 'team config';
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? rel : path;
 }
 
@@ -1458,8 +1459,8 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
     if (res.refused.some((r) => r.level === 'team')) {
       const extra = team.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
       out.push({
-        what: `delivery_order [${team.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
-        repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order in .agents/team.yaml`,
+        what: `delivery_order [${team.deliveryOrder.join(', ')}] in team config is set aside; [${res.value.join(', ')}] stands`,
+        repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order in team config`,
       });
     }
   }
@@ -1479,8 +1480,8 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
     if (res.refused.some((r) => r.level === 'seat')) {
       const extra = seat.deliveryOrder.filter((leg) => !res.value.includes(leg)).length;
       out.push({
-        what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in .agents/team.yaml is set aside; [${res.value.join(', ')}] stands`,
-        repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order for ${seat.name} in .agents/team.yaml`,
+        what: `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config is set aside; [${res.value.join(', ')}] stands`,
+        repair: `drop the ${pluralCount(Math.max(1, extra), 'leg')} not in the inherited delivery_order for ${seat.name} in team config`,
       });
     }
   }
@@ -1541,7 +1542,7 @@ function unknownStatusNotes(team: TeamFile, state: SessionState, live: Live): st
 // `status`'s own problem lines, in the check's name.
 function printProblems(io: Io, problems: Problem[]): void {
   for (const problem of problems) {
-    io.stderr(`team check: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
+    io.stderr(`team check: ${problem.line ? `team config line ${problem.line}: ` : ''}${problem.message}\n`);
   }
 }
 
@@ -1566,9 +1567,9 @@ function deprecationRepairOf(message: string, shownFile: string): string | undef
 function policyRefusalRepair(refusal: PolicyLoadRefusal, seatName?: string): string {
   if ((refusal.kind === 'loosening' || refusal.kind === 'invalid-policy') && refusal.unsigned === true) {
     if (seatName) {
-      return `remove or narrow delivery_order for ${seatName} in .agents/team.yaml`;
+      return `remove or narrow delivery_order for ${seatName} in team config`;
     }
-    return 'remove or narrow delivery_order in .agents/team.yaml';
+    return 'remove or narrow delivery_order in team config';
   }
   const seatFlag = seatName ? ` --seat ${seatName}` : '';
   if (refusal.kind === 'loosening') {
@@ -1658,7 +1659,7 @@ function policyCheck(
     team.deliveryOrder !== null
   ) {
     notes.push(
-      `delivery_order [${team.deliveryOrder.join(', ')}] in .agents/team.yaml is shadowed by the signed team delivery-order policy; remove delivery_order from .agents/team.yaml so team policy unset does not bring it back`,
+      `delivery_order [${team.deliveryOrder.join(', ')}] in team config is shadowed by the signed team delivery-order policy; remove delivery_order from team config so team policy unset does not bring it back`,
     );
   }
 
@@ -1709,7 +1710,7 @@ function policyCheck(
       seat.deliveryOrder !== undefined
     ) {
       notes.push(
-        `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in .agents/team.yaml is shadowed by the signed seat delivery-order policy; remove delivery_order for ${seat.name} from .agents/team.yaml so team policy unset does not bring it back`,
+        `${seat.name}: delivery_order [${seat.deliveryOrder.join(', ')}] in team config is shadowed by the signed seat delivery-order policy; remove delivery_order for ${seat.name} from team config so team policy unset does not bring it back`,
       );
     }
     const seatChain = loadAndResolvePolicyChain(

@@ -1021,7 +1021,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       // file this run stops counts as approved, the warning names it, and the caller goes to
       // the audit log. Off, today's refusal.
       const said = notInForce(standing);
-      const folded = devModeFileApproval(dev, said, current.path ?? join(dir, 'team.yaml'));
+      const folded = devModeFileApproval(dev, said, current.path ?? 'team config');
       if (folded === null) {
         for (const line of warnings) {
           if (json) collect(line);

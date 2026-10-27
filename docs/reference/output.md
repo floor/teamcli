@@ -158,7 +158,7 @@ The `who` value comes from the closed four-value vocabulary `DIFFERENCE_WHO_VALU
 - `'any seat'`: any registered seat of the team (or the owner) may run the repair (`team register`, `team send`, or seat-record read surfaces `status`, `check`, `messages`, `feed`, `list`, `usage`, `next`).
 
 **Set-aside `delivery_order` settings (`team check`, scene D4)**:
-- When a `delivery_order` / delivery-order setting in `.agents/team.yaml` (at the team, role, or pair level) is set aside because it holds an illegal or empty word (leaving the inherited delivery order in force), `team check` reports it as a `difference:` naming the invalid setting and the standing inherited order, with `repair:` pointing to fixing the `delivery_order` value in `.agents/team.yaml` and `who: "the team's lead"` — the repair is a plain file edit that a lead may make, so the repair names no command and the map falls back to the lead.
+- When a `delivery_order` / delivery-order setting in `team config` (at the team, role, or pair level) is set aside because it holds an illegal or empty word (leaving the inherited delivery order in force), `team check` reports it as a `difference:` naming the invalid setting and the standing inherited order, with `repair:` pointing to fixing the `delivery_order` value in `team config` and `who: "the team's lead"` — the repair is a plain file edit that a lead may make, so the repair names no command and the map falls back to the lead.
 
 **Deterministic resolution rule (`whoOfDifference(diff)` and `whoFromCommand(command)`)**:
 The repair names the **first** authority tier that applies:
@@ -189,7 +189,7 @@ Every command ends its plain-text reading or action with **one summary line** us
 - **Counted table summaries (`seats`, `send --list`, `list`, `messages`, `issues`, `plan`, `feed`, `worktree list`, `projects`, `release check`, `mcp doctor`, `proc list`)**:
   - `pluralCount(n, singular)` formats `1 <singular>` for `1` and `<n> <plural>` for `0` or `n >= 2` (e.g., `0 seats`, `1 seat`, `4 seats`, `0 tasks`, `1 task`, `2 tasks`).
 - **Action commands (`up`, `down`, `add`, `remove`, `restart`, `reload`, `register`, `grant`, `delegate`, `revoke`, `init`, `worktree`, `hold`, `tempo`, `lock`, `unlock`, `pause`, `resume`, `raise`, `reply`, `policy`, `proc`)** (`renderActionSummary(spec)`):
-  - **Existing final outcome line counts as the summary line**: where an action command's existing final line already states the outcome (`team restart: restarted <seat>; pane <old> -> <new>`, `team reload: <seat> reloaded`, `removed <name>` / `stopped <name>`, `<seat>: registered — pane <pane>…`, `Wrote .agents/team.yaml: …`, `session <session>: stopped and cleared`, or `<seat>: ready`), **that line is the closing summary line** in plain text and populates `action_summary` in `--json`. Do **not** append a second summary line below an existing outcome line.
+  - **Existing final outcome line counts as the summary line**: where an action command's existing final line already states the outcome (`team restart: restarted <seat>; pane <old> -> <new>`, `team reload: <seat> reloaded`, `removed <name>` / `stopped <name>`, `<seat>: registered — pane <pane>…`, `Wrote the team record: …`, `session <session>: stopped and cleared`, or `<seat>: ready`), **that line is the closing summary line** in plain text and populates `action_summary` in `--json`. Do **not** append a second summary line below an existing outcome line.
   - `--dry-run`: `dry run: nothing was run` (or the command's existing single-line `would register…` summary on `register --dry-run`).
 
 ---
@@ -223,7 +223,7 @@ Every command ends its plain-text reading or action with **one summary line** us
    - Schema/field deprecation warnings (such as `coordinator:` → `leads: true`) are emitted **only** in `team check` (and `team doctor`'s `warn` findings), never on stderr during `team status`, `team seats`, `team list`, `team usage`, or action commands.
    - Every deprecation warning uses `formatDeprecationWarning({ line, message, repair })`:
      ```text
-     warning: the file, line 5: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml
+     warning: the file, line 5: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from team config
      ```
 
 ---
@@ -256,7 +256,7 @@ Every command ends its plain-text reading or action with **one summary line** us
    - Standard convention across commands:
      - `0`: work finished, reading agrees with the file, or `--dry-run` plan printed.
      - `1`: differences/findings found, caller/policy/lock gate refused, or runtime step failed.
-     - `2`: bad CLI invocation (unknown flag, missing argument), unreadable/invalid `.agents/team.yaml`, not inside a git repository, or `herdr` unreachable (where the contract row specifies `2`).
+     - `2`: bad CLI invocation (unknown flag, missing argument), unreadable/invalid `team config`, not inside a git repository, or `herdr` unreachable (where the contract row specifies `2`).
    - **Documented contract exceptions (pinned in `contract/exit-codes.json`)**:
      - `release`: returns `0` (all checks pass), `1` (a check is missing), `2` (`release.unknown` — unknown check name), and `64` (`release.configuration`, `release.usage` — unreadable team file or bad invocation).
      - `list` and `usage`: return only `0` and `2` (no exit `1` rows).
@@ -350,7 +350,7 @@ When a command fails (exit code `1`, `2`, or `64`) while `--json` is passed, it 
   "error": {
     "id": "add.caller",
     "message": "only the owner or a standing grant (delegate) runs this, from a terminal outside herdr; this call is seat codex-acme",
-    "repair": "an approved delegate runs `team add …` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr",
+    "repair": "an approved delegate runs `team add …` from its own pane when team config names one; otherwise the owner runs it from this folder, at a terminal outside herdr",
     "rule": "owner-only"
   }
 }
@@ -362,7 +362,7 @@ When a command fails (exit code `1`, `2`, or `64`) while `--json` is passed, it 
 - `error.message` is the human-readable failure text (without the leading `team <command>: ` prefix).
 - `error.repair` is the actionable repair string, or `null` when no automated repair command applies.
 - `error.rule` (optional `string | null`) carries the permission resolver's `PermissionRule` (`'no-record'`, `'unreadable'`, `'unplaced'`, `'not-in-map'`, `'owner-only'`, `'owner-or-leads'`, `'owner-or-own-team'`, `'team-change'`, `'team-read'`, `'terminal'`, `'absent'`, `'outside-envelope'`, `'outside-scope'`, `'other-team'`, `'admission'`, `'pane-authority'`) whenever a caller/permission gate refuses the command.
-- `notice` (optional top-level `string | null` on `team.error`) carries the load's fallback notice (e.g. `'team.yaml is invalid …; using the copy of <date>'`) whenever a refusal is decided after `currentTeam` fell back to a stored copy.
+- `notice` (optional top-level `string | null` on `team.error`) carries the load's fallback notice (e.g. `'team config is invalid …; using the copy of <date>'`) whenever a refusal is decided after `currentTeam` fell back to a stored copy.
 - **`team up`'s `deny` path under `--json`**: `up`'s unplaced/untrusted `deny` refusal exists specifically to disclose nothing about the team or file. Under `--json`, it writes `{ "schema": { "name": "team.error", "version": 1 }, "error": { "id": "up.deny", "message": "deny", "repair": null, "rule": "no-record" } }` on `stdout` (`stderr` empty, exit `1`), disclosing no team, seat, or path details beyond `"deny"` and `"no-record"`.
 - **`--dry-run` refusals under `--json`**: when a `--dry-run` call hits an exit-1 or exit-2 refusal, `--json` writes the `team.error` envelope using the **exact `contract/exit-codes.json` row ID** for that refusal site (e.g. `up.dry-…` or `add.dry-…` where a dedicated dry-run exit ID exists, or the shared refusal ID such as `add.caller` when `dry` and real runs share that `// exit:` marker). When `--dry-run` exits `0` and includes `! <cmd> would refuse: …` / `! to unblock: …` lines inside the plan, it emits the normal `team.<command>` envelope with `dry_run: true` and those `!` steps in `plan`.
 

@@ -254,12 +254,12 @@ function executePolicyView(
       return 'refused';
     }
   } else if (!current.ok) {
-    const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');
+    const msg = current.errors.map((p) => `${p.line ? `team config line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');
     if (json) {
       writeJsonError(rawIo, 'policy.invalid', msg, null);
     } else {
       for (const p of current.errors) {
-        io.stderr(`team policy: ${p.line ? `team.yaml line ${p.line}: ` : ''}${plainText(p.message)}\n`);
+        io.stderr(`team policy: ${p.line ? `team config line ${p.line}: ` : ''}${plainText(p.message)}\n`);
       }
     }
     return 'invalid';
@@ -465,7 +465,7 @@ function resolveWriteTarget(
     if (!entity) {
       return {
         ok: false,
-        why: 'no entity is declared in the team file; pass --entity <name> or set entity: in .agents/team.yaml',
+        why: 'no entity is declared in the team record; pass --entity <name> or set entity with team config',
       };
     }
     return {
