@@ -2,9 +2,12 @@
 //
 // A definition that omits `session:` used to be given `<entity>-<project>`, or the project name
 // alone. That derivation is wrong once the registry has already recorded the session: a team
-// whose registry entry says `docs` must not be addressed as `floor-docs` because a leftover
-// team file never wrote the key. An explicit `session:` is the definition's own word and is
-// left as written.
+// whose registry entry says `docs` must not be addressed as `floor-docs` because the definition
+// never wrote the key. The file fallback and a migrated config record both apply this — the
+// stored text often still omits `session:`, and reading it back as `<entity>-<project>` sends
+// `up`, `send`, `status` and `restart` at a herdr session the crew is not in. An explicit
+// `session:` is the definition's own word and is left as written. `--file` does not apply it:
+// the file it names is read as written.
 
 import { getTeam, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { parseYaml } from '../yaml.ts';

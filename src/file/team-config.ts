@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { canonicalRecord, teamRecordOf } from './canonical-record.ts';
 import { loadTeamFile, loadTeamText, TEAM_FILE } from './load.ts';
+import { withRecordedSession } from './recorded-session.ts';
 import type { LoadResult, TeamFile } from './types.ts';
 import { machineSettingsPath } from '../settings/declared.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
@@ -150,8 +151,11 @@ function leftoverOf(
   }
   const file = loadTeamText(text, root, path, { ...(options.home !== undefined ? { home: options.home } : {}), checkOnly: true });
   if (!file.ok) return { path, matches: false };
+  // A leftover that omits `session:` is read the same way the registry record is: the recorded
+  // session, not a derived `<entity>-<project>`. Otherwise a byte-identical file looks different.
+  const interpreted = options.home === undefined ? file.team : withRecordedSession(file.team, text, options.home, root);
   try {
-    return { path, matches: canonicalTeam(file.team) === canonicalTeam(team) };
+    return { path, matches: canonicalTeam(interpreted) === canonicalTeam(team) };
   } catch {
     return { path, matches: false };
   }

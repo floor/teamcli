@@ -169,7 +169,12 @@ function readRegistryThenFile(cwd: string, options: LoadTeamFileOptions): LoadRe
   }
   if (stored !== null) {
     const loaded = loadTeamText(stored.text, root, path, options);
-    return noteRegistryRead(loaded, path, root, options);
+    if (!loaded.ok) return loaded;
+    // A stored definition that omits `session:` keeps the session the team registry recorded.
+    // Deriving `<entity>-<project>` here addresses a herdr session the running crew is not in.
+    const team = withRecordedSession(loaded.team, loaded.text, home, root);
+    const read = team === loaded.team ? loaded : { ...loaded, team };
+    return noteRegistryRead(read, path, root, { home });
   }
   if (!found) return readTeamYaml(cwd, options);
   const listed = listedTeam(home, root) != null;
