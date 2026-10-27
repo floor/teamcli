@@ -105,17 +105,20 @@ a question in a pane: the answer is a signature from the owner's own device. `te
 1. The caller runs the command with `--request`. TeamCLI records the action, the repository root,
    the team, `HEAD`, a hash of the command's arguments and who asks, for fifteen minutes, and drops
    the confirmation in the owner-seat inbox. It prints the request id and the exact run to make next.
-2. The owner answers on the owner page (`team owner-seat serve`): **Oui**, **Toujours** or **Non**,
-   confirmed with Touch ID on the Mac or with the iPhone passkey. The answer is signed by an
-   accepted owner signer whose key TeamCLI confirms against the credential store.
+2. The owner answers on the owner page (`team owner-seat serve`): **Approve once**, **Always allow**
+   or **Deny**, confirmed with Touch ID on the Mac or with the iPhone passkey. **Approve once** is
+   a one-time approval. A migration needs that, and its card offers only **Approve once** and
+   **Deny**. The answer is signed by an accepted owner signer whose key TeamCLI confirms against
+   the credential store.
 3. The caller runs the same command with `--approval <id>`. TeamCLI verifies the signed answer is
    bound to this id, this action, this repository, team, `HEAD` and arguments, claims it once for
    this action, and writes an audit entry in `~/.config/team/action-audit/`. `--dry-run` verifies
    and spends nothing.
 
-**Toujours** also stores a signed rule for the same actions under the repository's parent folder,
-inside the owner's `approval-rule-ttl`: a later run of that action in a sibling repository is admitted
-with no request. Everything else fails closed: a missing, expired, mismatched (repository, team,
+**Always allow**, on a card that offers it, also stores a signed rule for that action under the
+repository's parent folder, inside the owner's `approval-rule-ttl`: a later run of that action in a
+sibling repository is admitted with no request. A migration card does not offer it. Everything else
+fails closed: a missing, expired, mismatched (repository, team,
 `HEAD`, arguments or action), unsigned or forged answer, an answer signed for another kind of
 request, a request answered by a signer of the requester's own name, and a replay. Only lifecycle
 actions are requested this way; a grant, an owner-signer change or an approval-mode change keeps

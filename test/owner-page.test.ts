@@ -12,7 +12,8 @@ import { createTeamCreateRequest, actionRequestsFolder } from '../src/client/tea
 import { admitOwnerAction, createOwnerActionRequest } from '../src/client/owner-action.ts';
 import { presentOwnerRequest } from '../src/client/owner-page-link.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
-import { OWNER_PAGE_HTML, serveOwnerPage, spkiToPoint } from '../src/security/owner-page.ts';
+import { OWNER_PAGE_HTML, ownerPageRequest, serveOwnerPage, spkiToPoint } from '../src/security/owner-page.ts';
+import { OWNER_ACTIONS } from '../src/client/owner-action.ts';
 import { proposeSecurityProfile, readSecurityProfile } from '../src/security/profile.ts';
 import { keyOf } from '../src/store/keys.ts';
 
@@ -150,9 +151,12 @@ describe('owner page', () => {
     if (!made.ok) throw new Error(made.why);
     const id = made.record.request_id;
     const state = await s.call('GET', '/api/state');
-    const shown = state.body.requests as Array<{ id: string; text: string }>;
+    const shown = state.body.requests as Array<{ id: string; text: string; title: string; description: string; onceOnly: boolean }>;
     expect(shown.map((r) => r.id)).toEqual([id]);
     expect(shown[0]!.text).toContain('seat:iris asks to create the team, then start the team');
+    expect(shown[0]).toMatchObject({ title: 'Create a team, then Start the team', onceOnly: false });
+    expect(shown[0]!.description).toContain('seat:iris asks to create the team, then start the team');
+    expect(shown[0]!.description).not.toContain('oui');
     const ch = await s.call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId: p.credentialId });
     expect(ch.status).toBe(200);
     const done = await s.call('POST', '/api/team-create/answer', { ...p.assert(String(ch.body.challenge)), id, word: 'oui' });
@@ -204,6 +208,20 @@ describe('owner page', () => {
     expect(presentOwnerRequest(s.home, () => { throw new Error('opened a browser'); })).toBe('live');
     expect(OWNER_PAGE_HTML).toContain('setInterval');
     expect(OWNER_PAGE_HTML).toContain('if (busy) return');
+    expect(OWNER_PAGE_HTML).toContain('lang="en"');
+    expect(OWNER_PAGE_HTML).toContain('>Owner seat<');
+    expect(OWNER_PAGE_HTML).toContain('Approve once');
+    expect(OWNER_PAGE_HTML).toContain('Always allow');
+    expect(OWNER_PAGE_HTML).toContain('>Deny<');
+    expect(OWNER_PAGE_HTML).toContain('A migration needs that');
+    expect(OWNER_PAGE_HTML).toContain('No owner seat yet. Ask Iris to run setup.');
+    expect(OWNER_PAGE_HTML).toContain('Add a passkey (iPhone or Mac)');
+    expect(OWNER_PAGE_HTML).toContain('Approve with my passkey');
+    expect(OWNER_PAGE_HTML).toContain('data-w="oui"');
+    expect(OWNER_PAGE_HTML).not.toContain('lang="fr"');
+    expect(OWNER_PAGE_HTML).not.toContain('Oui');
+    expect(OWNER_PAGE_HTML).not.toContain('Toujours');
+    expect(OWNER_PAGE_HTML).not.toContain('Siège');
     const first = await s.call('GET', '/api/state');
     const before = Array.isArray(first.body.requests) ? first.body.requests.length : 0;
     const root = join(s.base, 'repo');
@@ -230,6 +248,114 @@ describe('owner page', () => {
     await new Promise<void>((resolve, reject) => s.page.server.close((error) => (error ? reject(error) : resolve())));
     expect(existsSync(join(s.home, '.config', 'team', 'owner-page.json'))).toBe(false);
     expect(presentOwnerRequest(s.home, () => { throw new Error('opened a browser'); })).toBe('closed');
+  });
+
+  test('a migration card asks for a one-time approval and every action kind has an English title', async () => {
+    const titles: Record<string, string> = {
+      'team-create': 'Create a team',
+      'team-import': 'Import a team file',
+      'team-migrate': 'Migrate a team',
+      'team-add': 'Add a seat',
+      'team-up': 'Start the team',
+      'team-send': 'Send a message',
+      'team-down': 'Stop the team',
+      'team-bus': 'Start the bus',
+      'team-revoke-approval': 'Revoke an approval rule',
+      'team-forget': 'Forget a team record',
+    };
+    for (const action of OWNER_ACTIONS) {
+      const card = ownerPageRequest({
+        request_id: `oa_${'ab'.repeat(12)}`,
+        kind: 'owner-action-confirmation',
+        text: `Request oa_x: seat:iris asks to ${action}. Authorized? oui, always, or non.`,
+        summary: { kind: 'owner-action', actions: [action], root: '/tmp/repo', team: 'demo', head: null, args: {}, requested_by: 'seat:iris' },
+      });
+      expect(card.title).toBe(titles[action] ?? '');
+      expect(card.description).not.toMatch(/oui|non|Toujours/);
+      expect(card.onceOnly).toBe(action === 'team-migrate');
+    }
+    const migration = ownerPageRequest({
+      request_id: `oa_${'cd'.repeat(12)}`,
+      kind: 'owner-action-confirmation',
+      text: 'Authorized? oui, always, or non.',
+      summary: {
+        kind: 'owner-action',
+        actions: ['team-migrate'],
+        root: '/tmp/repo',
+        team: 'demo',
+        head: 'abc123abc123',
+        args: {},
+        words: { 'team-migrate': ['team=demo', 'id=demo-id', 'project=Demo', 'seats=2', 'record=deadbeef'] },
+        requested_by: 'seat:iris',
+      },
+    });
+    expect(migration.title).toBe('Migrate a team');
+    expect(migration.onceOnly).toBe(true);
+    expect(migration.description).toContain('migrate team "demo"');
+    expect(migration.description).toContain('2 seats');
+    expect(migration.description).toContain('canonical record deadbeef');
+    expect(migration.description).toContain('This migration needs a one-time approval.');
+    const created = ownerPageRequest({
+      request_id: `tc_${'ab'.repeat(12)}`,
+      kind: 'team-create-confirmation',
+      text: 'Authorized? reply oui/approved, always, or non/deny',
+      summary: { kind: 'team-create', root: '/tmp/docs', team: 'docs', head: null },
+    });
+    expect(created).toMatchObject({ title: 'Create a team', onceOnly: false });
+    expect(created.description).toBe('Create team "docs" in /tmp/docs.');
+    expect(created.description).not.toContain('oui');
+    const grant = ownerPageRequest({
+      request_id: `gr_${'ab'.repeat(12)}`,
+      kind: 'grant-confirmation',
+      text: 'Grant request gr_x: Grant for iris. Authorized? reply oui/approved, always, or non/deny',
+      summary: { text: 'Grant for iris: send to orchestrator@demo (entity demo) for 30 days.', master: false, expires: '2026-11-26T00:00:00.000Z' },
+    });
+    expect(grant).toMatchObject({ title: 'Grant', onceOnly: false });
+    expect(grant.description).toBe('Grant for iris: send to orchestrator@demo (entity demo) for 30 days.');
+    const master = ownerPageRequest({
+      request_id: `gr_${'cd'.repeat(12)}`,
+      kind: 'grant-confirmation',
+      text: 'Authorized? oui',
+      summary: { text: 'MASTER grant for iris: grant to orchestrator@demo (entity demo) for 30 days.', master: true, expires: '2026-11-26T00:00:00.000Z' },
+    });
+    expect(master.title).toBe('Master grant');
+    expect(master.onceOnly).toBe(true);
+    expect(master.description).toContain('This grant needs a one-time approval.');
+    const teamGrant = ownerPageRequest({
+      request_id: `gr_${'ef'.repeat(12)}`,
+      kind: 'grant-confirmation',
+      text: 'Authorized? oui',
+      summary: { text: 'Up grant for iris: run team up for team demo.', master: false, up: { project: 'demo' }, expires: '2026-11-26T00:00:00.000Z' },
+    });
+    expect(teamGrant).toMatchObject({ title: 'Team grant', onceOnly: true });
+    const open = ownerPageRequest({
+      request_id: `gr_${'aa'.repeat(12)}`,
+      kind: 'grant-confirmation',
+      text: 'Authorized? oui',
+      summary: { text: 'Grant for iris: send to orchestrator@demo.', master: false, expires: null },
+    });
+    expect(open.onceOnly).toBe(true);
+    expect(open.description).toContain('one-time approval');
+
+    const s = await setup();
+    const root = join(s.base, 'migrate-repo');
+    mkdirSync(root);
+    const made = createOwnerActionRequest(s.home, {
+      actions: ['team-migrate'],
+      root,
+      team: 'demo',
+      head: null,
+      args: { 'team-migrate': ['team=demo', 'id=demo-id', 'project=Demo', 'seats=1', 'record=deadbeef'] },
+      requestedBy: 'seat:iris',
+    });
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    const state = await s.call('GET', '/api/state');
+    const card = (state.body.requests as Array<{ id: string; title: string; description: string; onceOnly: boolean }>).find((item) => item.id === made.record.request_id);
+    expect(card).toMatchObject({ title: 'Migrate a team', onceOnly: true });
+    expect(card?.description).toContain('1 seat');
+    expect(card?.description).toContain('This migration needs a one-time approval.');
+    expect(card?.description).not.toContain('oui');
   });
 
   test('a request from another Host is refused even with the token', async () => {

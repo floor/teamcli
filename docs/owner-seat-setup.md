@@ -70,7 +70,8 @@ when already done). Before running it, Iris can show you the exact prompts with 
    folder of `~/Code/floor` from now on). **You approve with Touch ID**:
    *"TeamCLI: once for Create team "docs" in …/floor/docs …"*.
    From the phone instead: Iris starts `team owner-seat serve`, opens the link on the Mac, and you
-   tap **Oui** / **Toujours** and confirm with your passkey (the browser offers the iPhone QR code).
+   tap **Approve once** or **Always allow** and confirm with your passkey (the browser offers the
+   iPhone QR code). **Approve once** is a one-time approval. A migration needs that.
 3. Iris runs `team init --execute <id>`; the team file is written.
 
 Under the relaxed profile step 2 disappears: Iris runs `--request` then `--execute`, and the audit
@@ -84,17 +85,20 @@ What Iris runs, in the new repository (say `~/Code/floor/demo`):
 2. `team init --request --then-up` — one request for "create the team, then start the team".
 3. Waits for your answer, then `team init --execute <id>` and `team up --approval <id>`.
 
-What you see, and all you do: the owner page shows one card,
-*"Request oa_…: seat:iris asks to create the team, then start the team — team "demo" in
-/Users/…/floor/demo (HEAD …). Authorized? oui, always, or non."*, with **Oui**, **Toujours** and
-**Non**. You tap **Oui** and confirm with Touch ID on the Mac, or with your iPhone (the browser's
-QR code for the passkey). The card disappears. Nothing else: no terminal, no code, no question in
-a pane — the seats' folder-trust questions for the lobby and the project are pre-accepted at
-launch, and a file without absolute `trust:` no longer stops `up`.
+What you see, and all you do: the owner page shows one card, **Create a team, then Start the team**,
+*"seat:iris asks to create the team, then start the team — team "demo" in
+/Users/…/floor/demo (HEAD …)."*, with **Approve once**, **Always allow** and **Deny**.
+**Approve once** is a one-time approval. A migration needs that. **Always allow** also permits
+later runs of the same action in the parent folder. You tap **Approve once** and confirm with
+Touch ID on the Mac, or with your iPhone (the browser's QR code for the passkey). The card
+disappears. Nothing else: no terminal, no code, no question in a pane — the seats' folder-trust
+questions for the lobby and the project are pre-accepted at launch, and a file without absolute
+`trust:` no longer stops `up`.
 
 `team import --request`, `team add <name> --request`, `team up --request` and `team migrate` work the same way for
-an existing team ([team up](commands/up.md#owner-seat-approval-no-owner-terminal)). A migrate run by anyone but the owner at a terminal records the card and waits; `--request` records it and stops. **Toujours**
-covers every sibling repository of the parent folder for that action from then on.
+an existing team ([team up](commands/up.md#owner-seat-approval-no-owner-terminal)). A migrate run by anyone but the owner at a terminal records the card and waits; `--request` records it and stops. The migrate card offers only **Approve once** and **Deny**: a migration needs a one-time approval.
+**Always allow**, on the other cards, covers every sibling repository of the parent folder for
+that action from then on.
 
 ## Security profile
 
@@ -134,7 +138,9 @@ token is per run). Iris opens it on the Mac. There you can:
 - **add a passkey**: the browser creates it (iCloud Keychain on the Mac, or the iPhone through
   the QR code); the Mac's Secure Enclave signer confirms it with one Touch ID;
 - **approve the waiting security profile** with that passkey;
-- **answer team requests** (Oui / Toujours / Non) with that passkey.
+- **answer team requests** (**Approve once**, **Always allow** or **Deny**) with that passkey.
+  **Approve once** is a one-time approval. A migration needs that, and its card does not offer
+  **Always allow**.
 
 The relying party is `localhost`, which browsers treat as a secure context, so no certificate is
 needed. The phone cannot open `localhost` itself: the approval goes through the Mac browser's
