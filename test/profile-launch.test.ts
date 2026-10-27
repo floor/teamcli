@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
-import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, namedResumeTarget, profileFor, resumeCarry, startupReadsList, supportsSessionResume, withResume } from '../src/profiles/profile.ts';
+import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, namedResumeTarget, resumeCarry, startupReadsList, supportsSessionResume, withResume } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
