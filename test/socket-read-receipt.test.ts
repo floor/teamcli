@@ -24,6 +24,7 @@ import { isRead, signReceiptPayload, signedReceiptOf, verifyReceipt, writeReceip
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
+import { version } from '../src/version.ts';
 import type { RetrySources } from '../src/watch/retry.ts';
 import { wakeUnreadDrops } from '../src/watch/unread.ts';
 import { claudeBox, testIo } from './helpers.ts';
@@ -172,7 +173,8 @@ test('an accepted socket frame writes the signed read receipt, and the frame ope
   const receipt = signedReceiptOf(JSON.parse(readFileSync(join(drops, `${id}.read.json`), 'utf8')));
   expect(receipt).not.toBeNull();
   if (receipt === null) return;
-  expect(receipt.payload).toEqual({
+  const { writer, ...fields } = receipt.payload;
+  expect(fields).toEqual({
     kind: 'receipt',
     status: 'read',
     id,
@@ -182,6 +184,7 @@ test('an accepted socket frame writes the signed read receipt, and the frame ope
     at: NOW.toISOString(),
     read_by: 'socket delivery',
   });
+  expect(writer).toEqual({ version: version(), pid: process.pid });
   expect(verifyReceipt(receipt, messageKeyOf(made.home))).toBe(true);
 });
 

@@ -17,6 +17,7 @@ import { plantRecord, recordDir, runMessages } from '../src/commands/messages.ts
 import { listUnread, receiptPath } from '../src/mcp/inbox.ts';
 import { receiptFile, recordFile, signedReceiptOf, signReceiptPayload, verifyReceipt, writeReceipt } from '../src/send/record.ts';
 import { messageKeyOf } from '../src/store/keys.ts';
+import { version } from '../src/version.ts';
 import { updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 
@@ -111,7 +112,11 @@ describe('team ack marks one message read without printing it', () => {
     const signed = signedReceiptOf(JSON.parse(readFileSync(receiptFile(recordDir(root, 'acme', 'owner'), SENT, 'read'), 'utf8')));
     expect(signed).not.toBeNull();
     expect(verifyReceipt(signed!, messageKeyOf(home))).toBe(true);
-    expect(signed!.payload).toEqual({ kind: 'receipt', status: 'read', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    // The signed writer provenance names this build and this process beside the receipt's own
+    // fields; everything else is exactly what the receipt always carried.
+    const { writer, ...fields } = signed!.payload;
+    expect(fields).toEqual({ kind: 'receipt', status: 'read', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    expect(writer).toEqual({ version: version(), pid: process.pid });
     // The message is no longer waiting, and the next read serves no body.
     expect(listUnread(recordDir(root, 'acme', 'owner'), { to: 'owner', root, session: 'acme' }, home)).toEqual([]);
     const io = testIo(root, { kind: 'owner' });

@@ -77,8 +77,11 @@ import {
 } from '../send/push-adapters/relay-runtime.ts';
 import {
   RECORD_KIND,
+  recordAuthOfSealed,
+  sealedOfRecord,
+  sealedRecordOf,
   signedRecordOf,
-  verifyRecord,
+  type Sealed,
   type SignedRecord,
 } from '../send/record.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
@@ -809,6 +812,17 @@ function parseSignedRecordInput(raw: SignedRecord | string): SignedRecord | null
   }
 }
 
+/** The raw envelope a route was handed, before any schema projection: an in-process record keeps
+ *  its kept raw payload, and a string is parsed as the `{payload, signature}` envelope alone. */
+function parseSealedInput(raw: SignedRecord | string): Sealed | null {
+  if (typeof raw !== 'string') return sealedOfRecord(raw);
+  try {
+    return sealedRecordOf(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
 function refuseSend(
   code: DaemonRelayRefusalCode | 'daemon.route-stage',
   message: string,
@@ -959,12 +973,13 @@ export async function handleDaemonRelaySend(
   }
 
   const parsedRecord = parseSignedRecordInput(input.record);
+  const sealedInput = parseSealedInput(input.record);
   const mustVerify =
     input.verifySignedRecord === true
     || (input.verifySignedRecord !== false && typeof input.record !== 'string');
 
   if (mustVerify) {
-    if (parsedRecord === null) {
+    if (sealedInput === null) {
       return refuseSend(
         'daemon.route-record',
         'the message record is not a well-formed signed record; nothing was routed',
@@ -972,11 +987,23 @@ export async function handleDaemonRelaySend(
       );
     }
     const keyState = messageKeyState(input.home);
-    if (keyState.kind !== 'key' || !verifyRecord(parsedRecord, keyState.key)) {
+    // The signature covers the complete raw payload before any field decides what is routed; an
+    // unsupported signed record is refused on its own ground, never as a bad signature.
+    const auth = keyState.kind === 'key'
+      ? recordAuthOfSealed(sealedInput, keyState.key)
+      : ({ kind: 'tampered' } as const);
+    if (auth.kind === 'tampered') {
       return refuseSend(
         'daemon.route-record',
         'the message record signature did not verify against this machine key; nothing was routed',
-        { id: parsedRecord.payload.id, seat: parsedRecord.payload.to },
+        { id: parsedRecord?.payload.id ?? input.id ?? null, seat: parsedRecord?.payload.to ?? null },
+      );
+    }
+    if (auth.kind === 'unsupported') {
+      return refuseSend(
+        'daemon.route-record',
+        `the signed record is signed, and this version cannot read it: ${auth.reason}; nothing was routed`,
+        { id: parsedRecord?.payload.id ?? input.id ?? null, seat: parsedRecord?.payload.to ?? null },
       );
     }
   }

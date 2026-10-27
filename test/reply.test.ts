@@ -22,6 +22,7 @@ import { REPLY_RULE } from '../src/send/admit.ts';
 import { readHistory } from '../src/send/history.ts';
 import { signedCloseOf, signedReceiptOf, verifyClose, verifyReceipt } from '../src/send/record.ts';
 import { messageKeyOf, messageKeyState } from '../src/store/keys.ts';
+import { version } from '../src/version.ts';
 import { updateState } from '../src/state.ts';
 import { recordAt, testIo } from './helpers.ts';
 
@@ -148,7 +149,9 @@ describe('a reply is a record on the thread it answers', () => {
 
     const receipt = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'owner'), `${SENT}.replied.json`), 'utf8')));
     if (receipt === null) throw new Error('no receipt was written');
-    expect(receipt.payload).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    const { writer, ...fields } = receipt.payload;
+    expect(fields).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'owner', root, session: 'acme', at: NOW_ISO });
+    expect(writer).toEqual({ version: version(), pid: process.pid });
     const key = messageKeyState(home);
     if (key.kind !== 'key') throw new Error(key.kind);
     expect(verifyReceipt(receipt, key.key)).toBe(true);
@@ -525,7 +528,9 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     // The receipt stays beside the answered record, where the local seat reads it.
     const receipt = signedReceiptOf(JSON.parse(readFileSync(join(recordDir(root, 'acme', 'lead'), `${SENT}.replied.json`), 'utf8')));
     if (receipt === null) throw new Error('no receipt was written');
-    expect(receipt.payload).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'lead', root, session: 'acme', at: NOW_ISO });
+    const { writer, ...fields } = receipt.payload;
+    expect(fields).toEqual({ kind: 'receipt', status: 'replied', id: SENT, to: 'lead', root, session: 'acme', at: NOW_ISO });
+    expect(writer).toEqual({ version: version(), pid: process.pid });
   });
 
   test('a declared endpoint replaces the default, and the reply lands on that seat', async () => {
