@@ -5,6 +5,15 @@
 # `Grok 4.7 (high)` and `Grok 4.7 (high) · always-approve`), so the rule pattern is the
 # two dashes every rule of the box carries: the runs the read compares are then equal at any
 # width or title. `Resume this session with:` is the shell screen the CLI leaves behind on exit.
+#
+# Resume, measured on Grok CLI 1.0.70: `grok -r <session-id>` resumes that conversation.
+# The same CLI accepts `--session-id <uuid>` when a launch starts a new one. TeamCLI does not
+# mint that id. It appends `-r <id>` to the seat's launch line, from the registry record's
+# reach.agent_session. A wrapper such as `zsh .../as-floor.sh grok ...` keeps `-r` and the id
+# on that same line so the wrapper forwards them; a quoted script that itself runs grok
+# (`zsh -lc "grok ..."`) gets both words inside the quotes. A line that already passes
+# `--session-id` is left as it is: that flag starts a new conversation, and it is not rewritten
+# into `-r`.
 format: 1
 cli: grok
 binary: grok

@@ -254,4 +254,30 @@ describe('the plan launches grok with its rules on the line', () => {
     expect(plan.some((step) => step.do?.do === 'deliver')).toBe(false);
     expect(plan.some((step) => step.do?.do === 'ready')).toBe(false);
   });
+
+  test('a recorded conversation resumes with -r <id> on the seat launch line', () => {
+    // The id is the registry's reach.agent_session. A typical grok seat, a flagged line, and a
+    // wrapper that forwards its arguments all carry the measured `-r`.
+    const id = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
+    const seat = {
+      name: 'grok', cli: 'grok', cwd: '.', label: 'grok', stopped: false, rules: 'Rules.',
+      repairLine: '`team remove grok --keep` then `team add grok`',
+    };
+    const commandOf = (launch: string, resume: { resume?: string; registry?: { launch: string; model: string; version: string; sessionId?: string } }): string => {
+      const plan = upPlan({
+        root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+        seats: [{ ...seat, launch, ...resume }],
+      });
+      const step = plan.find((item) => item.do?.do === 'launch');
+      return step?.do?.do === 'launch' ? step.do.command : '';
+    };
+    expect(commandOf('grok', { registry: { launch: 'grok', model: 'Grok', version: '4.7', sessionId: id } }))
+      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --always-approve --rules Rules.`);
+    expect(commandOf('grok --model grok-4.7', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 grok --model grok-4.7 -r ${id} --always-approve --rules Rules.`);
+    expect(commandOf('zsh /Users/owner/as-floor.sh grok --model grok-4.7', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${id} --always-approve --rules Rules.`);
+    expect(commandOf('zsh -lc "grok --model grok-4.7"', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 zsh -lc "grok --model grok-4.7 -r ${id}" --always-approve --rules Rules.`);
+  });
 });

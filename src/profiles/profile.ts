@@ -289,9 +289,15 @@ export function supportsSessionId(cli: string): boolean {
  *  `--conversation=<id>` word appended to the seat's launch line, including a wrapper such
  *  as `zsh …/as-floor.sh agy …`, so the wrapper forwards it. This profile does not mint the
  *  id at launch.
+ *
+ *  Grok's form was measured on Grok CLI 1.0.70: `grok -r <session-id>` resumes that
+ *  conversation. The same CLI accepts `--session-id <uuid>` at launch for a new conversation.
+ *  TeamCLI does not mint that id; a relaunch appends `-r <id>` from the registry record's
+ *  `reach.agent_session`, on the same line a wrapper such as `zsh …/as-floor.sh grok …`
+ *  forwards.
  */
 export function supportsSessionResume(cli: string): boolean {
-  return cli === 'claude-code' || cli === 'codex' || cli === 'antigravity';
+  return cli === 'claude-code' || cli === 'codex' || cli === 'antigravity' || cli === 'grok';
 }
 
 /** The session id a launch line already names with `--session-id`, if it names one. */
@@ -321,42 +327,47 @@ export function withLaunchSession(cli: string, command: string): { command: stri
  * id is appended after every other argument, as `withLaunchSession` appends a new one. The
  * measured lines are Claude Code's (`-r, --resume [value] Resume a conversation - provide a
  * session ID`, `claude --help` 2.1.303), Codex's subcommand (`Usage: codex resume [OPTIONS]
- * [SESSION_ID] [PROMPT]`, `codex resume --help` 0.161.0) and Antigravity's
+ * [SESSION_ID] [PROMPT]`, `codex resume --help` 0.161.0), Antigravity's
  * `--conversation=<uuid>` (`agy --conversation=b4b1b021-e8af-4213-9b7e-470b233b712f`, measured
- * on the owner's Mac; quoted on {@link supportsSessionResume}). A Codex line takes the
- * subcommand, so its id is a word after `resume`, never a flag. An Antigravity line takes one
- * `--conversation=<id>` word at the end of the seat's launch command. A wrapper whose last
- * word is a quoted script that itself runs `agy` (`zsh -lc "agy …"`) gets the flag inside
- * that script; a wrapper that forwards its own arguments (`zsh …/as-floor.sh agy …`) gets the
- * flag after them. Null when the CLI cannot resume: the caller hands over instead. Null,
- * too, for a launch line that already names a session — the flags below for Claude Code, the
- * `resume` subcommand for Codex, `--conversation` for Antigravity: appending ours would leave
- * two choices on the line, and the line's own choice is the one the file records. `-c` is a
- * flag's name only on a Claude Code line: Codex's own `-c` is a config override, and a
- * recorded Codex line carries one.
+ * on the owner's Mac; quoted on {@link supportsSessionResume}) and Grok's `-r <session-id>`
+ * (Grok CLI 1.0.70). A Codex line takes the subcommand, so its id is a word after `resume`,
+ * never a flag. An Antigravity line takes one `--conversation=<id>` word. A Grok line takes
+ * `-r` and the id as the next word. A wrapper whose last word is a quoted script that itself
+ * runs the CLI (`zsh -lc "agy …"`, `zsh -lc "grok …"`, `zsh -lc "codex …"`) gets that addition
+ * inside the script; a wrapper that forwards its own arguments (`zsh …/as-floor.sh agy …`)
+ * gets it after them. Null when the CLI cannot resume: the caller hands over instead. Null,
+ * too, for a launch line that already names a session — the flags below for Claude Code and
+ * Grok, the `resume` subcommand for Codex, `--conversation` for Antigravity: appending ours
+ * would leave two choices on the line, and the line's own choice is the one the file records.
+ * `-c` is a flag's name only on a Claude Code line: Codex's own `-c` is a config override, and
+ * a recorded Codex line carries one. Grok's `--session-id` starts a new conversation; it is
+ * not rewritten into `-r`.
  */
 export function withResume(cli: string, command: string, sessionId: string): string | null {
   if (!supportsSessionResume(cli)) return null;
   if (cli === 'codex') {
     if (/(^|\s)resume(\s|$)/.test(command)) return null;
-    return `${command} resume ${sessionId}`;
+    return appendOnLaunchLine(command, `resume ${sessionId}`, 'codex');
   }
   if (cli === 'antigravity') {
     if (/(^|\s)--conversation(=|\s|$)/.test(command)) return null;
-    return appendAntigravityConversation(command, sessionId);
+    return appendOnLaunchLine(command, `--conversation=${sessionId}`, 'agy');
+  }
+  if (cli === 'grok') {
+    if (/(^|\s)(--session-id|--resume|-r)(=|\s|$)/.test(command)) return null;
+    return appendOnLaunchLine(command, `-r ${sessionId}`, 'grok');
   }
   if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return null;
   return `${command} --resume ${sessionId}`;
 }
 
 /**
- * `--conversation=<id>` on an Antigravity launch line. The flag is one word after every other
- * argument, so a wrapper that execs `"$@"` (`zsh …/as-floor.sh agy …`) forwards it to `agy`.
- * A trailing quoted script that itself runs `agy` (`zsh -lc "agy --model …"`) would drop a flag
- * written after the quotes: the flag goes inside that script, still as its last word.
+ * Words appended to a launch line so a wrapper still forwards them. A wrapper that execs
+ * `"$@"` (`zsh …/as-floor.sh <binary> …`) takes the words at the end of the line. A trailing
+ * quoted script that itself runs `<binary>` (`zsh -lc "grok --model …"`) would drop words
+ * written after the quotes: those words go inside that script, still last.
  */
-function appendAntigravityConversation(command: string, sessionId: string): string {
-  const flag = `--conversation=${sessionId}`;
+function appendOnLaunchLine(command: string, addition: string, binary: string): string {
   const trimmed = command.trimEnd();
   const quote = trimmed.at(-1);
   if (quote === '"' || quote === "'") {
@@ -364,32 +375,42 @@ function appendAntigravityConversation(command: string, sessionId: string): stri
     if (open >= 0) {
       const before = open === 0 ? '' : trimmed[open - 1];
       const inner = trimmed.slice(open + 1, -1);
-      if ((open === 0 || /\s/.test(before ?? '')) && !inner.includes(quote) && /(^|\s)agy(\s|$)/.test(inner)) {
+      const word = new RegExp(`(^|\\s)${binary}(\\s|$)`);
+      if ((open === 0 || /\s/.test(before ?? '')) && !inner.includes(quote) && word.test(inner)) {
         const gap = inner.length === 0 || /\s$/.test(inner) ? '' : ' ';
-        return `${trimmed.slice(0, open + 1)}${inner}${gap}${flag}${quote}`;
+        return `${trimmed.slice(0, open + 1)}${inner}${gap}${addition}${quote}`;
       }
     }
   }
-  return `${trimmed} ${flag}`;
+  return `${trimmed} ${addition}`;
 }
 
 /**
  * The conversation a launch line already names to resume, read from the measured grammar above:
- * the id after Claude Code's `--resume`/`-r`, the word after Codex's `resume`, or the id of
- * Antigravity's `--conversation=<id>` (a separate `--conversation <id>` word is the same flag).
- * Null when the line names no resume at all. `''` when it resumes without naming one —
- * `--continue`/`-c` (Claude Code's most recent), `--last`, `--all` or a bare `resume` (Codex's
- * picker), or a bare `--conversation` — which cannot be told from the id a record binds. A line
+ * the id after Claude Code's `--resume`/`-r`, the word after Codex's `resume`, the id of
+ * Antigravity's `--conversation=<id>` (a separate `--conversation <id>` word is the same flag),
+ * or the id after Grok's `-r` (a `--resume <id>` on that line is the same flag). Null when the
+ * line names no resume at all. `''` when it resumes without naming one — `--continue`/`-c`
+ * (Claude Code's most recent), `--last`, `--all` or a bare `resume` (Codex's picker), a bare
+ * `--conversation`, or a bare `-r` — which cannot be told from the id a record binds. A line
  * this version does not read is null: an unmeasured form is not a resume this tool may reason
  * about.
  */
 export function namedResumeTarget(cli: string, command: string): string | null {
   if (cli === 'codex') {
-    const words = command.trim().split(/\s+/);
+    // A closing quote is not part of the token: `zsh -lc "codex resume <id>"` names the id
+    // inside the script.
+    const words = command.trim().split(/\s+/).map((word) => word.replace(/^["']+|["']+$/g, ''));
     const at = words.indexOf('resume');
     if (at === -1) return null;
     const next = words[at + 1];
     return next === undefined || next.startsWith('-') ? '' : next;
+  }
+  if (cli === 'grok') {
+    const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(command);
+    if (named?.[1] && !named[1].startsWith('-')) return named[1];
+    if (/(?:^|\s)(?:--resume|-r)(?:=|\s|$)/.test(command)) return '';
+    return null;
   }
   if (cli === 'antigravity') {
     // A closing quote is a word boundary too: `zsh -lc "agy --conversation=<id>"` names the
