@@ -536,6 +536,9 @@ export async function runInit(
   }
   const restored = args.flags.has('restore');
   const fromArchiveRestored = fromArchive !== undefined;
+  if (target.kind === 'registry') {
+    first = first.replaceAll(TEAM_FILE, 'the team record').replace('Edit it, then run team up.', 'Edit it with team config, then run team up.');
+  }
   const into = target.kind === 'registry' ? 'into the registry' : `as ${TEAM_FILE}`;
   logLine(dirname(path), 'init', describeCaller(caller), `${restored ? 'restored the copy this machine stored' : what} ${into}; excluded ${pluralCount(added.length, 'path')}`);
   // The registry is where the user-level state lives: the home the shipped command names, or the
@@ -553,9 +556,7 @@ export async function runInit(
   }
   // The existing closing line is the action summary; the privacy paragraph is plain-only prose
   // the document has no field for.
-  const action_summary = restored
-    ? `Restored ${TEAM_FILE} from the copy this machine stored.`
-    : first.trimEnd();
+  const action_summary = first.trimEnd();
   if (json) {
     writeJson(io, 'team.init', {
       format: 1 as const,

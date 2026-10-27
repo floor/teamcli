@@ -86,11 +86,15 @@ describe('the source setting', () => {
 });
 
 describe('reading from the registry', () => {
-  test('a team not yet migrated is refused with the migration named, and the file is not read', () => {
+  test('a team not yet migrated is read from the file, once, and the notice names team migrate', () => {
     const { home, root } = scene();
     const read = readTeamConfig(root, registry(home));
-    expect(read.ok).toBe(false);
-    if (!read.ok) expect(read.errors[0]?.message).toContain('run `team migrate`');
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.source).toBe('team-file');
+    expect(read.team.project).toBe('acme');
+    expect(read.notice).toContain('run `team migrate`');
+    expect(read.notice).not.toContain('not in the registry');
   });
 
   test('--file reads the file it names whatever the setting', () => {

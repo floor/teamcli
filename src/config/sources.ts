@@ -28,6 +28,7 @@ import { grantsDir } from '../grant.ts';
 import { agentsDir, findAgent, getAgent, isAgentId, readAgents, updateAgent } from '../registry/agents.ts';
 import { get as getProject, projectsFile, upsertProject } from '../registry/projects.ts';
 import { registerDeclaredSeat } from '../registry/sync.ts';
+import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { getTeam, readTeams, teamIdOf, teamsFile, upsertTeam } from '../registry/teams.ts';
 import { bumpGeneration, keyOf, keyState } from '../store/keys.ts';
 import { DELIVERY_LEGS, type DeliveryLeg } from '../settings/inherit.ts';
@@ -651,11 +652,13 @@ function readTargetSource(home: string, level: ConfigLevel, target: string, seat
  * its seats, and the bootstrap ruling plans against the declaration; a name learned here buys a
  * read-only plan, while the write still needs the agent record.
  */
-function declaredSeatNames(root: string): string[] {
+function declaredSeatNames(root: string, home: string): string[] {
   try {
+    const stored = readStoredTeamConfig(home, teamIdOf(root));
     const path = join(root, '.agents', 'team.yaml');
-    if (!existsSync(path)) return [];
-    const value = toValue(parseYaml(readFileSync(path, 'utf8')));
+    const text = stored?.text ?? (existsSync(path) ? readFileSync(path, 'utf8') : null);
+    if (text === null) return [];
+    const value = toValue(parseYaml(text));
     if (!isMap(value) || !Array.isArray(value.seats)) return [];
     return value.seats.flatMap((seat) => (isMap(seat) && typeof seat.name === 'string' ? [seat.name] : []));
   } catch {
@@ -684,7 +687,7 @@ function seatTargetProblem(home: string, target: string, declaration?: SeatDecla
       // A seat the team file declares but `team up` never launched has no registry roster line
       // yet; the declaration itself is what the bootstrap ruling plans against.
       const loaded = readTeamConfig(record.root, { home });
-      const declared = loaded.ok ? loaded.team.seats.map((seat) => seat.name) : declaredSeatNames(record.root);
+      const declared = loaded.ok ? loaded.team.seats.map((seat) => seat.name) : declaredSeatNames(record.root, home);
       if (declared.includes(target)) return null;
     }
   } catch {

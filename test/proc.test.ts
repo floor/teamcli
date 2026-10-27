@@ -324,7 +324,7 @@ describe('team proc list', () => {
     expect(remembered.ok).toBe(true);
     seed(where, { build: { by: 'owner', at: new Date(AT).toISOString() } });
     writeFileSync(where.file, TEAM.replace('format: 1', 'format: 9'));
-    const notice = 'team.yaml is invalid (line 1: format must be 1: this version of team reads no other); using the copy of 2026-10-04T09:00:00.000Z';
+    const notice = 'team config is invalid (line 1: format must be 1: this version of team reads no other); using the copy of 2026-10-04T09:00:00.000Z';
 
     const json = owner(where);
     expect(await runProc(['list', '--json'], json, sources(where))).toBe(0);

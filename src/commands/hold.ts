@@ -106,7 +106,7 @@ export async function runHold(argv: string[], io: Io, sources: HoldSources = rea
   if (!current.ok) {
     // `team hold` takes no `--file`, so the no-repository refusal must not offer one.
     const messages = current.errors.map(
-      (problem) => `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${withoutFileOffer(plainText(problem.message))}`,
+      (problem) => `${problem.line ? `team config line ${problem.line}: ` : ''}${withoutFileOffer(plainText(problem.message))}`,
     );
     if (json) {
       writeJsonError(out, 'hold.file', messages.join('; '), null);

@@ -120,7 +120,7 @@ Renaming `builder-1` updates the team's record, the session state, and the live 
 
 ```console
 $ team rename builder-1 builder-01 ; echo "exit $?"
-renamed builder-1 -> builder-01: moved .agents/team.yaml, .agents/team.state.json, pane w2:p1
+renamed builder-1 -> builder-01: moved team config, .agents/team.state.json, pane w2:p1
 exit 0
 ```
 

@@ -175,7 +175,7 @@ test('add: a dry run says what it would refuse and the one command that unblocks
   expect(await runAdd(['worker', '--dry-run'], io, addSources(made.home))).toBe(1);
   expect(io.err).toBe('');
   expect(io.out).toBe(`! add would refuse: ${ADD_LINE}\n`
-    + '! to unblock: an approved delegate runs `team add worker` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr\n');
+    + '! to unblock: an approved delegate runs `team add worker` from its own pane when team config names one; otherwise the owner runs it from this folder, at a terminal outside herdr\n');
   expect(existsSync(join(made.root, '.agents', 'team.log'))).toBe(false);
 });
 

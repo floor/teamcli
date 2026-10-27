@@ -476,10 +476,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         : first.errors.some(isParseError)
           ? 'watch.file-invalid'
           : 'watch.file';
-      const message = first.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${p.message}`).join('; ');
+      const message = first.errors.map((p) => `${p.line ? `team config line ${p.line}: ` : ''}${p.message}`).join('; ');
       writeJsonError(io, id, message, null);
     } else {
-      for (const problem of first.errors) io.stderr(`team watch: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${problem.message}\n`);
+      for (const problem of first.errors) io.stderr(`team watch: ${problem.line ? `team config line ${problem.line}: ` : ''}${problem.message}\n`);
     }
     // exit: watch.not-a-repo
     // exit: watch.file
@@ -703,7 +703,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         told.add(`approval:${approvalReason}`);
         say(approvalReason, false);
       }
-      const problem = current.ok ? current.notice : `team.yaml can't be read (${current.errors[0]?.message ?? 'unknown'}); watching with the team as it was`;
+      const problem = current.ok ? current.notice : `team config can't be read (${current.errors[0]?.message ?? 'unknown'}); watching with the team as it was`;
       if (problem !== notice) {
         notice = problem;
         if (problem) tell(problem, true);

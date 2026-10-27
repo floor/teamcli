@@ -510,11 +510,10 @@ export function readTeamPolicySource(
   return { ok: true, level: 'team', target: primaryTarget, policies };
 }
 
-function readSeatLegacyDeliveryFromTeamRoot(teamRoot: string, seatName: string): unknown {
+function readSeatLegacyDeliveryFromTeamRoot(teamRoot: string, seatName: string, home: string): unknown {
   const path = join(teamRoot, '.agents', 'team.yaml');
-  if (!existsSync(path)) return undefined;
   try {
-    const root = toValue(parseYaml(readFileSync(path, 'utf8')));
+    const root = toValue(parseYaml(readTeamText(path, { home })));
     if (!isMap(root) || !Array.isArray(root.seats)) return undefined;
     for (const item of root.seats) {
       if (!isMap(item) || typeof item.name !== 'string') continue;
@@ -584,7 +583,7 @@ export function readSeatPolicySource(
         try {
           const teamRoot = getTeam(home, teamId)?.root;
           if (teamRoot) {
-            rawLegacy = readSeatLegacyDeliveryFromTeamRoot(teamRoot, seatName);
+            rawLegacy = readSeatLegacyDeliveryFromTeamRoot(teamRoot, seatName, home);
           }
         } catch {
           rawLegacy = undefined;
@@ -597,7 +596,7 @@ export function readSeatPolicySource(
           ok: false,
           level: 'seat',
           target,
-          source: '.agents/team.yaml',
+          source: 'team config',
           why: `seat "${seat?.name ?? target ?? 'seat'}": delivery_order has an unreadable value`,
         };
       }
@@ -790,7 +789,7 @@ export function planPolicySet(
   }
 
   if (request.level === 'team' && !request.teamRoot) {
-    return { ok: false, why: 'setting a team-level policy requires a team root with .agents/team.yaml' };
+    return { ok: false, why: 'setting a team-level policy requires a team root whose record team config can read' };
   }
   if (request.level === 'seat' && getAgent(home, request.target) === null) {
     return { ok: false, why: `no registered agent "${request.target}" in ${agentsDir(home)}` };
@@ -901,7 +900,7 @@ export function planPolicyUnset(
     return { ok: false, why: 'a policy name is required' };
   }
   if (request.level === 'team' && !request.teamRoot) {
-    return { ok: false, why: 'unsetting a team-level policy requires a team root with .agents/team.yaml' };
+    return { ok: false, why: 'unsetting a team-level policy requires a team root whose record team config can read' };
   }
   const previous = readExistingPolicyAtLevel(home, request.level, request.target, request.teamRoot, name);
   return {

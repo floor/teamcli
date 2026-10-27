@@ -1,5 +1,6 @@
 import { lstatSync, readFileSync, readdirSync, realpathSync, type Stats } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { recordedSession, textDeclaresSession, withRecordedSession } from '../file/recorded-session.ts';
 import type { TeamFile } from '../file/types.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { storesFolder } from '../store/store.ts';
@@ -86,13 +87,18 @@ function interpret(path: string, root: string, session: string, home: string): F
     return null;
   }
   const names = declared(text);
-  if (!names || names.session !== session) return null;
+  if (!names) return null;
   const folder = resolved(root);
+  // A file that declares no session takes the registry's recorded session. The derived
+  // `<entity>-<project>` name is not used when the registry already recorded another.
+  const sessionName = textDeclaresSession(text) ? names.session : (recordedSession(home, folder) ?? names.session);
+  if (sessionName !== session) return null;
   const validated = validateTeamFile(text, { home, root: folder });
   if (validated.ok) {
+    const team = withRecordedSession(validated.team, text, home, folder);
     return {
-      found: { project: validated.team.project, root: folder, seats: validated.team.seats.length, unreadable: false },
-      team: validated.team,
+      found: { project: team.project, root: folder, seats: team.seats.length, unreadable: false },
+      team,
     };
   }
   return {

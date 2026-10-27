@@ -104,7 +104,7 @@ describe('team check', () => {
     });
     expect(code).toBe(2);
     expect(io.out).toBe('');
-    expect(io.err).toBe(`team check: team.yaml line 23: ${LEAD}\n`);
+    expect(io.err).toBe(`team check: team config line 23: ${LEAD}\n`);
   });
 });
 

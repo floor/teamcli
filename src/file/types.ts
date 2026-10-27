@@ -343,9 +343,12 @@ export type LoadResult =
       warnings: Problem[];
       deprecations?: Deprecation[];
       text: string;
-      /** Where the configuration was read from: set by `readTeamConfig`, absent from the file
-       *  reader's own result (src/file/team-config.ts). */
+      /** Where the configuration was read from. The registry record when it exists; the team
+       *  file only when the registry holds no config record for this root. */
       source?: 'registry' | 'team-file';
+      /** One sentence, when this read used `.agents/team.yaml` because the registry holds no
+       *  config record. Absent when the registry record was read, or when the file was named. */
+      notice?: string;
       /** A `.agents/team.yaml` left beside a team read from the registry, and whether it still
        *  says what the registry's record says. The file is not read as the team either way. */
       leftover?: { path: string; matches: boolean };

@@ -19,7 +19,7 @@ export type { LoadConfig };
 export const USAGE = `Usage: team check [--session <name>] [--file <path>] [--repair] [--json]
 
   --session <name>  the session to read; the file's own when absent
-  --file <path>     the team file, instead of .agents/team.yaml
+  --file <path>     a team file, instead of the registry record (team config)
   --repair          the owner's repair, one write: drop the state's leftovers (a
                     record for a seat the file no longer declares, a session with
                     no seat of the team in it), re-record a seat an agent
@@ -40,7 +40,7 @@ Usage: team check <ref> [--pr <file>] [--since <ref>] [--file <path>]
   --pr <file>      also check a pull request's body ("-" reads standard input)
   --since <ref>    skip this commit and everything reachable from it, for this
                    run; overrides identity.since
-  --file <path>    the team file, instead of .agents/team.yaml
+  --file <path>    a team file, instead of the registry record (team config)
 
 Exits 0 when every commit passes, 1 when one is refused, 2 when the check
 can't run.
@@ -55,7 +55,7 @@ const OLD_USAGE = `Usage: team check <ref> [--pr <file>] [--since <ref>] [--file
   --pr <file>      also check a pull request's body ("-" reads standard input)
   --since <ref>    skip this commit and everything reachable from it, for this
                    run; overrides identity.since
-  --file <path>    the team file, instead of .agents/team.yaml
+  --file <path>    a team file, instead of the registry record (team config)
 
 Exits 0 when every commit passes, 1 when one is refused, 2 when the check
 can't run.

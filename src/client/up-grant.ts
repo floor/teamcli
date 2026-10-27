@@ -100,7 +100,7 @@ export function resolveClientUpTarget(
     }
     const named = Object.values(records).filter((record) => record.project === project && record.lifecycle !== 'archived');
     if (named.length === 0) {
-      return { ok: false, why: `no team "${project}" is registered and this folder is not its team folder; run the request from the folder that holds ${project}'s .agents/team.yaml` };
+      return { ok: false, why: `no team "${project}" is registered and this folder is not its team folder; run the request from that team's checkout` };
     }
     if (named.length > 1) {
       return { ok: false, why: `${String(named.length)} registered teams are named "${project}" (${named.map((record) => record.root).join(', ')}); run the request from the folder of the one the grant is for` };

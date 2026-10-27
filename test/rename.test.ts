@@ -323,7 +323,7 @@ describe('team rename <seat> <new-seat> and --renumber', () => {
     const io = testIo(fx.root, owner);
     const code = await runRename(['builder-1', 'tester-1'], io, { home: fx.home, now: () => NOW });
     expect(code).toBe(1);
-    expect(io.err).toContain('seat "tester-1" is already declared in .agents/team.yaml');
+    expect(io.err).toContain('seat "tester-1" is already declared in team config');
   });
 
   test('5. nickname clash is refused', async () => {

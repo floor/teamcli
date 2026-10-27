@@ -1,24 +1,22 @@
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { canonicalRecord, teamRecordOf } from './canonical-record.ts';
-import { findRoot, loadTeamFile, loadTeamText, TEAM_FILE } from './load.ts';
+import { loadTeamFile, loadTeamText, TEAM_FILE } from './load.ts';
 import type { LoadResult, TeamFile } from './types.ts';
 import { machineSettingsPath } from '../settings/declared.ts';
-import { readStoredTeamConfig, TeamConfigStoreError, teamConfigRecordPath } from '../registry/team-config-store.ts';
-import { teamIdOf } from '../registry/teams.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
 
 // The one read seam for a team's configuration. Every command that needs the team reads it here,
 // never through the backing store directly, so the source can change behind this function without
 // touching its callers.
 //
-// Phase 2: the source is a setting, `team-config.source`, and its default is the registry. The
-// registry holds the definition `team migrate` imported once (src/registry/team-config-store.ts);
-// there is no fallback to the team file and no shadow read. A `.agents/team.yaml` left in the
-// project is not read as the team: when it no longer says what the registry says, the result
-// carries `leftover.matches: false`, and `team check` and `team status` name it with `team import`
-// as the repair. `--file` always reads the file it names (tests, snapshots), whatever the setting.
+// The source is a setting, `team-config.source`, and its default is the registry. The registry
+// holds the definition `team migrate` imported once (src/registry/team-config-store.ts). When that
+// record exists, a `.agents/team.yaml` left in the project is not read as the team: when it no
+// longer says what the registry says, the result carries `leftover.matches: false`, and
+// `team check` and `team status` name it with `team import` as the repair. When the record does
+// not exist, the team file is read and the result says so once. `--file` always reads the file it
+// names (tests, snapshots, `team migrate`), whatever the setting.
 
 /** Where the configuration came from. */
 export type TeamConfigSource = 'registry' | 'team-file';
@@ -102,14 +100,6 @@ export function resolveTeamConfigSource(options: { source?: string; home?: strin
   return { ok: true, source: DEFAULT_TEAM_CONFIG_SOURCE, from: 'default' };
 }
 
-function realOrResolved(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
-}
-
 /** The canonical record of a validated team: what two sources are compared by. */
 export function canonicalTeam(team: TeamFile): string {
   return canonicalRecord(teamRecordOf(team as unknown as Record<string, unknown> & { seats: object[] }));
@@ -117,46 +107,30 @@ export function canonicalTeam(team: TeamFile): string {
 
 /** Finds, reads and validates the team's configuration for the folder `cwd`. */
 export function readTeamConfig(cwd: string, options: ReadTeamConfigOptions = {}): LoadResult {
-  const { source: _source, env: _env, ...fileOptions } = options;
+  const { source: _source, env, ...fileOptions } = options;
   // A named file is read and only that file: the way tests and snapshots hand a team in.
-  if (options.file !== undefined) return withSource(loadTeamFile(cwd, fileOptions), 'team-file');
+  if (options.file !== undefined) return withSource(loadTeamFile(cwd, { ...fileOptions, source: 'file' }), 'team-file');
   const resolved = resolveTeamConfigSource(options);
   if (!resolved.ok) return { ok: false, errors: [{ line: 0, message: resolved.message }] };
-  if (resolved.source === 'file') return withSource(loadTeamFile(cwd, fileOptions), 'team-file');
-  return readFromRegistry(cwd, fileOptions);
+  if (resolved.source === 'file') return withSource(loadTeamFile(cwd, { ...fileOptions, source: 'file' }), 'team-file');
+  return loadTeamFile(cwd, { ...fileOptions, source: 'registry', ...(env !== undefined ? { env } : {}) });
 }
 
-function withSource(result: LoadResult, source: TeamConfigSource): LoadResult {
-  return result.ok ? { ...result, source } : result;
-}
-
-function readFromRegistry(cwd: string, options: NonNullable<Parameters<typeof loadTeamFile>[1]>): LoadResult {
-  const home = options.home ?? homedir();
-  // The team is the checkout's: its git root, or this folder when it is not in a repository
-  // (the file reader's own rule, src/file/load.ts). The ID is the root's, as the registry keys it.
-  const root = findRoot(cwd) ?? realOrResolved(cwd);
-  const path = join(root, TEAM_FILE);
-  const id = teamIdOf(root);
-  let stored;
-  try {
-    stored = readStoredTeamConfig(home, id);
-  } catch (error) {
-    if (error instanceof TeamConfigStoreError) {
-      return { ok: false, path, errors: [{ line: 0, message: `the registry's record of this team cannot be read: ${error.message}` }] };
-    }
-    throw error;
-  }
-  if (stored === null) {
-    const message = existsSync(path)
-      ? `this team is not in the registry yet; its definition is still in ${TEAM_FILE}: run \`team migrate\` to import it once (or set ${TEAM_CONFIG_SOURCE_SETTING}: file in ${machineSettingsPath(home)} to keep reading the file)`
-      : `no team is registered for ${root} (${teamConfigRecordPath(home, id)}): run \`team init\`, then \`team migrate\``;
-    return { ok: false, path, errors: [{ line: 0, message }] };
-  }
-  const loaded = loadTeamText(stored.text, root, path, options);
+/** A team read from the registry's config record: the source mark, and a leftover file beside it. */
+export function noteRegistryRead(
+  loaded: LoadResult,
+  path: string,
+  root: string,
+  options: { home?: string },
+): LoadResult {
   if (!loaded.ok) return loaded;
   const result: LoadResult = { ...loaded, source: 'registry' };
   const leftover = leftoverOf(path, loaded.team, root, options);
   return leftover === undefined ? result : { ...result, leftover };
+}
+
+function withSource(result: LoadResult, source: TeamConfigSource): LoadResult {
+  return result.ok ? { ...result, source } : result;
 }
 
 /** A team file left beside a registry team: present, and whether it says what the registry says.

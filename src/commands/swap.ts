@@ -273,7 +273,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
       return 'caller';
     }
     const messages = current.errors.map(
-      (problem) => `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${plainText(problem.message)}`,
+      (problem) => `${problem.line ? `team config line ${problem.line}: ` : ''}${plainText(problem.message)}`,
     );
     if (json) writeJsonError(rawIo, 'swap.file', messages.join('; '), null);
     else for (const message of messages) io.stderr(`team swap: ${message}\n`);
@@ -303,7 +303,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     // A run writes the file's new declaration and launches from it: the saved copy an invalid
     // file fell back to is not where either may happen.
     if (current.path === undefined || notice !== undefined) {
-      const msg = 'team.yaml is invalid, so a swap cannot write the new declaration or launch from it';
+      const msg = 'team config is invalid, so a swap cannot write the new declaration or launch from it';
       if (json) writeJsonError(rawIo, 'swap.file', msg, null);
       else io.stderr(`team swap: ${msg}\n`);
       return 'file';

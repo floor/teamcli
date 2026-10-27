@@ -339,7 +339,7 @@ it did instead. The lines around them:
 | `<account>: its check is unreadable` | the check command failed, timed out, or printed something other than one to three lines for a subscription or one line for a spend account; its output is never logged |
 | `the check for <account> is unapproved; that account reads unknown` | the check's file changed since the record was written, or no record holds it: it is not run |
 | `the session "<session>" is not this file's "<session>": its readings are not saved` | `--session` names a session other than the file's own; said once, on the first pass that sees it |
-| `team.yaml can't be read (<problem>); watching with the team as it was` | the file broke and no copy of it validated |
+| `team config can't be read (<problem>); watching with the team as it was` | the file broke and no copy of it validated |
 | `liveness_<setting>: the <level> declared <n>, longer than the <n> in force — a liveness threshold may be tightened, never loosened, unless the level above allows it` | a liveness word in the chain would loosen a threshold: it is set aside, the value in force stands, and the line is said once per setting |
 | `<name>: its record is not an approved seat; left as it is (the owner cleans it: team remove <name> --abandon)` | a temporary seat whose end is proved and whose pane is free is left running |
 | `worktree <task> was not removed` | its removal failed; it is tried again on the next pass |
@@ -446,7 +446,7 @@ a first sight, which the launch gate calls `first sight only, not yet counted`, 
 | `team watch: --no-nudge and --no-notify are the owner's, from a terminal outside herdr; this call is <caller>` | 1 |
 | `team watch: only the owner or a placed seat runs this, from a terminal outside herdr or its own pane` | 1 |
 | `team watch: unknown option --x` / `team watch: unexpected "x"` (each with the usage) | 2 |
-| `team watch: team.yaml line <n>: <message>` / `team watch: <message>` | 2 |
+| `team watch: team config line <n>: <message>` / `team watch: <message>` | 2 |
 
 Under `--json` — not a flag the loop takes — that invocation refusal is one `team.error`
 document on stdout: `error.id` `watch.invocation`, `error.message` the sentence above without
@@ -574,7 +574,7 @@ seats: [
 $ team watch ; echo "exit $?"
 2026-10-04T09:00:00.000Z the watch-rhythm policy could not be read: team: policy source cannot be read or verified (./.agents/team.yaml: line 3: "[" is not closed on its line); automated work, nudges and escalations are held until it can be read
 2026-10-04T09:00:00.000Z watching the session "beacon" every 120s
-2026-10-04T09:00:00.000Z team.yaml is invalid (line 3: "[" is not closed on its line); using the copy of 2026-10-04T09:00:00.000Z
+2026-10-04T09:00:00.000Z team config is invalid (line 3: "[" is not closed on its line); using the copy of 2026-10-04T09:00:00.000Z
 2026-10-04T09:00:00.000Z the watch of "beacon" stopped
 exit 0
 ```

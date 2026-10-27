@@ -1883,7 +1883,7 @@ describe('team watch', () => {
     await runWatch(['--file', file], io, sources(3, {
       wait: async (seconds) => { clock += seconds * 1000; if (round++ === 0) writeFileSync(file, 'format: 9\n'); return round < 3; },
     }));
-    expect(io.out.match(/team\.yaml is invalid/g)?.length).toBe(1);
+    expect(io.out.match(/team config is invalid/g)?.length).toBe(1);
     expect(io.out).toContain('using the copy of');
   });
 

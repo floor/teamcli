@@ -22,7 +22,7 @@ export const USAGE = `Usage: team commits check <ref> [--since <ref>] [--file <p
                    (origin/main..HEAD); otherwise that one commit
   --since <ref>    skip this commit and everything reachable from it, for this
                    run; overrides identity.since
-  --file <path>    the team file, instead of .agents/team.yaml
+  --file <path>    a team file, instead of the registry record (team config)
   --json           the report as a document, and a refusal as the error document
 
 Exits 0 when every commit passes, 1 when one is refused, 2 when the check

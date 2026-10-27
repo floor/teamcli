@@ -127,7 +127,7 @@ forces one seat at a time, and a machine near its start limits falls back to one
 own). Whether seats run concurrently or one at a time, on a terminal the provisional line is drawn
 as `<seat>: launching` and rewritten in place as seats advance — `waiting for its prompt`,
 `naming`, `sending its rules` — and the final records, their stderr details and `.agents/team.log`
-are emitted in `.agents/team.yaml` file order. A
+are emitted in declaration order. A
 redirected stdout receives the final records only: one newline-terminated line per seat, nothing
 provisional, no escape sequence. Everything else a run says about a seat — the indented detail
 under the record, the `skip` line for a seat stopped in the file, a note, a timeout's last reading

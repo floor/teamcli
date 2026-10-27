@@ -17,7 +17,7 @@ it by hand, or let CI run it after it creates a tag.
 
 ## What it reads and writes
 
-Reads the team file — by default `.agents/team.yaml` of the repository's main checkout, found
+Reads the team's registry record — by default the record of the repository's main checkout, found
 through git's common directory, so a run inside a linked worktree reads the main checkout's file,
 not the worktree's; a folder that is not a git repository is read from `.agents/team.yaml` in that
 folder only, not from a parent, and a link at `.agents` or at the file is not followed;

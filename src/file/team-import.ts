@@ -21,7 +21,7 @@ import {
   writeStoredTeamConfig,
   type StoredTeamConfig,
 } from '../registry/team-config-store.ts';
-import { teamIdOf } from '../registry/teams.ts';
+import { getTeam, teamIdOf } from '../registry/teams.ts';
 
 export type ImportMode = 'migrate' | 'import';
 
@@ -141,8 +141,23 @@ export function importForUp(cwd: string, home: string | undefined, dryRun: boole
   } catch {
     return null;
   }
-  if (dryRun) return `this team is not in the registry yet: a real run imports ${TEAM_FILE} first (team migrate)`;
+  const listed = registryLists(where, root);
+  if (dryRun) {
+    return listed
+      ? `the registry lists this team but holds no config record yet: a real run imports ${TEAM_FILE} first (team migrate)`
+      : `this team is not in the registry yet: a real run imports ${TEAM_FILE} first (team migrate)`;
+  }
   const moved = importTeamFile({ cwd, home: where, mode: 'migrate', now });
   if (!moved.ok) return null;
-  return `this team was not in the registry yet: imported ${TEAM_FILE} (team ${moved.id}), read back and verified; the file is no longer read: run \`team migrate\` to move it to the Trash`;
+  return listed
+    ? `the registry lists this team but holds no config record yet: imported ${TEAM_FILE} (team ${moved.id}), read back and verified; the file is no longer read: run \`team migrate\` to move it to the Trash`
+    : `this team was not in the registry yet: imported ${TEAM_FILE} (team ${moved.id}), read back and verified; the file is no longer read: run \`team migrate\` to move it to the Trash`;
+}
+
+function registryLists(home: string, root: string): boolean {
+  try {
+    return getTeam(home, teamIdOf(root)) !== null;
+  } catch {
+    return false;
+  }
 }

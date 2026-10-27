@@ -474,7 +474,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         refuse(io, true, 'add', {
           id: 'add.caller',
           message: mayRun,
-          repair: 'an approved delegate runs `team add …` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr',
+          repair: 'an approved delegate runs `team add …` from its own pane when team config names one; otherwise the owner runs it from this folder, at a terminal outside herdr',
           rule: 'owner-only',
         });
       } else if (dry) {
@@ -1763,7 +1763,7 @@ function hostOf(input: {
  *  dropped, so the printed line is a command that runs. */
 function unblockingAddRun(argv: string[]): string {
   const words = ['team', 'add', ...withoutOutputFlags(argv).map(shellQuote)];
-  return `an approved delegate runs \`${words.join(' ')}\` from its own pane when .agents/team.yaml names one; otherwise the owner runs it from this folder, at a terminal outside herdr`;
+  return `an approved delegate runs \`${words.join(' ')}\` from its own pane when team config names one; otherwise the owner runs it from this folder, at a terminal outside herdr`;
 }
 
 /** The caller's words without this run's own output flags: the repair names a command that

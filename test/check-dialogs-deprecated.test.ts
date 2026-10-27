@@ -149,7 +149,7 @@ describe('the dialogs section the 0.4 line wrote', () => {
     const line = text.split('\n').indexOf('dialogs:') + 1;
     expect(out).toContain(
       `warning: the file, line ${line}: \`dialogs:\` is deprecated and grants nothing; `
-      + 'repair: remove dialogs: from .agents/team.yaml; trust answering is now an owner grant: '
+      + 'repair: remove dialogs: from team config; trust answering is now an owner grant: '
       + 'team grant @team --capabilities dialogs.trust',
     );
     // A warning is not a difference: nothing to count, nothing to fail, no change to the exit.
@@ -176,7 +176,7 @@ describe('the dialogs section the 0.4 line wrote', () => {
     // The same sentence `team check` prints, in doctor's `warn` line.
     expect(io.out).toContain(
       `warn  the file, line ${line}: \`dialogs:\` is deprecated and grants nothing; `
-      + 'repair: remove dialogs: from .agents/team.yaml; trust answering is now an owner grant: '
+      + 'repair: remove dialogs: from team config; trust answering is now an owner grant: '
       + 'team grant @team --capabilities dialogs.trust',
     );
   });

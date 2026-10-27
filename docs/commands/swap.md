@@ -112,7 +112,7 @@ is not a rollback.
 | --- | --- |
 | `team swap: <how the invocation is malformed>` (with the usage) | 2 |
 | `team swap: <why the team file did not load>` | 2 |
-| `team swap: team.yaml is invalid, so a swap cannot write the new declaration or launch from it` | 2 |
+| `team swap: team config is invalid, so a swap cannot write the new declaration or launch from it` | 2 |
 | `team swap: this team is not yours to read` | 1 |
 | `team swap: only the owner forces a swap; this call is <caller>` | 1 |
 | `team swap: only the owner runs this, from a terminal outside herdr or its own seat` | 1 |

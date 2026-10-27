@@ -19,8 +19,8 @@ This specification defines the file formats, environment mappings, lock files, c
 - `agent_session`: the session identifier recorded for a seat in `.agents/team.state.json` (`src/state.ts`); under `resume: true`, a lowercase hexadecimal UUID (`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`) backed by a verified on-disk transcript.
 - `start_cwd`: the working directory in which a seat's launch command was started, recorded in `.agents/team.state.json` (`src/state.ts`).
 - `cli_pid`: the child CLI process identifier spawned inside a seat's pane (recorded under `launched` in `.agents/team.state.json`, `src/state.ts`).
-- `resume`: a boolean seat field in `.agents/team.yaml` (`default: false`) requesting deterministic conversation continuity across CLI process exits (planned for 0.5.1).
-- `account`: a seat field in `.agents/team.yaml` naming either a per-entity provider launch account in `<home>/.config/team/entities/<entity>/accounts.yaml` (planned for 0.5.1) or a machine billing subscription in `<home>/.config/team/accounts.yaml` (`src/information/machine-accounts.ts`).
+- `resume`: a boolean seat field in `team config` (`default: false`) requesting deterministic conversation continuity across CLI process exits (planned for 0.5.1).
+- `account`: a seat field in `team config` naming either a per-entity provider launch account in `<home>/.config/team/entities/<entity>/accounts.yaml` (planned for 0.5.1) or a machine billing subscription in `<home>/.config/team/accounts.yaml` (`src/information/machine-accounts.ts`).
 - `usage_account`: an optional field on a launch account in `<home>/.config/team/entities/<entity>/accounts.yaml` mapping the seat's token spend to a billing entry in `<home>/.config/team/accounts.yaml` (defaults to `provider`).
 - `identity.github`: the per-entity GitHub credentials and commit-author block in `<home>/.config/team/entities/<entity>/identity.yaml` (planned for 0.5.1).
 - `private-patterns.txt`: an entity's mode `0600` file of extended regular expressions at `<home>/.config/team/entities/<entity>/private-patterns.txt` scanned before a push.
@@ -30,20 +30,20 @@ This specification defines the file formats, environment mappings, lock files, c
 
 ## 3. Formats
 
-### 3.1 Seat resume fields (`.agents/team.yaml` and `.agents/team.state.json`)
+### 3.1 Seat resume fields (`team config` and `.agents/team.state.json`)
 
-- **Where:** `.agents/team.yaml` (seat declaration, written by the project owner) and `.agents/team.state.json` (runtime state, written atomically under the session lock by `team`; `src/state.ts`).
-- **Status at `v0.5.0 (52db9b75)` and `int/0.5.1 (8acb470b)`:** `agent_session`, `start_cwd`, and `launched` are shipped in `src/state.ts`; `resume: true` in `.agents/team.yaml` and missing-transcript refusal state are 0.5.1 additions (not built at `int/0.5.1 8acb470b`).
+- **Where:** `team config` (seat declaration, written by the project owner) and `.agents/team.state.json` (runtime state, written atomically under the session lock by `team`; `src/state.ts`).
+- **Status at `v0.5.0 (52db9b75)` and `int/0.5.1 (8acb470b)`:** `agent_session`, `start_cwd`, and `launched` are shipped in `src/state.ts`; `resume: true` in `team config` and missing-transcript refusal state are 0.5.1 additions (not built at `int/0.5.1 8acb470b`).
 
 | Field | Location | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|---|
-| `resume` | `.agents/team.yaml` (`seats[]`) | `boolean` | no | `false` | 0.5.1 (planned) | When `true`, `team` pre-assigns or resumes the seat's UUID conversation across CLI exits. Incompatible with a custom `launch:` string. |
-| `account` | `.agents/team.yaml` (`seats[]`) | `string` | no | — | 0.5.0 (billing) / 0.5.1 (launch) | Names a launch account in `entities/<entity>/accounts.yaml` first, or a billing subscription in `accounts.yaml`. |
+| `resume` | `team config` (`seats[]`) | `boolean` | no | `false` | 0.5.1 (planned) | When `true`, `team` pre-assigns or resumes the seat's UUID conversation across CLI exits. Incompatible with a custom `launch:` string. |
+| `account` | `team config` (`seats[]`) | `string` | no | — | 0.5.0 (billing) / 0.5.1 (launch) | Names a launch account in `entities/<entity>/accounts.yaml` first, or a billing subscription in `accounts.yaml`. |
 | `agent_session` | `.agents/team.state.json` (`seats.<name>`) | `string` | no | — | 0.5.0 | Session identifier observed from the multiplexer or, under `resume: true`, the lowercase UUID verified on disk (mirrored to the seat's registry record). |
 | `start_cwd` | `.agents/team.state.json` (`seats.<name>`) | `string` | no | — | 0.5.0 | Working directory in which the seat was launched; keys transcript lookup for cwd-scoped CLIs. |
 | `launched` | `.agents/team.state.json` (`seats.<name>`) | `object` | no | — | 0.5.0 | `{ shell_pid: number, child_pids: number[] }` identifying the live CLI process in the pane. |
 
-Example (`.agents/team.yaml` seat declaration, 0.5.1):
+Example (`team config` seat declaration, 0.5.1):
 
 ```yaml
 seats:
@@ -192,10 +192,10 @@ github:
 - **Where:** `<home>/.config/team/entities/<entity>/private-patterns.txt` (mode `0600`, outside every repository, never committed).
 - **Format:** line-oriented text; blank lines and lines matching `/^[ \t]*#/` are ignored; every other line is an extended regular expression tested against added diff lines and commit messages.
 
-### 3.6 Declared gates (`gates:` in `.agents/team.yaml`) and lock files (`who` vs `owner`)
+### 3.6 Declared gates (`gates:` in `team config`) and lock files (`who` vs `owner`)
 
 - **Where:**
-  - `gates:` in `.agents/team.yaml` (`light`, `sweep`, `full`, `push`; planned for 0.5.1).
+  - `gates:` in `team config` (`light`, `sweep`, `full`, `push`; planned for 0.5.1).
   - `<home>/.config/team/locks/<name>.lock/who`: written by `team lock` (`src/lock/machine.ts`; shipped at `v0.5.0`).
   - `light-slot-{1..4}.lock/owner`, `heavy-run{,-2,-3}.lock/owner`, `hourly-suite.lock/owner`: written by the gate runners (deployed in the gate scripts at `v0.5.0`; bundled into `team gate` with line 3 `lstart` in `0.5.1`).
 
@@ -203,7 +203,7 @@ Shipped `team lock` `who` fields (`src/lock/machine.ts` at `v0.5.0`):
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
-| `team` | `string` | yes | — | 0.5.0 | Project name from `.agents/team.yaml`. |
+| `team` | `string` | yes | — | 0.5.0 | Project name from `team config`. |
 | `run` | `string` | yes | `""` | 0.5.0 | One-line note passed via `--for`. |
 | `by` | `string` | yes | — | 0.5.0 | Caller identity (`owner` or seat name). |
 | `at` | `string` | yes | — | 0.5.0 | UTC ISO-8601 timestamp (`YYYY-MM-DDTHH:MM:SSZ`). |
@@ -287,7 +287,7 @@ team gate --reclaim-wedged <slot>
 
 6. **Gate slot locks, any-held skip order, and dead-lock reclamation.** `team lock` and `team unlock` MUST enforce single-holder directory locks at `<home>/.config/team/locks/<name>.lock` with `who`, never breaking a held or unreadable lock (`src/lock/machine.ts`; *proof:* `test/lock.test.ts` at `v0.5.0`). For `team gate`, the runner pool uses 4 light slots (`light-slot-{1..4}.lock`, waiter timeout `GATE_SLOT_WAIT_MAX_MIN=15`, run wall-clock timeout `LIGHT_CHECK_MAX_MIN=10` killing only the check's own `bun` tree), 3 heavy slots (`heavy-run{,-2,-3}.lock`, where `sweep` detaches first and waits up to `HUB_SWEEP_SLOT_TRIES=90` × 20s = 30 min), and `hourly-suite.lock`. No process MAY wait for a heavy slot while holding a light slot or wait for a light slot while holding a heavy slot. `team gate full` MUST execute in exact order: (1) `sweep_no_report`, (2) compare tip SHA to `last-sha`, (3) reclaim dead `hourly-suite.lock` and take it by `mkdir`, (4) reclaim dead locks across `heavy-run{,-2,-3}.lock` and if ANY heavy slot is held (`-d`), release `hourly-suite.lock`, log `heavy slot ... is held; skipping`, and skip the hour, (5) take the first free heavy slot by `mkdir` or, if all 3 were taken in a race, release `hourly-suite.lock` and skip. `reclaim_dead_lock` MUST parse the first all-digit word from line 2 then line 1 of `owner`, check `kill -0 <pid>` and (in 0.5.1) compare line 3's `lstart` against `ps -o lstart= -p <pid>`, verify `owner` is byte-for-byte unchanged, and atomically rename the lock directory before removing it. A lock with no readable pid MUST NOT be auto-reclaimed by a timer and MAY be cleared only by `team gate --reclaim-wedged <slot>`. `team gate push` MUST fail closed when `private-patterns.txt` is missing, unreadable, or matched. (*Source:* `src/lock/machine.ts` at `v0.5.0`, Runtime commitment 52; *proof:* `test/lock.test.ts` at `v0.5.0`, plus gate stub suites `hourly-suite.test.zsh`, `lock-reclaim.test.zsh`, `light-check-limit.test.zsh`, `light-check-release-race.test.zsh`, `cli-smoke-selection.test.zsh`.)
 
-7. **Wrapper replacement inventory and staged migration.** Six obsolete knowledge-base tools scripts were superseded by shipped commands and removed at `eca38e5`: `team.sh` (`team up`), `team-watch.sh` and `agent-watchdog.sh` (`team watch`), `agent-queue.sh` (`team broker` / `team next`), `owner-runner.sh` (`team grant` / `delegates`), and `seat-roster.py` (`team seats` / `team usage`). The eight remaining entries follow a two-step replacement schedule (targeted after the event-driven `team send` work, outside `0.5.1`'s guaranteed scope unless time allows, with the amendment's owner confirmations remaining with the owner): (Step 1) the two session-resume wrappers move to `resume: true` on `orchestrator` and `architect`, the three provider wrappers (`claude-deepseek.sh`, `claude-glm.sh`, `claude-kimi.sh`) move to `account: deepseek`, `account: glm`, and `account: kimi`, the entity GitHub identity wrapper moves to `identity.github`, and the gate scripts folder (`teamcli-gates/`) moves to `gates:` in `.agents/team.yaml` plus `team gate`; (Step 2, after `0.5.1` in Runtime amendment 02) `merge-train.sh` moves to `team merge-train` carrying all five gates (head unchanged during CI, all checks `SUCCESS`, reviewed SHA is an ancestor of head, zero behind `origin/main`, and every post-review first-parent commit is a clean two-parent mechanical merge). Migration MUST (a) change nothing during `0.5.0`, (b) ship `usage_account` attribution and dry-run environment/argv equivalence checks against the wrapper scripts first, (c) populate `<home>/.config/team/entities/<entity>/{accounts.yaml,identity.yaml,private-patterns.txt}` (`0600`) and replace existing wrapper scripts with one-line `exec team launch-env ...` forwarders, (d) import existing session UUIDs and verify non-empty transcripts before reloading `resume: true` seats, (e) migrate non-primary entities first and the tool's own team last while seats are idle with external backups, and (f) delete the forwarders once zero references remain across all team files. (*Source:* Runtime commitment 53; *proof:* none at the tag.)
+7. **Wrapper replacement inventory and staged migration.** Six obsolete knowledge-base tools scripts were superseded by shipped commands and removed at `eca38e5`: `team.sh` (`team up`), `team-watch.sh` and `agent-watchdog.sh` (`team watch`), `agent-queue.sh` (`team broker` / `team next`), `owner-runner.sh` (`team grant` / `delegates`), and `seat-roster.py` (`team seats` / `team usage`). The eight remaining entries follow a two-step replacement schedule (targeted after the event-driven `team send` work, outside `0.5.1`'s guaranteed scope unless time allows, with the amendment's owner confirmations remaining with the owner): (Step 1) the two session-resume wrappers move to `resume: true` on `orchestrator` and `architect`, the three provider wrappers (`claude-deepseek.sh`, `claude-glm.sh`, `claude-kimi.sh`) move to `account: deepseek`, `account: glm`, and `account: kimi`, the entity GitHub identity wrapper moves to `identity.github`, and the gate scripts folder (`teamcli-gates/`) moves to `gates:` in `team config` plus `team gate`; (Step 2, after `0.5.1` in Runtime amendment 02) `merge-train.sh` moves to `team merge-train` carrying all five gates (head unchanged during CI, all checks `SUCCESS`, reviewed SHA is an ancestor of head, zero behind `origin/main`, and every post-review first-parent commit is a clean two-parent mechanical merge). Migration MUST (a) change nothing during `0.5.0`, (b) ship `usage_account` attribution and dry-run environment/argv equivalence checks against the wrapper scripts first, (c) populate `<home>/.config/team/entities/<entity>/{accounts.yaml,identity.yaml,private-patterns.txt}` (`0600`) and replace existing wrapper scripts with one-line `exec team launch-env ...` forwarders, (d) import existing session UUIDs and verify non-empty transcripts before reloading `resume: true` seats, (e) migrate non-primary entities first and the tool's own team last while seats are idle with external backups, and (f) delete the forwarders once zero references remain across all team files. (*Source:* Runtime commitment 53; *proof:* none at the tag.)
 
 ## 6. Registries
 

@@ -85,7 +85,7 @@ function fileProblemId(problems: Problem[]): 'proc.file' | 'proc.file-invalid' {
 function problemLine(problem: Problem): string {
   // `team proc` takes no `--file`, so the no-repository refusal must not offer one; the id
   // above still reads the untransformed message.
-  return `${problem.line ? `team.yaml line ${problem.line}: ` : ''}${withoutFileOffer(problem.message)}`;
+  return `${problem.line ? `team config line ${problem.line}: ` : ''}${withoutFileOffer(problem.message)}`;
 }
 
 function fileProblems(io: Io, json: boolean, problems: Problem[]): number {

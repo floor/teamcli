@@ -469,7 +469,7 @@ describe('refusals', () => {
     writeFileSync(join(root, '.agents', 'team.yaml'), 'format: 1\nseats: not-a-list\n');
     const result = await run(['lead']);
     expect(result.code).toBe(2);
-    expect(result.err).toContain('team.yaml line');
+    expect(result.err).toContain('team config line');
   });
 
   test('a file the owner names that is not there', async () => {

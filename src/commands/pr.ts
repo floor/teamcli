@@ -17,7 +17,7 @@ import { hasJsonFlag, refuse, whoOfDifference, writeJson } from '../output/index
 export const USAGE = `Usage: team pr check <file> [--file <path>] [--json]
 
   <file>           the pull request's body ("-" reads standard input)
-  --file <path>    the team file, instead of .agents/team.yaml
+  --file <path>    a team file, instead of the registry record (team config)
   --json           the report as a document, and a refusal as the error document
 
 Checks one pull request body and nothing else. Needs no repository.

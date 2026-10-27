@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, realpathSync, type Stats } from 'node:fs';
+import { lstatSync, realpathSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describeCaller, isOwner, walkCaller } from './caller.ts';
@@ -60,6 +60,8 @@ export async function runAuthorityEdit(
   const home = options.home ?? homedir();
   let loaded: ReturnType<typeof readTeamConfig>;
   try {
+    // A missing file is the loader's to explain (a registry team has none). A link is not a file:
+    // said here, before the loader, so the refusal stays `invalid` and the link is not followed.
     const root = findRoot(io.cwd) ?? realpathSync(io.cwd);
     requireRegularFile(join(root, '.agents', 'team.yaml'));
     loaded = readTeamConfig(io.cwd, { home });

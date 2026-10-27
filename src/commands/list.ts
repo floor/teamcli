@@ -1,8 +1,8 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readArgs } from '../args.ts';
-import { validateTeamFile } from '../file/validate.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { agentList, paneRead, sessionList, type HerdrSession } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { plainLine } from '../launch/plain.ts';
@@ -706,8 +706,7 @@ export function realListSources(home: string = homedir()): ListSources {
     },
     file(root) {
       try {
-        const text = readFileSync(join(root, '.agents', 'team.yaml'), 'utf8');
-        const checked = validateTeamFile(text, { home, root });
+        const checked = readTeamConfig(root, { home, checkOnly: true });
         return checked.ok ? { valid: true, seats: checked.team.seats.length } : { valid: false, seats: null };
       } catch {
         return null;

@@ -386,7 +386,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
         : current.errors.some(isParseError)
           ? 'status.file-invalid'
           : 'status.file';
-      const msg = current.errors.map((p) => `${p.line ? `team.yaml line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');
+      const msg = current.errors.map((p) => `${p.line ? `team config line ${p.line}: ` : ''}${plainText(p.message)}`).join('; ');
       writeJsonError(io, id, msg, null);
     } else {
       printProblems(out, current.errors);
@@ -850,6 +850,6 @@ function render(
 
 function printProblems(io: Io, problems: Problem[]): void {
   for (const problem of problems) {
-    io.stderr(`team status: ${problem.line ? `team.yaml line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
+    io.stderr(`team status: ${problem.line ? `team config line ${problem.line}: ` : ''}${plainText(problem.message)}\n`);
   }
 }

@@ -167,7 +167,7 @@ describe('a delegate entry naming approve', () => {
     expect(code).toBe(1);
   });
 
-  test("a set-aside delivery_order in .agents/team.yaml is reported as the lead's difference (D4) and validates under --json", () => {
+  test("a set-aside delivery_order in team config is reported as the lead's difference (D4) and validates under --json", () => {
     const withSetAside = [
       ...HEAD.trimEnd().split('\n'),
       '    delivery_order: [mcp-inbox, typed]',
@@ -183,8 +183,8 @@ describe('a delegate entry naming approve', () => {
       now: () => NOW,
     });
     expect(code).toBe(1);
-    expect(io.out).toContain('difference: lead: delivery_order [mcp-inbox, typed] in .agents/team.yaml is set aside; [typed] stands\n');
-    expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in .agents/team.yaml\n');
+    expect(io.out).toContain('difference: lead: delivery_order [mcp-inbox, typed] in team config is set aside; [typed] stands\n');
+    expect(io.out).toContain('  repair: drop the 1 leg not in the inherited delivery_order for lead in team config\n');
     expect(io.out).toContain("  who: the team's lead\n");
     expect(io.out).toContain('1 difference\n');
     expect(io.out).not.toContain('(s)');
@@ -204,7 +204,7 @@ describe('a delegate entry naming approve', () => {
       now: () => NOW,
     });
     expect(code2).toBe(1);
-    expect(io2.out).toContain('  repair: drop the 2 legs not in the inherited delivery_order for lead in .agents/team.yaml\n');
+    expect(io2.out).toContain('  repair: drop the 2 legs not in the inherited delivery_order for lead in team config\n');
     expect(io2.out).not.toContain('(s)');
 
     const jsonIo = testIo(root, { kind: 'owner' });
@@ -318,10 +318,10 @@ describe('a delegate entry naming approve', () => {
     expect(code).toBe(0);
     const doc = assertMatchesOutputSchema<{ warnings: string[] }>(io.out, CHECK_OUTPUT_SCHEMA);
     expect(doc.warnings).toEqual([
-      "warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from .agents/team.yaml",
-      'warning: the file, line 19: watch.quota_marks is now budgets.marks, and is still read; repair: move `watch.quota_marks` to `budgets.marks` in .agents/team.yaml',
-      'warning: the file, line 21: budgets.marks replaces watch.quota_marks; repair: remove `watch.quota_marks` from .agents/team.yaml and keep `budgets.marks`',
-      'warning: the file, line 16: `dialogs:` is deprecated and grants nothing; repair: remove dialogs: from .agents/team.yaml; trust answering is now an owner grant: team grant @team --capabilities dialogs.trust',
+      "warning: the file, line 3: `coordinator:` is now `leads: true` on the lead's seat, and is still read; repair: set `leads: true` on the lead's seat and remove `coordinator:` from team config",
+      'warning: the file, line 19: watch.quota_marks is now budgets.marks, and is still read; repair: move `watch.quota_marks` to `budgets.marks` in team config',
+      'warning: the file, line 21: budgets.marks replaces watch.quota_marks; repair: remove `watch.quota_marks` from team config and keep `budgets.marks`',
+      'warning: the file, line 16: `dialogs:` is deprecated and grants nothing; repair: remove dialogs: from team config; trust answering is now an owner grant: team grant @team --capabilities dialogs.trust',
     ]);
   });
 
@@ -344,7 +344,7 @@ describe('a delegate entry naming approve', () => {
     expect(runTeamCheck({}, plainIo, sources)).toBe(0);
     const lines = plainIo.out.split('\n');
     expect(lines[0]).toBe(
-      'team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 2026-10-17T11:00:00.000Z',
+      'team config is invalid (line 1: "[" is not closed on its line); using the copy of 2026-10-17T11:00:00.000Z',
     );
     expect(lines[1]).toBe('team acme, session "acme"');
 
@@ -352,7 +352,7 @@ describe('a delegate entry naming approve', () => {
     expect(runTeamCheck({ json: true }, jsonIo, sources)).toBe(0);
     const doc = assertMatchesOutputSchema<{ notice?: string }>(jsonIo.out, CHECK_OUTPUT_SCHEMA);
     expect(doc.notice).toBe(
-      'team.yaml is invalid (line 1: "[" is not closed on its line); using the copy of 2026-10-17T11:00:00.000Z',
+      'team config is invalid (line 1: "[" is not closed on its line); using the copy of 2026-10-17T11:00:00.000Z',
     );
   });
 

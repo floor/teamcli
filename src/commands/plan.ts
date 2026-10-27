@@ -117,7 +117,7 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
     const message = problem?.message ?? 'the team file can\'t be read';
     if (problem !== undefined && isNoRepository(problem)) {
       const shown = withoutFileOffer(message);
-      if (json) writeJsonError(io, 'plan.not-a-repo', shown, 'run team plan from inside a checkout, or from the folder that holds .agents/team.yaml');
+      if (json) writeJsonError(io, 'plan.not-a-repo', shown, 'run team plan from inside a checkout');
       else out.stderr(`team plan: ${shown}\n`);
       // exit: plan.not-a-repo
       return 2;

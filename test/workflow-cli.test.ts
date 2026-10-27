@@ -91,7 +91,7 @@ describe('team workflow check', () => {
     expect(doc.summary).toEqual({ refusals: 0, notes: 0 });
   });
 
-  test('resolves team seat roles from .agents/team.yaml in the working directory via main()', async () => {
+  test('resolves team seat roles from team config in the working directory via main()', async () => {
     const dir = makeTempDir();
     mkdirSync(join(dir, '.agents'), { recursive: true });
     writeFileSync(

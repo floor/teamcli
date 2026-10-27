@@ -7,17 +7,17 @@ codes stay on the page.
 
 ## What the run does: the skeleton, the restore, the exclude lines
 
-Writes the team file: a skeleton for this project, or the copy of `.agents/team.yaml` this machine
-stored. It also lists the team file and its runtime files in `.git/info/exclude`,
-so git never sees them and a fresh clone never carries them.
+Writes the team into the registry: a skeleton for this project, or the copy this machine stored.
+The legacy `file` source writes `.agents/team.yaml` instead. Either way it lists that path and the
+runtime files in `.git/info/exclude`, so git never sees them and a fresh clone never carries them.
 
 ## What it reads and writes
 
 Reads the git repository (`findRoot`, `HEAD`, the git common directory) and, with `--restore`, the
 user-level store (`~/.config/team/<project>-<hash>/approved.yaml`).
 
-Writes `.agents/team.yaml`, adds the missing lines to `<git common dir>/info/exclude`, and appends
-one line to `.agents/team.log`:
+Writes the registry record (or `.agents/team.yaml` on the legacy `file` source), adds the missing
+lines to `<git common dir>/info/exclude`, and appends one line to `.agents/team.log`:
 
     .agents/team.yaml
     .agents/team.state.json
@@ -58,6 +58,7 @@ named. A run with no terminal is refused with one sentence, before the repositor
 
 ## What it prints
 
+On the default registry source a skeleton prints `Wrote the team record: a skeleton with one seat. Edit it with team config, then run team up.` A restore or an archive restore names `the team record` the same way. The legacy `file` source, which the examples below show, prints
 `Wrote .agents/team.yaml: a skeleton with one seat. Edit it, then run team up.`, or
 `Restored .agents/team.yaml from the copy this machine stored.`, followed by the
 privacy paragraph: the file is private to this clone, listed in `.git/info/exclude` and never in

@@ -117,7 +117,7 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
     const message = problem?.message ?? 'the team file can\'t be read';
     if (problem !== undefined && isNoRepository(problem)) {
       const shown = withoutFileOffer(message);
-      if (json) writeJsonError(io, 'next.not-a-repo', shown, 'run team next from inside a checkout, or from the folder that holds .agents/team.yaml');
+      if (json) writeJsonError(io, 'next.not-a-repo', shown, 'run team next from inside a checkout');
       else io.stderr(`team next: ${shown}\n`);
       // exit: next.not-a-repo
       return 2;

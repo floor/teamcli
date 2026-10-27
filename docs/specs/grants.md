@@ -274,7 +274,7 @@ A non-owner (an agent) cannot create a team on its own. The flow:
 
 1. `team init --request [--json]` creates a pending request `tc_…` in `~/.config/team/action-requests`. It is bound to a hash of {kind `team-create`, repository realpath, team name, HEAD} and expires after 15 minutes. It is delivered to the owner seat inbox. The request is refused when no owner seat is registered.
 2. The owner runs `team init --approve-as-owner-seat <id> oui|always|non [--signer <name>] [--assertion <file>]`. This signs an answer with kind `team-create`.
-3. `team init --execute <id>` re-verifies the signature against the pinned signer key and the policy. It checks that the repository matches, claims the request (single use), writes an audit entry in `~/.config/team/action-audit`, and then writes `.agents/team.yaml`.
+3. `team init --execute <id>` re-verifies the signature against the pinned signer key and the policy. It checks that the repository matches, claims the request (single use), writes an audit entry in `~/.config/team/action-audit`, and then writes `team config`.
 
 `always` stores the signed answer as a rule in `~/.config/team/action-approvals`. The rule is scoped to the parent folder of the approved repository and covers only the action kind `team-create`. It never covers grants, and grant answers never cover team creation. Rules are listed with `team init --approvals` and revoked with `team init --revoke-approval <id>`. An edited rule fails verification and is ignored. There is no path where an unsigned chat click, the shared message key, or a file written by an agent is enough.
 
