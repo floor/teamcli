@@ -1,5 +1,14 @@
 # Antigravity's screen. Trust and permission are case-insensitive. The slash
 # menu's arrow line and the esc footer are chrome, so exit-typed stays unsent.
+#
+# Resume, measured on the owner's Mac: `agy --conversation=<uuid>` resumes that
+# conversation. Example: `agy --conversation=b4b1b021-e8af-4213-9b7e-470b233b712f`.
+# Conversations live under ~/.gemini/antigravity-cli/conversations/. TeamCLI appends
+# one `--conversation=<id>` word to the seat's launch line, from the registry record's
+# reach.agent_session. A wrapper such as `zsh .../as-floor.sh agy ...` keeps the flag
+# on that same line so the wrapper forwards it; a quoted script that itself runs agy
+# (`zsh -lc "agy ..."`) gets the flag inside the quotes. This profile does not mint
+# the id at launch.
 format: 1
 cli: antigravity
 binary: agy

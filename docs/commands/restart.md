@@ -138,7 +138,8 @@ agent registry's recorded `reach.agent_session`. The registry record is the proo
 state file written before the id was recorded is no bar to recognizing the seat, and no bar to
 resuming it either. The seat is then relaunched with that recorded conversation through its
 launch line — Claude Code as `--resume <id>`, Codex as its own subcommand, `codex … resume
-<id>`; a CLI with no measured resume form is left as it is unless the caller abandons the
+<id>`, Antigravity as `--conversation=<id>` appended to the seat's launch line. A CLI with
+no measured resume form is left as it is unless the caller abandons the
 conversation with `--abandon`, a state that names another id is relaunched without one, and a
 conversation that differs or cannot be read remains refused (`<seat> has a process in its old
 pane that is not the signed seat; left as it is`, exit 1).
