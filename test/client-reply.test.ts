@@ -66,7 +66,7 @@ function world(inbox: boolean) {
   const teamId = teamIdOf(root);
   const agent = (seat: string, role: string) => registerAgent(home, {
     name: seat, signing: { model: 'Claude Opus', version: '5.5', role }, lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
-    reach: { team: teamId, seat, session: 'acme', pane: seat === 'orchestrator' ? 'w1:p1' : 'w1:p2', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
+    reach: { team: teamId, seat, session: 'acme', pane: seat === 'orchestrator' ? 'fixture:lead' : 'fixture:worker', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
   });
   const orch = agent('orchestrator', 'orchestrator');
   const builder = agent('builder', 'builder');
@@ -76,7 +76,7 @@ function world(inbox: boolean) {
     lifecycle: 'running',
   });
   updateState(join(root, '.agents'), (state) => {
-    state.sessions.acme = { seats: { orchestrator: { stage: 'ready' as const, pane: 'w1:p1' }, builder: { stage: 'ready' as const, pane: 'w1:p2' } } } as never;
+    state.sessions.acme = { seats: { orchestrator: { stage: 'ready' as const, pane: 'fixture:lead' }, builder: { stage: 'ready' as const, pane: 'fixture:worker' } } } as never;
   });
   const pair = newClientKeyPair();
   const keyDir = clientKeyDir(home, 'grok-bot');
@@ -100,7 +100,7 @@ async function clientSend(w: World, text: string) {
 }
 
 async function seatReply(w: World, seat: string, id: string, text: string) {
-  const pane = seat === 'orchestrator' ? 'w1:p1' : 'w1:p2';
+  const pane = seat === 'orchestrator' ? 'fixture:lead' : 'fixture:worker';
   const io = testIo(w.root, { kind: 'seat', name: seat, pane, session: 'acme' });
   const code = await runReply([id, text, '--json'], io, { home: w.home, now: () => new Date(NOW.getTime() + 60_000), newId: nextId });
   return { code, out: io.out, err: io.err, json: io.out.trim().startsWith('{') ? JSON.parse(io.out) : null };
@@ -187,7 +187,7 @@ describe('the client follows its thread', () => {
 describe('the reply is scoped by the grant; nothing widens it', () => {
   test('a client read from a seat is still refused before grant or key access', async () => {
     const w = world(true);
-    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
+    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'fixture:lead', session: 'acme' });
     const code = await runMessages(['--client', join(w.base, 'missing-grant'), '--key', join(w.base, 'missing-key'), '--json'], io, { home: w.home, now: () => NOW });
     expect(code).toBe(1);
     expect(JSON.parse(io.out).error.code).toBe('messages.client-pane');
@@ -199,7 +199,7 @@ describe('the reply is scoped by the grant; nothing widens it', () => {
     const w = world(true);
     const sent = await clientSend(w, 'synthetic publication freshness check');
     expect(sent.code).toBe(0);
-    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
+    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'fixture:lead', session: 'acme' });
     let replyId = '';
     const code = await runReply([sent.id, 'must not be published', '--json'], io, {
       home: w.home,
