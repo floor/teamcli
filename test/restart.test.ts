@@ -41,6 +41,10 @@ const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt'
 const AGY_IDLE = readFileSync(new URL('./fixtures/antigravity/1.2.16/idle.txt', import.meta.url), 'utf8');
 const AGY_EXIT_TYPED = readFileSync(new URL('./fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
 const AGY_CONVERSATION = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
+// Grok's own screens. The idle footer names Grok 4.7, the model this scene's file declares.
+const GROK_IDLE = readFileSync(new URL('./fixtures/grok/1.0.52/idle.txt', import.meta.url), 'utf8');
+const GROK_EXIT_TYPED = readFileSync(new URL('./fixtures/grok/1.0.52/exit-typed.txt', import.meta.url), 'utf8');
+const GROK_SESSION = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
 
 const TEAM_YAML = `format: 1
 project: acme
@@ -148,6 +152,27 @@ const AGY_TEAM_YAML = TEAM_YAML.replace(
     model: Gemini Flash
     version: "3.8"
     launch: agy`,
+);
+
+// The same team with a Grok worker. Resume is `-r <id>` on the launch line, read from the
+// registry's reach.agent_session the way an Antigravity seat's conversation flag is.
+const GROK_TEAM_YAML = TEAM_YAML.replace(
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`,
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: grok
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    launch: grok`,
 );
 
 // The live restart reading: the file asks for 0.5 GB free swap — which no longer refuses a
@@ -1176,6 +1201,83 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).toContain(
       `AGENT_UNATTENDED=1 ${launch} --conversation=${AGY_CONVERSATION} --dangerously-skip-permissions`,
     );
+  });
+
+  test('a restored Grok seat is proven by the registry binding and resumes that conversation through its launcher', async () => {
+    // The state predates the id. The registry record is the proof, and the relaunch appends
+    // the measured `-r <id>` before the profile's unattended flag.
+    const { fixture, run } = seeded({
+      registry: GROK_SESSION,
+      cli: 'grok',
+      model: 'Grok',
+      version: '4.7',
+      yaml: GROK_TEAM_YAML,
+      launch: 'grok',
+      workerSession: GROK_SESSION,
+      launched: true,
+      foregroundArgv0: 'grok',
+      newPaneScreen: GROK_IDLE,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.0.52' };
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    expect(run.did.runs.join('\n')).toContain(
+      `AGENT_UNATTENDED=1 grok -r ${GROK_SESSION} --always-approve`,
+    );
+    expect(io.err).toBe('');
+  });
+
+  test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
+    const launch = 'zsh /Users/owner/as-floor.sh grok --model grok-4.7';
+    const { fixture, run } = seeded({
+      registry: GROK_SESSION,
+      cli: 'grok',
+      model: 'Grok',
+      version: '4.7',
+      yaml: GROK_TEAM_YAML.replace('    launch: grok', `    launch: ${launch}`),
+      launch,
+      workerSession: GROK_SESSION,
+      launched: true,
+      foregroundArgv0: 'grok',
+      newPaneScreen: GROK_IDLE,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.0.52' };
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? GROK_EXIT_TYPED : GROK_IDLE) : GROK_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain(
+      `AGENT_UNATTENDED=1 ${launch} -r ${GROK_SESSION} --always-approve`,
+    );
+  });
+
+  test('a restored Codex wrapper keeps resume <id> after the flags the seat already names', async () => {
+    const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      yaml: CODEX_TEAM_YAML.replace('    launch: codex -m gpt-6.1-sol', `    launch: ${launch}`),
+      launch,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain(
+      `AGENT_UNATTENDED=1 ${launch} resume ses_codex`,
+    );
+    expect(run.did.runs.join('\n')).not.toContain('--resume');
   });
 
   test('a recorded launcher that selects another conversation is refused before the stop', async () => {

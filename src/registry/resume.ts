@@ -89,8 +89,11 @@ export function recordedSeatSession(input: {
  * disagree, and neither is allowed to speak for the seat.
  *
  * A CLI that cannot carry one in a measured form (every profile but the ones
- * {@link withResume} knows) has no resume id at all; this reader is what lets a restart
- * recognize its restored pane anyway.
+ * {@link withResume} knows: Claude Code `--resume <id>`, Codex `resume <id>`, Antigravity
+ * `--conversation=<id>`, Grok `-r <id>`) has no resume id at all. This reader does not branch
+ * on the CLI: the id it returns is `reach.agent_session`, and the profile writes that token
+ * in the form above. It is also what lets a restart recognize a restored pane when the
+ * profile has no resume form.
  */
 export function recordedSeatContinuity(input: {
   home: string;

@@ -290,6 +290,45 @@ describe('Codex launch and captured screens', () => {
       "coder: would refuse: its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -",
     );
   });
+
+  test('a recorded conversation resumes with the codex resume subcommand on the seat launch line', () => {
+    // Flags the seat already names stay in front of `resume`. A wrapper that forwards its
+    // arguments, and a quoted script that itself runs codex, both keep that order.
+    const id = 'ses_codex';
+    const flagged = 'codex -m gpt-6-sol -c model_reasoning_effort=high';
+    const seat = {
+      name: 'coder', cli: 'codex', cwd: '.', label: 'coder', stopped: false, rules: 'Rules.',
+      repairLine: '`team remove coder --keep` then `team add coder`',
+    };
+    const commandOf = (launch: string, resume: { resume?: string; registry?: { launch: string; model: string; version: string; sessionId?: string } }): string => {
+      const planned = upPlan({
+        root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+        seats: [{ ...seat, launch, ...resume }],
+      });
+      const step = planned.find((item) => item.do?.do === 'launch');
+      return step?.do?.do === 'launch' ? step.do.command : '';
+    };
+    const tail = '-a never -s danger-full-access --no-alt-screen';
+    // The inbox `-c` arguments follow the profile's own flags, and their paths are this
+    // machine's. The resume word stays with the flags the seat already named.
+    const expectResume = (launch: string, head: string): void => {
+      const command = commandOf(launch, launch === flagged
+        ? { registry: { launch: flagged, model: 'GPT Sol', version: '6', sessionId: id } }
+        : { resume: id });
+      expect(command.startsWith(head)).toBe(true);
+      expect(command.slice(head.length) === '' || command.slice(head.length).startsWith(' ')).toBe(true);
+      expect(command.indexOf(`resume ${id}`)).toBeLessThan(command.indexOf(tail));
+    };
+    expectResume(flagged, `AGENT_UNATTENDED=1 ${flagged} resume ${id} ${tail}`);
+    expectResume(
+      `zsh /Users/owner/as-floor.sh ${flagged}`,
+      `AGENT_UNATTENDED=1 zsh /Users/owner/as-floor.sh ${flagged} resume ${id} ${tail}`,
+    );
+    expectResume(
+      `zsh -lc "${flagged}"`,
+      `AGENT_UNATTENDED=1 zsh -lc "${flagged} resume ${id}" ${tail}`,
+    );
+  });
 });
 
 describe('the typed-newline captures (Codex)', () => {

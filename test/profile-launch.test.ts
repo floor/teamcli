@@ -427,6 +427,12 @@ describe('the resume line a launch appends', () => {
     // The `-c` here is Codex's config override, not Claude Code's continue flag: it stays.
     expect(withResume('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_1'))
       .toBe('codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1');
+    // A wrapper that forwards its arguments keeps `resume` and the id at the end of that line.
+    expect(withResume('codex', 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_1'))
+      .toBe('zsh /Users/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1');
+    // A quoted script is the program zsh runs: `resume` after the quotes never reaches codex.
+    expect(withResume('codex', 'zsh -lc "codex -m gpt-6-sol -c model_reasoning_effort=high"', 'ses_1'))
+      .toBe('zsh -lc "codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1"');
   });
 
   test('a Codex line that already names resume keeps its own choice', () => {
@@ -458,6 +464,29 @@ describe('the resume line a launch appends', () => {
       .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions`);
   });
 
+  test('a Grok line takes -r <id>, including a wrapper that forwards its arguments', () => {
+    // Measured on Grok CLI 1.0.70: `grok -r <session-id>` resumes that conversation.
+    const id = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
+    expect(supportsSessionResume('grok')).toBe(true);
+    expect(withResume('grok', 'grok', id)).toBe(`grok -r ${id}`);
+    expect(withResume('grok', 'grok --model grok-4.7', id)).toBe(`grok --model grok-4.7 -r ${id}`);
+    expect(withResume('grok', 'zsh /Users/owner/as-floor.sh grok --model grok-4.7', id))
+      .toBe(`zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${id}`);
+    expect(withResume('grok', 'zsh -lc "grok --model grok-4.7"', id))
+      .toBe(`zsh -lc "grok --model grok-4.7 -r ${id}"`);
+    const profile = profileFor('grok');
+    if (!profile) throw new Error('grok has no profile');
+    expect(launchCommand(profile, `grok -r ${id}`, 'Rules.'))
+      .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --always-approve --rules Rules.`);
+  });
+
+  test('a Grok line that already names a session keeps its own choice', () => {
+    const id = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
+    for (const line of [`grok -r ${id}`, 'grok --resume other', 'grok --session-id 7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6', 'zsh /Users/owner/as-floor.sh grok -r']) {
+      expect(withResume('grok', line, 'ses_1')).toBeNull();
+    }
+  });
+
   test('an Antigravity line that already names a conversation keeps its own choice', () => {
     const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
     for (const line of [`agy --conversation=${id}`, 'agy --conversation other', 'zsh /Users/owner/as-floor.sh agy --conversation']) {
@@ -472,6 +501,13 @@ describe('a launch line that already selects a conversation', () => {
     expect(namedResumeTarget('claude-code', 'claude -r ses_9')).toBe('ses_9');
     expect(namedResumeTarget('claude-code', 'claude --resume=ses_9')).toBe('ses_9');
     expect(namedResumeTarget('codex', 'codex -m gpt-6-sol resume ses_9')).toBe('ses_9');
+    expect(namedResumeTarget('codex', 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_9')).toBe('ses_9');
+    expect(namedResumeTarget('codex', 'zsh -lc "codex -m gpt-6-sol resume ses_9"')).toBe('ses_9');
+    const grokId = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
+    expect(namedResumeTarget('grok', `grok -r ${grokId}`)).toBe(grokId);
+    expect(namedResumeTarget('grok', `grok --resume ${grokId}`)).toBe(grokId);
+    expect(namedResumeTarget('grok', `zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${grokId}`)).toBe(grokId);
+    expect(namedResumeTarget('grok', `zsh -lc "grok -r ${grokId}"`)).toBe(grokId);
     const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
     expect(namedResumeTarget('antigravity', `agy --conversation=${id}`)).toBe(id);
     expect(namedResumeTarget('antigravity', `agy --conversation ${id}`)).toBe(id);
@@ -483,8 +519,11 @@ describe('a launch line that already selects a conversation', () => {
     for (const line of ['claude --continue', 'claude -c', 'claude --resume']) {
       expect(namedResumeTarget('claude-code', line)).toBe('');
     }
-    for (const line of ['codex resume', 'codex resume --last', 'codex resume --all']) {
+    for (const line of ['codex resume', 'codex resume --last', 'codex resume --all', 'zsh -lc "codex resume --last"']) {
       expect(namedResumeTarget('codex', line)).toBe('');
+    }
+    for (const line of ['grok -r', 'grok --resume', 'zsh /Users/owner/as-floor.sh grok -r --model grok-4.7']) {
+      expect(namedResumeTarget('grok', line)).toBe('');
     }
     for (const line of ['agy --conversation', 'agy --conversation=', 'zsh /Users/owner/as-floor.sh agy --conversation --model x']) {
       expect(namedResumeTarget('antigravity', line)).toBe('');
@@ -496,6 +535,8 @@ describe('a launch line that already selects a conversation', () => {
     expect(namedResumeTarget('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high')).toBeNull();
     expect(namedResumeTarget('cursor', 'cursor-agent --resume ses_1')).toBeNull();
     expect(namedResumeTarget('antigravity', 'agy --model gemini-3.1-pro')).toBeNull();
+    expect(namedResumeTarget('grok', 'grok --model grok-4.7')).toBeNull();
+    expect(namedResumeTarget('grok', 'grok --session-id 7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6')).toBeNull();
   });
 
   test('a proven id is carried only when the line selects it or names none', () => {
@@ -511,6 +552,25 @@ describe('a launch line that already selects a conversation', () => {
       .toEqual({ kind: 'refuse', why: 'its launch line resumes a different conversation' });
     expect(resumeCarry('codex', 'codex resume --last', 'ses_1'))
       .toEqual({ kind: 'refuse', why: 'its launch line resumes without naming the recorded conversation' });
+    expect(resumeCarry('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_codex'))
+      .toEqual({ kind: 'line', line: 'codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_codex' });
+    expect(resumeCarry('codex', 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol', 'ses_codex'))
+      .toEqual({ kind: 'line', line: 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol resume ses_codex' });
+    expect(resumeCarry('codex', 'zsh -lc "codex -m gpt-6-sol resume ses_codex"', 'ses_codex'))
+      .toEqual({ kind: 'line', line: 'zsh -lc "codex -m gpt-6-sol resume ses_codex"' });
+    const grokId = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
+    expect(resumeCarry('grok', 'grok', grokId))
+      .toEqual({ kind: 'line', line: `grok -r ${grokId}` });
+    expect(resumeCarry('grok', 'zsh /Users/owner/as-floor.sh grok --model grok-4.7', grokId))
+      .toEqual({ kind: 'line', line: `zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${grokId}` });
+    expect(resumeCarry('grok', `zsh -lc "grok -r ${grokId}"`, grokId))
+      .toEqual({ kind: 'line', line: `zsh -lc "grok -r ${grokId}"` });
+    expect(resumeCarry('grok', 'grok -r ses_9', grokId))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes a different conversation' });
+    expect(resumeCarry('grok', 'grok -r', grokId))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes without naming the recorded conversation' });
+    expect(resumeCarry('grok', 'grok --session-id 7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6', grokId))
+      .toEqual({ kind: 'refuse', why: 'its launch line already sets a new session id' });
     expect(resumeCarry('cursor', 'cursor-agent --model x', 'ses_1'))
       .toEqual({ kind: 'refuse', why: 'its launch line has no measured resume form' });
     const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';

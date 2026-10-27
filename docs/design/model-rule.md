@@ -124,7 +124,7 @@ declaration, wait for ready. The shared pieces of `runRestart` move into a `perf
 function the command and the swap both call, so there is one launch sequence in the tool.
 
 **Resume or handover.** When the CLI is unchanged and the profile says the CLI keeps its
-sessions (`supportsSessionResume`, today Claude Code, Codex and Antigravity), the launch line is given the recorded
+sessions (`supportsSessionResume`, today Claude Code, Codex, Antigravity and Grok), the launch line is given the recorded
 session id to resume, and the old conversation is tried on the new model. The log records
 the attempt and what the screen showed; lossless resumption is not an observed fact.
 When the CLI changes — or the CLI cannot resume, where a fresh

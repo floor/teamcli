@@ -26,6 +26,14 @@ import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/outpu
 const CODEX_IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8')
   .replace('gpt-5.6-terra', 'gpt-5.0-sol')
   .replace('GPT-5.6-Terra', 'GPT-5.0-Sol');
+const CODEX_LUNA_IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8')
+  .replace('gpt-5.6-terra', 'gpt-6-luna')
+  .replace('GPT-5.6-Terra', 'GPT-6-Luna');
+const CODEX_EXIT_TYPED = readFileSync(new URL('./fixtures/codex/0.161.0/exit-typed.txt', import.meta.url), 'utf8');
+const GROK_IDLE = readFileSync(new URL('./fixtures/grok/1.0.52/idle.txt', import.meta.url), 'utf8');
+const GROK_FAST_IDLE = GROK_IDLE.replaceAll('Grok 4.7 (high)', 'Grok 4.7 Fast (high)');
+const GROK_EXIT_TYPED = readFileSync(new URL('./fixtures/grok/1.0.52/exit-typed.txt', import.meta.url), 'utf8');
+const GROK_SESSION = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
 
 const TEAM = `format: 1
 project: acme
@@ -57,6 +65,27 @@ seats:
     model: GPT Sol
     version: "5.0"
     launch: codex --model gpt-sol
+  - role: reviewer
+    name: luna
+    cli: codex
+    vendor: openai
+    model: GPT Luna
+    version: "6"
+    launch: codex -m gpt-6-luna
+  - role: implementer
+    name: grok
+    cli: grok
+    vendor: xai
+    model: Grok
+    version: "4.7"
+    launch: grok
+  - role: implementer
+    name: grok-fast
+    cli: grok
+    vendor: xai
+    model: Grok Fast
+    version: "4.7"
+    launch: grok --model grok-4.7-build-fast
 `;
 
 const NOW = new Date('2026-10-19T09:00:00Z');
@@ -160,6 +189,16 @@ function fakeHerdr(
     slowHandover?: boolean;
     /** False for a conversation that never writes the handover its request named. */
     handoverWritten?: boolean;
+    /** The seat herdr lists. A same-CLI resume scene names the seat the queue is for. */
+    seat?: string;
+    /** The old pane's foreground binary, before the exit returns it to a shell. */
+    argv0?: string;
+    /** The old pane's idle capture, when it is not Claude's. */
+    oldScreen?: string;
+    /** The old pane once `/exit` has been typed, so the stop can read that text back. */
+    exitScreen?: string;
+    /** The doctor version this CLI's tested range accepts. */
+    doctorVersion?: string;
   } = {},
 ): FakeHerdr {
   const did = { typed: [] as string[], closed: [] as string[], runs: [] as string[] };
@@ -177,11 +216,11 @@ function fakeHerdr(
     }
   };
   const led: { name: string; pane: string; workspace: string; status: string }[] = [
-    { name: 'lead', pane: 'pane-old', workspace: 'ws-old', status: opts.status ?? 'idle' },
+    { name: opts.seat ?? 'lead', pane: 'pane-old', workspace: 'ws-old', status: opts.status ?? 'idle' },
   ];
   // The old pane's composer: the stop types the exit text into it and needs to read it back, then
   // the Enter runs and the CLI is gone (the shell is the foreground process).
-  let boxedText = CLAUDE_IDLE;
+  let boxedText = opts.oldScreen ?? CLAUDE_IDLE;
   let shelled = false;
   const newPanes = new Map<string, { text: string; agent: boolean; name: string | null; workspace: string }>();
   // The binary each new pane runs: the launch's own first word, so a relaunch on another CLI is
@@ -225,7 +264,9 @@ function fakeHerdr(
   const downLaunch: DownLaunch = {
     typeText(_session, pane, text) {
       did.typed.push(text);
-      if (pane === 'pane-old') boxedText = claudeBox(text);
+      if (pane === 'pane-old') {
+        boxedText = opts.exitScreen !== undefined && text.includes('/exit') ? opts.exitScreen : (opts.oldScreen === undefined ? claudeBox(text) : boxedText);
+      }
       return true;
     },
     sendKey: () => true,
@@ -314,7 +355,7 @@ function fakeHerdr(
     now,
   };
   const doctor: DoctorSources = {
-    version: () => '2.1.288',
+    version: () => opts.doctorVersion ?? '2.1.288',
     onPath: () => true,
     loggedIn: () => true,
     herdrVersion: () => '0.7.1',
@@ -334,7 +375,9 @@ function fakeHerdr(
     screen: (_session, pane) => (pane === 'pane-old' ? screenOf(screenKind) : { kind: 'idle' }),
     screenText: (_session, pane) => (pane === 'pane-old' ? boxedText : newPanes.get(pane)?.text ?? CLAUDE_IDLE),
     status: (_session, pane) => agents().find((agent) => agent.pane === pane)?.status ?? null,
-    foreground: (_session, pane) => (pane === 'pane-old' && shelled ? ['zsh'] : [binaries.get(pane) ?? 'claude']),
+    foreground: (_session, pane) => (
+      pane === 'pane-old' && shelled ? ['zsh'] : [binaries.get(pane) ?? (pane === 'pane-old' ? (opts.argv0 ?? 'claude') : 'claude')]
+    ),
     now,
     sleep,
     launch: downLaunch,
@@ -697,11 +740,11 @@ describe('team swap now and --run', () => {
 
   // The registry's own record of the seat's last conversation, planted the way a launch writes
   // it: a swap that finds an id on an unchanged CLI resumes it rather than handing over.
-  function plantSession(): void {
+  function plantSession(seatName = 'lead', cliSession = 'ses_0123456789ab'): void {
     const parsed = validateTeamFile(readFileSync(join(root, '.agents', 'team.yaml'), 'utf8'));
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
-    const seat = parsed.team.seats.find((one) => one.name === 'lead');
-    if (seat === undefined) throw new Error('no lead');
+    const seat = parsed.team.seats.find((one) => one.name === seatName);
+    if (seat === undefined) throw new Error(`no ${seatName}`);
     const made = beginSession({
       home,
       root,
@@ -709,7 +752,7 @@ describe('team swap now and --run', () => {
       session: parsed.team.session,
       seat,
       pane: 'pane-old',
-      cli_session: 'ses_0123456789ab',
+      cli_session: cliSession,
       now: NOW,
     });
     if ('note' in made) throw new Error(made.note);
@@ -728,6 +771,50 @@ describe('team swap now and --run', () => {
     expect(log).toContain('lead: resuming session ses_0123456789ab on the new declaration');
     expect(log).toContain('lead: swapped anthropic Claude Opus 5.5 -> deepseek DeepSeek Flash 4.0 (resumed session ses_0123456789ab)');
     // No handover was asked: a resumed conversation already holds its own context.
+    expect(world.did.typed.join('\n')).not.toContain('write a handover');
+  });
+
+  test('a recorded Codex session on an unchanged CLI resumes with the resume subcommand', async () => {
+    place();
+    setRule('*=!anthropic');
+    plantSession('helper', 'ses_codex');
+    await swap(['queue', 'helper', '--to', 'codex:gpt luna']);
+    const world = fakeHerdr({
+      seat: 'helper',
+      argv0: 'codex',
+      oldScreen: CODEX_IDLE,
+      exitScreen: CODEX_EXIT_TYPED,
+      newScreen: CODEX_LUNA_IDLE,
+      doctorVersion: '0.161.0',
+    });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    expect(world.did.runs.join('\n')).toContain('codex -m gpt-6-luna resume ses_codex');
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('helper: resuming session ses_codex on the new declaration');
+    expect(log).toContain('resumed session ses_codex');
+    expect(world.did.typed.join('\n')).not.toContain('write a handover');
+  });
+
+  test('a recorded Grok session on an unchanged CLI resumes with -r <id>', async () => {
+    place();
+    setRule('*=!anthropic');
+    plantSession('grok', GROK_SESSION);
+    await swap(['queue', 'grok', '--to', 'grok:grok fast']);
+    const world = fakeHerdr({
+      seat: 'grok',
+      argv0: 'grok',
+      oldScreen: GROK_IDLE,
+      exitScreen: GROK_EXIT_TYPED,
+      newScreen: GROK_FAST_IDLE,
+      doctorVersion: '1.0.52',
+    });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    expect(world.did.runs.join('\n')).toContain(`grok --model grok-4.7-build-fast -r ${GROK_SESSION}`);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain(`grok: resuming session ${GROK_SESSION} on the new declaration`);
+    expect(log).toContain(`resumed session ${GROK_SESSION}`);
     expect(world.did.typed.join('\n')).not.toContain('write a handover');
   });
 

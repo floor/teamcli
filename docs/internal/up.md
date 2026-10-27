@@ -158,7 +158,8 @@ exactly as above — an unreadable model is a note, never a cycle, the same conv
 differs, and herdr reports the seat idle or done, `up` closes that workspace without input and
 launches the seat again through its own `launch` line, resuming the conversation the pane's own
 agent names where the CLI has a measured resume form — `--resume <id>` for Claude Code, `codex …
-resume <id>` for Codex, `--conversation=<id>` appended to the launch line for Antigravity. A pane
+resume <id>` for Codex, `--conversation=<id>` appended to the launch line for Antigravity,
+`-r <id>` appended to the launch line for Grok. A pane
 that names no session, or one that is not the record's, launches
 without a resume id. Nothing is typed, the seat is not renamed, and it
 keeps its name. A box that holds unsent text does not stop the close. The record stays
