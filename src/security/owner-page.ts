@@ -7,15 +7,17 @@
 // What the page can do, each completed only by an owner-device signature:
 // - register a passkey as an owner signer (the existing Secure Enclave signer confirms with Touch ID);
 // - sign the waiting security-profile proposal;
-// - answer a waiting team-create request, or a team import / add / up request (oui / always / non).
+// - answer a waiting team-create request, a grant, or a team import / add / up request
+//   (approve once, always allow, or deny; the posted word stays oui / always / non).
 // Every API call carries the per-run token from the link and must come to Host localhost:<port>.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { clearOwnerPageLink, writeOwnerPageLink } from '../client/owner-page-link.ts';
 import { addOwnerSigner, ownerSeatMessages, ownerSeatPublicKey, readOwnerSeat, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
-import { actionRequestsFolder, approveTeamCreate } from '../client/team-create.ts';
-import { approveOwnerAction, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
+import { actionRequestsFolder, approveTeamCreate, teamCreateSummary, type TeamCreateParams } from '../client/team-create.ts';
+import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, ownerActionSummary, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
+import { approveAsOwnerSeat, GRANT_REQUEST_ID_PATTERN, grantRequestsFolder } from '../client/emission.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ownerDeviceConsent, readProposal, readSecurityProfile, securityProfileChallenge, securityProfileLine, signSecurityProfile } from './profile.ts';
@@ -38,6 +40,82 @@ type Assertion = { credentialId: string; authenticatorData: string; clientDataJS
 
 export type OwnerPageOptions = { home: string; store: OwnerSeatKeyStore; port?: number; token?: string; now?: () => Date };
 
+/** Card titles for every owner-seat action. The posted answer word is unchanged. */
+const ACTION_TITLES: Record<OwnerAction, string> = {
+  'team-create': 'Create a team',
+  'team-import': 'Import a team file',
+  'team-migrate': 'Migrate a team',
+  'team-add': 'Add a seat',
+  'team-up': 'Start the team',
+  'team-send': 'Send a message',
+  'team-down': 'Stop the team',
+  'team-bus': 'Start the bus',
+  'team-revoke-approval': 'Revoke an approval rule',
+  'team-forget': 'Forget a team record',
+};
+
+const MIGRATION_ACTIONS = new Set<OwnerAction>(['team-migrate']);
+
+export type OwnerPageRequest = {
+  id: string;
+  /** The inbox line. The page shows `title` and `description` instead of this prompt. */
+  text: string;
+  title: string;
+  description: string;
+  /** Approve once and Deny only. Migrations, and grants a standing rule cannot cover. */
+  onceOnly: boolean;
+};
+
+const SHOWN_KINDS = new Set(['team-create-confirmation', 'owner-action-confirmation', 'grant-confirmation']);
+
+function strippedPrompt(text: string): string {
+  return text.replace(/\s*Authorized\?[\s\S]*$/, '').trim();
+}
+
+function isOwnerAction(summary: unknown): summary is OwnerActionParams {
+  return typeof summary === 'object' && summary !== null && (summary as { kind?: string }).kind === 'owner-action' && Array.isArray((summary as { actions?: unknown }).actions);
+}
+
+function isTeamCreate(summary: unknown): summary is TeamCreateParams {
+  return typeof summary === 'object' && summary !== null && (summary as { kind?: string }).kind === 'team-create';
+}
+
+type GrantCard = { text?: string; master?: boolean; up?: unknown; expires?: string | null };
+
+function isGrantCard(summary: unknown): summary is GrantCard {
+  return typeof summary === 'object' && summary !== null && typeof (summary as { text?: unknown }).text === 'string';
+}
+
+/** English title, description and once/always choice for one inbox card. */
+export function ownerPageRequest(message: { request_id: string; text?: string; kind?: string; summary?: unknown }): OwnerPageRequest {
+  const id = message.request_id;
+  const text = typeof message.text === 'string' ? message.text : '';
+  const kind = message.kind ?? '';
+  const summary = message.summary;
+  if (kind === 'owner-action-confirmation' || isOwnerAction(summary)) {
+    const params = isOwnerAction(summary) ? summary : null;
+    const actions = params?.actions ?? [];
+    const onceOnly = actions.some((action) => MIGRATION_ACTIONS.has(action));
+    const title = actions.length === 0 ? 'Approval' : actions.map((action) => ACTION_TITLES[action] ?? action).join(', then ');
+    const described = params === null ? strippedPrompt(text) : ownerActionSummary(params);
+    const description = onceOnly ? `${described} This migration needs a one-time approval.`.trim() : described;
+    return { id, text, title, description, onceOnly };
+  }
+  if (kind === 'team-create-confirmation' || isTeamCreate(summary)) {
+    const description = isTeamCreate(summary) ? teamCreateSummary(summary) : strippedPrompt(text);
+    return { id, text, title: 'Create a team', description, onceOnly: false };
+  }
+  if (kind === 'grant-confirmation' || id.startsWith('gr_')) {
+    const grant = isGrantCard(summary) ? summary : null;
+    const onceOnly = grant !== null && (grant.master === true || grant.up != null || grant.expires === null);
+    const title = grant?.master === true ? 'Master grant' : grant?.up != null ? 'Team grant' : 'Grant';
+    const described = grant?.text ?? strippedPrompt(text);
+    const description = onceOnly ? `${described} This grant needs a one-time approval.`.trim() : described;
+    return { id, text, title, description, onceOnly };
+  }
+  return { id, text, title: 'Approval', description: strippedPrompt(text), onceOnly: false };
+}
+
 export function ownerPageHandler(options: OwnerPageOptions & { port: number; token: string }) {
   const { home, store, token } = options;
   const now = options.now ?? (() => new Date());
@@ -49,18 +127,28 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
 
   // A request already answered, or past its fifteen minutes, is not shown again.
   const answeredOrExpired = (id: string): boolean => {
+    const folder = GRANT_REQUEST_ID_PATTERN.test(id) ? grantRequestsFolder(home) : actionRequestsFolder(home);
     try {
-      if (existsSync(join(actionRequestsFolder(home), `${id}.seat-answer.json`))) return true;
-      const record = JSON.parse(readFileSync(join(actionRequestsFolder(home), `${id}.json`), 'utf8')) as { expires_at?: string | null };
+      if (existsSync(join(folder, `${id}.seat-answer.json`))) return true;
+      if (GRANT_REQUEST_ID_PATTERN.test(id) && (existsSync(join(folder, `${id}.answer.json`)) || existsSync(join(folder, `${id}.used`)))) return true;
+      const record = JSON.parse(readFileSync(join(folder, `${id}.json`), 'utf8')) as { expires_at?: string | null };
       if (record.expires_at === null) return false;
       return typeof record.expires_at !== 'string' || Date.parse(record.expires_at) <= now().getTime();
     } catch {
       return true;
     }
   };
-  // One answer route for both request kinds: a team-create id (tc_) or an owner-action id (oa_).
-  const approveAny = (id: string, ...rest: Parameters<typeof approveTeamCreate> extends [unknown, unknown, ...infer R] ? R : never) =>
-    (OWNER_ACTION_ID_PATTERN.test(id) ? approveOwnerAction : approveTeamCreate)(home, id, ...rest);
+  // One answer route: a grant id (gr_), an owner-action id (oa_), or a team-create id (tc_).
+  const approveAny = (
+    id: string,
+    word: string,
+    at: Date,
+    via: { signer?: string; assertion?: { authenticator_data: string; client_data_json: string; signature: string } },
+  ) => {
+    if (GRANT_REQUEST_ID_PATTERN.test(id)) return approveAsOwnerSeat(home, id, word, store, at, via);
+    if (OWNER_ACTION_ID_PATTERN.test(id)) return approveOwnerAction(home, id, word, store, at, via);
+    return approveTeamCreate(home, id, word, store, at, via);
+  };
   const state = () => {
     const seat = readOwnerSeat(home);
     const proposal = readProposal(home);
@@ -69,9 +157,9 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       profile: securityProfileLine(readSecurityProfile(home, store, now())),
       proposal: proposal === null ? null : { profile: proposal.profile, expires: proposal.expires, signer: proposal.signer, challenge: securityProfileChallenge(proposal) },
       requests: ownerSeatMessages(home)
-        .filter((m) => ['team-create-confirmation', 'owner-action-confirmation'].includes((m as { kind?: string }).kind ?? ''))
+        .filter((m) => SHOWN_KINDS.has((m as { kind?: string }).kind ?? ''))
         .filter((m) => !answeredOrExpired(m.request_id))
-        .map((m) => ({ id: m.request_id, text: m.text })),
+        .map((m) => ownerPageRequest(m as { request_id: string; text?: string; kind?: string; summary?: unknown })),
       rp_id: OWNER_PAGE_RP_ID,
     };
   };
@@ -120,7 +208,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       if (signer === undefined) return { status: 400, body: { error: 'unknown passkey' } };
       const at = now();
       // Asked without an assertion, the signer names the exact challenge; nothing is written.
-      const probe = approveAny(id, word, store, at, { signer: signer.name });
+      const probe = approveAny(id, word, at, { signer: signer.name });
       const challenge = !probe.ok ? /sign challenge (\S+)/.exec(probe.why)?.[1] : undefined;
       if (challenge === undefined) return { status: 400, body: { error: probe.ok ? 'unexpected' : probe.why } };
       pendingAnswers.set(`${id}:${word}:${signer.name}`, { at, challenge });
@@ -132,7 +220,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       const pending = signer === undefined ? undefined : pendingAnswers.get(`${a.id}:${a.word}:${signer.name}`);
       if (signer === undefined || pending === undefined) return { status: 400, body: { error: 'no challenge was issued for this answer' } };
       pendingAnswers.delete(`${a.id}:${a.word}:${signer.name}`);
-      const answered = approveAny(a.id, a.word, store, pending.at, { signer: signer.name, assertion: assertionOf(a) });
+      const answered = approveAny(a.id, a.word, pending.at, { signer: signer.name, assertion: assertionOf(a) });
       return answered.ok ? { status: 200, body: { ok: true, choice: answered.choice } } : { status: 400, body: { error: answered.why } };
     },
   };
@@ -190,12 +278,13 @@ export function challengeWords(challenge: string): string {
 }
 
 export const OWNER_PAGE_HTML = `<!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TeamCLI – siège propriétaire</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TeamCLI – owner seat</title>
 <style>body{font:16px -apple-system,system-ui,sans-serif;max-width:640px;margin:2em auto;padding:0 1em;color:#222}
 button{font-size:16px;padding:.6em 1em;margin:.3em .3em .3em 0;border-radius:8px;border:1px solid #888;background:#f4f4f4}
-.relaxed{color:#b00;font-weight:600}.card{border:1px solid #ddd;border-radius:10px;padding:1em;margin:1em 0}#log{color:#555;white-space:pre-wrap}</style></head>
-<body><h1>Siège propriétaire</h1><p id="profile"></p><div id="cards"></div><p id="log"></p>
+.relaxed{color:#b00;font-weight:600}.card{border:1px solid #ddd;border-radius:10px;padding:1em;margin:1em 0}
+.hint{color:#555;font-size:14px;margin:.6em 0}.card p{margin:.4em 0}#log{color:#555;white-space:pre-wrap}</style></head>
+<body><h1>Owner seat</h1><p id="profile"></p><div id="cards"></div><p id="log"></p>
 <script>
 const t = new URLSearchParams(location.search).get('t');
 const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
@@ -209,38 +298,48 @@ async function assertOver(challenge) {
   return { credentialId: b64u(c.rawId), authenticatorData: b64u(c.response.authenticatorData), clientDataJSON: b64u(c.response.clientDataJSON), signature: b64u(c.response.signature) };
 }
 async function register() {
-  const name = prompt('Nom de ce passkey (ex. iphone)', 'iphone'); if (!name) return;
+  const name = prompt('Name for this passkey (for example, iphone)', 'iphone'); if (!name) return;
   const o = await api('POST', '/api/register/options');
   const c = await navigator.credentials.create({ publicKey: { challenge: unb64u(o.challenge), rp: { id: o.rp_id, name: 'TeamCLI owner seat' }, user: { id: unb64u(o.user_id), name: 'owner-' + name, displayName: 'TeamCLI owner (' + name + ')' }, pubKeyCredParams: [{ type: 'public-key', alg: -7 }], authenticatorSelection: { residentKey: 'required', userVerification: 'required' }, timeout: 120000 } });
-  log('Confirmez avec Touch ID sur le Mac…');
+  log('Confirm with Touch ID on the Mac…');
   await api('POST', '/api/register', { signer: name, credentialId: b64u(c.rawId), publicKey: b64u(c.response.getPublicKey()), clientDataJSON: b64u(c.response.clientDataJSON) });
-  log('Passkey ' + name + ' enregistré.'); load();
+  log('Passkey ' + name + ' saved.'); load();
 }
-async function signProfile() { const a = await assertOver(S.proposal.challenge); const r = await api('POST', '/api/profile/sign', a); log('Profil signé. ' + r.profile); load(); }
+async function signProfile() { const a = await assertOver(S.proposal.challenge); const r = await api('POST', '/api/profile/sign', a); log('Profile signed. ' + r.profile); load(); }
 async function answer(id, word) {
   const first = S.seat.signers.find(s => s.type === 'webauthn');
   const ch = await api('POST', '/api/team-create/challenge', { id, word, credentialId: first.credential_id });
   const a = await assertOver(ch.challenge);
-  const r = await api('POST', '/api/team-create/answer', { ...a, id, word }); log('Réponse enregistrée : ' + r.choice); load();
+  const r = await api('POST', '/api/team-create/answer', { ...a, id, word }); log('Answer saved: ' + r.choice); load();
 }
 let busy = 0;
-const run = (f) => (...a) => { busy++; return f(...a).catch(e => log('Refusé : ' + e.message)).finally(() => { busy--; }); };
+const run = (f) => (...a) => { busy++; return f(...a).catch(e => log('Refused: ' + e.message)).finally(() => { busy--; }); };
 let stamp = '';
 async function load() {
   if (busy) return;
   const next = await api('GET', '/api/state');
-  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + r.text), next.seat]);
+  const mark = JSON.stringify([next.profile, next.proposal, (next.requests || []).map(r => r.id + '\\n' + (r.title || '') + '\\n' + r.onceOnly + '\\n' + (r.description || '') + '\\n' + r.text), next.seat]);
   S = next;
   if (mark === stamp) return;
   stamp = mark;
   const p = document.getElementById('profile'); p.textContent = S.profile; p.className = /RELAXED/.test(S.profile) ? 'relaxed' : '';
   const cards = document.getElementById('cards'); cards.innerHTML = '';
+  const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const card = (html) => { const d = document.createElement('div'); d.className = 'card'; d.innerHTML = html; cards.appendChild(d); return d; };
-  if (!S.seat) { card('Aucun siège propriétaire. Demandez à Iris de lancer la mise en place.'); return; }
+  if (!S.seat) { card('No owner seat yet. Ask Iris to run setup.'); return; }
   const hasPasskey = S.seat.signers.some(s => s.type === 'webauthn');
-  const reg = card('<b>Passkey</b> : ' + (hasPasskey ? 'enregistré.' : 'aucun.') + '<br><button>Ajouter un passkey (iPhone ou Mac)</button>'); reg.querySelector('button').onclick = run(register);
-  if (S.proposal && hasPasskey) { const d = card('<b>Profil de sécurité proposé</b> : ' + S.proposal.profile + ' jusqu\\u2019au ' + S.proposal.expires + '<br><button>Approuver avec mon passkey</button>'); d.querySelector('button').onclick = run(signProfile); }
-  for (const r of S.requests) { if (!hasPasskey) break; const d = card(r.text.replace(/</g,'&lt;') + '<br><button data-w="oui">Oui</button><button data-w="always">Toujours</button><button data-w="non">Non</button>'); d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w))); }
+  const reg = card('<b>Passkey</b>: ' + (hasPasskey ? 'saved.' : 'none yet.') + '<br><button>Add a passkey (iPhone or Mac)</button>'); reg.querySelector('button').onclick = run(register);
+  if (S.proposal && hasPasskey) { const d = card('<b>Proposed security profile</b>: ' + esc(S.proposal.profile) + ' until ' + esc(S.proposal.expires) + '<br><button>Approve with my passkey</button>'); d.querySelector('button').onclick = run(signProfile); }
+  for (const r of S.requests) {
+    if (!hasPasskey) break;
+    const description = esc(r.description || String(r.text || '').replace(/\\s*Authorized\\?[\\s\\S]*$/, ''));
+    const hint = r.onceOnly
+      ? 'This needs a one-time approval. Choose Approve once.'
+      : 'Approve once is a one-time approval. A migration needs that. Always allow also permits later runs of the same action in this folder.';
+    const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
+    const d = card('<b>' + esc(r.title || 'Approval') + '</b><p>' + description + '</p><p class="hint">' + hint + '</p><button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>');
+    d.querySelectorAll('button').forEach(btn => btn.onclick = run(() => answer(r.id, btn.dataset.w)));
+  }
 }
 load().catch(e => log(e.message));
 setInterval(() => { load().catch(() => {}); }, 2000);
