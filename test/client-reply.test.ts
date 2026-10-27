@@ -107,7 +107,9 @@ async function seatReply(w: World, seat: string, id: string, text: string) {
 }
 
 async function clientRead(w: World, extra: string[] = []) {
-  const io = testIo(w.root);
+  // Model the client's own external caller, as clientSend already does. An omitted caller
+  // invokes the real parent-process walk and inherits the host running this synthetic suite.
+  const io = testIo(w.root, { kind: 'owner' });
   const code = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--json', ...extra], io, { home: w.home, now: () => new Date(NOW.getTime() + 120_000) });
   return { code, out: io.out, err: io.err, json: io.out.trim().startsWith('{') ? JSON.parse(io.out) : null };
 }
@@ -183,6 +185,40 @@ describe('the client follows its thread', () => {
 });
 
 describe('the reply is scoped by the grant; nothing widens it', () => {
+  test('a client read from a seat is still refused before grant or key access', async () => {
+    const w = world(true);
+    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
+    const code = await runMessages(['--client', join(w.base, 'missing-grant'), '--key', join(w.base, 'missing-key'), '--json'], io, { home: w.home, now: () => NOW });
+    expect(code).toBe(1);
+    expect(JSON.parse(io.out).error.code).toBe('messages.client-pane');
+    expect(io.out).not.toContain('client-grant');
+    expect(existsSync(clientInboxFolder(w.root, 'acme', 'grok-bot'))).toBe(false);
+  });
+
+  test('revocation between the initial check and publication prevents the reply', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'synthetic publication freshness check');
+    expect(sent.code).toBe(0);
+    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'w1:p1', session: 'acme' });
+    let replyId = '';
+    const code = await runReply([sent.id, 'must not be published', '--json'], io, {
+      home: w.home,
+      now: () => new Date(NOW.getTime() + 60_000),
+      newId: () => {
+        const revoked = appendClientRevocation(w.home, w.grantId, { now: new Date(NOW.getTime() + 60_000), key: keyOf(w.home) });
+        expect(revoked.ok).toBe(true);
+        replyId = nextId();
+        return replyId;
+      },
+    });
+    expect(replyId).not.toBe('');
+    expect(code).toBe(1);
+    expect(io.out + io.err).toContain('nothing was written');
+    const inbox = clientInboxFolder(w.root, 'acme', 'grok-bot');
+    expect(existsSync(inbox) ? readdirSync(inbox) : []).not.toContain(replyId);
+    expect(io.out).not.toContain('must not be published');
+  });
+
   test('a send-only grant opens no conversation: the reply is refused and no inbox is written', async () => {
     const w = world(false);
     const sent = await clientSend(w, 'send only');
