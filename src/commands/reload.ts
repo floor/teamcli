@@ -57,7 +57,7 @@ import { upPlan } from '../launch/plan.ts';
 import { recordText } from '../launch/progress.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
@@ -413,7 +413,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
   // text is not running what the file declares, however its model row reads. This is the same
   // reading `team check` makes (`rulesFileProblem`), so the repair the check names can never
   // leave the check red. A seat with no home to look under has no file to compare.
-  const rulesProblem = home === undefined ? null : rulesFileProblem(standing, team, seat, root, home);
+  const rulesProblem = home === undefined ? null : rulesFileProblem(standing, team, seat, root, home, rulesOriginOf(loaded.source));
   const driftDetail = [detail, rulesProblem === null ? null : 'rules'].filter((part): part is string => part !== null).join('; ');
   const now = sources.now ?? (() => new Date());
   // The lines plain output writes beside the document ride on it as notes under `--json`;
@@ -605,7 +605,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(seat.effort ? { effort: seat.effort } : {}),
       repairLine: relaunchRepair(team, seat.name, 'markdown'),
       stopped: false,
-      rules: rulesOf(team, seat, root),
+      rules: rulesOf(team, seat, root, undefined, rulesOriginOf(loaded.source)),
       // The same session display name a fresh `up` gives the seat: a relaunched claude session
       // reads its sender like every other surface, and a reload is how most seats get relaunched.
       sessionName: sessionDisplayName({
@@ -623,7 +623,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       // The same delivery a fresh `up` gives the seat: a message seat needs its per-seat file
       // and the one line to read, written and typed by the host below; an option seat needs
       // nothing here (its rules ride the launch line).
-      ...(home === undefined ? {} : seatDeliveryOf(standing, team, seat, root, home, standing.kind !== 'verified' || owner)),
+      ...(home === undefined ? {} : seatDeliveryOf(standing, team, seat, root, home, standing.kind !== 'verified' || owner, rulesOriginOf(loaded.source))),
       repair: {
         pane: recorded.pane,
         workspace: recorded.workspace,

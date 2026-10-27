@@ -16,7 +16,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
-import { rulesOf } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
@@ -988,7 +988,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // this one body. `rulesOf` is the launch's own builder, so the file's rules, the seat's
   // signature lines and the workspace lines are the ones its launch would have sent.
   if (declared !== undefined && receiving.ok && profileFor(declared.cli)?.rulesMode === 'prepend') {
-    body = `${rulesOf(receiving.team, declared, to.root)}\n\n${body}`;
+    body = `${rulesOf(receiving.team, declared, to.root, undefined, rulesOriginOf(receiving.source))}\n\n${body}`;
   }
 
   const dry = args.flags.has('dry-run');

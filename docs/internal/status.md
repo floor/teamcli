@@ -195,7 +195,7 @@ here.
 | `<seat>: trust sent; recovery required` | `team up` (the map admits the owner and the team's leads, so `who:` names the team's lead) |
 | `<seat>: its launch stopped at "<stage>"` | `team up (it resumes the launch)` — the map admits the owner and the team's leads, so `who:` names the team's lead, and a lead repairs a relaunch that did not reach ready |
 | `<seat>: its rules were not delivered` | `team remove <seat> --keep`, then `team add <seat>` |
-| `<seat>: its rules file is missing` / `… is a symbolic link` / `… is not a regular file` / `… has mode 0644, not 0600` / `… is not owned by this user` / `… cannot be read` / `… differs from the team file's rules` | `team reload <seat>` — the seat's rules travel in a file in the project state folder, and it no longer holds the rules text the live file gives it; `status` never rewrites it |
+| `<seat>: its rules file is missing` / `… is a symbolic link` / `… is not a regular file` / `… has mode 0644, not 0600` / `… is not owned by this user` / `… cannot be read` / `… differs from the team file's rules` (a registry read: `… differs from the team's registry config`) | `team reload <seat>` — the seat's rules travel in a file in the project state folder, and it no longer holds the rules text the live definition gives it; `status` never rewrites it |
 | `<seat> holds text in its input box that was never sent` | `the owner clears or sends it in the pane; team does not type into a box it can't verify` |
 | `<seat> waits at a permission prompt: its lead's to answer, or its owner's` | `its lead answers it in the pane` |
 | `<seat> waits at a trust prompt: the owner's to answer` | `the owner answers it in the pane` |

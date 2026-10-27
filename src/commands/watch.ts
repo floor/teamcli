@@ -75,6 +75,7 @@ import { LEGACY_LINE, type Standing } from '../store/store.ts';
 import { realSources, standingSource } from './status.ts';
 import { queuedSwaps, swapLine } from '../swap/queue.ts';
 import { queueRuleBreaches } from '../swap/auto.ts';
+import { rulesOriginOf } from '../launch/rules.ts';
 import { runDueSwaps, type SwapRunResult } from '../swap/run.ts';
 import { realSources as restartSources, type RestartSources } from './restart.ts';
 import {
@@ -1204,6 +1205,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               sources: sources.swapSources,
               by: 'the watch',
               owner: false,
+              rulesOrigin: rulesOriginOf(current.source),
               ...(sources.presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy: sources.presenceChannelHealthy }),
               now: sources.now,
             });

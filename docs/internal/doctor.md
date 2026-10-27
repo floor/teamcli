@@ -76,7 +76,8 @@ run), the budget checks, then each seat of the live file whose rules travel as a
 message: its file in the project state folder — missing, a symbolic link, not a regular file,
 wider than `0600`, not the owner's, unreadable, or holding something other than the rules text the
 live file gives it — is one `warn` (`codex-scribe: its rules file differs from the team file's
-rules; run team reload codex-scribe`), never a rewrite: the file is written at a delivery, and a
+rules; run team reload codex-scribe`; a team read from the registry says `the team's registry
+config` there instead of `the team file's rules`), never a rewrite: the file is written at a delivery, and a
 delivery happens only at a launch — which `up` skips for a ready seat, so the line names
 `team reload`, which closes the ready seat and launches the file's line. herdr, one CLI at a
 time (its version, its login, then each of its seats' launchers and models), one line per seat whose launch

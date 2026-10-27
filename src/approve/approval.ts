@@ -50,8 +50,12 @@ export type NotVerified = Exclude<Standing, { kind: 'verified' }>;
  * The one line a command that needs an approval in force refuses on: never
  * approved, the legacy record's line, or the case the verification refused.
  */
-export function notInForce(standing: NotVerified): string {
-  if (standing.kind === 'none') return 'the file was never approved on this machine';
+export function notInForce(standing: NotVerified, source?: 'registry' | 'team-file'): string {
+  if (standing.kind === 'none') {
+    return source === 'registry'
+      ? "the team's registry config was never approved on this machine"
+      : 'the file was never approved on this machine';
+  }
   if (standing.kind === 'legacy') return LEGACY_LINE;
   return standing.why;
 }
