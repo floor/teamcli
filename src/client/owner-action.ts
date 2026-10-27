@@ -1,6 +1,6 @@
-// Lifecycle actions approved by the owner seat: `team import`, `team add` and `team up` (and
-// `team init`, bundled with `up` so one answer starts a new team) run for a caller that is not the
-// owner at a terminal once the owner seat has signed for exactly that action. The flow is the one
+// Lifecycle actions approved by the owner seat: `team import`, `team migrate`, `team add` and
+// `team up` (and `team init`, bundled with `up` so one answer starts a new team) run for a caller
+// that is not the owner at a terminal once the owner seat has signed for exactly that action. The flow is the one
 // `team init` already uses (src/client/team-create.ts):
 //
 //   request   the caller records what it will run (actions, repository root, team, HEAD, a hash
@@ -29,7 +29,7 @@ import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
-export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget'] as const;
+export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-migrate', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget'] as const;
 export type OwnerAction = (typeof OWNER_ACTIONS)[number];
 export const OWNER_ACTION_TTL_MS = 15 * 60 * 1000;
 export const OWNER_ACTION_ID_PATTERN = /^oa_[0-9a-f]{24}$/;
@@ -138,6 +138,7 @@ function replaceFile(path: string, text: string): boolean {
 const ACTION_WORDS: Record<OwnerAction, string> = {
   'team-create': 'create the team',
   'team-import': 'import the team file',
+  'team-migrate': 'migrate the team',
   'team-add': 'add a seat',
   'team-up': 'start the team',
   'team-send': 'send a message',
@@ -147,7 +148,27 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
   'team-forget': 'forget a team record',
 };
 
+/** The card for `team migrate`: team, project, seat count, and the canonical-record hash the signature binds. */
+function migrateCardSummary(p: OwnerActionParams): string | null {
+  if (p.actions.length !== 1 || p.actions[0] !== 'team-migrate') return null;
+  const words = p.words?.['team-migrate'] ?? [];
+  const take = (key: string): string | undefined => words.find((word) => word.startsWith(`${key}=`))?.slice(key.length + 1);
+  const team = take('team');
+  const id = take('id');
+  const project = take('project');
+  const seats = take('seats');
+  const record = take('record');
+  if (team === undefined || id === undefined || project === undefined || seats === undefined || record === undefined) return null;
+  const count = Number(seats);
+  const seatWord = count === 1 ? '1 seat' : `${seats} seats`;
+  const keep = words.includes('--keep-file') ? ' The file stays.' : ' The file is retired after the record verifies.';
+  const head = p.head ? ` (HEAD ${p.head.slice(0, 12)})` : '';
+  return `${p.requested_by} asks to migrate team "${team}" (${id}) in project "${project}" — ${seatWord} — canonical record ${record} — ${p.root}${head}.${keep}`;
+}
+
 export function ownerActionSummary(p: OwnerActionParams): string {
+  const card = migrateCardSummary(p);
+  if (card !== null) return card;
   const what = p.actions.map((action) => {
     const words = p.words?.[action] ?? [];
     return words.length > 0 ? `${ACTION_WORDS[action]} (${words.join(' ')})` : ACTION_WORDS[action];

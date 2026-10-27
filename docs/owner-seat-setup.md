@@ -92,8 +92,8 @@ QR code for the passkey). The card disappears. Nothing else: no terminal, no cod
 a pane — the seats' folder-trust questions for the lobby and the project are pre-accepted at
 launch, and a file without absolute `trust:` no longer stops `up`.
 
-`team import --request`, `team add <name> --request` and `team up --request` work the same way for
-an existing team ([team up](commands/up.md#owner-seat-approval-no-owner-terminal)). **Toujours**
+`team import --request`, `team add <name> --request`, `team up --request` and `team migrate` work the same way for
+an existing team ([team up](commands/up.md#owner-seat-approval-no-owner-terminal)). A migrate run by anyone but the owner at a terminal records the card and waits; `--request` records it and stops. **Toujours**
 covers every sibling repository of the parent folder for that action from then on.
 
 ## Security profile

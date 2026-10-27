@@ -395,7 +395,7 @@ function buildGates(): Record<string, Gate> {
     },
     migrate: {
       kind: 'owner-only',
-      why: 'the team\'s configuration is the owner\'s: moving it into the registry is the owner\'s act, from a terminal outside herdr',
+      why: 'moving the team into the registry is the owner\'s act, from a terminal outside herdr, or an owner-seat approval of that exact record; --dry-run only reads, and anyone in the project may run it',
     },
     tempo: {
       kind: 'owner-only',

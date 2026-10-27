@@ -2587,6 +2587,13 @@
     {
       "code": 0,
       "command": "migrate",
+      "id": "migrate.approval-requested",
+      "meaning": "an owner-seat request for this migrate was recorded and sent to the owner seat",
+      "trigger": "team migrate --request"
+    },
+    {
+      "code": 0,
+      "command": "migrate",
       "id": "migrate.done",
       "meaning": "the team is in the registry (or would be, with --dry-run), and its team file was moved to the Trash, renamed, kept with --keep-file, or already gone",
       "trigger": "team migrate"
@@ -2601,15 +2608,15 @@
     {
       "code": 1,
       "command": "migrate",
-      "id": "migrate.detached",
-      "meaning": "the owner-only act was run with no terminal",
-      "trigger": "team migrate"
+      "id": "migrate.approval-refused",
+      "meaning": "the owner-seat request or approval for this migrate was refused: missing, denied, expired, mismatched, unsigned, self-approved or already used",
+      "trigger": "team migrate --approval <request-id>"
     },
     {
       "code": 1,
       "command": "migrate",
       "id": "migrate.not-owner",
-      "meaning": "the caller is not the owner",
+      "meaning": "the owner charter blocks this migrate",
       "trigger": "team migrate"
     },
     {

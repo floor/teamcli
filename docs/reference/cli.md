@@ -1537,19 +1537,23 @@ Hidden: no
 Usage:
 
     team migrate [--keep-file] [--dry-run] [--json]
+    team migrate [--keep-file] --request [--json]
+    team migrate [--keep-file] --approval <request-id> [--json]
 
 ### Who may run it
 
-`owner-only` — the team's configuration is the owner's: moving it into the registry is the owner's act, from a terminal outside herdr
+`owner-only` — moving the team into the registry is the owner's act, from a terminal outside herdr, or an owner-seat approval of that exact record; --dry-run only reads, and anyone in the project may run it
 
 ### Flags
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--keep-file` | no | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals

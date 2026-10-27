@@ -6399,13 +6399,20 @@ scene('migrate.already-migrated', async (place) => {
   write(place, TEAM.replace('project: acme', 'project: acme-other'));
   return show(await imported(place, 'migrate', []), 'team import');
 });
-scene('migrate.detached', async (place) => {
+scene('migrate.approval-requested', async (place) => {
   write(place, TEAM);
-  return show(await imported(place, 'migrate', [], detachedCaller), 'migrate');
+  seatOwner(place.home);
+  return show(await imported(place, 'migrate', ['--request'], other), 'owner-seat request');
+});
+scene('migrate.approval-refused', async (place) => {
+  write(place, TEAM);
+  return show(await imported(place, 'migrate', ['--approval', 'oa_nope'], other), 'is not an owner-seat request id');
 });
 scene('migrate.not-owner', async (place) => {
   write(place, TEAM);
-  return show(await imported(place, 'migrate', [], other), 'only the owner runs migrate');
+  mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
+  writeFileSync(join(place.home, '.config', 'team', 'charter.json'), '{}\n');
+  return show(await imported(place, 'migrate', []), 'owner charter');
 });
 scene('migrate.invalid', async (place) => {
   writeFileSync(join(place.root, '.agents', 'team.yaml'), 'format: [\n');

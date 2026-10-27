@@ -2800,6 +2800,12 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--approval",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--dry-run",
           "repeatable": false,
           "takesValue": false
@@ -2823,6 +2829,12 @@
           "takesValue": false
         },
         {
+          "hidden": false,
+          "name": "--request",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
           "hidden": true,
           "name": "-h",
           "repeatable": false,
@@ -2834,11 +2846,13 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team migrate [--keep-file] [--dry-run] [--json]"
+        "team migrate [--keep-file] [--dry-run] [--json]",
+        "team migrate [--keep-file] --request [--json]",
+        "team migrate [--keep-file] --approval <request-id> [--json]"
       ],
       "who": {
         "gate": "owner-only",
-        "why": "the team's configuration is the owner's: moving it into the registry is the owner's act, from a terminal outside herdr"
+        "why": "moving the team into the registry is the owner's act, from a terminal outside herdr, or an owner-seat approval of that exact record; --dry-run only reads, and anyone in the project may run it"
       }
     },
     {
