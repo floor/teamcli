@@ -6,7 +6,7 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { profileFor } from '../profiles/index.ts';
-import { rulesOf } from './rules.ts';
+import { rulesOf, RULES_DIFFER_FROM, type RulesOrigin } from './rules.ts';
 
 /** `O_NOFOLLOW` is POSIX, not plain JS: a platform without it gets 0, and the `lstat` checks
  *  above every open still refuse a link. */
@@ -329,7 +329,7 @@ export type RulesFileCheck = { ok: true } | { ok: false; what: string };
 /** Checks one seat's rules file with the writer's own reading of a path (`heldAt`, then the
  *  no-follow open): a regular file, mode `0600`, owned by this user, holding exactly the rules
  *  text the file gives that seat. */
-export function checkRulesFile(path: string, wanted: string): RulesFileCheck {
+export function checkRulesFile(path: string, wanted: string, origin: RulesOrigin = 'file'): RulesFileCheck {
   const held = heldAt(path);
   if (held.kind === 'missing') return { ok: false, what: 'its rules file is missing' };
   if (held.kind === 'link') return { ok: false, what: 'its rules file is a symbolic link' };
@@ -342,7 +342,7 @@ export function checkRulesFile(path: string, wanted: string): RulesFileCheck {
   }
   const text = readHeld(path);
   if (text === null) return { ok: false, what: 'its rules file cannot be read' };
-  return text === wanted ? { ok: true } : { ok: false, what: "its rules file differs from the team file's rules" };
+  return text === wanted ? { ok: true } : { ok: false, what: `its rules file differs from ${RULES_DIFFER_FROM[origin]}` };
 }
 
 /** One message-rules seat's delivery: the file its rules are written to, the text that goes in
@@ -357,6 +357,7 @@ export function rulesDeliveryOf(
   root: string,
   home: string,
   live = false,
+  origin: RulesOrigin = 'file',
 ): { text: string; path: string; line: string } | { refusal: string } {
   void standing;
   void live;
@@ -367,15 +368,23 @@ export function rulesDeliveryOf(
   if (path === null || !typeablePath(path)) {
     return { refusal: "its rules file's path can't be typed safely: the read-back can't prove a path outside letters, digits and . _ / @ + -" };
   }
-  const text = rulesOf(team, seat, root);
+  const text = rulesOf(team, seat, root, undefined, origin);
   return { text, path, line: rulesLine(path, rulesFileHash(text)) };
 }
 
 /** A message seat's delivery in the plan: the file its rules go to and the line that points at
  *  it, or the refusal that stops the seat before anything is typed. An option seat has neither. */
-export function seatDeliveryOf(standing: Standing, team: TeamFile, seat: Seat, root: string, home: string, live = false): { rulesFile?: { path: string; line: string }; rulesRefusal?: string } {
+export function seatDeliveryOf(
+  standing: Standing,
+  team: TeamFile,
+  seat: Seat,
+  root: string,
+  home: string,
+  live = false,
+  origin: RulesOrigin = 'file',
+): { rulesFile?: { path: string; line: string }; rulesRefusal?: string } {
   if ((profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') return {};
-  const delivery = rulesDeliveryOf(standing, team, seat, root, home, live);
+  const delivery = rulesDeliveryOf(standing, team, seat, root, home, live, origin);
   if ('refusal' in delivery) return { rulesRefusal: delivery.refusal };
   return { rulesFile: { path: delivery.path, line: delivery.line } };
 }

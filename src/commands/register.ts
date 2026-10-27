@@ -35,6 +35,7 @@ import { deliverBriefForAttribution, walkBriefDeliveries } from '../launch/gener
 import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
+import { rulesOriginOf } from '../launch/rules.ts';
 import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '../launch/rules-file.ts';
 import { unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
@@ -812,7 +813,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       finishedRules = 'option';
     } else {
       const standing = (sources.standing ?? ((r: string) => approvalStanding(r, sources.home)))(root);
-      const delivery = rulesDeliveryOf(standing, team, seat, root, sources.home);
+      const delivery = rulesDeliveryOf(standing, team, seat, root, sources.home, false, rulesOriginOf(loaded.source));
       if ('refusal' in delivery) {
         return screenRefused(io, json, name, screen.kind);
       }

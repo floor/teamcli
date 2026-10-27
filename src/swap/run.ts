@@ -11,6 +11,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ceilingsOf } from '../approve/approval.ts';
 import { performRestart, type ReadBack, type RestartSources } from '../commands/restart.ts';
+import type { RulesOrigin } from '../launch/rules.ts';
 import { hasSeat, rewriteSeatModel, type SeatModelFields } from '../file/lines.ts';
 import type { Problem, Seat, TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
@@ -103,6 +104,8 @@ export type SwapRunOptions = {
    *  presence record is unaffected. */
   presenceChannelHealthy?: (seat: string) => boolean;
   now(): Date;
+  /** Registry wording when the team was read from the registry; file wording for a real team.yaml. */
+  rulesOrigin?: RulesOrigin;
 };
 
 /**
@@ -318,6 +321,7 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
     declare: () => declareRecipe(input.path, name, fields, home),
     now: input.now,
     sources,
+    ...(input.rulesOrigin === undefined ? {} : { rulesOrigin: input.rulesOrigin }),
   });
 
   switch (performed.kind) {

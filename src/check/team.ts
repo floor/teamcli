@@ -15,6 +15,7 @@ import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, relative, resolve } from 'node:path';
 import { notInForce, sessionDefaultMoveNotes } from '../approve/approval.ts';
+import { rulesOriginOf } from '../launch/rules.ts';
 import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhythm.ts';
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
@@ -422,7 +423,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // what it is; a machine that never approved the file is the ordinary file now, and nothing to
     // repair. Under dev mode both fold into the quiet notes above.
     ...record.differences,
-    ...rulesFileDifferences(standing, team, root, sources.home),
+    ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
     ...staleDifferences(stale),
     // A blind seat — unknown past the blind threshold — counts as not working, and is
     // a must-fix here exactly as it is in `team status`.

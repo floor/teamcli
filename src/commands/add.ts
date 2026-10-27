@@ -17,7 +17,7 @@ import type { ActingCommand } from '../delegate-types.ts';
 import { entityGrantAdmits, readEntityCreateGrants } from '../grant.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { removeRulesFile, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { nextFreeSeatNumber, type SeatNumbering } from '../seat-names.ts';
 import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
@@ -852,7 +852,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // refused — that seat runs nothing now, and its miss is left out here exactly as `up` leaves
   // one out of the plan for a resumed seat.
   for (const finding of [
-    ...doctorFindings(doctorTeam, root, dir, session, sources.doctor, prepared.warnings, standing, team),
+    ...doctorFindings(doctorTeam, root, dir, session, sources.doctor, prepared.warnings, standing, team, [], [], rulesOriginOf(loaded.source)),
     ...(launchProblem && !stray
       ? [{ level: 'miss' as const, text: `${built.name}: ${launchProblemDetail ?? launchProblem}` }]
       : []),
@@ -881,7 +881,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
         // otherwise print is no document, and the row is the same one the real run takes.
         refuse(io, true, 'add', { id: 'add.doctor', message: finding.text, repair: null });
       } else if (dry && launchProblem && !stray && finding.text === launchText) {
-        const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home);
+        const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home, rulesOriginOf(loaded.source));
         const planned = repair ? { ...starting, repair } : starting;
         const preview = upPlan({
           root,
@@ -941,7 +941,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   // changes no section of its own, and no unapproved reserve may unblock a launch (#50).
   const budgets = budgetsInForceOf(standing, prepared.team);
   const decision = (sources.seatBudget ?? seatBudget)(budgets, loadReadings(dir), built.seat, sources.now().getTime(), loadSpendReadings(dir));
-  const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home);
+  const starting = seatPlan(standing, prepared.team, built.seat, start, root, sources.home, rulesOriginOf(loaded.source));
   const planned = repair
     ? { ...starting, repair }
     : stray
@@ -1358,6 +1358,7 @@ function seatPlan(
   start: { cwd: string; lobby?: true },
   root: string,
   home: string,
+  origin: RulesOrigin = 'file',
 ): UpSeat {
   return {
     name: seat.name,
@@ -1376,7 +1377,7 @@ function seatPlan(
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
-    rules: rulesOf(team, seat, root),
+    rules: rulesOf(team, seat, root, undefined, origin),
     sessionName: sessionDisplayName({
       seat: seat.name,
       nickname: seat.nickname ?? null,
@@ -1384,7 +1385,7 @@ function seatPlan(
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
     }),
-    ...seatDeliveryOf(standing, team, seat, root, home, true),
+    ...seatDeliveryOf(standing, team, seat, root, home, true, origin),
     ...(start.lobby ? { lobby: true } : {}),
   };
 }

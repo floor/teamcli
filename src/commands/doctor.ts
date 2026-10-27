@@ -25,7 +25,7 @@ import { launchBinary, launchLineFindings } from '../launch/line.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { lobbyFileOwners, profileFor, shippedLobbyFiles, shippedStartupReads } from '../profiles/index.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
-import { rulesOf } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { overridesInForceOf, quotaWith } from '../profiles/overrides.ts';
 import { versionVerdict, type Profile } from '../profiles/profile.ts';
 import { extractFolder, isEligible, versionMatches } from '../profiles/trust-answer.ts';
@@ -647,6 +647,8 @@ export function doctorFindings(
   /** The per-seat launch-line findings. `up` and `add` hand them in so a seat's own line can leave
    *  that seat out before its workspace is made; the report prints them as they come. */
   launchLines: Finding[] = [],
+  /** Registry wording when the team was read from the registry; file wording for a real team.yaml. */
+  rulesOrigin: RulesOrigin = 'file',
 ): Finding[] {
   const findings: Finding[] = warnings.map((warning) => ({
     level: 'warn',
@@ -672,7 +674,7 @@ export function doctorFindings(
       if (seat.stopped || (profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') continue;
       const path = rulesFilePath(approved.project, root, sources.home, seat.name);
       if (path === null) continue;
-      const check = checkRulesFile(path, rulesOf(approved, seat, root));
+      const check = checkRulesFile(path, rulesOf(approved, seat, root, undefined, rulesOrigin), rulesOrigin);
       if (!check.ok) findings.push({ level: 'warn', text: `${seat.name}: ${check.what}; run team reload ${seat.name}` });
     }
   }
@@ -984,6 +986,7 @@ export async function runDoctor(argv: string[], io: Io, sources: DoctorSources):
           undefined,
           budgetCheckFindings(team, standing, root, sources, callerOf(io)),
           launchLineFindings(team, root, { onPath: (binary) => sources.onPath(binary), home: sources.home }),
+          rulesOriginOf(loaded.source),
         ),
         // The machine's own reading, last: the one check no machine can ever meet here.
         ...machineFindings(team, root, sources),

@@ -48,7 +48,9 @@ export function currentTeam(
   });
   if (loaded.ok) {
     const dir = dirname(loaded.path);
-    if (remember) rememberLastValid(dir, loaded.path, now);
+    // Remember the text this read validated. A registry team has no `.agents/team.yaml` to
+    // re-read; the path on the result is only the conventional place that file used to sit.
+    if (remember) rememberText(dir, loaded.text, now);
     return { ok: true, team: loaded.team, root: loaded.root, dir, warnings: loaded.warnings, deprecations: loaded.deprecations ?? [], path: loaded.path,
       ...(loaded.source !== undefined ? { source: loaded.source } : {}),
       ...(loaded.leftover !== undefined ? { leftover: loaded.leftover } : {}),
@@ -84,13 +86,19 @@ export function currentTeam(
 }
 
 /** The `last_valid` write `currentTeam` makes when `remember` is left on. A command that loaded
- *  with `remember` false calls this only after its caller gate has allowed the run. */
+ *  with `remember` false calls this only after its caller gate has allowed the run. A registry
+ *  team whose file is gone has nothing on disk to copy: the run is not failed for that. */
 export function rememberCurrent(dir: string, path: string, now: Date): void {
-  rememberLastValid(dir, path, now);
+  let file: string;
+  try {
+    file = readFileSync(path, 'utf8');
+  } catch {
+    return;
+  }
+  rememberText(dir, file, now);
 }
 
-function rememberLastValid(dir: string, path: string, now: Date): void {
-  const file = readFileSync(path, 'utf8');
+function rememberText(dir: string, file: string, now: Date): void {
   try {
     if (readState(dir).last_valid?.file === file) return;
     updateState(dir, (state) => {

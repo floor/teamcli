@@ -75,7 +75,7 @@ import { recordWhat, progressWriter, classificationOf } from '../launch/progress
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { processSignals, terminalReader, type Terminal } from '../launch/terminal.ts';
-import { rulesOf } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
@@ -528,6 +528,8 @@ function seatPlan(
   liveRules = false,
   /** The seat this run is running inside, when it is one: its drift is refused, never closed. */
   callerSeat: string | null = null,
+  /** Registry wording when this run read the registry; file wording for a real team.yaml. */
+  origin: RulesOrigin = 'file',
 ): UpSeat {
   const binding = recorded
     ? recordedSeatSession({ home, root, herdrSession: session, seat, state: recorded })
@@ -565,7 +567,7 @@ function seatPlan(
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live
     // file. A stored copy is not the text a seat is told to obey.
-    rules: rulesOf(team, seat, root),
+    rules: rulesOf(team, seat, root, undefined, origin),
     sessionName: sessionDisplayName({
       seat: seat.name,
       nickname: seat.nickname ?? null,
@@ -573,7 +575,7 @@ function seatPlan(
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
     }),
-    ...seatDeliveryOf(standing, team, seat, root, home, liveRules),
+    ...seatDeliveryOf(standing, team, seat, root, home, liveRules, origin),
   };
   const known = agents ?? [];
   const asked = agents !== null;
@@ -973,6 +975,11 @@ function devWarningLine(refusals: UpRefusal[], standing: Standing, caller: Calle
 function devModeWarning(line: string, standing: Standing, placement: string): boolean {
   if (line === placement) return true;
   if (standing.kind === 'verified') return false;
+  // A registry read names the team's registry config; a team-file read names the file. Both
+  // are the never-approved warning dev mode folds, and neither stays a refusal.
+  if (standing.kind === 'none') {
+    return line === notInForce(standing) || line === notInForce(standing, 'registry');
+  }
   return line === notInForce(standing);
 }
 
@@ -1392,10 +1399,11 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   }
   // The live file is the record. A verified copy that no longer matches is not a refusal.
   // A legacy or refused record still is: its text is the case, and dev mode warns instead.
+  const approvalSource = loaded.source === 'registry' ? 'registry' as const : 'team-file' as const;
   if (standing.kind === 'none') {
-    if (dev.on) refusals.push({ id: 'up.never-approved', message: notInForce(standing) });
+    if (dev.on) refusals.push({ id: 'up.never-approved', message: notInForce(standing, approvalSource) });
   } else if (standing.kind !== 'verified') {
-    refusals.push({ id: 'up.never-approved', message: notInForce(standing) });
+    refusals.push({ id: 'up.never-approved', message: notInForce(standing, approvalSource) });
   }
   // The budget readings the gate refuses on are the live file's own: a standing that is not
   // verified names no account at all, not even for a dry run's plan.
@@ -1405,7 +1413,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // as a miss, and that miss is applied once `launchingIntoLobby` is known, below.
   const startupReadRefusals: string[] = [];
   if (sources.doctor) {
-    const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing);
+    const findings = doctorFindings(team, root, dir, session, sources.doctor, loaded.warnings, standing, team, [], [], rulesOriginOf(loaded.source));
     for (const finding of findings) {
       if (!blocksLaunch(finding)) continue;
       if (!dev.on && (finding.text.includes('team approve') || finding.text.includes('never approved'))) continue;
@@ -1603,6 +1611,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // The seat this run is inside: a proven drift on it is refused where the plan is built,
       // before any close can reach the pane that holds this process.
       caller.kind === 'seat' ? caller.name : null,
+      rulesOriginOf(loaded.source),
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.

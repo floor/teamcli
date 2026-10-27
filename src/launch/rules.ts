@@ -8,11 +8,40 @@ import { landingRule, resolveWorkSettings, vaultRule, type WorkSettings } from '
 import { ofTeam as projectOfTeam } from '../registry/projects.ts';
 import { teamIdOf } from '../registry/teams.ts';
 
+/** Where the rules' wording comes from. A registry read names the team's registry config;
+ *  a read of a real team.yaml (`--file`, `team migrate`, the file fallback) names the file. */
+export type RulesOrigin = 'registry' | 'file';
+
+/** The load source as a rules origin. Absent, or a team-file read, keeps the file wording. */
+export function rulesOriginOf(source: 'registry' | 'team-file' | undefined): RulesOrigin {
+  return source === 'registry' ? 'registry' : 'file';
+}
+
+/** The headline a seat's rules open with. */
+export const RULES_HEAD: Record<RulesOrigin, string> = {
+  file: 'Rules for this session, from the team file:',
+  registry: "Rules for this session, from the team's registry config:",
+};
+
+/** The trust rule. The file wording stays only while a real team.yaml is what was read. */
+export const TRUST_RULE: Record<RulesOrigin, string> = {
+  file: 'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
+  registry: 'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` with `team config`.',
+};
+
+/** What a rules file that does not match is said to differ from. */
+export const RULES_DIFFER_FROM: Record<RulesOrigin, string> = {
+  file: "the team file's rules",
+  registry: "the team's registry config",
+};
+
 /** What the rules of a seat are written from. */
 export interface RulesInput {
   orchestrator: string;
-  /** The file's own `rules`. */
+  /** The definition's own `rules`. */
   rules: readonly string[];
+  /** Registry wording when the team was read from the registry; file wording otherwise. */
+  origin?: RulesOrigin;
   /** The seat's profile's own rules, over the file's: a safety line the CLI makes necessary.
    *  Empty when the profile carries none. */
   profileRules?: readonly string[];
@@ -54,7 +83,7 @@ export function seatRules(input: RulesInput): string[] {
     ...(input.inbox === true
       ? ['If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.']
       : []),
-    'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
+    TRUST_RULE[input.origin ?? 'file'],
     'In a protected checkout, never switch the branch, reset or commit.',
   ];
   const signing = [
@@ -99,14 +128,20 @@ export function rulesText(input: RulesInput, delivery: RulesDelivery): string {
   // A file whose own rules already carry the form's closing line gets it once: as the closing line.
   const closing = CLOSING[delivery];
   const rules = seatRules(input).filter((rule) => rule !== closing);
-  return ['Rules for this session, from the team file:', ...rules.map((rule) => `- ${rule}`), closing].join('\n');
+  return [RULES_HEAD[input.origin ?? 'file'], ...rules.map((rule) => `- ${rule}`), closing].join('\n');
 }
 
 /** The rules one seat gets at launch, with its own signature lines, as its delivery carries them:
  *  the text a launch option embeds and the text the seat's rules file holds, byte for byte. A
  *  shared seat starts in the machine lobby like every seat, so the text names its folder from
  *  the project root — the same text every caller that checks the file must build. */
-export function rulesOf(team: TeamFile, seat: Seat, root: string, work: WorkSettings | null = workSettingsFor(team, root)): string {
+export function rulesOf(
+  team: TeamFile,
+  seat: Seat,
+  root: string,
+  work: WorkSettings | null = workSettingsFor(team, root),
+  origin: RulesOrigin = 'file',
+): string {
   const { commits, pullRequests } = team.identity.signature;
   const profile = profileFor(seat.cli);
   const delivery: RulesDelivery = profile?.rulesMode ?? 'message';
@@ -130,6 +165,7 @@ export function rulesOf(team: TeamFile, seat: Seat, root: string, work: WorkSett
         cwd: resolve(root, seat.cwd),
       },
       work: workLines(work, team.project),
+      origin,
     },
     delivery,
   );

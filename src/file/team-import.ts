@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { CANONICAL_RECORD_VERSION } from './canonical-record.ts';
 import { findRoot, loadTeamText, TEAM_FILE } from './load.ts';
+import { withRecordedSession } from './recorded-session.ts';
 import { canonicalTeam, readTeamConfig, resolveTeamConfigSource } from './team-config.ts';
 import type { Problem } from './types.ts';
 import {
@@ -70,8 +71,12 @@ export function importTeamFile(options: ImportOptions): ImportOutcome {
   } catch {
     return { ok: false, reason: 'invalid', errors: [{ line: 0, message: `no readable team file at ${from}` }], from };
   }
-  const loaded = loadTeamText(text, root0, join(root0, TEAM_FILE), { home: options.home });
-  if (!loaded.ok) return { ok: false, reason: 'invalid', errors: loaded.errors, from };
+  const parsed = loadTeamText(text, root0, join(root0, TEAM_FILE), { home: options.home });
+  if (!parsed.ok) return { ok: false, reason: 'invalid', errors: parsed.errors, from };
+  // The same recorded session a later registry read will use. Hashing the derived
+  // `<entity>-<project>` and then reading the recorded session back would fail the round trip.
+  const session = withRecordedSession(parsed.team, parsed.text, options.home, parsed.root);
+  const loaded = session === parsed.team ? parsed : { ...parsed, team: session };
   const id = teamIdOf(loaded.root);
   let existing: StoredTeamConfig | null;
   try {

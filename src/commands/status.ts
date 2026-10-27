@@ -39,7 +39,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import type { PresenceObservation, SeatStateWord, StateSource } from '../labels/state.ts';
 import { presenceChannelHealthy, presenceSeatsOf } from '../labels/presence.ts';
 import { checkRulesFile, rulesFilePath } from '../launch/rules-file.ts';
-import { rulesOf } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import {
   contextLine,
   hasJsonFlag,
@@ -581,7 +581,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // still say what they are — as rows, or under dev mode as the quiet notes above.
     ...record.differences,
     // The file's own rules files, only once a record exists for a launch to have written them.
-    ...rulesFileDifferences(standing, team, root, sources.home),
+    ...rulesFileDifferences(standing, team, root, sources.home, rulesOriginOf(current.source)),
     // A seat whose reading is blind — unknown past the blind threshold — counts as
     // not working, and is a must-fix here exactly as it is in `team check`.
     ...blindDifferences(team, state, live, comparison, now, hold !== null, {
@@ -710,7 +710,14 @@ export function approvalAndOverrideRows(
  *  live project, the same text. Null for a stopped seat (nothing wrote its file), an option seat
  *  (its rules travel on the launch line), a seat with no typeable path, and no home at all (a
  *  test standing in for no store). */
-export function rulesFileProblem(standing: Standing, team: TeamFile, seat: Seat, root: string, home: string | undefined): string | null {
+export function rulesFileProblem(
+  standing: Standing,
+  team: TeamFile,
+  seat: Seat,
+  root: string,
+  home: string | undefined,
+  origin: RulesOrigin = 'file',
+): string | null {
   // The check runs only once a record exists, so a file that was never approved does not grow a
   // difference for a file no launch has written.
   if (home === undefined || standing.kind !== 'verified') return null;
@@ -722,15 +729,21 @@ export function rulesFileProblem(standing: Standing, team: TeamFile, seat: Seat,
   if ((profileFor(seat.cli)?.rulesMode ?? 'message') !== 'message') return null;
   const path = rulesFilePath(team.project, root, home, seat.name);
   if (path === null) return null;
-  const check = checkRulesFile(path, rulesOf(team, seat, root));
+  const check = checkRulesFile(path, rulesOf(team, seat, root, undefined, origin), origin);
   return check.ok ? null : check.what;
 }
 
-export function rulesFileDifferences(standing: Standing, team: TeamFile, root: string, home: string | undefined): Difference[] {
+export function rulesFileDifferences(
+  standing: Standing,
+  team: TeamFile,
+  root: string,
+  home: string | undefined,
+  origin: RulesOrigin = 'file',
+): Difference[] {
   if (home === undefined || standing.kind !== 'verified') return [];
   const out: Difference[] = [];
   for (const seat of team.seats) {
-    const problem = rulesFileProblem(standing, team, seat, root, home);
+    const problem = rulesFileProblem(standing, team, seat, root, home, origin);
     if (problem !== null) out.push({ what: `${seat.name}: ${problem}`, repair: `team reload ${seat.name}` });
   }
   return out;

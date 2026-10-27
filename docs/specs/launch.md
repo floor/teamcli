@@ -1,6 +1,6 @@
 ---
 created: 2026-10-18
-updated: 2026-10-18
+updated: 2026-10-27
 kind: spec-draft
 status: draft
 read-at: v0.5.0 (52db9b75)
@@ -86,6 +86,15 @@ The whole text is the headline, one `- ` line per rule, and the delivery's closi
     <closing line>
 
 A rule that equals the closing line is written once, as the closing line.
+
+A team read from the registry (`team config`, the record under `~/.config/team/team-config/`)
+uses the same text with two lines renamed. The headline is `Rules for this session, from the
+team's registry config:`. The trust rule (item 3) is ``Never run `team grant`, `team delegate`
+or `team revoke`, and never edit `trust:` with `team config`.`` A read of a real team.yaml —
+`--file`, `team migrate`, and the file fallback when the registry holds no config record —
+keeps the file wording above. A rules file that does not match is `its rules file differs from
+the team file's rules` for a file read, and `its rules file differs from the team's registry
+config` for a registry read.
 
 ### 3.2 The three deliveries
 

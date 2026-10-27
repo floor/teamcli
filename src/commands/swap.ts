@@ -17,6 +17,7 @@ import {
 import { charterGate } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { currentTeam } from '../file/current.ts';
+import { rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -122,6 +123,8 @@ type RunPlan = {
   presenceChannelHealthy?: (seat: string) => boolean;
   /** `team swap now`: the seat it forced and the record it stands on; absent for `--run`. */
   forcedSeat?: { seat: Seat; record: QueuedSwap; donor: RuleDonor | null };
+  /** Registry wording when the team was read from the registry; file wording for a real team.yaml. */
+  rulesOrigin?: RulesOrigin;
 };
 
 export async function runSwap(argv: string[], rawIo: Io, options: SwapCommandOptions = {}): Promise<number> {
@@ -325,6 +328,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
         owner,
         now,
         sources: options.sources ?? realSources,
+        rulesOrigin: rulesOriginOf(current.source),
         ...(options.presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy: options.presenceChannelHealthy }),
       };
     }
@@ -389,6 +393,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     owner,
     now,
     sources: options.sources ?? realSources,
+    rulesOrigin: rulesOriginOf(current.source),
     ...(options.presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy: options.presenceChannelHealthy }),
   };
 
@@ -539,6 +544,7 @@ async function performRun(origin: RunPlan): Promise<Outcome> {
     by,
     owner,
     ...(presenceChannelHealthy === undefined ? {} : { presenceChannelHealthy }),
+    ...(origin.rulesOrigin === undefined ? {} : { rulesOrigin: origin.rulesOrigin }),
     now: () => now,
   };
   let results: SwapRunResult[];

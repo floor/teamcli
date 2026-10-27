@@ -65,7 +65,7 @@ import { plainLine, plainText } from '../launch/plain.ts';
 import { formatPlan, upPlan, type DownSeat, type UpSeat } from '../launch/plan.ts';
 import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
-import { rulesOf } from '../launch/rules.ts';
+import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
@@ -465,6 +465,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     ceilings,
     dev,
     devFolded,
+    rulesOrigin: rulesOriginOf(loaded.source),
     command: 'restart',
     endReason: 'restart',
     dry,
@@ -555,6 +556,8 @@ export type PerformInput = {
   ceilings: Ceilings;
   dev: DevModeRun;
   devFolded: boolean;
+  /** Registry wording when the team was read from the registry; file wording for a real team.yaml. */
+  rulesOrigin?: RulesOrigin;
   command: PerformCommand;
   endReason: 'restart' | 'swap';
   /** The dry run: preflight, then the plan, and nothing stopped or launched. */
@@ -660,7 +663,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     return { kind: 'not-ready', message: start.problem };
   }
   const doctorTeam = { ...team, seats: [next] };
-  for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team)) {
+  for (const finding of doctorFindings(doctorTeam, root, dir, session, sources.doctor, [], standing, team, [], [], input.rulesOrigin ?? 'file')) {
     if (blocksLaunch(finding)) {
       if (finding.text.includes('team approve') || finding.text.includes('never approved')) continue;
       if (finding.text.includes(' is read at start by ')) continue;
@@ -690,7 +693,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   }
 
   const liveRules = standing.kind !== 'verified' || owner;
-  const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules);
+  const planSeat = buildUpSeat(standing, team, next, start, root, home, liveRules, input.rulesOrigin ?? 'file');
   if (input.registryLaunch) planSeat.launch = input.registryLaunch;
   const declaredLaunch = planSeat.launch;
   // The recorded conversation, resumed on the new declaration. The profile decides whether the
@@ -1452,6 +1455,7 @@ function buildUpSeat(
   root: string,
   home: string,
   live = false,
+  origin: RulesOrigin = 'file',
 ): UpSeat {
   return {
     name: seat.name,
@@ -1466,7 +1470,7 @@ function buildUpSeat(
     stopped: false,
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
-    rules: rulesOf(team, seat, root),
+    rules: rulesOf(team, seat, root, undefined, origin),
     sessionName: sessionDisplayName({
       seat: seat.name,
       nickname: seat.nickname ?? null,
@@ -1474,7 +1478,7 @@ function buildUpSeat(
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
     }),
-    ...seatDeliveryOf(standing, team, seat, root, home, live),
+    ...seatDeliveryOf(standing, team, seat, root, home, live, origin),
     ...(start.lobby ? { lobby: true } : {}),
   };
 }

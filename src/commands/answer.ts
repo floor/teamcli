@@ -12,6 +12,7 @@ import { agentList, agentRename, agentStatus, paneForeground, paneForegroundCwd,
 import type { Command, Io } from '../io.ts';
 import { deliverRules, type Delivery } from '../launch/deliver.ts';
 import { seatProcessVerdict, type LaunchedIdentity } from '../launch/identity.ts';
+import { rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '../launch/rules-file.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -250,7 +251,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const waiting = recorded?.waiting;
     if (waiting?.manual === true) return refused(refusedClass('state', `${seatName}: the owner has the pane open`));
     if (waiting?.state === 'trust-sent-recovery') {
-      return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, waiting.folder);
+      return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, waiting.folder, rulesOriginOf(loaded.source));
     }
     if (waiting?.state !== 'waiting-owner' || waiting.classification !== 'trust') {
       return refused(refusedClass('state', `${seatName}: it is not waiting at a trust dialog`));
@@ -306,7 +307,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       logLine(dir, 'answer', who, `${seatName}: refused trust: action`, host.now());
       return recovery(io, json, `${seatName}: the key could not be sent; recovery required`);
     }
-    return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, checked.folder);
+    return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, checked.folder, rulesOriginOf(loaded.source));
   } finally {
     lock.release();
   }
@@ -529,13 +530,14 @@ async function finish(
   standing: Standing,
   launched?: LaunchedIdentity,
   folder?: string,
+  origin: RulesOrigin = 'file',
 ): Promise<number> {
   const seatState = readState(dir).sessions[session]?.seats[name];
   const like = seatState?.temporary?.like;
   const seat = configured ?? team.seats.find((item) => item.name === like);
   const profile = seat ? profileFor(seat.cli) : null;
   const launchIdentity = launched ?? seatState?.launched;
-  const ready = profile ? await recover(host, session, pane, name, profile, seat as Seat, team, root, standing, launchIdentity) : 'idle';
+  const ready = profile ? await recover(host, session, pane, name, profile, seat as Seat, team, root, standing, launchIdentity, origin) : 'idle';
   if (typeof ready === 'object' && 'class' in ready) {
     return refuse(io, json, dir, who, name, host, ready);
   }
@@ -589,6 +591,7 @@ async function recover(
   root: string,
   standing: Standing,
   launched?: LaunchedIdentity,
+  origin: RulesOrigin = 'file',
 ): Promise<true | Refusal | 'idle' | 'rule delivery'> {
   if (!(await waitIdle(host, session, pane, profile))) return 'idle';
   const named = host.agents(session)?.some((agent) => agent.name === name && agent.pane === pane) === true;
@@ -597,7 +600,7 @@ async function recover(
   // The rules are delivered exactly as `up` delivers them: written to the seat's per-seat
   // file first — from the live file, as `up`'s are — then the one line that points at it,
   // the only shape of rules a read-back can prove; this command shares that delivery.
-  const delivery = rulesDeliveryOf(standing, team, seat, root, host.home);
+  const delivery = rulesDeliveryOf(standing, team, seat, root, host.home, false, origin);
   if ('refusal' in delivery) return 'rule delivery';
   if (!writeRulesFile(standing, seat.name, root, host.home, delivery.text, rulesFileHash(delivery.text), undefined, team.project).ok) return 'rule delivery';
   let processRefusal: Refusal | null = null;
