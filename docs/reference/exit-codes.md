@@ -375,10 +375,11 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `messages.client-usage` | `messages` | 2 | the client invocation can't be read | `team messages --client client-grant.json` |
 | `messages.invocation` | `messages` | 2 | the invocation can't be read | `team messages extra` |
 | `messages.not-a-repo` | `messages` | 2 | not inside a git repository | `team messages` |
+| `migrate.approval-requested` | `migrate` | 0 | an owner-seat request for this migrate was recorded and sent to the owner seat | `team migrate --request` |
 | `migrate.done` | `migrate` | 0 | the team is in the registry (or would be, with --dry-run), and its team file was moved to the Trash, renamed, kept with --keep-file, or already gone | `team migrate` |
 | `migrate.already-migrated` | `migrate` | 1 | the registry already holds the team and the file left beside it says something else; team import replaces the record | `team migrate` |
-| `migrate.detached` | `migrate` | 1 | the owner-only act was run with no terminal | `team migrate` |
-| `migrate.not-owner` | `migrate` | 1 | the caller is not the owner | `team migrate` |
+| `migrate.approval-refused` | `migrate` | 1 | the owner-seat request or approval for this migrate was refused: missing, denied, expired, mismatched, unsigned, self-approved or already used | `team migrate --approval <request-id>` |
+| `migrate.not-owner` | `migrate` | 1 | the owner charter blocks this migrate | `team migrate` |
 | `migrate.invalid` | `migrate` | 2 | the team file is missing or does not validate | `team migrate` |
 | `migrate.invocation` | `migrate` | 2 | the invocation does not parse | `team migrate extra` |
 | `migrate.registry` | `migrate` | 2 | the registry record that exists cannot be read | `team migrate` |

@@ -1,62 +1,74 @@
 # team migrate
 
-Moves this team's definition from `.agents/team.yaml` into the registry, and retires the file.
-The team is imported, read back through the registry and compared with the file by canonical
-record (`team-record-c14n-v1`); only once that round trip verifies is `.agents/team.yaml` moved to
-the system Trash. When no Trash can be reached (no `/usr/bin/trash` on macOS, no `gio` on
-Linux), the file is renamed beside itself to `.agents/team.yaml.migrated` instead. It is never
-deleted. Every command then reads the team from the registry (`team-config.source`, default
-`registry`), and [`team config`](config.md) edits it. The owner runs it from a terminal outside
-herdr.
+Moves this team's definition from `.agents/team.yaml` into the registry, once, and then retires the file.
 
-The approval stays in force across the move: it is signed over the team's canonical record, not
-over the file's text (0.5.5), and the registry holds the same record. When a verified approval was
-in force before the run, the run says it still is.
-
-## Synopsis
+## Usage
 
     team migrate [--keep-file] [--dry-run] [--json]
+    team migrate [--keep-file] --request [--json]
+    team migrate [--keep-file] --approval <request-id> [--json]
 
-`--keep-file` imports and verifies, and leaves `.agents/team.yaml` where it is; it is no longer
-read, `team up`, `team check` and `team status` name it in one line, and a later `team migrate`
-retires it. `--dry-run` says what would be imported and moved, and writes nothing. `--json`
-prints the `team.migrate` document instead of the plain lines; it carries `file` (`trash`,
-`renamed`, `kept` or `absent`), `file_moved_to` and `approval` (the standing after the run).
+## Examples
 
-## Run again
+```fixture
+approved: false
+```
 
-A run on a team the registry already holds is safe:
+```yaml file=.agents/team.yaml
+format: 1
+project: beacon
+coordinator: claude-keeper
+operator: claude-keeper
 
-- no file is left: it says the registry already holds the team, and exits 0;
-- a file is left that says what the registry says: the file is retired as a first run would
-  retire it, and it exits 0;
-- a file is left that says something else: it is refused (`migrate.already-migrated`), and
-  [`team import`](import.md) replaces the registry's record with that file when that is what you
-  want.
+trust:
+  - ~/.config/team/lobby
+  - ~/Code/beacon
 
-## What it reads and writes
+workspace:
+  mode: shared
 
-Reads `.agents/team.yaml` in the current checkout. Writes one record,
-`~/.config/team/team-config/<team id>.json`: the imported text, its digest and its canonical
-record's digest. It then reads the team back through the registry and compares the canonical
-records, and only then moves the file to the Trash (or renames it).
+seats:
+  - role: coordinator
+    name: claude-keeper
+    label: coordinator
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+```
 
-## Who may run it
+Anyone can see what a migrate would do. It writes nothing, and it does not ask the owner:
 
-| Caller | May |
-| --- | --- |
-| the owner, from a terminal outside herdr | move the team |
-| a run with no terminal | nothing |
-| a seat, or an agent-run CLI | nothing: `team migrate: only the owner runs migrate, from a terminal outside herdr; this call is <caller>` |
+```console caller=agent
+$ team migrate --dry-run
+beacon: would import ./.agents/team.yaml (team <id>); nothing written
+then .agents/team.yaml would be moved to the Trash (--keep-file leaves it)
+```
 
-## Output and exit codes
+The owner, from a terminal, imports and leaves the file. A second run finds the team already there:
 
-| Outcome | What is printed | Exit |
-| --- | --- | --- |
-| the team is in the registry, or would be with `--dry-run` | `<project>: imported <file> (team <id>); read back and verified`, then `.agents/team.yaml was moved to the Trash; edit the team with team config` (or `was renamed to …`, or `was kept (--keep-file)`) | 0 |
-| refused: not the owner, no terminal, or a leftover file that differs from the registry | `team migrate: <reason>`; a differing file names `team import` | 1 |
-| it can't run: a bad invocation, a team file or registry record that can't be read, or a read back that differs | `team migrate: <problem>` | 2 |
+```console
+$ team migrate --keep-file
+beacon: imported ./.agents/team.yaml (team <id>); read back and verified
+.agents/team.yaml was kept (--keep-file); it is no longer read, and team migrate moves it later
+$ team migrate --keep-file
+beacon: the registry already holds this team; nothing to import
+.agents/team.yaml was kept (--keep-file); it is no longer read, and team migrate moves it later
+```
 
-Under `--json`, a refusal writes the `team.error` document with its `contract/exit-codes.json`
-id (`migrate.invocation`, `migrate.detached`, `migrate.not-owner`, `migrate.already-migrated`,
-`migrate.invalid`, `migrate.registry`, `migrate.round-trip`) to stdout, leaving stderr empty.
+## Options
+
+- `--dry-run` — say what would be imported, and write nothing. Anyone in the project may run it.
+- `--keep-file` — import and verify, and leave `.agents/team.yaml` where it is.
+- `--request` — record an owner-seat card for this exact record and stop. The card names the team, the project, the seat count and the canonical-record hash.
+- `--approval <request-id>` — run the migrate the owner seat signed, once. A denial, an expiry, or a bad signature writes nothing. No signer approves a request they asked for.
+- `--json` — one JSON document on stdout.
+
+Run by anyone but the owner at a terminal, `team migrate` records that card, waits for the signed answer, and continues. The owner at a terminal runs it with no extra flags.
+
+## See also
+
+- [team import](import.md) — replace the registry's record when a leftover file differs
+- [team config](config.md) — edit the team after it lives in the registry
+- [Owner-seat approval](up.md#owner-seat-approval-no-owner-terminal)

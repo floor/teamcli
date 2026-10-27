@@ -61,6 +61,7 @@ import { runProjects } from '../../src/commands/projects.ts';
 import { runUsage } from '../../src/commands/usage.ts';
 import { runLock } from '../../src/commands/lock.ts';
 import { runUnlock } from '../../src/commands/unlock.ts';
+import { runMigrate } from '../../src/commands/migrate.ts';
 import { runTempo } from '../../src/commands/tempo.ts';
 import { runWatch } from '../../src/commands/watch.ts';
 import { runWorkflow } from '../../src/commands/workflow.ts';
@@ -124,6 +125,7 @@ function normalize(text: string, page: { fixture: Fixture }): string {
     .replace(/([A-Za-z0-9._-]+)-[0-9a-f]{12}-(?=\d{8}T\d{6}Z)/g, '$1-<hash>-')
     .replace(/\b[0-9a-f]{40}\b/g, '<sha>')
     .replace(/\b[0-9a-f]{10}\b/g, '<sha>')
+    .replace(/\(team [0-9a-f]{12}\)/g, '(team <id>)')
     .replace(/^(\s+)[0-9a-f]{7,40} /gm, '$1<sha> ');
 }
 
@@ -378,6 +380,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
       return runRaise(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'messages':
       return runMessages(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'migrate':
+      return runMigrate(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'reply':
       // The page's clock is pinned, so thread-ttl is read against it, not against today.
       return runReply(rest, io, { home: fixture.home, now: () => new Date(spec.now) });

@@ -97,9 +97,10 @@ whatever the source.
 
 ## Owner-seat approval: no owner terminal
 
-`team import`, `team add` and `team up` run for a caller that is not the owner at a terminal once
+`team import`, `team add`, `team up` and `team migrate` run for a caller that is not the owner at a terminal once
 the owner seat has signed for exactly that run. The owner never types a command and never answers
-a question in a pane: the answer is a signature from the owner's own device.
+a question in a pane: the answer is a signature from the owner's own device. `team migrate` with no
+`--request` waits in the same process for that signature; `--dry-run` only reads, and anyone may run it.
 
 1. The caller runs the command with `--request`. TeamCLI records the action, the repository root,
    the team, `HEAD`, a hash of the command's arguments and who asks, for fifteen minutes, and drops
