@@ -36,6 +36,11 @@ const CODEX_NEW_IDLE = CODEX_OLD_IDLE.replace('gpt-5.6-terra', 'gpt-6.1-sol').re
 // Cursor's own idle screen, captured from cursor-agent 2026.10.01: the relaunched pane must draw
 // a prompt this version reads as ready for a cursor seat to have launched.
 const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
+// Antigravity's own screens: idle before the stop, `/exit` in the composer after the one text
+// this scene types. The footer names Gemini Flash 3.8, the model this scene's file declares.
+const AGY_IDLE = readFileSync(new URL('./fixtures/antigravity/1.2.16/idle.txt', import.meta.url), 'utf8');
+const AGY_EXIT_TYPED = readFileSync(new URL('./fixtures/antigravity/1.2.16/exit-typed.txt', import.meta.url), 'utf8');
+const AGY_CONVERSATION = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
 
 const TEAM_YAML = `format: 1
 project: acme
@@ -122,6 +127,27 @@ const CURSOR_TEAM_YAML = TEAM_YAML.replace(
     model: Grok
     version: "4.7"
     launch: cursor-agent --model cursor-model`,
+);
+
+// The same team with an Antigravity worker. Resume is `--conversation=<id>` on the launch line,
+// read from the registry's reach.agent_session the way a Codex seat's subcommand is.
+const AGY_TEAM_YAML = TEAM_YAML.replace(
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`,
+  `  - role: implementer
+    name: worker
+    label: worker
+    cli: antigravity
+    vendor: google
+    model: Gemini Flash
+    version: "3.8"
+    launch: agy`,
 );
 
 // The live restart reading: the file asks for 0.5 GB free swap — which no longer refuses a
@@ -304,6 +330,13 @@ function makeHarness(
           '→ Plan, search, build anything',
           rows.map((row, at) => (at === 0 ? `→ ${row}` : `    ${row}`)).join('\n'),
         );
+      } else if (opts.newPaneScreen?.includes('Antigravity CLI')) {
+        // Antigravity's composer, from its capture: the first row takes the prompt, later rows
+        // sit at the prompt's own width, exactly as `antigravity/1.2.16/unsent.txt` draws them.
+        const body = pasted ? (pasted[1] ?? '') : text;
+        const [first = '', ...rest] = body.split('\n');
+        const drawn = [`> ${first}`, ...rest.map((line) => `  ${line}`)].join('\n');
+        slot.text = opts.newPaneScreen.replace('\n>\n', `\n${drawn}\n`);
       } else if (pasted) slot.text = claudeBox(pasted[1] ?? '');
       return true;
     },
@@ -1087,6 +1120,62 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // Not a flag: the id is a word after `resume`, as `codex resume --help` measures it.
     expect(run.did.runs.join('\n')).not.toContain('--resume');
     expect(io.err).toBe('');
+  });
+
+  test('a restored Antigravity seat is proven by the registry binding and resumes that conversation through its launcher', async () => {
+    // The state predates the id. The registry record is the proof, the live agent's own session
+    // is what it is compared against, and the relaunch appends the measured `--conversation=<id>`.
+    const { fixture, run } = seeded({
+      registry: AGY_CONVERSATION,
+      cli: 'antigravity',
+      model: 'Gemini Flash',
+      version: '3.8',
+      yaml: AGY_TEAM_YAML,
+      launch: 'agy',
+      workerSession: AGY_CONVERSATION,
+      launched: true,
+      foregroundArgv0: 'agy',
+      newPaneScreen: AGY_IDLE,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.4.2' };
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? AGY_EXIT_TYPED : AGY_IDLE) : AGY_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.closed).toContain('ws-old');
+    // A typical `agy` seat: the profile's unattended flag follows the conversation the record named.
+    expect(run.did.runs.join('\n')).toContain(
+      `AGENT_UNATTENDED=1 agy --conversation=${AGY_CONVERSATION} --dangerously-skip-permissions`,
+    );
+    expect(io.err).toBe('');
+  });
+
+  test('a restored Antigravity wrapper keeps --conversation=<id> on the forwarded launch line', async () => {
+    const launch = 'zsh /Users/owner/as-floor.sh agy --model gemini-3.8-flash';
+    const { fixture, run } = seeded({
+      registry: AGY_CONVERSATION,
+      cli: 'antigravity',
+      model: 'Gemini Flash',
+      version: '3.8',
+      yaml: AGY_TEAM_YAML.replace('    launch: agy', `    launch: ${launch}`),
+      launch,
+      workerSession: AGY_CONVERSATION,
+      launched: true,
+      foregroundArgv0: 'agy',
+      newPaneScreen: AGY_IDLE,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.doctor = { ...run.sources.doctor, version: () => '1.4.2' };
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? AGY_EXIT_TYPED : AGY_IDLE) : AGY_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain(
+      `AGENT_UNATTENDED=1 ${launch} --conversation=${AGY_CONVERSATION} --dangerously-skip-permissions`,
+    );
   });
 
   test('a recorded launcher that selects another conversation is refused before the stop', async () => {

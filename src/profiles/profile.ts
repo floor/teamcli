@@ -282,9 +282,16 @@ export function supportsSessionId(cli: string): boolean {
  *  Codex takes the id as a word after `resume`, not as a flag. `codex -m gpt-6-sol -c
  *  model_reasoning_effort=high resume --help` printed that usage and exited 0 in an empty
  *  synthetic home, so a recorded line's own options stay in front of the subcommand.
+ *
+ *  Antigravity's form was measured on the owner's Mac: `agy --conversation=<uuid>` resumes
+ *  that conversation (for example `agy --conversation=b4b1b021-e8af-4213-9b7e-470b233b712f`).
+ *  Conversations live under `~/.gemini/antigravity-cli/conversations/`. The flag is one
+ *  `--conversation=<id>` word appended to the seat's launch line, including a wrapper such
+ *  as `zsh …/as-floor.sh agy …`, so the wrapper forwards it. This profile does not mint the
+ *  id at launch.
  */
 export function supportsSessionResume(cli: string): boolean {
-  return cli === 'claude-code' || cli === 'codex';
+  return cli === 'claude-code' || cli === 'codex' || cli === 'antigravity';
 }
 
 /** The session id a launch line already names with `--session-id`, if it names one. */
@@ -313,14 +320,20 @@ export function withLaunchSession(cli: string, command: string): { command: stri
  * The command a pane runs to resume a recorded conversation, where the CLI keeps sessions: the
  * id is appended after every other argument, as `withLaunchSession` appends a new one. The
  * measured lines are Claude Code's (`-r, --resume [value] Resume a conversation - provide a
- * session ID`, `claude --help` 2.1.303) and Codex's subcommand (`Usage: codex resume [OPTIONS]
- * [SESSION_ID] [PROMPT]`, `codex resume --help` 0.161.0; both quoted on
- * {@link supportsSessionResume}). A Codex line takes the subcommand, so its id is a word after
- * `resume`, never a flag. Null when the CLI cannot resume: the caller hands over instead. Null,
+ * session ID`, `claude --help` 2.1.303), Codex's subcommand (`Usage: codex resume [OPTIONS]
+ * [SESSION_ID] [PROMPT]`, `codex resume --help` 0.161.0) and Antigravity's
+ * `--conversation=<uuid>` (`agy --conversation=b4b1b021-e8af-4213-9b7e-470b233b712f`, measured
+ * on the owner's Mac; quoted on {@link supportsSessionResume}). A Codex line takes the
+ * subcommand, so its id is a word after `resume`, never a flag. An Antigravity line takes one
+ * `--conversation=<id>` word at the end of the seat's launch command. A wrapper whose last
+ * word is a quoted script that itself runs `agy` (`zsh -lc "agy …"`) gets the flag inside
+ * that script; a wrapper that forwards its own arguments (`zsh …/as-floor.sh agy …`) gets the
+ * flag after them. Null when the CLI cannot resume: the caller hands over instead. Null,
  * too, for a launch line that already names a session — the flags below for Claude Code, the
- * `resume` subcommand for Codex: appending ours would leave two choices on the line, and the
- * line's own choice is the one the file records. `-c` is a flag's name only on a Claude Code
- * line: Codex's own `-c` is a config override, and a recorded Codex line carries one.
+ * `resume` subcommand for Codex, `--conversation` for Antigravity: appending ours would leave
+ * two choices on the line, and the line's own choice is the one the file records. `-c` is a
+ * flag's name only on a Claude Code line: Codex's own `-c` is a config override, and a
+ * recorded Codex line carries one.
  */
 export function withResume(cli: string, command: string, sessionId: string): string | null {
   if (!supportsSessionResume(cli)) return null;
@@ -328,17 +341,47 @@ export function withResume(cli: string, command: string, sessionId: string): str
     if (/(^|\s)resume(\s|$)/.test(command)) return null;
     return `${command} resume ${sessionId}`;
   }
+  if (cli === 'antigravity') {
+    if (/(^|\s)--conversation(=|\s|$)/.test(command)) return null;
+    return appendAntigravityConversation(command, sessionId);
+  }
   if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$)/.test(command)) return null;
   return `${command} --resume ${sessionId}`;
 }
 
 /**
+ * `--conversation=<id>` on an Antigravity launch line. The flag is one word after every other
+ * argument, so a wrapper that execs `"$@"` (`zsh …/as-floor.sh agy …`) forwards it to `agy`.
+ * A trailing quoted script that itself runs `agy` (`zsh -lc "agy --model …"`) would drop a flag
+ * written after the quotes: the flag goes inside that script, still as its last word.
+ */
+function appendAntigravityConversation(command: string, sessionId: string): string {
+  const flag = `--conversation=${sessionId}`;
+  const trimmed = command.trimEnd();
+  const quote = trimmed.at(-1);
+  if (quote === '"' || quote === "'") {
+    const open = trimmed.lastIndexOf(quote, trimmed.length - 2);
+    if (open >= 0) {
+      const before = open === 0 ? '' : trimmed[open - 1];
+      const inner = trimmed.slice(open + 1, -1);
+      if ((open === 0 || /\s/.test(before ?? '')) && !inner.includes(quote) && /(^|\s)agy(\s|$)/.test(inner)) {
+        const gap = inner.length === 0 || /\s$/.test(inner) ? '' : ' ';
+        return `${trimmed.slice(0, open + 1)}${inner}${gap}${flag}${quote}`;
+      }
+    }
+  }
+  return `${trimmed} ${flag}`;
+}
+
+/**
  * The conversation a launch line already names to resume, read from the measured grammar above:
- * the id after Claude Code's `--resume`/`-r`, or the word after Codex's `resume`. Null when the
- * line names no resume at all. `''` when it resumes without naming one — `--continue`/`-c`
- * (Claude Code's most recent), `--last`, `--all` or a bare `resume` (Codex's picker) — which
- * cannot be told from the id a record binds. A line this version does not read is null: an
- * unmeasured form is not a resume this tool may reason about.
+ * the id after Claude Code's `--resume`/`-r`, the word after Codex's `resume`, or the id of
+ * Antigravity's `--conversation=<id>` (a separate `--conversation <id>` word is the same flag).
+ * Null when the line names no resume at all. `''` when it resumes without naming one —
+ * `--continue`/`-c` (Claude Code's most recent), `--last`, `--all` or a bare `resume` (Codex's
+ * picker), or a bare `--conversation` — which cannot be told from the id a record binds. A line
+ * this version does not read is null: an unmeasured form is not a resume this tool may reason
+ * about.
  */
 export function namedResumeTarget(cli: string, command: string): string | null {
   if (cli === 'codex') {
@@ -347,6 +390,14 @@ export function namedResumeTarget(cli: string, command: string): string | null {
     if (at === -1) return null;
     const next = words[at + 1];
     return next === undefined || next.startsWith('-') ? '' : next;
+  }
+  if (cli === 'antigravity') {
+    // A closing quote is a word boundary too: `zsh -lc "agy --conversation=<id>"` names the
+    // id inside the script, and the quote is not part of the token.
+    const named = /(?:^|\s)--conversation(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(command);
+    if (named?.[1] && !named[1].startsWith('-')) return named[1];
+    if (/(?:^|\s)--conversation(?:=|\s|$)/.test(command)) return '';
+    return null;
   }
   if (cli !== 'claude-code') return null;
   const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$)/.exec(command);

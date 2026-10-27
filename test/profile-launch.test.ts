@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { TOOL_LOBBY_FILES, profileFor, shippedLobbyFiles, shippedStartupReads } from '../src/profiles/index.ts';
-import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, namedResumeTarget, resumeCarry, startupReadsList, withResume } from '../src/profiles/profile.ts';
+import { exitClearKey, inputBlockOf, launchCommand, lobbyFilesList, namedResumeTarget, resumeCarry, startupReadsList, supportsSessionResume, withResume } from '../src/profiles/profile.ts';
 import { runningModel } from '../src/status/statusline.ts';
 
 // Main's launch readers, copied here. The production files no longer have this code.
@@ -438,6 +438,32 @@ describe('the resume line a launch appends', () => {
   test('a CLI with no measured resume form takes no id', () => {
     expect(withResume('cursor', 'cursor-agent --model x', 'ses_1')).toBeNull();
   });
+
+  test('an Antigravity line takes --conversation=<id>, including a wrapper that forwards its arguments', () => {
+    // Measured on the owner's Mac: `agy --conversation=<uuid>` resumes that conversation.
+    const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
+    expect(supportsSessionResume('antigravity')).toBe(true);
+    expect(withResume('antigravity', 'agy', id)).toBe(`agy --conversation=${id}`);
+    expect(withResume('antigravity', 'agy --model gemini-3.1-pro', id))
+      .toBe(`agy --model gemini-3.1-pro --conversation=${id}`);
+    // The wrapper execs its arguments, so the flag is the launch line's last word, not a rewrite of `agy`.
+    expect(withResume('antigravity', 'zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro', id))
+      .toBe(`zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}`);
+    // A quoted script is the program zsh runs: a flag after the quotes never reaches agy.
+    expect(withResume('antigravity', 'zsh -lc "agy --model gemini-3.1-pro"', id))
+      .toBe(`zsh -lc "agy --model gemini-3.1-pro --conversation=${id}"`);
+    const profile = profileFor('antigravity');
+    if (!profile) throw new Error('antigravity has no profile');
+    expect(launchCommand(profile, `agy --conversation=${id}`, 'Rules.'))
+      .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions`);
+  });
+
+  test('an Antigravity line that already names a conversation keeps its own choice', () => {
+    const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
+    for (const line of [`agy --conversation=${id}`, 'agy --conversation other', 'zsh /Users/owner/as-floor.sh agy --conversation']) {
+      expect(withResume('antigravity', line, 'ses_1')).toBeNull();
+    }
+  });
 });
 
 describe('a launch line that already selects a conversation', () => {
@@ -446,6 +472,11 @@ describe('a launch line that already selects a conversation', () => {
     expect(namedResumeTarget('claude-code', 'claude -r ses_9')).toBe('ses_9');
     expect(namedResumeTarget('claude-code', 'claude --resume=ses_9')).toBe('ses_9');
     expect(namedResumeTarget('codex', 'codex -m gpt-6-sol resume ses_9')).toBe('ses_9');
+    const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
+    expect(namedResumeTarget('antigravity', `agy --conversation=${id}`)).toBe(id);
+    expect(namedResumeTarget('antigravity', `agy --conversation ${id}`)).toBe(id);
+    expect(namedResumeTarget('antigravity', `zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}`)).toBe(id);
+    expect(namedResumeTarget('antigravity', `zsh -lc "agy --conversation=${id}"`)).toBe(id);
   });
 
   test('a selection that names no id reads as empty', () => {
@@ -455,12 +486,16 @@ describe('a launch line that already selects a conversation', () => {
     for (const line of ['codex resume', 'codex resume --last', 'codex resume --all']) {
       expect(namedResumeTarget('codex', line)).toBe('');
     }
+    for (const line of ['agy --conversation', 'agy --conversation=', 'zsh /Users/owner/as-floor.sh agy --conversation --model x']) {
+      expect(namedResumeTarget('antigravity', line)).toBe('');
+    }
   });
 
   test('a line with no resume form reads as none', () => {
     expect(namedResumeTarget('claude-code', 'claude --model x')).toBeNull();
     expect(namedResumeTarget('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high')).toBeNull();
     expect(namedResumeTarget('cursor', 'cursor-agent --resume ses_1')).toBeNull();
+    expect(namedResumeTarget('antigravity', 'agy --model gemini-3.1-pro')).toBeNull();
   });
 
   test('a proven id is carried only when the line selects it or names none', () => {
@@ -478,6 +513,19 @@ describe('a launch line that already selects a conversation', () => {
       .toEqual({ kind: 'refuse', why: 'its launch line resumes without naming the recorded conversation' });
     expect(resumeCarry('cursor', 'cursor-agent --model x', 'ses_1'))
       .toEqual({ kind: 'refuse', why: 'its launch line has no measured resume form' });
+    const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
+    expect(resumeCarry('antigravity', 'agy', id))
+      .toEqual({ kind: 'line', line: `agy --conversation=${id}` });
+    expect(resumeCarry('antigravity', 'zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro', id))
+      .toEqual({ kind: 'line', line: `zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}` });
+    expect(resumeCarry('antigravity', `agy --conversation=${id}`, id))
+      .toEqual({ kind: 'line', line: `agy --conversation=${id}` });
+    expect(resumeCarry('antigravity', `zsh -lc "agy --conversation=${id}"`, id))
+      .toEqual({ kind: 'line', line: `zsh -lc "agy --conversation=${id}"` });
+    expect(resumeCarry('antigravity', 'agy --conversation=ses_9', id))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes a different conversation' });
+    expect(resumeCarry('antigravity', 'agy --conversation', id))
+      .toEqual({ kind: 'refuse', why: 'its launch line resumes without naming the recorded conversation' });
     // A line that starts a named new session is not a resume form for the recorded one.
     expect(resumeCarry('claude-code', 'claude --session-id 7f1c2a53-0e5a-4f4c-9a4b-1d2e3f4a5b6c', 'ses_1'))
       .toEqual({ kind: 'refuse', why: 'its launch line already sets a new session id' });

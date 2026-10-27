@@ -178,6 +178,30 @@ describe('Antigravity launch and captured screens', () => {
     expect(deliverStep?.kind === 'run' ? deliverStep.argv.at(-1) : undefined).toBe(line);
     expect(plan.some((step) => step.do?.do === 'ready')).toBe(false);
   });
+
+  test('a recorded conversation resumes with --conversation=<id> on the seat launch line', () => {
+    // The id is the registry's reach.agent_session. A typical agy seat, and a wrapper that
+    // forwards its arguments, both carry the measured flag.
+    const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
+    const seat = {
+      name: 'gemini', cli: 'antigravity', cwd: '.', label: 'gemini', stopped: false, rules: 'Rules.',
+      repairLine: '`team remove gemini --keep` then `team add gemini`',
+    };
+    const commandOf = (launch: string, resume: { resume?: string; registry?: { launch: string; model: string; version: string; sessionId?: string } }): string => {
+      const plan = upPlan({
+        root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
+        seats: [{ ...seat, launch, ...resume }],
+      });
+      const step = plan.find((item) => item.do?.do === 'launch');
+      return step?.do?.do === 'launch' ? step.do.command : '';
+    };
+    expect(commandOf('agy', { registry: { launch: 'agy', model: 'Gemini Flash', version: '3.8', sessionId: id } }))
+      .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions`);
+    expect(commandOf('zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions`);
+    expect(commandOf('zsh -lc "agy --model gemini-3.1-pro"', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id}" --dangerously-skip-permissions`);
+  });
   test('a message seat whose rules file has no typeable path is refused before anything is typed', () => {
     const plan = upPlan({
       root: '.', session: 'scratch', sessionRunning: true, watchAlive: true, watchLabel: 'Watch · scratch',
