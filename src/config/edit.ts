@@ -11,6 +11,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { charterGate } from '../charter/check.ts';
 import { approvalDifferences } from '../approve/approval.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
 import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.ts';
@@ -98,23 +99,33 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     // exit: config.value
     return 0;
   }
-  // A write: the owner's, as the file was.
-  const caller = callerOf(rawIo);
-  const detached = detachedRefusal(caller);
-  if (detached !== undefined) {
-    refuse(io, json, 'config', { id: 'config.detached', message: detached, repair: null });
-    // exit: config.detached
+  // A write. A verified charter that covers this folder admits it with no prompt. Outside that
+  // charter the run is refused, and the owner re-signs only with `team setup --edit`. With no
+  // charter, the write stays the owner's, from a terminal, as the file was.
+  const gate = charterGate(home, { operation: 'config', cwd: io.cwd }, sources.ownerSeatStore);
+  if (gate.kind === 'block') {
+    refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
+    // exit: config.charter
     return 1;
   }
-  if (!isOwner(caller)) {
-    refuse(io, json, 'config', {
-      id: 'config.not-owner',
-      message: `only the owner edits the team's record, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
-      repair: null,
-      rule: 'owner-only',
-    });
-    // exit: config.not-owner
-    return 1;
+  if (gate.kind !== 'admit') {
+    const caller = callerOf(rawIo);
+    const detached = detachedRefusal(caller);
+    if (detached !== undefined) {
+      refuse(io, json, 'config', { id: 'config.detached', message: detached, repair: null });
+      // exit: config.detached
+      return 1;
+    }
+    if (!isOwner(caller)) {
+      refuse(io, json, 'config', {
+        id: 'config.not-owner',
+        message: `only the owner edits the team's record, from a terminal outside herdr; this call is ${describeCaller(caller)}`,
+        repair: null,
+        rule: 'owner-only',
+      });
+      // exit: config.not-owner
+      return 1;
+    }
   }
   let next: string;
   let kept: string | null = null;

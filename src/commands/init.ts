@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
+import { charterGate } from '../charter/check.ts';
 import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
@@ -242,7 +243,12 @@ export async function runInit(
     else io.stdout(`${summary}\n${Object.entries(extra).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n')}\n`);
   };
   let actionOutcome: 'done' | 'refused' | null = null;
-  if (args.flags.has('request')) {
+  const signing = approving || args.flags.has('approvals') || args.values['approval-mode'] !== undefined || args.flags.has('approval-modes') || args.values['revoke-approval'] !== undefined;
+  const charter = signing ? { kind: 'absent' as const } : charterGate(actionHome, { operation: 'init', cwd: io.cwd }, store);
+  if (charter.kind === 'block') {
+    actionRefusal(charter.message);
+    actionOutcome = 'refused';
+  } else if (args.flags.has('request') && charter.kind !== 'admit') {
     const root = findRoot(io.cwd);
     if (root === null) actionRefusal('not inside a git repository');
     else if (existsSync(join(root, TEAM_FILE))) actionRefusal(`${TEAM_FILE} exists already`);
@@ -324,7 +330,8 @@ export async function runInit(
   const rootOf = () => (foundRoot === undefined ? (foundRoot = findRoot(io.cwd)) : foundRoot);
   // A restore reads a copy of a file rather than composing one, so neither it nor a restore from
   // an archive is the create a grant may stand behind.
-  const createGranted = seatApproved || (
+  const charterAdmitted = charter.kind === 'admit';
+  const createGranted = seatApproved || charterAdmitted || (
     !isOwner(caller) &&
     !args.flags.has('restore') &&
     fromArchive === undefined &&
@@ -369,7 +376,7 @@ export async function runInit(
   let devOwnerLine: string | null = null;
   // Collapsed notes: the warnings plain output writes to stderr ride on the document instead.
   const notes: string[] = [];
-  if (!isOwner(caller) && !createGranted) {
+  if (!isOwner(caller) && !createGranted && !charterAdmitted) {
     const ownerLine = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}${devModeExpiryNote(dev)}`;
     const folded = devModeCallerGate(dev, ownerLine)
       ?? (ruleRelaxed(actionHome, 'gate.owner-terminal', store, { now, what: `init by ${describeCaller(caller)}` }) ? `owner terminal gate relaxed by the owner-signed security profile (rule gate.owner-terminal); this call is ${describeCaller(caller)}` : null);

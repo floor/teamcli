@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { basename } from 'node:path';
 import { callerLabel, callerOf } from '../caller.ts';
+import { charterGate } from '../charter/check.ts';
 import { admitOwnerAction, admitOwnerActionByRule, boundWords, createOwnerActionRequest, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
 import { systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
 import { findRoot } from '../file/load.ts';
@@ -49,8 +50,14 @@ export function ownerSeatStep(
   io: Io,
   sources: OwnerSeatSources,
 ): OwnerSeatStep {
-  if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   const home = sources.home ?? homedir();
+  const gate = charterGate(home, { operation: command === 'import' ? 'import' : command, cwd: io.cwd }, sources.ownerSeatStore);
+  if (gate.kind === 'block') {
+    refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
+    return { kind: 'refused' };
+  }
+  if (gate.kind === 'admit') return { kind: 'admitted', admission: { ok: true, via: 'charter', signer: gate.signer } };
+  if (!ask.request && ask.approval === undefined) return { kind: 'none' };
   const now = sources.now?.() ?? new Date();
   const refused = (message: string): OwnerSeatStep => {
     refuse(io, ask.json, command, { id: `${command}.approval-refused`, message, repair: null });

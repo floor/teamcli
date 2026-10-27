@@ -4,6 +4,7 @@ import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
+import { charterGate } from '../charter/check.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { retireTeamFile, type Retired } from '../file/retire.ts';
@@ -97,7 +98,16 @@ export async function runTeamImport(
     : { kind: 'none' as const };
   if (seat.kind === 'requested') return 'approval-requested';
   if (seat.kind === 'refused') return 'approval-refused';
-  const seatApproved = seat.kind === 'admitted'
+  let charterAdmitted = false;
+  if (mode === 'migrate') {
+    const gate = charterGate(sources.home ?? homedir(), { operation: 'migrate', cwd: io.cwd });
+    if (gate.kind === 'block') {
+      refuse(io, json, mode, { id: `${mode}.not-owner`, message: gate.message, repair: null });
+      return 'not-owner';
+    }
+    charterAdmitted = gate.kind === 'admit';
+  }
+  const seatApproved = charterAdmitted || seat.kind === 'admitted'
     || (mode === 'import' && !isOwner(caller) && ownerSeatRuleAdmits('team-import', io.cwd, args.flags.has('dry-run'), sources));
   const detached = seatApproved ? undefined : detachedRefusal(caller);
   if (detached !== undefined) {

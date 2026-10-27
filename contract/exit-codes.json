@@ -1264,6 +1264,13 @@
     {
       "code": 1,
       "command": "config",
+      "id": "config.charter",
+      "meaning": "the owner charter does not cover this edit",
+      "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
       "id": "config.detached",
       "meaning": "an edit was run with no terminal",
       "trigger": "team config set watch.unread_after 5m"
@@ -3721,6 +3728,13 @@
     {
       "code": 1,
       "command": "remove",
+      "id": "remove.charter",
+      "meaning": "the owner charter does not cover this removal",
+      "trigger": "team remove worker"
+    },
+    {
+      "code": 1,
+      "command": "remove",
       "id": "remove.client-refused",
       "meaning": "the owner-signed manager grant, or the client removal it admits, did not verify, or the seat is a lead seat or a human's pane",
       "trigger": "team remove spare --client grant.json --key client.key --team docs"
@@ -4781,6 +4795,27 @@
       "id": "settings.write",
       "meaning": "the seat's record can't be replaced",
       "trigger": "team settings set lead nickname=Ada"
+    },
+    {
+      "code": 0,
+      "command": "setup",
+      "id": "setup.done",
+      "meaning": "the owner signed the charter",
+      "trigger": "team setup --signer touch-id"
+    },
+    {
+      "code": 1,
+      "command": "setup",
+      "id": "setup.refused",
+      "meaning": "the owner did not sign the charter; nothing was written",
+      "trigger": "team setup --signer touch-id"
+    },
+    {
+      "code": 2,
+      "command": "setup",
+      "id": "setup.invocation",
+      "meaning": "the invocation is invalid, or --signer was omitted so this run does not sign",
+      "trigger": "team setup"
     },
     {
       "code": 0,

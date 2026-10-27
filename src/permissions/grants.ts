@@ -43,6 +43,7 @@ import type { KeyObject } from 'node:crypto';
 import { existsSync, linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { charterGrantBound } from '../charter/check.ts';
 import { grantsDir, readGrantRecords } from '../grant.ts';
 import { isAgentId } from '../registry/agents.ts';
 import { bumpGeneration, keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
@@ -845,6 +846,8 @@ function grantProblem(home: string, request: GrantRequest, now: Date): string | 
   if (readGrants(home).revocations.some((revocation) => revocation.name === request.name)) {
     return `"${request.name}" is a revocation's name in ${grantsDir(home)}: a grant is a separate record and never writes over a revocation's file`;
   }
+  const bound = charterGrantBound(home, request);
+  if (bound !== null) return bound;
   return null;
 }
 

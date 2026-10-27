@@ -1,5 +1,7 @@
 # Owner seat: the morning setup
 
+`team setup` is the one signature. It registers the owner seat, lets the owner choose Touch ID or an iPhone passkey, and writes one signed charter. Routine commands that sit inside that charter run with no further prompt. A run outside it is refused and names `team setup --edit`; TeamCLI does not raise a prompt of its own while a charter is on disk. The helper that holds the Secure Enclave key is still built by the current path (it is not auto-provisioned).
+
 You never open a terminal. Iris (the orchestrator agent) runs every command; your only acts are
 native prompts on your own devices: Touch ID on the Mac, or a tap on your iPhone for a passkey.
 That signature from your device is the authority; nothing else (no TTY, no chat click) is.

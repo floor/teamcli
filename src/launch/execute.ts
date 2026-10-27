@@ -205,11 +205,14 @@ export type Host = {
    * `close-no-terminal`: an owner whose stdin is not a terminal — the workspace is closed
    * without input and the record says so. `timeoutIsDialog` on that mode: a delegated run,
    * whose idle wait's timeout is a dialog like any other stop — closed without input, never
-   * left at launched. Absent: the close path that predates the pause.
+   * left at launched. `notice`: a run the owner charter covers — the unattended limit is said
+   * and the seat continues, with no waiting record and no prompt. Absent: the close path that
+   * predates the pause.
    */
   dialog?:
     | { mode: 'prompt'; run(input: PauseInput): Promise<PauseResult> }
     | { mode: 'keep' }
+    | { mode: 'notice' }
     | { mode: 'close-no-terminal'; timeoutIsDialog?: boolean };
   /** Records a seat's waiting state, with the process identity read at that moment in the same
    *  write. `add`'s keep path; `up`'s prompt path records through `pause.ts`'s own write. */
@@ -771,6 +774,10 @@ export async function executePlan(
       final(seat, { kind: 'left out', reason: classification }, `  a lead finishes it with \`team up\`\n`);
       return 'settled';
     }
+    if (dialog?.mode === 'notice') {
+      host.say('unattended runtime limit reached; continuing under the owner charter\n');
+      return 'idle';
+    }
     if (dialog?.mode === 'close-no-terminal') {
       // An owner whose stdin is not a terminal: the workspace is closed without input, and the
       // record says why. Nothing is read from stdin, and nothing is sent into the pane. The close
@@ -850,6 +857,11 @@ export async function executePlan(
         dropped.add(op.seat);
         final(op.seat, { kind: 'left out', reason: classification }, `  a lead finishes it with \`team up\`\n`);
         return 'settled';
+      }
+      if (dialog.mode === 'notice') {
+        host.say('unattended runtime limit reached; continuing under the owner charter\n');
+        host.clearWaiting?.(op.seat);
+        return 'idle';
       }
       if (dialog.mode === 'close-no-terminal') {
         // A resumed wait is not closed from a run with no terminal. The workspace stays, and
@@ -1351,6 +1363,7 @@ export async function executePlan(
         if (
           outcome === 'timeout' &&
           (host.dialog?.mode === 'prompt' ||
+            host.dialog?.mode === 'notice' ||
             (host.dialog?.mode === 'close-no-terminal' && host.dialog.timeoutIsDialog === true))
         ) {
           // The idle wait ran out with the owner at a terminal: the owner is asked about the

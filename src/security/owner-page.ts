@@ -51,7 +51,8 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   const answeredOrExpired = (id: string): boolean => {
     try {
       if (existsSync(join(actionRequestsFolder(home), `${id}.seat-answer.json`))) return true;
-      const record = JSON.parse(readFileSync(join(actionRequestsFolder(home), `${id}.json`), 'utf8')) as { expires_at?: string };
+      const record = JSON.parse(readFileSync(join(actionRequestsFolder(home), `${id}.json`), 'utf8')) as { expires_at?: string | null };
+      if (record.expires_at === null) return false;
       return typeof record.expires_at !== 'string' || Date.parse(record.expires_at) <= now().getTime();
     } catch {
       return true;

@@ -27,6 +27,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   delegate: () => import('./commands/delegate.ts'),
   'development-mode': () => import('./commands/development-mode.ts'),
   'owner-seat': () => import('./commands/owner-seat.ts'),
+  setup: () => import('./commands/setup.ts'),
   revoke: () => import('./commands/revoke.ts'),
   status: () => import('./commands/status.ts'),
   seats: () => import('./commands/seats.ts'),

@@ -11,6 +11,7 @@
 //   - A grant with no end date is written only when the cap in force for its kind is `none`, and
 //     never as a master grant or a sub-grant. Nothing here widens a grant that already exists.
 
+import { charterLifetime } from '../charter/check.ts';
 import { loadAndResolvePolicyChain } from '../policy/sources.ts';
 import { readTeams } from '../registry/teams.ts';
 import {
@@ -132,7 +133,13 @@ export function chooseGrantExpiry(input: {
   const policyCap: DurationCap = inForce.caps[input.kind];
   // The cap that binds: the policy's, shortened by a bound the caller already holds.
   const narrow = input.narrowDays ?? null;
-  const cap: DurationCap = policyCap === null ? narrow : narrow === null ? policyCap : Math.min(policyCap, narrow);
+  let cap: DurationCap = policyCap === null ? narrow : narrow === null ? policyCap : Math.min(policyCap, narrow);
+  const charterCap = charterLifetime(input.home, 'grant');
+  if (charterCap.kind === 'invalid') return { ok: false, why: 'the owner charter does not verify; nothing was signed. The owner signs again with team setup --edit' };
+  if (charterCap.kind === 'set') {
+    if (charterCap.ms === null) cap = narrow;
+    else cap = cap === null ? charterCap.ms / DAY_MS : Math.min(cap, charterCap.ms / DAY_MS);
+  }
   if (input.never === true) {
     if (input.allowNever === false) return { ok: false, why: `a ${noun} always has an end date: --expires never is refused for it` };
     if (cap !== null) {

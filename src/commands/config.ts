@@ -6,6 +6,7 @@
 // owner's (as editing the file was), and the run names what the approval no longer covers.
 
 import { readArgs } from '../args.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import {
   CONFIG_KEYS,
   CONFIG_LEVELS,
@@ -49,6 +50,8 @@ export default config;
 /** What a test hands in: the home whose registry holds the team, the editor, the clock. */
 export type ConfigSources = {
   home?: string;
+  /** The credential store a charter signature is confirmed against. Absent: the system one. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   now?: () => Date;
   env?: Record<string, string | undefined>;
   /** Runs the editor on the file; returns its exit status. The user's $VISUAL/$EDITOR when absent. */

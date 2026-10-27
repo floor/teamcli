@@ -5495,6 +5495,99 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--credential-id",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--edit",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--grant-duration",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--json",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--public-key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--request-expiry",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--roots",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--rule-lifetime",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--signature",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--signer",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--team",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "setup",
+      "positionals": [],
+      "subcommands": [],
+      "usage": [
+        "team setup --signer <touch-id|passkey> [--roots <dirs>] [--team <team>] [--edit] [--request-expiry <duration>] [--rule-lifetime <duration>] [--grant-duration <duration>] [--public-key <hex>] [--signature <hex>] [--credential-id <id>] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "an agent may start it, but nothing is written until the owner signs the charter; the owner-device signature is the authority"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--all",
           "repeatable": false,
           "takesValue": false

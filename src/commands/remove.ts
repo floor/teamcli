@@ -6,6 +6,8 @@ import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { recordSeatDigestOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, judgeCallerOf, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
+import { charterGate } from '../charter/check.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { delegateGate, logDelegated } from '../delegate.ts';
 import { devModeCallerGate, devModeExpiryNote, devModeFileApproval, devModeOwnerLift, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
@@ -48,6 +50,8 @@ export type RemoveSources = DownSources & {
   renameAgent?(session: string, pane: string, name: string): boolean;
   /** Approval store home. The real command uses the owner's home. */
   home?: string;
+  /** The credential store a charter signature is confirmed against. Absent: the system one. */
+  ownerSeatStore?: OwnerSeatKeyStore;
   // The approval store's one read, done before anything is stopped or written and reused by the
   // amending branch, overridable so a test can count it or swap the record after the read.
   standing?(root: string): Standing;
@@ -210,7 +214,14 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // read, as `down` and `init` ask it —
   // `test/owner-no-tty-boundaries.test.ts` throws at every read past a refusal and pins that
   // order.
-  const detached = clientRun !== null ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
+  const charter = clientRun !== null ? { kind: 'absent' as const } : charterGate(sources.home ?? homedir(), { operation: 'remove', cwd: io.cwd }, sources.ownerSeatStore);
+  if (charter.kind === 'block') {
+    refuse(io, json, 'remove', { id: 'remove.charter', message: charter.message, repair: null });
+    // exit: remove.charter
+    return 1;
+  }
+  const charterAdmitted = charter.kind === 'admit';
+  const detached = clientRun !== null || charterAdmitted ? undefined : detachedRefusal(walkCaller(io), { who: 'the owner or a `leads` seat', where: 'a terminal outside herdr or its own pane' });
   if (detached !== undefined) {
     refuse(io, json, 'remove', { id: 'remove.detached', message: detached, repair: null });
     // exit: remove.detached
@@ -340,7 +351,7 @@ export async function runRemove(argv: string[], io: Io, sources: RemoveSources =
   // only when a record exists, so a caller with none reads no clock for it, exactly as `down`
   // asks it. `--keep` is not granted: that run re-signs the approval, so only a lead's `--keep`
   // — a swap, which never edits the file — is the ordinary rule's own.
-  const createGranted = clientRun !== null || (verdict.kind !== 'ok'
+  const createGranted = clientRun !== null || charterAdmitted || (verdict.kind !== 'ok'
     && !(args.flags.has('keep') && !swap)
     && readEntityCreateGrants(sources.home).length > 0
     && entityGrantAdmits(root, io, { home: sources.home, now: sources.now(), cwd: io.cwd }));

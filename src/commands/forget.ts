@@ -52,20 +52,14 @@ export async function runForget(argv: string[], io: Io, sources: ForgetSources =
   const caller = callerOf(io);
   let seatApproved = false;
   let seatRefused = false;
-  if (args.flags.has('request')) {
-    const seat = ownerSeatStep('forget', 'team-forget', argv, { request: true, approval: undefined, dry: false, json }, io, seatSources);
-    if (seat.kind === 'requested') {
-      // exit: forget.approval-requested
-      return 0;
-    }
-    seatRefused = true;
-  } else if (args.values.approval !== undefined) {
-    const preview = ownerSeatStep('forget', 'team-forget', argv, { request: false, approval: args.values.approval, dry: true, json }, io, seatSources);
-    seatApproved = preview.kind === 'admitted';
-    if (!seatApproved) seatRefused = true;
-  } else if (!isOwner(caller)) {
-    seatApproved = ownerSeatRuleAdmits('team-forget', io.cwd, false, seatSources);
+  const seat = ownerSeatStep('forget', 'team-forget', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.values.approval !== undefined, json }, io, seatSources);
+  if (seat.kind === 'requested') {
+    // exit: forget.approval-requested
+    return 0;
   }
+  if (seat.kind === 'refused') seatRefused = true;
+  else if (seat.kind === 'admitted') seatApproved = true;
+  else if (!isOwner(caller)) seatApproved = ownerSeatRuleAdmits('team-forget', io.cwd, false, seatSources);
   if (!seatRefused && !seatApproved && args.values.approval === undefined) {
     const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside herdr' });
     if (detached !== undefined) return refused(io, json, detached);

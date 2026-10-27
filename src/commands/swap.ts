@@ -14,6 +14,8 @@ import {
   type Caller,
   type CallerVerdict,
 } from '../caller.ts';
+import { charterGate } from '../charter/check.ts';
+import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { currentTeam } from '../file/current.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -64,6 +66,8 @@ export type SwapCommandOptions = {
   /** The caller's fresh per-seat native channel health, when it has a provider. Unset leaves
    *  every native projection unproven, so the run holds such a seat. */
   presenceChannelHealthy?: (seat: string) => boolean;
+  /** The credential store a charter signature is confirmed against. Absent: the system one. */
+  ownerSeatStore?: OwnerSeatKeyStore;
 };
 
 function resolveNow(now: Date | (() => Date) | undefined): Date {
@@ -214,9 +218,15 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   if (extra !== undefined) return invocation(rawIo, io, json, `unexpected "${plainLine(extra)}"`);
 
   const walked = walkCaller(rawIo);
-  const owner = isOwner(walked);
+  const gate = charterGate(home, { operation: 'swap', cwd: rawIo.cwd }, options.ownerSeatStore);
+  if (gate.kind === 'block') {
+    refuse(rawIo, io, json, 'swap.caller', plainText(gate.message), `the owner widens the charter with team setup --edit`, undefined, 'owner-or-leads');
+    return 'caller';
+  }
+  const covered = gate.kind === 'admit';
+  const owner = isOwner(walked) || covered;
 
-  if (sub === 'now') {
+  if (sub === 'now' && !covered) {
     // `team swap now` is the owner's alone: forcing the swap is the owner's word.
     const detached = detachedRefusal(walked, { who: 'the owner', where: 'a terminal outside herdr or its own seat' });
     if (detached !== undefined) {
@@ -273,7 +283,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
   const notice = current.notice ? plainText(current.notice) : undefined;
   if (notice !== undefined && !json) io.stdout(`${notice}\n`);
 
-  if (sub === 'queue' || sub === 'cancel' || sub === 'run') {
+  if ((sub === 'queue' || sub === 'cancel' || sub === 'run') && !covered) {
     const judged = judgeCallerIn(rawIo, dir, team);
     const verdict = mayChangeTeamVerdict(judged.caller, team, standingOf(dir, judged.session, judged.caller));
     if (verdict.kind !== 'ok') {

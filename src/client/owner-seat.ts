@@ -304,7 +304,25 @@ export function deliverToOwnerSeat(home: string, message: { request_id: string; 
   const folder = ownerSeatInbox(home);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   const path = join(folder, `${message.request_id}.json`);
-  return writeExclusive(path, `${JSON.stringify({ to: 'owner', kind: message.kind ?? 'grant-confirmation', ...message }, null, 2)}\n`) === 'written' ? path : null;
+  return writeExclusive(path, inboxText(message)) === 'written' ? path : null;
+}
+
+/** Rewrites the one card for `request_id`. A merge of concurrent requests keeps a single inbox file. */
+export function replaceOwnerSeatMessage(home: string, message: { request_id: string; params_sha256: string; text: string; summary: unknown; at: string; kind?: string }): string | null {
+  if (readOwnerSeat(home) === null) return null;
+  const path = join(ownerSeatInbox(home), `${message.request_id}.json`);
+  const temporary = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, inboxText(message), { mode: 0o600, flag: 'wx' });
+    renameSync(temporary, path);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+function inboxText(message: { request_id: string; params_sha256: string; text: string; summary: unknown; at: string; kind?: string }): string {
+  return `${JSON.stringify({ to: 'owner', kind: message.kind ?? 'grant-confirmation', ...message }, null, 2)}\n`;
 }
 
 export function ownerSeatMessages(home: string): Array<{ request_id: string; text: string; at: string }> {

@@ -717,7 +717,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // keep the terminal check they have always had.
   const seatSources = { home: host.home, now: () => host.now(), ...(host.ownerSeatStore ? { ownerSeatStore: host.ownerSeatStore } : {}) };
   let seatApproved = false;
-  if (host.watch === undefined && (args.flags.has('request') || args.values.approval !== undefined)) {
+  if (host.watch === undefined) {
     const step = ownerSeatStep('send', 'team-send', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, seatSources);
     if (step.kind === 'requested') {
       // exit: send.approval-requested

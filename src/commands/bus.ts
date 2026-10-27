@@ -65,7 +65,8 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
   // The owner-seat door, before any terminal check: `--request` records the start and returns;
   // `--approval` runs the start the owner seat signed. A spawned restart carries `--inherited`
   // and is not an owner-seat request.
-  if (args.values.inherited === undefined && (args.flags.has('request') || args.values.approval !== undefined)) {
+  let seatApproved = false;
+  if (args.values.inherited === undefined) {
     const seat = ownerSeatStep('bus', 'team-bus', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json: false }, io, seatSources);
     if (seat.kind === 'requested') {
       // exit: bus.approval-requested
@@ -75,10 +76,11 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
       // exit: bus.approval-refused
       return 1;
     }
+    seatApproved = seat.kind === 'admitted';
   }
-  const seatApproved = args.values.inherited === undefined && args.values.approval !== undefined
-    ? true
-    : !isOwner(caller) && args.values.inherited === undefined && ownerSeatRuleAdmits('team-bus', io.cwd, false, seatSources);
+  if (!seatApproved && args.values.inherited === undefined && !isOwner(caller)) {
+    seatApproved = ownerSeatRuleAdmits('team-bus', io.cwd, false, seatSources);
+  }
 
   // `--inherited` is how `team up` starts a bus with no owner terminal. The token is a one-use
   // file this checkout's `.agents` holds, mode 0600, and it is consumed here. It starts the

@@ -21,11 +21,12 @@
 // they remove a standing the owner already gave, and they do not hand a new one out.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { charterLifetime } from '../charter/check.ts';
 import { answerChoiceOf, approvalRuleExpired } from './emission.ts';
 import { presentOwnerRequest } from './owner-page-link.ts';
-import { deliverToOwnerSeat, readOwnerSeat, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
+import { deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
 export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget'] as const;
@@ -45,8 +46,19 @@ export type OwnerActionParams = {
   words?: Partial<Record<OwnerAction, string[]>>;
   /** Who asked: the caller's log label. A signer of that name cannot answer it. */
   requested_by: string;
+  /** Every caller folded into one card. Set only when more than one asked, and part of the hash then. */
+  requesters?: string[];
 };
-export type OwnerActionRecord = { request_id: string; params: OwnerActionParams; params_sha256: string; created: string; expires_at: string };
+export type OwnerActionRecord = {
+  request_id: string;
+  params: OwnerActionParams;
+  params_sha256: string;
+  created: string;
+  /** `null` when the charter says a request does not expire. */
+  expires_at: string | null;
+  /** Epoch of the coalesce that wrote this card. A later caller joins only a newer epoch. */
+  join?: { epoch: number };
+};
 
 /** The words of a command that an approval binds: everything but how it is asked and shown. */
 export function boundWords(argv: readonly string[]): string[] {
@@ -76,7 +88,16 @@ export function ownerActionHash(p: OwnerActionParams): string {
     for (const key of Object.keys(p.words).sort()) words[key] = [...(p.words[key as OwnerAction] ?? [])];
     body.words = words;
   }
+  if (p.requesters !== undefined) body.requesters = [...p.requesters].sort();
   return createHash('sha256').update(JSON.stringify(body), 'utf8').digest('hex');
+}
+
+function askedBy(params: OwnerActionParams): readonly string[] {
+  return params.requesters ?? [params.requested_by];
+}
+
+function requestExpired(expires: string | null, now: Date): boolean {
+  return expires !== null && Date.parse(expires) <= now.getTime();
 }
 
 export function canonicalRoot(root: string): string {
@@ -143,32 +164,214 @@ export type OwnerActionRequestInput = {
   requestedBy: string;
 };
 
-/** Records one request and drops its confirmation in the owner seat inbox. Refused with no owner seat. */
-export function createOwnerActionRequest(home: string, input: OwnerActionRequestInput, now: Date = new Date()): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string; page: 'live' | 'closed' } | { ok: false; why: string } {
-  if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered, so no owner-seat approval is possible; the owner registers one on the owner page (team owner-seat serve)' };
-  const actions = [...new Set(input.actions)];
-  if (actions.length === 0 || actions.some((a) => !(OWNER_ACTIONS as readonly string[]).includes(a))) return { ok: false, why: `an owner-seat request names one or more of ${OWNER_ACTIONS.join(', ')}` };
+/** The directory two overlapping requests wait in. A caller writes its file before taking the lock. */
+export function ownerActionWaitersFolder(home: string): string {
+  return join(actionRequestsFolder(home), '.waiters');
+}
+
+/** Held only while a request is recorded. A second caller that finds it is concurrent with the holder. */
+export function ownerActionLockPath(home: string): string {
+  return join(actionRequestsFolder(home), '.lock');
+}
+
+const COALESCE_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+
+type WaiterFile = { id: string; input: OwnerActionRequestInput };
+
+function requestExpiry(home: string, now: Date): string | null {
+  const life = charterLifetime(home, 'request');
+  if (life.kind === 'set') return life.ms === null ? null : new Date(now.getTime() + life.ms).toISOString();
+  return new Date(now.getTime() + OWNER_ACTION_TTL_MS).toISOString();
+}
+
+function sameAsk(a: OwnerActionRequestInput, b: OwnerActionRequestInput): boolean {
+  return canonicalRoot(a.root) === canonicalRoot(b.root) && a.team === b.team && a.head === b.head;
+}
+
+function recordFrom(inputs: readonly OwnerActionRequestInput[], now: Date, home: string, prior?: OwnerActionRecord): OwnerActionRecord {
+  const actions = [...new Set(inputs.flatMap((input) => input.actions))];
+  const first = inputs[0]!;
   const args: Partial<Record<OwnerAction, string>> = {};
   const words: Partial<Record<OwnerAction, string[]>> = {};
   for (const action of actions) {
-    words[action] = [...(input.args[action] ?? [])];
+    const source = [...inputs].reverse().find((input) => input.actions.includes(action));
+    words[action] = [...(source?.args[action] ?? [])];
     args[action] = actionArgsHash(action, words[action]!);
   }
-  const params: OwnerActionParams = { kind: 'owner-action', actions, root: canonicalRoot(input.root), team: input.team, head: input.head, args, words, requested_by: input.requestedBy };
-  const record: OwnerActionRecord = {
-    request_id: `oa_${randomBytes(12).toString('hex')}`,
+  const requesters = [...new Set(inputs.map((input) => input.requestedBy))].sort();
+  const params: OwnerActionParams = {
+    kind: 'owner-action',
+    actions,
+    root: canonicalRoot(first.root),
+    team: first.team,
+    head: first.head,
+    args,
+    words,
+    requested_by: requesters.length === 1 ? requesters[0]! : requesters.join(', '),
+    ...(requesters.length > 1 ? { requesters } : {}),
+  };
+  return {
+    request_id: prior?.request_id ?? `oa_${randomBytes(12).toString('hex')}`,
     params,
     params_sha256: ownerActionHash(params),
-    created: now.toISOString(),
-    expires_at: new Date(now.getTime() + OWNER_ACTION_TTL_MS).toISOString(),
+    created: prior?.created ?? now.toISOString(),
+    expires_at: prior?.expires_at === undefined ? requestExpiry(home, now) : prior.expires_at,
+    join: prior?.join,
   };
-  mkdirSync(actionRequestsFolder(home), { recursive: true, mode: 0o700 });
-  if (writeExclusive(join(actionRequestsFolder(home), `${record.request_id}.json`), `${JSON.stringify(record, null, 2)}\n`) !== 'written') return { ok: false, why: 'the request could not be recorded' };
-  const text = `Request ${record.request_id}: ${ownerActionSummary(params)} Authorized? oui, always, or non.`;
-  const inbox = deliverToOwnerSeat(home, { kind: 'owner-action-confirmation', request_id: record.request_id, params_sha256: record.params_sha256, text, summary: params, at: now.toISOString() });
-  // The open page polls for this card. A request never opens a second window over it.
-  const page = presentOwnerRequest(home);
+}
+
+function readWaiters(home: string): WaiterFile[] {
+  const folder = ownerActionWaitersFolder(home);
+  let names: string[];
+  try {
+    names = readdirSync(folder).filter((name) => name.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  const waiters: WaiterFile[] = [];
+  for (const name of names) {
+    try {
+      const parsed = JSON.parse(readFileSync(join(folder, name), 'utf8')) as WaiterFile;
+      if (typeof parsed.id === 'string' && parsed.input !== undefined) waiters.push(parsed);
+    } catch {
+      // a waiter that is still being written is read on the next pass
+    }
+  }
+  return waiters;
+}
+
+function readEpoch(home: string): number {
+  try {
+    const value = Number(readFileSync(join(actionRequestsFolder(home), '.epoch'), 'utf8'));
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function joinCardAfter(home: string, seen: number): OwnerActionRecord | null {
+  let names: string[];
+  try {
+    names = readdirSync(actionRequestsFolder(home)).filter((name) => /^oa_[0-9a-f]{24}\.json$/.test(name));
+  } catch {
+    return null;
+  }
+  let found: OwnerActionRecord | null = null;
+  for (const name of names) {
+    try {
+      const record = JSON.parse(readFileSync(join(actionRequestsFolder(home), name), 'utf8')) as OwnerActionRecord;
+      const epoch = record.join?.epoch;
+      if (epoch === undefined || !(epoch > seen)) continue;
+      if (found === null || epoch > (found.join?.epoch ?? 0)) found = record;
+    } catch {
+      // skip a card that is mid-write
+    }
+  }
+  return found;
+}
+
+function holdLock(lock: string): boolean {
+  const started = Date.now();
+  while (true) {
+    try {
+      mkdirSync(lock, { mode: 0o700 });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return false;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 15_000) {
+          rmSync(lock, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // the holder released it between the stat and the next try
+      }
+      if (Date.now() - started > 20_000) return false;
+      Atomics.wait(COALESCE_SLEEP, 0, 0, 15);
+    }
+  }
+}
+
+function dropWaiters(home: string, ids: readonly string[]): void {
+  for (const id of ids) {
+    try { unlinkSync(join(ownerActionWaitersFolder(home), `${id}.json`)); } catch { /* already gone */ }
+  }
+}
+
+function publish(home: string, record: OwnerActionRecord, now: Date, open: ((url: string) => void) | undefined, fresh: boolean): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string; page: 'live' | 'closed' } {
+  const text = `Request ${record.request_id}: ${ownerActionSummary(record.params)} Authorized? oui, always, or non.`;
+  const message = { kind: 'owner-action-confirmation', request_id: record.request_id, params_sha256: record.params_sha256, text, summary: record.params, at: now.toISOString() };
+  const inbox = fresh ? deliverToOwnerSeat(home, message) : (replaceOwnerSeatMessage(home, message) ?? deliverToOwnerSeat(home, message));
+  // The open page polls for this card. A request never opens a browser, including when two callers share the card.
+  const page = presentOwnerRequest(home, open);
   return { ok: true, record, inbox, text, page };
+}
+
+/**
+ * Records one request and drops its confirmation in the owner seat inbox. Refused with no owner seat.
+ * Two callers that overlap on the lock share one card and one signature. Two calls in sequence stay
+ * two requests: a join is taken only when the card's epoch is newer than the epoch this call read
+ * before it waited.
+ */
+export function createOwnerActionRequest(
+  home: string,
+  input: OwnerActionRequestInput,
+  now: Date = new Date(),
+  open?: (url: string) => void,
+): { ok: true; record: OwnerActionRecord; inbox: string | null; text: string; page: 'live' | 'closed' } | { ok: false; why: string } {
+  if (readOwnerSeat(home) === null) return { ok: false, why: 'no owner seat is registered, so no owner-seat approval is possible; the owner registers one on the owner page (team owner-seat serve)' };
+  const actions = [...new Set(input.actions)];
+  if (actions.length === 0 || actions.some((action) => !(OWNER_ACTIONS as readonly string[]).includes(action))) return { ok: false, why: `an owner-seat request names one or more of ${OWNER_ACTIONS.join(', ')}` };
+  const mine: OwnerActionRequestInput = { ...input, actions };
+  const waiterId = randomBytes(8).toString('hex');
+  mkdirSync(ownerActionWaitersFolder(home), { recursive: true, mode: 0o700 });
+  if (writeExclusive(join(ownerActionWaitersFolder(home), `${waiterId}.json`), `${JSON.stringify({ id: waiterId, input: mine })}\n`) !== 'written') return { ok: false, why: 'the request could not be recorded' };
+  const seen = readEpoch(home);
+  const lock = ownerActionLockPath(home);
+  if (!holdLock(lock)) {
+    dropWaiters(home, [waiterId]);
+    return { ok: false, why: 'the request could not be recorded' };
+  }
+  try {
+    const compatible = (): WaiterFile[] => readWaiters(home).filter((waiter) => sameAsk(waiter.input, mine));
+    let batch = compatible();
+    const card = joinCardAfter(home, seen);
+    const included = batch.some((waiter) => waiter.id === waiterId);
+    if (card !== null && sameAsk({ actions: card.params.actions, root: card.params.root, team: card.params.team, head: card.params.head, args: {}, requestedBy: card.params.requested_by }, mine)) {
+      const inputs = [...inputsOf(card), ...batch.map((waiter) => waiter.input)];
+      const merged = recordFrom(inputs, now, home, card);
+      merged.join = card.join;
+      if (!replaceFile(join(actionRequestsFolder(home), `${merged.request_id}.json`), `${JSON.stringify(merged, null, 2)}\n`)) return { ok: false, why: 'the request could not be recorded' };
+      dropWaiters(home, batch.map((waiter) => waiter.id));
+      return publish(home, merged, now, open, false);
+    }
+    const again = compatible();
+    if (again.length > batch.length) batch = again;
+    if (!included && !batch.some((waiter) => waiter.id === waiterId)) batch = [...batch, { id: waiterId, input: mine }];
+    const epoch = readEpoch(home) + 1;
+    const record = recordFrom(batch.map((waiter) => waiter.input), now, home);
+    record.join = { epoch };
+    writeFileSync(join(actionRequestsFolder(home), '.epoch'), String(epoch), { mode: 0o600 });
+    if (writeExclusive(join(actionRequestsFolder(home), `${record.request_id}.json`), `${JSON.stringify(record, null, 2)}\n`) !== 'written') return { ok: false, why: 'the request could not be recorded' };
+    dropWaiters(home, batch.map((waiter) => waiter.id));
+    return publish(home, record, now, open, true);
+  } finally {
+    try { rmSync(lock, { recursive: true, force: true }); } catch { /* released */ }
+  }
+}
+
+function inputsOf(record: OwnerActionRecord): OwnerActionRequestInput[] {
+  const args: OwnerActionRequestInput['args'] = {};
+  for (const action of record.params.actions) args[action] = record.params.words?.[action] ?? [];
+  const names = record.params.requesters ?? [record.params.requested_by];
+  return names.map((requestedBy, index) => ({
+    actions: index === 0 ? record.params.actions : [],
+    root: record.params.root,
+    team: record.params.team,
+    head: record.params.head,
+    args: index === 0 ? args : {},
+    requestedBy,
+  }));
 }
 
 export function readOwnerActionRecord(home: string, id: string): OwnerActionRecord | string {
@@ -190,7 +393,7 @@ function boundAnswer(home: string, signed: SignedOwnerAnswer, record: OwnerActio
   if (!verified.ok) return verified;
   const a = verified.answer;
   if (a.kind !== 'owner-action' || a.request_id !== record.request_id || a.params_sha256 !== record.params_sha256) return { ok: false, why: `the owner-seat answer is not bound to request ${record.request_id} and its parameters` };
-  if (verified.signer.name === record.params.requested_by) return { ok: false, why: `signer "${verified.signer.name}" asked for request ${record.request_id}; no principal approves its own request` };
+  if (askedBy(record.params).includes(verified.signer.name)) return { ok: false, why: `signer "${verified.signer.name}" asked for request ${record.request_id}; no principal approves its own request` };
   return { ok: true, answer: a, signer: verified.signer.name };
 }
 
@@ -207,17 +410,17 @@ export function approveOwnerAction(
   if (choice === null) return { ok: false, why: `"${word}" is not an answer: oui/approved/yes, always, or non/deny` };
   const record = readOwnerActionRecord(home, id);
   if (typeof record === 'string') return { ok: false, why: record };
-  if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
+  if (requestExpired(record.expires_at, now)) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   const seat = readOwnerSeat(home);
   if (seat === null) return { ok: false, why: 'no owner seat is registered' };
-  if (via.signer !== undefined && via.signer === record.params.requested_by) return { ok: false, why: `signer "${via.signer}" asked for request ${id}; no principal approves its own request` };
+  if (via.signer !== undefined && askedBy(record.params).includes(via.signer)) return { ok: false, why: `signer "${via.signer}" asked for request ${id}; no principal approves its own request` };
   const answer: OwnerSeatAnswer = {
     kind: 'owner-action', request_id: id, params_sha256: record.params_sha256, choice, team: seat.team, seat: 'owner', at: now.toISOString(),
     ...(choice === 'always' ? { scope: dirname(record.params.root) } : {}),
   };
   const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} — ${ownerActionSummary(record.params)}`, via.assertion);
   if (!signed.ok) return signed;
-  if (signed.signed.signer === record.params.requested_by) return { ok: false, why: `signer "${signed.signed.signer}" asked for request ${id}; no principal approves its own request` };
+  if (askedBy(record.params).includes(signed.signed.signer)) return { ok: false, why: `signer "${signed.signed.signer}" asked for request ${id}; no principal approves its own request` };
   const text = `${JSON.stringify(signed.signed, null, 2)}\n`;
   const path = join(actionRequestsFolder(home), `${id}.seat-answer.json`);
   const written = writeExclusive(path, text);
@@ -272,7 +475,7 @@ export function listOwnerActionRules(home: string, store: OwnerSeatKeyStore, now
       const a = file.owner_seat_answer;
       if (!bound.ok || a.choice !== 'always' || typeof a.scope !== 'string' || a.scope !== dirname(p.root)) throw new Error('rule');
       const seat = readOwnerSeat(home);
-      if (seat === null || approvalRuleExpired(home, seat.entity, a.at, now)) throw new Error('expired');
+      if (seat === null || approvalRuleExpired(home, seat.entity, a.at, now, store)) throw new Error('expired');
       rules.push({ rule_id: id, actions: p.actions, scope: a.scope, team: p.team, signer: bound.signer, created: a.at });
     } catch {
       ignored.push(id);
@@ -291,7 +494,7 @@ export type OwnerActionAsk = {
   claim: boolean;
 };
 
-export type OwnerActionAdmission = { ok: true; via: 'owner-seat' | 'rule'; requestId?: string; ruleId?: string; signer: string } | { ok: false; why: string };
+export type OwnerActionAdmission = { ok: true; via: 'owner-seat' | 'rule' | 'charter'; requestId?: string; ruleId?: string; signer: string } | { ok: false; why: string };
 
 /**
  * Admits one action run under request `id`: the request is whole, unexpired, names this action,
@@ -307,7 +510,7 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
   if (p.team !== ask.team) return { ok: false, why: `request ${id} is for team "${p.team}", not "${ask.team}"` };
   if (p.head !== null && p.head !== ask.head) return { ok: false, why: `request ${id} was approved at HEAD ${p.head.slice(0, 12)}; HEAD is now ${ask.head?.slice(0, 12) ?? 'unknown'}` };
   if (p.args[ask.action] !== actionArgsHash(ask.action, ask.words)) return { ok: false, why: `request ${id} was approved for other ${ask.action} arguments` };
-  if (Date.parse(record.expires_at) <= now.getTime()) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
+  if (requestExpired(record.expires_at, now)) return { ok: false, why: `request ${id} expired at ${record.expires_at}` };
   let answerText: string | null = null;
   try {
     answerText = readFileSync(join(actionRequestsFolder(home), `${id}.seat-answer.json`), 'utf8');
@@ -322,7 +525,7 @@ export function admitOwnerAction(home: string, id: string, ask: OwnerActionAsk, 
     }
     const bound = boundAnswer(home, signed, record, store, now);
     if (!bound.ok) return bound;
-    if (!(Date.parse(bound.answer.at) <= Date.parse(record.expires_at))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
+    if (record.expires_at !== null && !(Date.parse(bound.answer.at) <= Date.parse(record.expires_at))) return { ok: false, why: `the owner-seat answer to ${id} was given after the request expired` };
     if (bound.answer.choice === 'deny') return { ok: false, why: `the owner seat denied request ${id}` };
     admitted = { ok: true, via: 'owner-seat', requestId: id, signer: bound.signer };
   } else {

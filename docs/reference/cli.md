@@ -2977,6 +2977,40 @@ Usage:
 | `seat` | no | no |
 | `key` | no | no |
 
+## `setup`
+
+Hidden: no
+
+Usage:
+
+    team setup --signer <touch-id|passkey> [--roots <dirs>] [--team <team>] [--edit] [--request-expiry <duration>] [--rule-lifetime <duration>] [--grant-duration <duration>] [--public-key <hex>] [--signature <hex>] [--credential-id <id>] [--json]
+
+### Who may run it
+
+`any-caller` — an agent may start it, but nothing is written until the owner signs the charter; the owner-device signature is the authority
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--credential-id` | yes | no | no |
+| `--edit` | no | no | no |
+| `--grant-duration` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--public-key` | yes | no | no |
+| `--request-expiry` | yes | no | no |
+| `--roots` | yes | no | no |
+| `--rule-lifetime` | yes | no | no |
+| `--signature` | yes | no | no |
+| `--signer` | yes | no | no |
+| `--team` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
 ## `status`
 
 Hidden: no

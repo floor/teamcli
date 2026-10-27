@@ -71,7 +71,12 @@ export async function runApprovals(argv: string[], io: Io, sources: ApprovalsSou
   const seatSources = { home, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
   let seatApproved = false;
   let seatRefused = false;
-  if (args.flags.has('request') || args.values.approval !== undefined) {
+  if (!args.flags.has('request') && args.values.approval === undefined) {
+    const covered = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: false, approval: undefined, dry: false, json }, io, seatSources);
+    if (covered.kind === 'refused') seatRefused = true;
+    else if (covered.kind === 'admitted') seatApproved = true;
+  }
+  if (!seatRefused && (args.flags.has('request') || args.values.approval !== undefined)) {
     // Check every id before the approval is claimed. A dry look admits nothing.
     if (args.values.approval !== undefined) {
       const preview = ownerSeatStep('approvals', 'team-revoke-approval', argv, { request: false, approval: args.values.approval, dry: true, json }, io, seatSources);
