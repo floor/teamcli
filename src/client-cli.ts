@@ -558,7 +558,7 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
   });
   if (!created.ok) return refuse(created.why);
   const id = created.record.request_id;
-  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now, home).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary: { ...summary, prompt_fr: grantPrompt(params, now, home) }, at: now.toISOString() });
+  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now, home).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary: { ...summary, prompt: grantPrompt(params, now, home) }, at: now.toISOString() });
   const choices = GRANT_CHOICES.filter((choice) => !(choice === 'always' && (params.allow_grant || up !== null))).map((choice) => ({
     id: choice,
     label: choice === 'once' ? 'Yes, once' : choice === 'always' ? 'Always for this' : 'No',
@@ -756,7 +756,7 @@ export function runOwnerSeatApproveMode(rawIo: Io, io: Io, requestId: string, wo
 export function runOwnerSeatInboxMode(io: Io, json: boolean, home: string): 'ok' {
   const messages = ownerSeatMessages(home);
   if (json) writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'unchanged' as const, action_summary: 'grant: owner seat inbox', project: null, session: null, target: 'owner-seat', rules: messages });
-  else io.stdout(messages.length === 0 ? 'owner seat inbox: empty\n' : `${messages.map((m) => { const fr = (m as { summary?: { prompt_fr?: unknown } }).summary?.prompt_fr; return `${m.at}  ${m.text}${typeof fr === 'string' ? `\n    ${fr}` : ''}`; }).join('\n')}\n`);
+  else io.stdout(messages.length === 0 ? 'owner seat inbox: empty\n' : `${messages.map((m) => { const line = (m as { summary?: { prompt?: unknown } }).summary?.prompt; return `${m.at}  ${m.text}${typeof line === 'string' ? `\n    ${line}` : ''}`; }).join('\n')}\n`);
   return 'ok';
 }
 

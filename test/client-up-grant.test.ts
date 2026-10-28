@@ -246,8 +246,8 @@ describe('request, owner-seat answer, execute, then the client brings the team u
     const w = world();
     const g = await issued(w);
     expect(w.store.prompts).toHaveLength(1);
-    expect(w.store.prompts[0]).toContain('démarrer (up)');
-    expect(w.store.prompts[0]).toContain("l'équipe docs");
+    expect(w.store.prompts[0]).toContain('start (up)');
+    expect(w.store.prompts[0]).toContain('on team docs');
     const record = JSON.parse(readFileSync(g.path, 'utf8')).client_grant;
     expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', allowed_ops: ['up'], vocabulary: 4 });
     expect(record.up).toMatchObject({ project: 'docs', team_id: teamIdOf(w.docs), root: w.docs });

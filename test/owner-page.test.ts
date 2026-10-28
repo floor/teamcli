@@ -116,12 +116,12 @@ describe('owner page', () => {
     expect((await registerPhone(s, p)).status).toBe(200);
     const again = await registerPhone(s, p);
     expect(again.status).toBe(409);
-    expect(again.body.error).toBe('Ce Mac est déjà enregistré, rien à faire.');
+    expect(again.body.error).toBe('This Mac is already registered; nothing to do.');
     expect(s.store.prompts.length).toBe(1);
   });
 
   test('the page has an empty state for no pending request', () => {
-    expect(OWNER_PAGE_HTML).toContain('Aucune demande en attente');
+    expect(OWNER_PAGE_HTML).toContain('No pending requests');
   });
 
   test('a registration that is not for an issued challenge is refused', async () => {
@@ -234,9 +234,9 @@ describe('owner page', () => {
     expect(OWNER_PAGE_HTML).toContain('data-w="oui"');
     expect(OWNER_PAGE_HTML).not.toContain('lang="fr"');
     expect(OWNER_PAGE_HTML).not.toContain('Oui');
-    // Grant cards are French (the owner asked); the other cards stay English.
-    expect(OWNER_PAGE_HTML).toContain('Toujours autoriser');
-    expect(OWNER_PAGE_HTML).not.toContain('Siège');
+    // Every card is English, from the message catalog.
+    expect(OWNER_PAGE_HTML).toContain('Always allow');
+    expect(OWNER_PAGE_HTML).not.toContain('Autoriser');
     const first = await s.call('GET', '/api/state');
     const before = Array.isArray(first.body.requests) ? first.body.requests.length : 0;
     const root = join(s.base, 'repo');
@@ -286,7 +286,7 @@ describe('owner page', () => {
         summary: { kind: 'owner-action', actions: [action], root: '/tmp/repo', team: 'demo', head: null, args: {}, requested_by: 'seat:iris' },
       });
       expect(card.title).toBe(titles[action] ?? '');
-      expect(card.description).not.toMatch(/oui|non|Toujours/);
+      expect(card.description).not.toMatch(/oui|non|Always allow/);
       expect(card.onceOnly).toBe(action === 'team-migrate');
     }
     const migration = ownerPageRequest({
@@ -325,7 +325,7 @@ describe('owner page', () => {
       text: 'Grant request gr_x: Grant for iris. Authorized? reply oui/approved, always, or non/deny',
       summary: { text: 'Grant for iris: send to orchestrator@demo (entity demo) for 30 days.', master: false, expires: '2026-11-26T00:00:00.000Z' },
     });
-    expect(grant).toMatchObject({ title: 'Autorisation', onceOnly: false });
+    expect(grant).toMatchObject({ title: 'Grant', onceOnly: false });
     expect(grant.description).toBe('Grant for iris: send to orchestrator@demo (entity demo) for 30 days.');
     const master = ownerPageRequest({
       request_id: `gr_${'cd'.repeat(12)}`,
@@ -333,7 +333,7 @@ describe('owner page', () => {
       text: 'Authorized? oui',
       summary: { text: 'MASTER grant for iris: grant to orchestrator@demo (entity demo) for 30 days.', master: true, expires: '2026-11-26T00:00:00.000Z' },
     });
-    expect(master.title).toBe('Autorisation maître');
+    expect(master.title).toBe('Master grant');
     expect(master.onceOnly).toBe(true);
     expect(master.description).toContain('This grant needs a one-time approval.');
     const teamGrant = ownerPageRequest({
@@ -342,7 +342,7 @@ describe('owner page', () => {
       text: 'Authorized? oui',
       summary: { text: 'Up grant for iris: run team up for team demo.', master: false, up: { project: 'demo' }, expires: '2026-11-26T00:00:00.000Z' },
     });
-    expect(teamGrant).toMatchObject({ title: "Autorisation d'équipe", onceOnly: true });
+    expect(teamGrant).toMatchObject({ title: 'Team grant', onceOnly: true });
     const open = ownerPageRequest({
       request_id: `gr_${'aa'.repeat(12)}`,
       kind: 'grant-confirmation',

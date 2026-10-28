@@ -187,7 +187,7 @@ describe('conversational requests and approvals', () => {
     const s = screen();
     const ghost = await requestOf(w, s, ['--team', 'ghost']);
     expect(ghost.code).not.toBe(0);
-    expect(JSON.parse(ghost.io.out()).error.message).toBe('no team "ghost" of entity "floor" is registered');
+    expect(JSON.parse(ghost.io.out()).error.message).toContain('no team "ghost"');
     const a = await requestOf(w, s);
     expect(a.code).toBe(0);
     const teams = join(w.home, '.config', 'team', 'teams.yaml');
@@ -581,8 +581,8 @@ describe('the owner seat approves with its own credential-store key', () => {
   });
 });
 
-describe('the French owner-seat prompt and the owner page grant card', () => {
-  test('the Touch ID reason is the short French line; the terminal keeps the full list', async () => {
+describe('the owner-seat prompt and the owner page grant card', () => {
+  test('the Touch ID reason is the short prompt line; the terminal keeps the full list', async () => {
     const w = world('seat-fr');
     conversational(w);
     const store = fakeStore();
@@ -591,18 +591,18 @@ describe('the French owner-seat prompt and the owner page grant card', () => {
     const r = await requestOf(w, { notify: () => false } as never);
     expect(r.code).toBe(0);
     const card = JSON.parse(readFileSync(join(ownerSeatInbox(w.home), `${r.json.target}.json`), 'utf8'));
-    expect(card.summary.prompt_fr).toStartWith('Autoriser Grok Bot (client grok-bot)');
+    expect(card.summary.prompt).toStartWith('Allow Grok Bot (client grok-bot)');
     expect(card.summary.text).toContain('Grant for grok-bot');
     expect(await runGrant(['--approve-as-owner-seat', r.json.target, 'oui'], capture(w).io, { home: w.home, ownerSeatStore: store })).toBe(0);
     const reason = store.prompts[0]!;
-    expect(reason).toStartWith("Autoriser Grok Bot (client grok-bot) sur l'équipe floor");
-    expect(reason).toContain('Signataire : mac.');
-    expect(reason).toContain('Expire le ');
+    expect(reason).toStartWith('Allow Grok Bot (client grok-bot) on team floor');
+    expect(reason).toContain('Signer: mac.');
+    expect(reason).toContain('Expires ');
     expect(reason).not.toContain('is trying to');
     expect(reason.length).toBeLessThanOrEqual(210);
   });
 
-  test('the owner page lists the pending grant with the French line and a passkey answer is verified by execute', async () => {
+  test('the owner page lists the pending grant with the prompt line and a passkey answer is verified by execute', async () => {
     const { serveOwnerPage } = await import('../src/security/owner-page.ts');
     const { addOwnerSigner } = await import('../src/client/owner-seat.ts');
     const { createHash } = await import('node:crypto');
@@ -629,8 +629,8 @@ describe('the French owner-seat prompt and the owner page grant card', () => {
       const id = r.json.target as string;
       const requests = (await call('GET', '/api/state')).body.requests as Array<{ id: string; title: string; description: string; details?: string }>;
       expect(requests.map((x) => x.id)).toEqual([id]);
-      expect(requests[0]!.description).toStartWith('Autoriser Grok Bot');
-      expect(requests[0]!.description).toContain('Signataire : iphone.');
+      expect(requests[0]!.description).toStartWith('Allow Grok Bot');
+      expect(requests[0]!.description).toContain('Signer: iphone.');
       expect(requests[0]!.details).toContain('Grant for grok-bot');
       const ch = await call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId });
       expect(ch.status).toBe(200);

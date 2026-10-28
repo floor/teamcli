@@ -27,7 +27,8 @@ import { BUNDLE_DEFAULT_DAYS, bundleSignsFile, type BundleName, type BundleOp } 
 import { GRANT_DURATION_DEFAULT_DAYS, expiryPhrase, type GrantDurationKind } from './duration-policy.ts';
 import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
 import { bundleCard, bundleSpecsInForce, projectIdOfTeam } from './bundles.ts';
-import { frenchGrantPrompt } from './grant-prompt-fr.ts';
+import { grantPromptText } from './grant-prompt.ts';
+import { msg } from './grant-messages.ts';
 
 export type GrantEmission = 'owner-terminal' | 'conversational';
 
@@ -331,7 +332,7 @@ export function approveAsOwnerSeat(
   const summary = pendingSummary(record.params, now, home).text;
   const signerName = via.signer ?? (seat.signers.length === 1 ? seat.signers[0]!.name : null);
   const prompt = grantPrompt(record.params, now, home, signerName);
-  const signed = signOwnerAnswer(home, answer, via.signer, store, choice === 'deny' ? `Refuser : ${prompt}` : prompt, via.assertion);
+  const signed = signOwnerAnswer(home, answer, via.signer, store, choice === 'deny' ? msg('prompt.deny', { prompt }) : prompt, via.assertion);
   if (!signed.ok) return signed;
   const path = join(grantRequestsFolder(home), `${requestId}.seat-answer.json`);
   const text = `${JSON.stringify(signed.signed, null, 2)}\n`;
@@ -744,15 +745,15 @@ export function pendingSummary(p: PendingGrantParams, now: Date, home?: string):
   return { client: p.client_id, entity: p.entity, team, seat, ops, expires, master: p.allow_grant, text };
 }
 
-/** The short French line for the Touch ID prompt and the owner page card (the full list stays in
+/** The short prompt line for the Touch ID prompt and the owner page card (the full list stays in
  *  `pendingSummary(...).text`). */
 export function grantPrompt(p: PendingGrantParams, now: Date, home?: string, signer: string | null = null, timeZone?: string): string {
   const s = pendingSummary(p, now, home);
   const sendSeats = p.bundle !== undefined ? (p.bundle_seats ?? []) : s.up === undefined ? [s.seat] : [];
-  return frenchGrantPrompt({ client: s.client, team: s.team, ops: s.ops, sendSeats, bundle: p.bundle ?? null, master: s.master, expires: s.expires, signer }, timeZone);
+  return grantPromptText({ client: s.client, team: s.team, ops: s.ops, sendSeats, bundle: p.bundle ?? null, master: s.master, expires: s.expires, signer }, timeZone);
 }
 
-/** The French prompt of one pending grant request, read with the owner key; null when it cannot be read. */
+/** The prompt of one pending grant request, read with the owner key; null when it cannot be read. */
 export function pendingGrantPrompt(home: string, requestId: string, now: Date = new Date(), signer: string | null = null): string | null {
   if (!GRANT_REQUEST_ID_PATTERN.test(requestId)) return null;
   const key = ownerKey(home);

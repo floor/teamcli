@@ -743,7 +743,7 @@ describe('the owner card: request, owner-seat answer, execute', () => {
     // The owner seat's signature prompt carries the same words.
     const yes = capture(w);
     expect(await runGrant(['--approve-as-owner-seat', id, 'oui'], yes.io, { home: w.home, ownerSeatStore: w.store }), yes.err()).toBe(0);
-    expect(w.store.prompts.at(-1)).toContain("sans date de fin (jusqu'à révocation)");
+    expect(w.store.prompts.at(-1)).toContain('no end date (until revoked)');
     const done = capture(w);
     expect(await runGrant(['--execute', id], done.io, { home: w.home, ownerSeatStore: w.store }), done.err()).toBe(0);
     expect(done.out()).toContain('expires: never (until revoked; no end date)');
