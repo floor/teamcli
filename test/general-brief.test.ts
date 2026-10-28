@@ -10,10 +10,11 @@ import { briefOf, textModuleOf } from '../scripts/brief.ts';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { QUIET_START_TAIL, quietRulesLine, rulesLine } from '../src/launch/rules-file.ts';
 import { runApprove } from '../src/approve/command.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import { runDrops } from '../src/commands/drops.ts';
-import { runUp, USAGE, type Launch, type UpSources } from '../src/commands/up.ts';
+import { QUIET_HOLD_REASON, runUp, USAGE, type Launch, type UpSources } from '../src/commands/up.ts';
 import { commands } from '../src/cli.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -560,11 +561,19 @@ seats:
     expect(calls).toEqual([]);
     const doc = JSON.parse(io.out) as { no_launch?: boolean };
     expect(doc.no_launch).toBe(true);
+    // The quiet start's team hold stands, so the watch types nothing automatic.
+    expect(readState(dir).hold?.reason).toBe(QUIET_HOLD_REASON);
     const briefs = readState(dir).sessions.acme?.briefs;
     for (const seat of ['lead', 'desk']) {
       expect(currentBriefClaim(briefs?.[seat])).toBeNull();
       expect(existsSync(dropDir(seat))).toBe(false);
     }
+  });
+
+  test('a quiet start types the rules line with the stop instruction in place of the ordinary tail', () => {
+    const line = rulesLine('/x/rules/lead.md', 'abcdef012345');
+    expect(quietRulesLine(line)).toBe(`Read /x/rules/lead.md (sha256 abcdef012345): your standing rules for this session; ${QUIET_START_TAIL}`);
+    expect(QUIET_START_TAIL).toContain('do not continue any earlier work and do not read drops');
   });
 
   test('the usage names --no-launch for the owner and the --client form', () => {

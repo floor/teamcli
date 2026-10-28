@@ -76,7 +76,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { processSignals, terminalReader, type Terminal } from '../launch/terminal.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
-import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
+import { quietRulesLine, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -94,7 +94,7 @@ import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, mintSeatId, pidAlive, readState, seatOfFile, updateState, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -311,7 +311,10 @@ export const realSources: UpSources = {
   superviseBus: true,
 };
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch starts the seats with their rules only: no general seat brief (the launch message) is dropped or typed to them.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+/** The reason the hold `up --no-launch` places carries. */
+export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
+
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told not to continue earlier work or read drops; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -2060,6 +2063,20 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       .filter((seat) => launchedSeats.includes(seat.name)
         || (recorded?.seats[seat.name] === undefined && !claimStands(seat.name)))
       .map((seat) => seat.name);
+    // `--no-launch` is a quiet start: a team hold stands so the watch types nothing automatic
+    // (no unread wake, no ring, no work offer) until `team hold --release`. A hold already
+    // standing is kept as it is.
+    if (noLaunch) {
+      try {
+        const placedAt = sources.now?.() ?? new Date();
+        updateState(dir, (state) => {
+          if (liveHold(state, placedAt) !== null) return;
+          state.hold = { reason: QUIET_HOLD_REASON, by: callerLabel(caller), at: placedAt.toISOString() };
+        });
+      } catch (error) {
+        stderrLine(`team up: the quiet-start hold was not placed (${plainText(error instanceof Error ? error.message : String(error))})\n`);
+      }
+    }
     // `--no-launch` delivers no brief at all: not to the launched seats, not to a seat behind.
     if (!noLaunch) {
       const briefs = deliverBriefForAttribution({
@@ -2221,7 +2238,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         // The delivery reports why it stopped through this box; the caller turns the stopped
         // reading into the report, and a plain refusal stays `false`.
         const stopped: { why: Refusal | null } = { why: null };
-        const delivered = await deliverRules(cli, file.line, seconds, {
+        const delivered = await deliverRules(cli, noLaunch ? quietRulesLine(file.line) : file.line, seconds, {
           screen: () => launch.paneText(session, pane) ?? undefined,
           status: () => launch.agentStatus?.(session, pane) ?? null,
           type: (value) => launch.typeText?.(session, pane, value) ?? false,

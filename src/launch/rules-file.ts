@@ -72,6 +72,16 @@ export function rulesLine(path: string, hash12: string): string {
   return `Read ${path} (sha256 ${hash12}): your standing rules for this session; reply ready and wait for your brief.`;
 }
 
+/** The tail a quiet start (`team up --no-launch`) types in place of the ordinary one: the seat,
+ *  fresh or resumed, is told not to pick up earlier work or read drops on its own. */
+export const QUIET_START_TAIL = 'TeamCLI restart: do not continue any earlier work and do not read drops; reply ready and wait until your lead or the owner sends you a task.';
+
+/** The rules line for a quiet start: the same path and hash, with {@link QUIET_START_TAIL}. */
+export function quietRulesLine(line: string): string {
+  const ordinary = ' reply ready and wait for your brief.';
+  return line.endsWith(ordinary) ? `${line.slice(0, -ordinary.length)} ${QUIET_START_TAIL}` : `${line} ${QUIET_START_TAIL}`;
+}
+
 /** The first 12 hex digits of a text's SHA-256. */
 export function rulesFileHash(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 12);

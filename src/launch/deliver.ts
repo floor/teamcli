@@ -381,6 +381,9 @@ export function refusalReport(why: Refusal): string {
  *  anything else is left alone, and a seat mid-turn is reported as such. A line this run typed
  *  whose rows do not read back is cleared with the profile's one key when the box is still the
  *  unsent composer. */
+/** Screens a typed line is never waited past: each asks the seat something, and Enter would answer it. */
+const DIALOGS: ReadonlySet<string> = new Set(['trust', 'permission', 'question', 'exit question', 'vendor notice', 'provider error', 'rate limit']);
+
 export async function deliverRules(cli: string, line: string, seconds: number, io: Delivery): Promise<boolean | 'no-agent'> {
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
@@ -469,7 +472,10 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
     const working = !busy && readScreen(cli, screen).kind === 'working';
     const state = busy || working ? 'wait' : boxState(cli, line, screen);
     if (state === 'ready') break;
-    if (state === 'no') return readBackStop();
+    // A dialog is never waited past. Any other screen that is not the box yet — a frame the CLI
+    // is still drawing (Codex's MCP start-up row on a narrow pane), a reading the grammar does
+    // not know — is waited out to the deadline like a box still rendering.
+    if (state === 'no' && DIALOGS.has(readScreen(cli, screen).kind)) return readBackStop();
     if (io.now() >= deadline) return busy || working ? busyStop() : readBackStop();
     const before = io.now();
     await io.sleep(100);

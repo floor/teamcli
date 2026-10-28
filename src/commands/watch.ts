@@ -17,7 +17,7 @@ import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
-import { emptySession, readState, updateState } from '../state.ts';
+import { emptySession, liveHold, readState, updateState } from '../state.ts';
 import { waitOrStop } from '../wait.ts';
 import type { Live } from '../status/compare.ts';
 import { readMachine, readingsText } from '../watch/machine.ts';
@@ -774,12 +774,16 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         }
         noteWorked(dir, session, live, sources.now());
         const whole = readState(dir);
+        // A team hold (`team hold`, which `up --no-launch` places for its quiet start) types
+        // nothing automatic, as `--no-nudge` does: no work offer, no ring, no unread wake, no
+        // held-drop retry and no swap. Reading and reporting go on; `team hold --release` ends it.
+        const quiet = args.flags.has('no-nudge') || liveHold(whole, sources.now()) !== null;
         const state = whole.sessions[session] ?? emptySession();
         const now = sources.now().getTime();
         // Whether this pass may dispatch at all: a foreign session, a watch told to type
         // nothing, an unreadable pace, or a hosted loop with no direct route. The dispatcher
         // below takes its reading only when something could act on it, and so does the broker.
-        const dispatchHeld = foreign || args.flags.has('no-nudge') || !paceVerified
+        const dispatchHeld = foreign || quiet || !paceVerified
           || (hosted !== undefined && sources.pushWork === undefined);
         // The tracker team's one broker reading for this pass, beside the presence snapshot: the
         // caller's reader, never this process's socket. A file team never asks, and neither does
@@ -1084,7 +1088,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
             // No work drop moves a seat a swap waits on: the seat is at its boundary, or close
             // to it, and a fresh task would take the swap past another wait.
             if (waiting.has(item.seat)) continue;
-            if (args.flags.has('no-nudge')) {
+            if (quiet) {
               say(`nudge not typed (--no-nudge): ${item.body}`, false);
               continue;
             }
@@ -1118,7 +1122,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         const ring = result.ring;
         const rung = new Set<string>();
         if (ring && delivered.size === 0 && !suppressed.has(ring.to) && hosted === undefined && paceVerified && sources.home !== undefined) {
-          if (args.flags.has('no-nudge')) say(`ring not typed (--no-nudge): ${ring.text}`, false);
+          if (quiet) say(`ring not typed (--no-nudge): ${ring.text}`, false);
           // A read that landed since the pass read the mailbox is the seat's own word: the signed
           // receipt is read again here, and an already-read message is not reminded. The snapshot
           // held it only because the read came after that read.
@@ -1141,7 +1145,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         // A send held while a pane was busy leaves its drop and a record beside it: the pass
         // delivers one per seat once the box is free, bounded, and says the drop's path when it
         // gives up. `--no-nudge` is the watch that types nothing, and this types too.
-        if (!foreign && !args.flags.has('no-nudge') && hosted === undefined && paceVerified) {
+        if (!foreign && !quiet && hosted === undefined && paceVerified) {
           await retryHeldDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
             nativeHeld: nativeHeldNow,
@@ -1153,7 +1157,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (!foreign) {
           await expirePendingNative(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
-            { noNudge: args.flags.has('no-nudge') },
+            { noNudge: quiet },
           );
           confirmTakenDrops({
             dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say,
@@ -1165,7 +1169,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           // `--no-nudge` leaves it out.
           await wakeUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say, nativeHeld: nativeHeldNow },
-            { unreadAfter: inForce.unreadAfter, rung, ...(args.flags.has('no-nudge') || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
+            { unreadAfter: inForce.unreadAfter, rung, ...(quiet || hosted !== undefined || !paceVerified ? { noNudge: true } : {}) },
           );
           reportUnreadDrops(
             { dir, session, root, home: sources.home, team, live, ownPane, sources, now: sources.now(), say },
@@ -1184,7 +1188,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
         if (
           hosted === undefined
           && !foreign
-          && !args.flags.has('no-nudge')
+          && !quiet
           && sources.swapSources !== undefined
           && sources.home !== undefined
           && current.ok

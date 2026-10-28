@@ -95,3 +95,17 @@ describe('a seat that turns busy under the typed line', () => {
     expect(refusalReport(why)).not.toContain("read-back didn't match");
   });
 });
+
+describe('a frame still drawing after the line was typed', () => {
+  const { cli, file, line } = SCREENS[1];
+  test('a screen the grammar does not read yet is waited out, not called a mismatch', async () => {
+    const s = seat(cli, fixture(file));
+    const box = s.io.screen;
+    let looks = 0;
+    // The first two looks after the start read a frame the grammar does not know (Codex's MCP
+    // start-up row on a narrow pane); then the box is drawn.
+    s.io.screen = () => { looks += 1; return looks >= 3 && looks <= 5 ? 'Starting MCP servers (0/1): team_inbox' : box(); };
+    expect(await deliverRules(cli, line, 30, s.io)).toBe(true);
+    expect(s.refusals).toEqual([]);
+  });
+});
