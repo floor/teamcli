@@ -1642,6 +1642,8 @@ export const UP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   required: ['seats'],
   properties: {
     seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+    /** Present and true when `--no-launch` left the general seat brief out. */
+    no_launch: { type: 'boolean', const: true },
     notes: { type: 'array', items: { type: 'string' } },
     restore_summary: {
       type: 'object',

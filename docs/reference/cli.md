@@ -979,7 +979,7 @@ Hidden: no
 Usage:
 
     team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]
-    team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]
+    team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]
     team down --request [--dry-run] [--wait] [--json]
     team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]
 
@@ -1115,8 +1115,8 @@ Usage:
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO|never>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO|never>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO|never>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> [--seat <seats>] [--expires <ISO|never>] [--json]
-    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> --request [--seat <seats>] [--expires <ISO|never>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <default|observer|operator|manager> [--seat <seats>] [--expires <ISO|never>] [--json]
+    team grant --client <client-id> --entity <entity> --public-key <file> --team <team> [--bundle <default|observer|operator|manager>] --request [--seat <seats>] [--expires <ISO|never>] [--json]
     team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]
     team grant --execute <request-id> [--json]
     team grant --answer <request-id> <oui|always|non> [--json]
@@ -3221,8 +3221,8 @@ Hidden: no
 
 Usage:
 
-    team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]
-    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]
+    team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]
+    team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]
     team up --request [--serial] [--json]
     team up --approval <request-id> [--dry-run] [--serial] [--json]
 
@@ -3241,6 +3241,7 @@ Usage:
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
+| `--no-launch` | no | no | no |
 | `--request` | no | no | no |
 | `--serial` | no | no | no |
 | `--session` | yes | no | no |

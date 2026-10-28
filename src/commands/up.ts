@@ -311,7 +311,7 @@ export const realSources: UpSources = {
   superviseBus: true,
 };
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch starts the seats with their rules only: no general seat brief (the launch message) is dropped or typed to them.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -1020,7 +1020,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'serial', 'json', 'request']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -1043,6 +1043,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     return 2;
   }
   const dry = args.flags.has('dry-run');
+  // `--no-launch`: seats get their rules and nothing else — no general seat brief is dropped in
+  // their folder and no launch-line inbox route names a brief epoch.
+  const noLaunch = args.flags.has('no-launch');
   // The client form: a grant the owner signed for ONE team at ONE folder, proven by the client's own
   // key. It is verified whole here, before anything else is read, and then the run is the grant's
   // folder alone — a no-terminal owner launch that never prompts, whose seats are the signed team
@@ -1809,7 +1812,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(watchFile ? { watchFile } : {}),
     teamFile: loaded.path,
     cliHooks,
-    briefEpochs: currentBriefEpochs(dir, session),
+    ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),
     home: sources.home,
     // A launch surface with no endpoint seam plans none: the marker is what makes the launch
     // start one, and a scene's fake launch must never reach a real process.
@@ -1921,6 +1924,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       writeJson(io, 'team.up', {
         format: 1,
         dry_run: true,
+        ...(noLaunch ? { no_launch: true } : {}),
         status: 'dry-run',
         action_summary: 'dry run: nothing was run',
         project: team.project,
@@ -2052,31 +2056,34 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       const claim = currentBriefClaim(recorded?.briefs?.[name]);
       return claim !== null && claim.stage === 'ready' && claim.sha256 === GENERAL_BRIEF_SHA256;
     };
-    const briefSeats = team.seats
+    const briefSeats = noLaunch ? [] : team.seats
       .filter((seat) => launchedSeats.includes(seat.name)
         || (recorded?.seats[seat.name] === undefined && !claimStands(seat.name)))
       .map((seat) => seat.name);
-    const briefs = deliverBriefForAttribution({
-      dir,
-      root,
-      session,
-      home: sources.home,
-      now: sources.now?.() ?? new Date(),
-      team,
-      state: recorded ?? emptySession(),
-      attributed: briefSeats,
-    });
-    await walkBriefDeliveries(briefs, { dir, home: sources.home });
-    for (const delivery of briefs.deliveries) {
-      if (delivery.ok) continue;
-      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
-      stderrLine(`team up: ${said}\n`);
-      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
-    }
-    if (briefs.recording !== undefined) {
-      const said = `the general seat briefs were written and not recorded (${briefs.recording})`;
-      stderrLine(`team up: ${said}\n`);
-      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+    // `--no-launch` delivers no brief at all: not to the launched seats, not to a seat behind.
+    if (!noLaunch) {
+      const briefs = deliverBriefForAttribution({
+        dir,
+        root,
+        session,
+        home: sources.home,
+        now: sources.now?.() ?? new Date(),
+        team,
+        state: recorded ?? emptySession(),
+        attributed: briefSeats,
+      });
+      await walkBriefDeliveries(briefs, { dir, home: sources.home });
+      for (const delivery of briefs.deliveries) {
+        if (delivery.ok) continue;
+        const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+        stderrLine(`team up: ${said}\n`);
+        logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+      }
+      if (briefs.recording !== undefined) {
+        const said = `the general seat briefs were written and not recorded (${briefs.recording})`;
+        stderrLine(`team up: ${said}\n`);
+        logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+      }
     }
     // The binding each planned seat holds before this install mints its successor. A seat whose
     // line never runs keeps it; one this install creates goes back out without a record.
@@ -2683,6 +2690,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         writeJson(io, 'team.up', {
           format: 1,
           dry_run: false,
+          ...(noLaunch ? { no_launch: true } : {}),
           status: 'ready',
           action_summary: summaryLine,
           project: team.project,
