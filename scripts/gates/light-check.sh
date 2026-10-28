@@ -11,10 +11,11 @@
 # reclaimed, never waited on; a live pid's is never touched. A hard wall-clock limit
 # (LIGHT_CHECK_MAX_MIN, default 10) kills this check's own bun tree at the limit, writes
 # `TIMEOUT after <n> min: running <what>`, frees the slot and exits non-zero.
-#     zsh $HOME/Code/floor/briefs/teamcli-notes/light-check.sh
+#     zsh scripts/gates/light-check.sh
 set -u
+GATES=${0:A:h}
 LOBBY=$HOME/Code/floor/briefs/teamcli-notes
-source $LOBBY/gate-common.sh
+source $GATES/gate-common.sh
 
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { print -u2 "light-check: not in a git worktree"; exit 2; }
 cd $top
@@ -183,7 +184,7 @@ fi
 # queue directory is the marker: a second light check with the same sha and file set finds it and
 # skips, and hub-sweep.zsh removes it when it exits. One run, never a loop.
 if (( ${#hub_left_final} )); then
-  if [[ -f $LOBBY/hub-sweep.zsh ]]; then
+  if [[ -f $GATES/hub-sweep.zsh ]]; then
     hs=$LOBBY/hub-sweep
     mkdir -p $hs/queue $hs/log
     head_sha=$(git rev-parse HEAD 2>/dev/null || print -r -- nogit)
@@ -204,7 +205,7 @@ if (( ${#hub_left_final} )); then
         print -r -- "top=$top"
         print -r -- "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       } > $q/meta
-      nohup zsh $LOBBY/hub-sweep.zsh $q </dev/null >>$hs/log/$key.log 2>&1 &!
+      nohup zsh $GATES/hub-sweep.zsh $q </dev/null >>$hs/log/$key.log 2>&1 &!
       print "light-check: queued a hub sweep of ${#hub_left_final} test files in a heavy slot ($hs)"
       print "light-check: the sweep writes its report to $hs/$bsan-$head_sha.md"
       if [[ ${branch:-detached} == "$int_tip" ]]; then
@@ -217,7 +218,7 @@ if (( ${#hub_left_final} )); then
       print "light-check: its report lands at $hs/$bsan-$head_sha.md"
     fi
   else
-    print -u2 "light-check: $LOBBY/hub-sweep.zsh is missing; ${#hub_left_final} test files left out and NOT queued"
+    print -u2 "light-check: $GATES/hub-sweep.zsh is missing; ${#hub_left_final} test files left out and NOT queued"
   fi
 fi
 

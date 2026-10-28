@@ -3,7 +3,7 @@
 # in a heavy machine slot: one run, then exit (never a loop). Queued by light-check.sh, which
 # creates the queue directory atomically — an identical sha and file set already queued or running
 # makes mkdir fail and the light check skips; this script trashes the directory when it exits.
-#     zsh $HOME/Code/floor/briefs/teamcli-notes/hub-sweep.zsh <queue-dir>
+#     zsh scripts/gates/hub-sweep.zsh <queue-dir>
 #
 # The queue directory holds: files (one test path per line), hubs (the hub modules that left them
 # out), meta (branch=, sha=, top=, created=), pid (this run, written below). A directory whose pid

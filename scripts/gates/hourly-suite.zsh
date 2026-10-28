@@ -3,7 +3,7 @@
 # round is open (owner-approved structural change, Dr Jones 2026-10-17 ~09:00).
 #
 # An operator seat runs it in its OWN pane, as a loop — never a detached background loop:
-#     zsh ~/Code/floor/briefs/teamcli-notes/hourly-suite.zsh --loop
+#     zsh scripts/gates/hourly-suite.zsh --loop
 #
 # One pass:
 #   1. reads the integration tip (`git -C <repo> rev-parse integration/0.5.x`; HOURLY_INTEGRATION_REF

@@ -1,6 +1,6 @@
 #!/bin/zsh
 # The team's push gate. Run it INSTEAD of `git push`, from inside your worktree:
-#     zsh $HOME/Code/floor/briefs/teamcli-notes/push-gate.sh [git push arguments]
+#     zsh scripts/gates/push-gate.sh [git push arguments]
 # It runs typecheck and the test files your branch's work touches, plus the tests of every module
 # that imports a changed src module two hops deep (depth 2 only while the selection stays under 80
 # files, a heavy file only when the change touches it, a hub module reduced to its own name/path
@@ -13,8 +13,9 @@
 # each other, and the heavy machine slots are for full-suite runs and builds only. It pushes
 # only if all of it passes, and leaves a stamp the orchestrator checks against the pushed commit.
 set -u
+GATES=${0:A:h}
 LOBBY=$HOME/Code/floor/briefs/teamcli-notes
-source $LOBBY/gate-common.sh
+source $GATES/gate-common.sh
 GATE=$LOBBY/gate
 mkdir -p $GATE
 
