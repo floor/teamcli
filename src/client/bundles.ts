@@ -132,8 +132,10 @@ function cardTime(iso: string | null): string {
 
 /** The text the owner reads at signing, one plain sentence per grant, built from the EXPLICIT ops. */
 export function bundleCard(input: { clientId: string; project: string; ops: readonly BundleOp[]; seats: readonly string[]; expires: string | null; fileFingerprint?: string | null }): string {
-  const what = input.ops.map((op) => OP_PHRASES[op](input.seats, input.fileFingerprint ?? null)).join(', ');
   const developed = input.ops.some((op) => (DEVELOPER_ONLY_OPS as readonly string[]).includes(op));
+  // The default (developer) bundle's stop may also abandon seats (unsent text, unrecognised screens,
+  // panes team did not launch): `team down --client … --abandon`, for this one team.
+  const what = input.ops.map((op) => (op === 'down' && developed ? 'stop or abandon' : OP_PHRASES[op](input.seats, input.fileFingerprint ?? null))).join(', ');
   const managed = developed || input.ops.some((op) => (MANAGER_ONLY_OPS as readonly string[]).includes(op));
   // A grant may list an op whose client route is not built yet: it admits nothing until then, and the
   // card says which, so the owner never signs for a power the client does not have.

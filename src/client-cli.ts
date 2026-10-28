@@ -115,6 +115,28 @@ export function teamOpsOfArgs(args: Args): ClientTeamOp[] | null {
   return asked.length === 0 ? null : asked;
 }
 
+/** The bundle every client gets unless the owner asks for less: `default`, recorded as `developer`
+ *  (its signed name since vocabulary 7, so grants signed before the rename verify unchanged).
+ *  `--bundle default` is that bundle by its new name; `--bundle developer` stays its alias. A
+ *  `--request` that names a team and asks for nothing narrower (no --bundle, --up, --down, --seat,
+ *  --inbox, --allow-grant, --client-request) asks for the default bundle. The owner still signs it,
+ *  once per team; nothing here widens a grant already signed. */
+export const DEFAULT_BUNDLE_ALIAS = 'default';
+export function withDefaultBundle(args: Args): Args {
+  const asked = args.values.bundle;
+  if (asked === DEFAULT_BUNDLE_ALIAS) return { ...args, values: { ...args.values, bundle: 'developer' } };
+  if (asked !== undefined) return args;
+  const narrower = teamOpsOfArgs(args) !== null || args.values.seat !== undefined || args.flags.has('inbox') || args.flags.has('allow-grant')
+    || args.flags.has('client-request') || MASTER_SCOPE_FLAGS.some((flag) => args.values[flag] !== undefined);
+  if (args.flags.has('request') && args.values.team !== undefined && !narrower) return { ...args, values: { ...args.values, bundle: 'developer' } };
+  return args;
+}
+
+/** How a bundle is named to a person: `developer` is the `default` bundle. */
+export function bundleDisplayName(bundle: string): string {
+  return bundle === 'developer' ? 'default' : bundle;
+}
+
 /** The problems the `--client` form of `team grant` owns, or null when the arguments are whole. */
 export function clientGrantProblem(args: Args): string | null {
   if (args.error !== undefined) return args.error;
@@ -136,7 +158,7 @@ export function clientGrantProblem(args: Args): string | null {
     // A bundle is the owner's form alone, like `--up`: it never rides a master grant, so a sub-grant
     // can never carry one, and it carries only what its name expands to for the one team it names.
     const asked = args.values.bundle;
-    if (!isBundleName(asked)) return `--bundle takes observer, operator, manager or developer, not "${asked}"`;
+    if (!isBundleName(asked)) return `--bundle takes default, observer, operator or manager (developer is default's older name), not "${asked}"`;
     if (teamOps !== null) return `--bundle ${asked} and ${teamOpFlags(teamOps)} are two forms: a bundle's ops come from its name; ask for one or the other`;
     if (args.flags.has('client-request')) return `--bundle belongs to the owner form: a sub-grant never carries a bundle`;
     if (args.values.team === undefined) return `--bundle ${asked} needs --team <team>: a bundle binds one team and its folder`;
@@ -203,6 +225,7 @@ export function masterScopeOf(args: Args): ClientGrantScope {
 
 /** The client form of `team grant`: owner-only, one fresh id per issuance, as long as the `client-grant-max-duration` policy allows (seven days by default). */
 export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean, home: string = homedir(), approval: GrantApprovalOptions = {}): 'ok' | 'refused' | 'invalid' {
+  args = withDefaultBundle(args);
   const problem = clientGrantProblem(args);
   if (problem !== null) {
     if (json) writeJsonError(rawIo, 'grant.invalid', plainText(problem), null);
@@ -284,7 +307,7 @@ export function bundleParamsOf(home: string, args: Args, now: Date, cwd: string)
       if (!admitted.ok) return admitted;
       const held = new Set(readRosterSeats(home, target.binding.teamId));
       seats = admitted.seats.filter((seat) => held.has(seat));
-      if (seats.length === 0) return { ok: false, why: `the ${bundle} bundle carries send but no seat of team ${target.binding.project} is open to client ${args.values.client!}; name the seats with --seat <seat>[,<seat>]` };
+      if (seats.length === 0) return { ok: false, why: `the ${bundleDisplayName(bundle)} bundle carries send but no seat of team ${target.binding.project} is open to client ${args.values.client!}; name the seats with --seat <seat>[,<seat>]` };
     }
   } else if (args.values.seat !== undefined) {
     return { ok: false, why: `--seat names where send goes, and the ${bundle} bundle in force does not carry send` };
@@ -292,7 +315,7 @@ export function bundleParamsOf(home: string, args: Args, now: Date, cwd: string)
   return { ok: true, up, bundle, bundle_ops: expanded.ops, bundle_seats: seats };
 }
 
-/** `team grant --client … --team <team> --bundle observer|operator|manager|developer`, at the owner's terminal. */
+/** `team grant --client … --team <team> --bundle default|observer|operator|manager` (developer = default), at the owner's terminal. */
 function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicInput, json: boolean, home: string, at?: Date): 'ok' | 'refused' {
   const refuse = (why: string): 'refused' => {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(why), null);
@@ -322,7 +345,7 @@ function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPubl
   if (json) {
     writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: updated', project: null, session: null, target: result.grant.grantId });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nbundle: ${result.grant.bundle}\nops: ${result.grant.ops.join(', ')}\nteam: ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${expiresField(result.grant.expires)}\ncard: ${card}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nbundle: ${bundleDisplayName(result.grant.bundle ?? '')}\nops: ${result.grant.ops.join(', ')}\nteam: ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${expiresField(result.grant.expires)}\ncard: ${card}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }

@@ -37,6 +37,10 @@ export interface Profile {
   cli: string;
   /** The CLI's process names, for the caller check. */
   processNames: readonly string[];
+  /** Startup screens drawn before the CLI ever started a session (each rule: every pattern
+   *  matches some row). `team down` closes such a pane without typing into it: no option is ever
+   *  chosen. Empty when the profile names none. */
+  notStarted?: readonly (readonly RegExp[])[];
   /** The binary whose version `doctor` reads, with `--version`. */
   binary: string;
   /** The range this profile was tested with, both ends included. */
@@ -642,7 +646,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1044,6 +1048,7 @@ function launchOf(root: YamlNode): Shipped {
   const standingRulesEntry = optional(entries, 'standing_rules');
   const herdrStatusEntry = optional(entries, 'herdr_status');
   const modelsEntry = optional(entries, 'models');
+  const notStartedEntry = optional(entries, 'not_started');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   if (exitEntry !== undefined && exitKeysEntry !== undefined) {
     fail(exitKeysEntry.line, '"exit" and "exit_keys" are one or the other, not both');
@@ -1060,6 +1065,7 @@ function launchOf(root: YamlNode): Shipped {
       cli,
       binary: text(required(entries, 'binary', root.line), 'binary'),
       processNames: strings(required(entries, 'process_names', root.line).value, 'process_names'),
+      notStarted: notStartedEntry ? notStartedOf(notStartedEntry.value) : [],
       tested: testedOf(required(entries, 'tested', root.line).value),
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
       rulesOption: rules.option,
@@ -1093,6 +1099,27 @@ function launchOf(root: YamlNode): Shipped {
     status: statusEntry ? modelRules(statusEntry.value, 'status_model') : [],
     quota: quotaEntry ? quotaOf(quotaEntry.value) : [],
   };
+}
+
+function notStartedOf(node: YamlNode): RegExp[][] {
+  if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, '"not_started" must be a non-empty list of rules');
+  return node.items.map((item) => {
+    const entries = mapping(item, 'a "not_started" rule');
+    only(entries, ['all']);
+    return strings(required(entries, 'all', item.line).value, 'all').map((pattern) => {
+      try {
+        return new RegExp(pattern, 'm');
+      } catch {
+        return fail(item.line, `"not_started" pattern "${pattern}" is not a valid expression`);
+      }
+    });
+  });
+}
+
+/** Whether a pane's text is one of the profile's not-started startup screens. */
+export function isNotStartedScreen(profile: Profile | null, text: string | undefined): boolean {
+  if (profile === null || text === undefined || (profile.notStarted ?? []).length === 0) return false;
+  return (profile.notStarted ?? []).some((rule) => rule.every((pattern) => pattern.test(text)));
 }
 
 function quotaOf(node: YamlNode): QuotaPattern[] {

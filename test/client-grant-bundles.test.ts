@@ -589,7 +589,7 @@ describe('request, owner-seat answer (one Touch ID), execute: the operator bundl
     }
     const unknown = capture(w, { kind: 'owner' });
     expect(await runGrant(bundleFlags(w, 'admin'), unknown.io, { home: w.home })).toBe(2);
-    expect(unknown.err()).toContain('observer, operator, manager or developer');
+    expect(unknown.err()).toContain('default, observer, operator or manager');
     const bare = capture(w, { kind: 'owner' });
     expect(await runGrant(['team-less', '--bundle', 'operator', '--scope', 'x'], bare.io, { home: w.home })).toBe(2);
     expect(bare.err()).toContain('--bundle belongs to the --client form');

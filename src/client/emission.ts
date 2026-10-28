@@ -436,7 +436,7 @@ function ownerKey(home: string): KeyObject | null {
 
 function summaryOf(p: PendingGrantParams): string {
   const noEnd = p.expires_never === true ? ' with NO END DATE' : '';
-  if (p.bundle !== undefined && p.up !== undefined && p.up !== null) return `${p.bundle} bundle for ${p.client_id} to team ${p.up.project} at ${p.up.root}: ${(p.bundle_ops ?? []).join(', ')}${noEnd}`;
+  if (p.bundle !== undefined && p.up !== undefined && p.up !== null) return `${p.bundle === 'developer' ? 'default' : p.bundle} bundle for ${p.client_id} to team ${p.up.project} at ${p.up.root}: ${(p.bundle_ops ?? []).join(', ')}${noEnd}`;
   if (p.up !== undefined && p.up !== null) return `${teamGrantLabel(teamOpsOf(p))} for ${p.client_id} to team ${p.up.project} at ${p.up.root} (file ${fileFingerprintOf(p.up)})${noEnd}`;
   const where = `${p.seat ?? 'orchestrator'}@${p.team ?? p.entity}`;
   return `client grant for ${p.client_id} to ${where}${p.inbox ? ' with inbox' : ''}${p.allow_grant ? ' as a MASTER grant' : ''}${p.expires_never === true ? ' with NO END DATE' : ''}`;

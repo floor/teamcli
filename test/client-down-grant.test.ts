@@ -416,13 +416,68 @@ describe('the grant is for one team and one folder, and for nothing else', () =>
     const w = world();
     teamRunning(w);
     const g = await issued(w, ['down']);
-    for (const extra of [['--file', 'other.yaml'], ['--session', 'elsewhere'], ['--abandon']]) {
+    for (const extra of [['--file', 'other.yaml'], ['--session', 'elsewhere']]) {
       const run = await clientDown(w, g.path, w.grok.keyPath, extra);
       expect(run.code, extra.join(' ')).toBe(2);
       expect(run.err).toContain('--client');
       expect(run.closed).toEqual([]);
     }
+    // A plain down grant (no default bundle) still abandons nothing.
+    const abandoned = await clientDown(w, g.path, w.grok.keyPath, ['--abandon']);
+    expect(abandoned.code).toBe(1);
+    expect(abandoned.err).toContain('default (developer) bundle');
+    expect(abandoned.closed).toEqual([]);
   });
+
+  test('the default bundle (--bundle default, alias developer) may --abandon with --client; --file and --session stay the owner\'s', async () => {
+    for (const name of ['default', 'developer'] as const) {
+      const w = world();
+      teamRunning(w);
+      const docsId = teamIdOf(w.docs);
+      const lead = registerAgent(w.home, {
+        name: 'lead', signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' }, lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
+        reach: { team: docsId, seat: 'lead', session: 'docs', pane: 'w1:p0', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
+      });
+      const orch = registerAgent(w.home, {
+        name: 'orchestrator', signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' }, lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
+        reach: { team: docsId, seat: 'orchestrator', session: 'docs', pane: 'w1:p1', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
+      });
+      upsertTeam(w.home, docsId, { project: 'docs', entity: null, session: 'docs', root: w.docs, lobby: join(w.home, '.config', 'team', 'lobby'), lifecycle: 'running', roster: [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }, { agent: orch.id, seat: 'orchestrator', role: 'implementer' }] });
+      await seated(w);
+      const c = capture(w);
+      const code = await runGrant(['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--team', 'docs', '--bundle', name, '--seat', 'orchestrator', '--request', '--json'], c.io, { home: w.home, notify: () => false });
+      expect(code, c.out() + c.err()).toBe(0);
+      const id = JSON.parse(c.out().trim()).target as string;
+      expect((await answer(w, id, 'oui')).code).toBe(0);
+      const done = await execute(w, id);
+      expect(done.code, done.err).toBe(0);
+      const grantId = /client grant: (cg_[0-9a-f]{24})/.exec(done.out)![1]!;
+      const path = clientGrantPath(w.home, grantId);
+      const record = JSON.parse(readFileSync(path, 'utf8')).client_grant;
+      expect(record.bundle).toBe('developer');
+      expect(record.vocabulary).toBe(7);
+      for (const extra of [['--file', 'other.yaml'], ['--session', 'elsewhere']]) {
+        const run = await clientDown(w, path, w.grok.keyPath, [...extra, '--abandon']);
+        expect(run.code, extra.join(' ')).toBe(2);
+        expect(run.closed).toEqual([]);
+      }
+      const run = await clientDown(w, path, w.grok.keyPath, ['--abandon']);
+      expect(run.code, run.err).toBe(0);
+      expect(run.err).not.toContain('only the owner abandons');
+    }
+  });
+
+  test('a --request naming a team and nothing narrower asks for the default bundle', async () => {
+    const w = world();
+    await seated(w);
+    const c = capture(w);
+    const code = await runGrant(['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--team', 'docs', '--request', '--json'], c.io, { home: w.home, notify: () => false });
+    // The default bundle carries send, and this team opens no seat to the client: the owner's
+    // visibility still decides, so the request is refused, by the default bundle's name.
+    expect(code).toBe(1);
+    expect(c.out() + c.err()).toContain('the default bundle carries send');
+  });
+
 
   test('a down grant is never asked with a seat, an inbox, grant, or without the team', async () => {
     const w = world();
