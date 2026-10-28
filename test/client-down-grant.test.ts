@@ -27,6 +27,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, LOG_FILE, updateState } from '../src/state.ts';
 import { keyOf } from '../src/store/keys.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { readScreen } from '../src/watch/screen.ts';
 
 const made: string[] = [];
 const realTmp = process.env.TMPDIR;
@@ -464,6 +465,23 @@ describe('the grant is for one team and one folder, and for nothing else', () =>
       const run = await clientDown(w, path, w.grok.keyPath, ['--abandon']);
       expect(run.code, run.err).toBe(0);
       expect(run.err).not.toContain('only the owner abandons');
+      if (name === 'default') {
+        // A seat holding unsent text: --abandon saves it under .agents/abandoned-input/, clears
+        // the box with the profile's key, and the seat is then stopped and closed.
+        teamRunning(w);
+        const { sources, closed } = downSourcesOf(w, () => new Date('2026-10-28T08:00:00Z'));
+        const keys: string[] = [];
+        let box = claudeBox('half a thought');
+        const launch = { ...sources.launch!, sendKey: (_s: string, _p: string, key: string) => { keys.push(key); if (key === 'ctrl+c') box = claudeBox(''); return true; } };
+        const io = testIo(w.docs, { kind: 'owner-no-tty' });
+        const code = await runDown(['--client', path, '--key', w.grok.keyPath, '--abandon'], io, { ...sources, launch, screenText: () => box, screen: () => readScreen('claude-code', box) });
+        expect(code, io.err + io.out).toBe(0);
+        expect(keys[0]).toBe('ctrl+c');
+        const saved = readdirSync(join(w.docs, '.agents', 'abandoned-input'));
+        expect(saved).toHaveLength(1);
+        expect(readFileSync(join(w.docs, '.agents', 'abandoned-input', saved[0]!), 'utf8')).toContain('half a thought');
+        void closed;
+      }
     }
   });
 

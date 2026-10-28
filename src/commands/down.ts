@@ -49,12 +49,12 @@ import { resetCliHookState } from '../launch/cli-hook.ts';
 import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
-import { isNotStartedScreen } from '../profiles/profile.ts';
+import { abandonAnswerKeys, isNotStartedScreen } from '../profiles/profile.ts';
 import { logLine } from '../log.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
-import { readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
+import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -1174,12 +1174,31 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // skip line). Anything else unsent keeps the ordinary unsent line.
     const exitInBox = reading === 'unsent' && profile !== null && profile.exit !== null
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
+    // `--abandon` only: a prompt the profile answers itself, or a box of unsent text saved under
+    // `.agents/abandoned-input/` and then cleared, so the seat can be asked to exit and close fully.
+    let abandonPlan: { answerKeys?: readonly string[]; unsentText?: string; saveTo?: string } = {};
+    if (args.flags.has('abandon') && profile !== null && !humanOf.has(name)) {
+      const text = sources.screenText(session, agent.pane, cli);
+      const answer = abandonAnswerKeys(profile, text);
+      if (answer !== null) abandonPlan = { answerKeys: answer };
+      else if (reading === 'unsent') {
+        const box = readBox(cli, text);
+        const rows = box === null ? [] : box.rows[0] === box.first ? box.rows : [box.first, ...box.rows];
+        const unsent = rows.map((row) => row.trimEnd()).join('\n').trim();
+        const stamp = sources.now().toISOString().replace(/[:.]/g, '-');
+        abandonPlan = {
+          answerKeys: [profile.exitClear ?? 'ctrl+u'],
+          ...(unsent !== '' ? { unsentText: unsent, saveTo: join(current.dir, 'abandoned-input', `${name.replace(/[^\w.-]/g, '_')}-${stamp}.txt`) } : {}),
+        };
+      }
+    }
     seats.push({
       name,
       cli,
       pane: agent.pane,
       workspace: agent.workspace,
       state: reading,
+      ...abandonPlan,
       ...(humanOf.has(name) ? { human: true as const } : {}),
       ...(exitInBox ? { exitInBox: true } : {}),
       ...(shown.kind === 'exit question' ? { atExitQuestion: true } : {}),
@@ -1351,6 +1370,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       },
       renameAgent: () => false,
       closeWorkspace: launch.closeWorkspace,
+      sendKey: (sessionName, pane, key) => launch.sendKey(sessionName, pane, key),
       stopSession: launch.stopSession,
       // Only the session this run has itself just stopped. Herdr keeps a stopped session listed
       // (`running: false`) until `session delete`; a delete while it still reports running is

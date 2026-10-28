@@ -41,3 +41,27 @@ describe('codex daemon dialog', () => {
     expect(steps.some((step) => (step as { kind: string }).kind === 'type' || (step as { kind: string }).kind === 'key')).toBe(false);
   });
 });
+
+describe('--abandon answers known prompts itself', () => {
+  test('the codex profile answers the daemon dialog with Esc only, never an option', async () => {
+    const { abandonAnswerKeys, ABANDON_SAFE_KEYS } = await import('../../src/profiles/profile.ts');
+    const keys = abandonAnswerKeys(profileFor('codex'), DIALOG);
+    expect(keys).toEqual(['escape']);
+    for (const key of keys ?? []) expect(ABANDON_SAFE_KEYS as readonly string[]).toContain(key);
+    expect(abandonAnswerKeys(profileFor('codex'), '› hello\n')).toBeNull();
+  });
+
+  test('an abandoned seat with an answer is answered, then asked to exit; without --abandon nothing is pressed', () => {
+    const seat = { name: 'w', cli: 'codex', pane: 'p1', workspace: 'ws1', state: 'unsent' as const, answerKeys: ['ctrl+u'], unsentText: 'half a thought', saveTo: '/x/.agents/abandoned-input/w-t.txt' };
+    const steps = downPlan({ session: 's', seats: [seat], extra: 0, watchPid: null, keep: [], abandon: true, closeUnasked: true });
+    const ops = steps.map((step) => (step as { do?: { do: string } }).do?.do);
+    expect(ops[0]).toBe('answer');
+    expect((steps[0] as unknown as { do: Record<string, unknown> }).do).toMatchObject({ keys: ['ctrl+u'], saveTo: seat.saveTo, text: 'half a thought' });
+    expect(ops).toContain('type');
+    const plain = downPlan({ session: 's', seats: [seat], extra: 0, watchPid: null, keep: [] });
+    expect(plain.map((step) => (step as { do?: { do: string } }).do?.do)).not.toContain('answer');
+    const daemon = downPlan({ session: 's', seats: [{ name: 'c', cli: 'codex', pane: 'p2', workspace: 'ws2', state: 'exited', answerKeys: ['escape'] }], extra: 0, watchPid: null, keep: [], abandon: true });
+    expect(daemon.map((step) => (step as { do?: { do: string } }).do?.do)).toEqual(['answer', 'close', 'stop'].slice(0, daemon.length));
+  });
+
+});

@@ -174,6 +174,17 @@ export type Op =
        *  saw in the pane. */
       said?: string;
     }
+  | {
+      /** `--abandon` only: answer the seat's prompt with the profile's safe keys, after saving
+       *  the unsent text it held (when one was read) to `saveTo`. Never fails the seat: the
+       *  steps after it ask the exit, and the workspace close follows whatever this did. */
+      do: 'answer';
+      seat: string;
+      pane: string;
+      keys: readonly string[];
+      saveTo?: string;
+      text?: string;
+    }
   | { do: 'kill'; pid: number }
   | { do: 'stop'; session: string };
 
@@ -955,6 +966,12 @@ export interface DownSeat {
   /** The caller's `--abandon` takes a pane herdr names as this seat but whose process cannot be
    *  tied to the launch: close its workspace, type nothing — no key, no exit text, no draft. */
   unproven?: true;
+  /** `--abandon` only: the profile's safe keys that answer the prompt this pane shows, or the
+   *  clearing key for a box holding unsent text. */
+  answerKeys?: readonly string[];
+  /** `--abandon` only: the unsent text read off the box, and the file it is saved to first. */
+  unsentText?: string;
+  saveTo?: string;
 }
 
 export interface DownInput {
@@ -985,6 +1002,17 @@ const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
   // here because the type names a clause for every state.
   exited: 'its CLI had exited',
 };
+
+/** The `--abandon` answer step: save the unsent text, then press the profile's safe keys. */
+function answerStep(session: string, seat: DownSeat): Step {
+  const keys = seat.answerKeys ?? [];
+  return {
+    kind: 'run',
+    argv: herdr(session, 'pane', 'send-keys', seat.pane, ...keys),
+    note: seat.saveTo !== undefined ? `abandoned: its unsent text is saved to ${seat.saveTo}, then cleared (${keys.join(' ')})` : `abandoned: its prompt is answered with ${keys.join(' then ')}`,
+    do: { do: 'answer', seat: seat.name, pane: seat.pane, keys, ...(seat.saveTo !== undefined && seat.unsentText !== undefined ? { saveTo: seat.saveTo, text: seat.unsentText } : {}) },
+  };
+}
 
 /** Every step of `team down`, in order. Nothing here runs anything. */
 export function downPlan(input: DownInput): Step[] {
@@ -1083,6 +1111,7 @@ export function downPlan(input: DownInput): Step[] {
       // Not counted among `left`: the seat is no longer in the session, so the session stop
       // below follows in this same run.
       if (seat.state === 'exited') {
+        if (input.abandon && seat.answerKeys && seat.answerKeys.length > 0) steps.push(answerStep(session, seat));
         steps.push({
           kind: 'run',
           argv: herdr(session, 'workspace', 'close', seat.workspace),
@@ -1091,7 +1120,11 @@ export function downPlan(input: DownInput): Step[] {
         });
         continue;
       }
-      if (input.abandon) {
+      if (input.abandon && seat.answerKeys && seat.answerKeys.length > 0 && (seat.state === 'unsent' || seat.state === 'blocked' || seat.state === 'unknown')) {
+        // The prompt is answered (or the box saved and cleared) by TeamCLI itself, and the seat
+        // is then asked to exit as a free one is; the owner's `--abandon` closes it if that fails.
+        steps.push(answerStep(session, seat));
+      } else if (input.abandon) {
         steps.push({
           kind: 'run',
           argv: herdr(session, 'workspace', 'close', seat.workspace),
@@ -1099,8 +1132,7 @@ export function downPlan(input: DownInput): Step[] {
           do: { do: 'close', seat: seat.name, workspace: seat.workspace },
         });
         continue;
-      }
-      if (!(seat.state === 'unsent' && seat.exitInBox && profile.exitClear !== null)) {
+      } else if (!(seat.state === 'unsent' && seat.exitInBox && profile.exitClear !== null)) {
         // A key-exit profile has no exit text, so no box can hold it: `exitInBox` is false
         // for it at every read.
         // An unsent box holding exactly the exit text, on a CLI with no key for it, is named:
@@ -1117,6 +1149,7 @@ export function downPlan(input: DownInput): Step[] {
         left++;
         continue;
       }
+      // (An answered seat, above, goes on to the exit below.)
       // The box already holds exactly this exit text and the profile carries the key: the
       // typing step below clears it first and then asks the seat to exit exactly as on an
       // empty box.

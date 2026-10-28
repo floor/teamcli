@@ -33,6 +33,9 @@ export type InputBlock = {
  * A launch profile: what `team` knows about one CLI, so a seat can't start
  * blocked. Keyed by the seat's `cli`.
  */
+/** The keys `--abandon` may press to answer a prompt: none of them selects a menu option. */
+export const ABANDON_SAFE_KEYS = ['escape', 'ctrl+c', 'ctrl+u'] as const;
+
 export interface Profile {
   cli: string;
   /** The CLI's process names, for the caller check. */
@@ -41,6 +44,10 @@ export interface Profile {
    *  matches some row). `team down` closes such a pane without typing into it: no option is ever
    *  chosen. Empty when the profile names none. */
   notStarted?: readonly (readonly RegExp[])[];
+  /** Prompts `team down --abandon` answers itself so the seat can close fully: each rule's
+   *  patterns all match the pane, and its keys (only the safe ones: escape, ctrl+c, ctrl+u — never
+   *  a digit or an Enter that would pick a menu option) are pressed in order. */
+  abandonAnswers?: readonly { all: readonly RegExp[]; keys: readonly string[] }[];
   /** The binary whose version `doctor` reads, with `--version`. */
   binary: string;
   /** The range this profile was tested with, both ends included. */
@@ -646,7 +653,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
 const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
-const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started'] as const;
+const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
 // it sends what the box holds. Established by run on herdr 0.7.1 with each CLI's own box.
@@ -1049,6 +1056,7 @@ function launchOf(root: YamlNode): Shipped {
   const herdrStatusEntry = optional(entries, 'herdr_status');
   const modelsEntry = optional(entries, 'models');
   const notStartedEntry = optional(entries, 'not_started');
+  const abandonAnswersEntry = optional(entries, 'abandon_answers');
   for (const key of LAUNCH_KEYS) required(entries, key, root.line);
   if (exitEntry !== undefined && exitKeysEntry !== undefined) {
     fail(exitKeysEntry.line, '"exit" and "exit_keys" are one or the other, not both');
@@ -1066,6 +1074,7 @@ function launchOf(root: YamlNode): Shipped {
       binary: text(required(entries, 'binary', root.line), 'binary'),
       processNames: strings(required(entries, 'process_names', root.line).value, 'process_names'),
       notStarted: notStartedEntry ? notStartedOf(notStartedEntry.value) : [],
+      abandonAnswers: abandonAnswersEntry ? abandonAnswersOf(abandonAnswersEntry.value) : [],
       tested: testedOf(required(entries, 'tested', root.line).value),
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
       rulesOption: rules.option,
@@ -1114,6 +1123,36 @@ function notStartedOf(node: YamlNode): RegExp[][] {
       }
     });
   });
+}
+
+
+function patternsOf(node: YamlNode, line: number, key: string): RegExp[] {
+  return strings(node, key).map((pattern) => {
+    try {
+      return new RegExp(pattern, 'm');
+    } catch {
+      return fail(line, `"${key}" pattern "${pattern}" is not a valid expression`);
+    }
+  });
+}
+
+function abandonAnswersOf(node: YamlNode): { all: RegExp[]; keys: string[] }[] {
+  if (node.kind !== 'seq' || node.items.length === 0) fail(node.line, '"abandon_answers" must be a non-empty list of rules');
+  return node.items.map((item) => {
+    const entries = mapping(item, 'an "abandon_answers" rule');
+    only(entries, ['all', 'keys']);
+    const keys = strings(required(entries, 'keys', item.line).value, 'keys');
+    for (const key of keys) {
+      if (!(ABANDON_SAFE_KEYS as readonly string[]).includes(key)) fail(item.line, `"abandon_answers" key "${key}" is not one of ${ABANDON_SAFE_KEYS.join(', ')}: an answer never picks a menu option`);
+    }
+    return { all: patternsOf(required(entries, 'all', item.line).value, item.line, 'all'), keys };
+  });
+}
+
+/** The keys the profile answers this pane's prompt with under `--abandon`, or null. */
+export function abandonAnswerKeys(profile: Profile | null, text: string | undefined): readonly string[] | null {
+  if (profile === null || text === undefined) return null;
+  return (profile.abandonAnswers ?? []).find((rule) => rule.all.every((pattern) => pattern.test(text)))?.keys ?? null;
 }
 
 /** Whether a pane's text is one of the profile's not-started startup screens. */

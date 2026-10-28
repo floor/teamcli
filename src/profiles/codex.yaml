@@ -117,6 +117,13 @@ not_started:
       - 'Background server has incompatible feature settings'
       - '^\s*›?\s*1\. Run without daemon this time'
       - '^\s*›?\s*2\. Restart with these settings'
+# Under `team down --abandon`, TeamCLI answers this dialog itself with Esc ('esc to cancel'), the
+# Cancel choice: never '2. Restart with these settings'.
+abandon_answers:
+  - all:
+      - 'Background server has incompatible feature settings'
+      - '^\s*›?\s*3\. Cancel'
+    keys: [escape]
 screen:
   unknown:
     - any: ['\bmodel:\s+loading\b']

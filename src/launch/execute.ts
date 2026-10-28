@@ -1,4 +1,16 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+
+function saveTextFile(path: string, text: string): boolean {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text.endsWith('\n') ? text : `${text}\n`, { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
 import { profileFor, shellQuote, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
@@ -85,6 +97,10 @@ export type Host = {
   /** The live key exit, for a CLI whose TUI takes no exit text: the profile's keys, pressed at
    *  the seat's idle screen only; see `ExitKeys`. Present where a seat can be stopped. */
   pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
+  /** One raw key into a pane, for `--abandon`'s prompt answers. Absent: the answer is skipped. */
+  sendKey?(session: string, pane: string, key: string): boolean;
+  /** Writes the unsent text `--abandon` saves; absent, it is written with node:fs. */
+  saveText?(path: string, text: string): boolean;
   /** `false` is a delivery that stopped without a reading worth reporting (no host, or no live
    *  pane); a `Refusal` is one that stopped on a screen the report can name. `file` is the
    *  seat's rules delivery: the text the file holds, the file's path, the one line typed, and
@@ -1814,6 +1830,17 @@ export async function executePlan(
         }
         host.drop(op.seat);
         relaunched.set(op.seat, op.drift || op.reload || verdict === 'same' ? 'drift' : verdict);
+        break;
+      }
+      case 'answer': {
+        if (op.saveTo !== undefined && op.text !== undefined) {
+          const saved = host.saveText ? host.saveText(op.saveTo, op.text) : saveTextFile(op.saveTo, op.text);
+          host.say(saved ? `${op.seat}: its unsent text was saved to ${op.saveTo}\n` : `${op.seat}: its unsent text could not be saved to ${op.saveTo}; it was not cleared\n`);
+          if (!saved) break;
+        }
+        for (const key of op.keys) {
+          if (!host.sendKey || !host.sendKey(session, op.pane, key)) break;
+        }
         break;
       }
       case 'close': {
