@@ -76,7 +76,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { processSignals, terminalReader, type Terminal } from '../launch/terminal.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
-import { quietRulesLine, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
+import { quietRulesDelivery, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -2215,7 +2215,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
         : {}),
       typeLine: () => false,
-      deliverRules: async (session, pane, cli, file, seconds) => {
+      deliverRules: async (session, pane, cli, planned, seconds) => {
+        // A quiet start (`--no-launch`) adds its stop instruction to the rules file itself, so the
+        // typed line keeps its ordinary length and shape — only the hash it names changes.
+        const file = noLaunch ? quietRulesDelivery(planned) : planned;
         // The rules go to the file first; nothing is typed until it holds them. The writer
         // builds the path itself, from the live project and the seat's name — the same folder
         // the typed line names.
@@ -2238,7 +2241,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         // The delivery reports why it stopped through this box; the caller turns the stopped
         // reading into the report, and a plain refusal stays `false`.
         const stopped: { why: Refusal | null } = { why: null };
-        const delivered = await deliverRules(cli, noLaunch ? quietRulesLine(file.line) : file.line, seconds, {
+        const delivered = await deliverRules(cli, file.line, seconds, {
           screen: () => launch.paneText(session, pane) ?? undefined,
           status: () => launch.agentStatus?.(session, pane) ?? null,
           type: (value) => launch.typeText?.(session, pane, value) ?? false,

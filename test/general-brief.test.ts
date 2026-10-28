@@ -10,7 +10,7 @@ import { briefOf, textModuleOf } from '../scripts/brief.ts';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { QUIET_START_TAIL, quietRulesLine, rulesLine } from '../src/launch/rules-file.ts';
+import { QUIET_START_NOTE, quietRulesDelivery, rulesFileHash, rulesLine } from '../src/launch/rules-file.ts';
 import { runApprove } from '../src/approve/command.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import { runDrops } from '../src/commands/drops.ts';
@@ -570,10 +570,13 @@ seats:
     }
   });
 
-  test('a quiet start types the rules line with the stop instruction in place of the ordinary tail', () => {
-    const line = rulesLine('/x/rules/lead.md', 'abcdef012345');
-    expect(quietRulesLine(line)).toBe(`Read /x/rules/lead.md (sha256 abcdef012345): your standing rules for this session; ${QUIET_START_TAIL}`);
-    expect(QUIET_START_TAIL).toContain('do not continue any earlier work and do not read drops');
+  test('a quiet start adds the stop instruction to the rules file and keeps the typed line ordinary', () => {
+    const plain = { seat: 'lead', text: 'Rule one.\n', path: '/x/rules/lead.md', line: rulesLine('/x/rules/lead.md', rulesFileHash('Rule one.\n')) };
+    const quiet = quietRulesDelivery(plain);
+    expect(quiet.text).toBe(`Rule one.\n\n${QUIET_START_NOTE}\n`);
+    expect(quiet.line).toBe(rulesLine('/x/rules/lead.md', rulesFileHash(quiet.text)));
+    expect(quiet.line.length).toBe(plain.line.length);
+    expect(QUIET_START_NOTE).toContain('do not continue any earlier work and do not read drops');
   });
 
   test('the usage names --no-launch for the owner and the --client form', () => {
