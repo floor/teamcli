@@ -495,9 +495,9 @@ describe('request, owner-seat answer, execute: the manager bundle', () => {
     const w = world();
     const g = await issued(w, 'manager', ['--seat', 'orchestrator']);
     expect(w.store.prompts).toHaveLength(1);
-    expect(w.store.prompts[0]).toContain('Grok Bot may, for team docs until');
-    expect(w.store.prompts[0]).toContain('add a seat');
-    expect(w.store.prompts[0]).toContain('remove a seat');
+    expect(w.store.prompts[0]).toContain("Autoriser Grok Bot (client grok-bot) sur l'équipe docs — bundle Manager");
+    expect(w.store.prompts[0]).toContain('gérer les sièges');
+    expect(w.store.prompts[0]).toContain('(up/down)');
     const record = recordOf(g.path);
     expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', bundle: 'manager', vocabulary: CLIENT_MANAGER_VOCABULARY_VERSION, seats: ['orchestrator'] });
     expect(record.allowed_ops).toEqual(MANAGER_OPS);
@@ -911,8 +911,8 @@ describe('request, owner-seat answer, execute: the developer bundle', () => {
     const w = world();
     const g = await issued(w, 'developer', ['--seat', 'orchestrator']);
     expect(w.store.prompts).toHaveLength(1);
-    expect(w.store.prompts[0]).toContain('pause the team');
-    expect(w.store.prompts[0]).toContain('resume the team');
+    expect(w.store.prompts[0]).toContain('— bundle Developer');
+    expect(w.store.prompts[0]).toContain('gérer les sièges');
     const record = recordOf(g.path);
     expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', bundle: 'developer', vocabulary: CLIENT_DEVELOPER_VOCABULARY_VERSION, seats: ['orchestrator'] });
     expect(record.allowed_ops).toEqual(DEVELOPER_OPS);

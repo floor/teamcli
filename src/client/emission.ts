@@ -27,6 +27,7 @@ import { BUNDLE_DEFAULT_DAYS, bundleSignsFile, type BundleName, type BundleOp } 
 import { GRANT_DURATION_DEFAULT_DAYS, expiryPhrase, type GrantDurationKind } from './duration-policy.ts';
 import { chooseGrantExpiry, projectIdOfTeamId } from './grant-duration.ts';
 import { bundleCard, bundleSpecsInForce, projectIdOfTeam } from './bundles.ts';
+import { frenchGrantPrompt } from './grant-prompt-fr.ts';
 
 export type GrantEmission = 'owner-terminal' | 'conversational';
 
@@ -328,7 +329,9 @@ export function approveAsOwnerSeat(
   if (choice === 'always' && record.params.expires_never === true) return { ok: false, why: NO_END_NEVER_ALWAYS };
   const answer: OwnerSeatAnswer = { kind: 'grant', request_id: requestId, params_sha256: record.params_sha256, choice, team: seat.team, seat: 'owner', at: via.at ?? now.toISOString() };
   const summary = pendingSummary(record.params, now, home).text;
-  const signed = signOwnerAnswer(home, answer, via.signer, store, `TeamCLI: ${choice} for ${summary}`, via.assertion);
+  const signerName = via.signer ?? (seat.signers.length === 1 ? seat.signers[0]!.name : null);
+  const prompt = grantPrompt(record.params, now, home, signerName);
+  const signed = signOwnerAnswer(home, answer, via.signer, store, choice === 'deny' ? `Refuser : ${prompt}` : prompt, via.assertion);
   if (!signed.ok) return signed;
   const path = join(grantRequestsFolder(home), `${requestId}.seat-answer.json`);
   const text = `${JSON.stringify(signed.signed, null, 2)}\n`;
@@ -739,6 +742,28 @@ export function pendingSummary(p: PendingGrantParams, now: Date, home?: string):
   const ops = pendingOps(p);
   const text = `${p.allow_grant ? 'MASTER grant' : 'Grant'} for ${p.client_id}: ${ops.join(' + ')} to ${seat}@${team} (entity ${p.entity}) ${expiryPhrase(expires)}.${expires === null ? ` ${NO_END_DATE_NOTICE}` : ''}`;
   return { client: p.client_id, entity: p.entity, team, seat, ops, expires, master: p.allow_grant, text };
+}
+
+/** The short French line for the Touch ID prompt and the owner page card (the full list stays in
+ *  `pendingSummary(...).text`). */
+export function grantPrompt(p: PendingGrantParams, now: Date, home?: string, signer: string | null = null, timeZone?: string): string {
+  const s = pendingSummary(p, now, home);
+  const sendSeats = p.bundle !== undefined ? (p.bundle_seats ?? []) : s.up === undefined ? [s.seat] : [];
+  return frenchGrantPrompt({ client: s.client, team: s.team, ops: s.ops, sendSeats, bundle: p.bundle ?? null, master: s.master, expires: s.expires, signer }, timeZone);
+}
+
+/** The French prompt of one pending grant request, read with the owner key; null when it cannot be read. */
+export function pendingGrantPrompt(home: string, requestId: string, now: Date = new Date(), signer: string | null = null): string | null {
+  if (!GRANT_REQUEST_ID_PATTERN.test(requestId)) return null;
+  const key = ownerKey(home);
+  if (key === null) return null;
+  const record = readPending(home, requestId, key);
+  if (typeof record === 'string') return null;
+  try {
+    return grantPrompt(record.params, now, home, signer);
+  } catch {
+    return null;
+  }
 }
 
 export const GRANT_CHOICES = ['once', 'always', 'deny'] as const;

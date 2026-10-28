@@ -262,8 +262,8 @@ describe('request, owner-seat answer, execute, then the client stops the team', 
     teamRunning(w);
     const g = await issued(w, ['down']);
     expect(w.store.prompts).toHaveLength(1);
-    expect(w.store.prompts[0]).toContain('down');
-    expect(w.store.prompts[0]).toContain(w.docs);
+    expect(w.store.prompts[0]).toContain('arrêter (down)');
+    expect(w.store.prompts[0]).toContain("l'équipe docs");
     const record = JSON.parse(readFileSync(g.path, 'utf8')).client_grant;
     expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', allowed_ops: ['down'], vocabulary: 4 });
     // A record that carries down keeps its binding under `team`; only the up-only form says `up`.
@@ -290,7 +290,7 @@ describe('request, owner-seat answer, execute, then the client stops the team', 
     const w = world();
     teamRunning(w);
     const g = await issued(w, ['up', 'down']);
-    expect(w.store.prompts[0]).toContain('team up and team down');
+    expect(w.store.prompts[0]).toContain('démarrer/arrêter (up/down)');
     const record = JSON.parse(readFileSync(g.path, 'utf8')).client_grant;
     expect(record.allowed_ops).toEqual(['up', 'down']);
     expect(record.team.root).toBe(w.docs);

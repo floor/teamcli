@@ -36,7 +36,7 @@ import { verifyClientGrantIssue } from './client/verify.ts';
 import { expiresArgument, expiresField } from './client/duration-policy.ts';
 import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
 import { charterGate } from './charter/check.ts';
-import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, issueGrantUnderCharter, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
+import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, grantPrompt, issueGrantUnderCharter, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
 import type { Io } from './io.ts';
 import { plainText } from './launch/plain.ts';
 import { writeJson, writeJsonError } from './output/index.ts';
@@ -558,7 +558,7 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
   });
   if (!created.ok) return refuse(created.why);
   const id = created.record.request_id;
-  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now, home).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary, at: now.toISOString() });
+  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now, home).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary: { ...summary, prompt_fr: grantPrompt(params, now, home) }, at: now.toISOString() });
   const choices = GRANT_CHOICES.filter((choice) => !(choice === 'always' && (params.allow_grant || up !== null))).map((choice) => ({
     id: choice,
     label: choice === 'once' ? 'Yes, once' : choice === 'always' ? 'Always for this' : 'No',
@@ -582,7 +582,7 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
       owner_seat: delivered !== null ? { delivered: true, inbox: delivered, answer_command: `team grant --approve-as-owner-seat ${id} <oui|always|non>` } : { delivered: false },
     });
   } else {
-    io.stdout(`grant: request recorded\nrequest: ${id}\nconfirmation: ${confirmationLine(id, params, now, home)}\nsummary: ${summary.text}\nparams sha256: ${created.record.params_sha256}\napproval: ${created.record.adapter} (shown to the owner on screen only)\nexpires: ${created.record.expires_at}\nchoices: ${choices.map((c) => c.id).join(' | ')}\n${choices.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\n`);
+    io.stdout(`grant: request recorded\nrequest: ${id}\nconfirmation: ${confirmationLine(id, params, now, home)}\nprompt: ${grantPrompt(params, now, home)}\nsummary: ${summary.text}\nparams sha256: ${created.record.params_sha256}\napproval: ${created.record.adapter} (shown to the owner on screen only)\nexpires: ${created.record.expires_at}\nchoices: ${choices.map((c) => c.id).join(' | ')}\n${choices.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\n`);
   }
   return 'ok';
 }
@@ -756,7 +756,7 @@ export function runOwnerSeatApproveMode(rawIo: Io, io: Io, requestId: string, wo
 export function runOwnerSeatInboxMode(io: Io, json: boolean, home: string): 'ok' {
   const messages = ownerSeatMessages(home);
   if (json) writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'unchanged' as const, action_summary: 'grant: owner seat inbox', project: null, session: null, target: 'owner-seat', rules: messages });
-  else io.stdout(messages.length === 0 ? 'owner seat inbox: empty\n' : `${messages.map((m) => `${m.at}  ${m.text}`).join('\n')}\n`);
+  else io.stdout(messages.length === 0 ? 'owner seat inbox: empty\n' : `${messages.map((m) => { const fr = (m as { summary?: { prompt_fr?: unknown } }).summary?.prompt_fr; return `${m.at}  ${m.text}${typeof fr === 'string' ? `\n    ${fr}` : ''}`; }).join('\n')}\n`);
   return 'ok';
 }
 

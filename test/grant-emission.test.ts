@@ -580,3 +580,71 @@ describe('the owner seat approves with its own credential-store key', () => {
     expect((await execute(w, c.json.target, [], undefined, unavailable)).code).toBe(0);
   });
 });
+
+describe('the French owner-seat prompt and the owner page grant card', () => {
+  test('the Touch ID reason is the short French line; the terminal keeps the full list', async () => {
+    const w = world('seat-fr');
+    conversational(w);
+    const store = fakeStore();
+    const owner = { ...capture(w).io, caller: { kind: 'owner' } as Io['caller'] } as Io;
+    expect(await runGrant(['--add-owner-seat', '--team', 'floor', '--signer', 'mac'], owner, { home: w.home, ownerSeatStore: store })).toBe(0);
+    const r = await requestOf(w, { notify: () => false } as never);
+    expect(r.code).toBe(0);
+    const card = JSON.parse(readFileSync(join(ownerSeatInbox(w.home), `${r.json.target}.json`), 'utf8'));
+    expect(card.summary.prompt_fr).toStartWith('Autoriser Grok Bot (client grok-bot)');
+    expect(card.summary.text).toContain('Grant for grok-bot');
+    expect(await runGrant(['--approve-as-owner-seat', r.json.target, 'oui'], capture(w).io, { home: w.home, ownerSeatStore: store })).toBe(0);
+    const reason = store.prompts[0]!;
+    expect(reason).toStartWith("Autoriser Grok Bot (client grok-bot) sur l'équipe floor");
+    expect(reason).toContain('Signataire : mac.');
+    expect(reason).toContain('Expire le ');
+    expect(reason).not.toContain('is trying to');
+    expect(reason.length).toBeLessThanOrEqual(210);
+  });
+
+  test('the owner page lists the pending grant with the French line and a passkey answer is verified by execute', async () => {
+    const { serveOwnerPage } = await import('../src/security/owner-page.ts');
+    const { addOwnerSigner } = await import('../src/client/owner-seat.ts');
+    const { createHash } = await import('node:crypto');
+    const w = world('seat-page');
+    conversational(w);
+    const store = fakeStore();
+    const owner = { ...capture(w).io, caller: { kind: 'owner' } as Io['caller'] } as Io;
+    expect(await runGrant(['--add-owner-seat', '--team', 'floor', '--signer', 'mac'], owner, { home: w.home, ownerSeatStore: store })).toBe(0);
+    const pair = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const jwk = pair.publicKey.export({ format: 'jwk' }) as { x: string; y: string };
+    const credentialId = Buffer.from('iphone-credential-0001').toString('base64url');
+    const added = addOwnerSigner(w.home, { signer: 'iphone', type: 'webauthn', publicKey: `04${Buffer.from(jwk.x, 'base64url').toString('hex')}${Buffer.from(jwk.y, 'base64url').toString('hex')}`, credentialId, rpId: 'localhost' }, store);
+    expect(added.ok).toBe(true);
+    const wrote = writePolicySet(w.home, { level: 'entity', target: 'floor', name: 'owner-signers', value: ['mac', 'iphone'] }, { now: new Date() });
+    if (!wrote.ok) throw new Error(wrote.why);
+    const page = await serveOwnerPage({ home: w.home, store, port: 0 });
+    try {
+      const call = async (method: string, path: string, body?: unknown) => {
+        const res = await fetch(`http://localhost:${page.port}${path}?t=${page.token}`, { method, headers: { 'content-type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+        return { status: res.status, body: await res.json() as Record<string, unknown> };
+      };
+      expect((await call('GET', '/api/state')).body.requests).toEqual([]);
+      const r = await requestOf(w, { notify: () => false } as never);
+      const id = r.json.target as string;
+      const requests = (await call('GET', '/api/state')).body.requests as Array<{ id: string; title: string; description: string; details?: string }>;
+      expect(requests.map((x) => x.id)).toEqual([id]);
+      expect(requests[0]!.description).toStartWith('Autoriser Grok Bot');
+      expect(requests[0]!.description).toContain('Signataire : iphone.');
+      expect(requests[0]!.details).toContain('Grant for grok-bot');
+      const ch = await call('POST', '/api/team-create/challenge', { id, word: 'oui', credentialId });
+      expect(ch.status).toBe(200);
+      const authData = Buffer.concat([createHash('sha256').update('localhost').digest(), Buffer.from([0x05, 0, 0, 0, 7])]);
+      const clientData = Buffer.from(JSON.stringify({ type: 'webauthn.get', challenge: String(ch.body.challenge), origin: 'http://localhost' }));
+      const signature = cryptoSign('sha256', Buffer.concat([authData, createHash('sha256').update(clientData).digest()]), { key: pair.privateKey, dsaEncoding: 'der' });
+      const done = await call('POST', '/api/team-create/answer', { id, word: 'oui', credentialId, authenticatorData: authData.toString('base64url'), clientDataJSON: clientData.toString('base64url'), signature: signature.toString('base64url') });
+      expect(done.status).toBe(200);
+      expect((await call('GET', '/api/state')).body.requests).toEqual([]);
+      const ran = await execute(w, id, [], undefined, store);
+      expect(ran.code).toBe(0);
+      expect(ran.io.out()).toContain('approved by: owner-seat');
+    } finally {
+      page.server.close();
+    }
+  });
+});

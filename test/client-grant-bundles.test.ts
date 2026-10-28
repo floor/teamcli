@@ -502,12 +502,10 @@ describe('request, owner-seat answer (one Touch ID), execute: the operator bundl
     const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
     // ONE owner signature, whose text is the card.
     expect(w.store.prompts).toHaveLength(1);
-    expect(w.store.prompts[0]).toContain('Grok Bot may, for team docs until');
-    expect(w.store.prompts[0]).toContain('see status');
-    expect(w.store.prompts[0]).toContain('send to orchestrator');
-    expect(w.store.prompts[0]).toMatch(/start \(file [0-9a-f]{12}\)/);
-    expect(w.store.prompts[0]).toContain('stop');
-    expect(w.store.prompts[0]).toContain('It cannot change permissions, add or remove seats, or create teams.');
+    expect(w.store.prompts[0]).toContain("Autoriser Grok Bot (client grok-bot) sur l'équipe docs — bundle Operator");
+    expect(w.store.prompts[0]).toContain('démarrer/arrêter (up/down)');
+    expect(w.store.prompts[0]).toContain('envoyer à orchestrator');
+    expect(w.store.prompts[0]).toContain('Signataire : mac.');
     const record = recordOf(g.path);
     expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', bundle: 'operator', vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION, seats: ['orchestrator'] });
     expect(record.allowed_ops).toEqual([...OPERATOR_DEFAULT_OPS]);
