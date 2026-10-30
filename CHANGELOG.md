@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-10-30
+
+0.5.8 makes the general grant reach every command. Through 0.5.7 only `config`, `up` and `init`
+read `--general`; `send`, `messages`, `reply`, `restart`, `down`/`--abandon`, `status` and the
+rest refused a no-terminal run even under a wildcard grant.
+
+### Added
+
+- **The general door.** Every command but `team client general-grant` takes
+  `--general <grant.json> --key <client.key>`. The dispatcher verifies it once
+  (`src/client/general-door.ts`, `admitGeneral`) for the command's own op and the entity of the
+  team in the folder, takes the two options off the line, and runs the command as the owner: no
+  detached or terminal refusal, the caller is the owner (for `reply`, in place of the walked
+  caller). A command added later is covered with no wiring of its own. `up`, `init` and `config`
+  keep their own admission. The grant-issuing command refuses `--general` (a holder issues with
+  `--via`).
+- Every command name is a general-grant op (`status` among them); the wildcard `*` covers them
+  all, and later ones.
+- Exit ids `team.general-usage` (2: `--general` without `--key`, or on the grant-issuing command)
+  and `team.general-refused` (1: expired, another key, an op or entity the grant does not cover).
+  The command contract lists `--general` and `--key` on every command and subcommand.
+
 ## [0.5.5] - 2026-10-26
 
 0.5.5 moves the team's definition into the registry. The team is read from and written to

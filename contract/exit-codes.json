@@ -5156,6 +5156,13 @@
     {
       "code": 1,
       "command": "team",
+      "id": "team.general-refused",
+      "meaning": "the general grant does not admit this command here (expired, another key, an op or entity it does not cover); nothing ran",
+      "trigger": "team status --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "team",
       "id": "team.mcp-serve-restart-failed",
       "meaning": "a stale inbox server could not start its fresh replacement, said why and left",
       "trigger": "team mcp serve"
@@ -5180,6 +5187,13 @@
       "id": "team.approve-removed",
       "meaning": "the approve command was removed in 0.5.0",
       "trigger": "team approve"
+    },
+    {
+      "code": 2,
+      "command": "team",
+      "id": "team.general-usage",
+      "meaning": "--general is given without --key, or on the grant-issuing command",
+      "trigger": "team status --general <grant.json>"
     },
     {
       "code": 2,

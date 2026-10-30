@@ -45,8 +45,10 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -81,6 +83,7 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--effort` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -119,8 +122,10 @@ Literal: `trust`
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -149,7 +154,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -172,8 +179,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -201,8 +210,10 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--approval` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -231,8 +242,10 @@ Usage:
 | `--abandon` | no | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--keep-running` | no | no | no |
+| `--key` | yes | no | no |
 | `--out` | yes | no | no |
 | `--session` | yes | no | no |
 | `--wait` | no | no | no |
@@ -259,6 +272,7 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--ask` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -291,8 +305,10 @@ Usage:
 | `--approval` | yes | no | no |
 | `--do` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -316,7 +332,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -341,8 +359,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--apply` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
@@ -367,7 +387,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -395,8 +417,10 @@ A run with no terminal is refused: only the owner or a `leads` seat runs this, f
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--approval` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--inherited` | yes | no | yes |
+| `--key` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -422,8 +446,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--pr` | yes | no | no |
 | `--repair` | no | no | no |
 | `--session` | yes | no | no |
@@ -455,7 +481,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -514,8 +542,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--out` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -539,7 +569,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -563,8 +595,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--since` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -598,7 +632,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -621,7 +657,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -644,8 +682,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -670,8 +710,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -781,7 +823,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -805,8 +849,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--root` | yes | no | no |
 | `--route` | yes | no | no |
 | `-h` | no | no | yes |
@@ -832,8 +878,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
 | `--watch` | no | no | no |
@@ -859,7 +907,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `--presence` | no | no | no |
 | `--root` | yes | no | no |
 | `--started-by` | yes | no | no |
@@ -886,8 +936,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -910,8 +962,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -936,8 +990,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--commands` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -963,8 +1019,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -988,8 +1046,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--show` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1016,9 +1076,11 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--jules` | no | no | no |
+| `--key` | yes | no | no |
 | `--login` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1051,6 +1113,7 @@ Usage:
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -1083,8 +1146,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--epoch` | yes | no | no |
 | `--follow` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--read` | no | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
@@ -1114,8 +1179,10 @@ Usage:
 | `--audit` | yes | no | no |
 | `--briefs` | yes | no | no |
 | `--follow` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--limit` | yes | no | no |
 | `--seat` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1145,8 +1212,10 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--approval` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1213,6 +1282,7 @@ Usage:
 | `--entity` | yes | no | no |
 | `--execute` | yes | no | no |
 | `--expires` | yes | no | no |
+| `--general` | yes | no | no |
 | `--grant-entity` | yes | no | no |
 | `--grant-project` | yes | no | no |
 | `--grant-team` | yes | no | no |
@@ -1284,6 +1354,7 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--client` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -1318,8 +1389,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1394,8 +1467,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1419,8 +1494,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--seats` | no | no | no |
 | `--watch` | no | no | no |
 | `-h` | no | no | yes |
@@ -1446,8 +1523,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--for` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--wait` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1475,7 +1554,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1498,8 +1579,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1524,7 +1607,9 @@ Usage:
 | --- | --- | --- | --- |
 | `--epoch` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1549,8 +1634,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1577,6 +1664,7 @@ Usage:
 | `--ack` | yes | no | no |
 | `--client` | yes | no | no |
 | `--follow` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -1609,9 +1697,11 @@ Usage:
 | --- | --- | --- | --- |
 | `--approval` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--keep-file` | no | no | no |
+| `--key` | yes | no | no |
 | `--request` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -1635,8 +1725,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--mine` | no | no | no |
 | `--release` | no | no | no |
 | `--wait` | no | no | no |
@@ -1666,8 +1758,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1691,7 +1785,9 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--days` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `--reason` | yes | no | no |
 | `--signer` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1718,7 +1814,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `--port` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -1743,8 +1841,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--entity` | yes | no | no |
+| `--general` | yes | no | no |
 | `--grant-emission` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `--owner-signers` | yes | no | no |
 | `--policy-entity` | yes | no | no |
 | `--signer` | yes | no | no |
@@ -1771,8 +1871,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -1800,6 +1902,7 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
 | `--client` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -1830,8 +1933,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1857,8 +1962,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--owner-device` | no | no | yes |
 | `--seat` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1886,8 +1993,10 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--entity` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--kind` | yes | no | no |
 | `--project` | yes | no | no |
 | `--seat` | yes | no | no |
@@ -1921,8 +2030,10 @@ Usage:
 | `--dry-run` | no | no | no |
 | `--entity` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--project` | yes | no | no |
 | `--seat` | yes | no | no |
 | `-h` | no | no | yes |
@@ -1950,7 +2061,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -1974,8 +2087,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -2022,7 +2137,9 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2047,8 +2164,10 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--note` | yes | no | no |
 | `--pid` | yes | no | no |
 | `-h` | no | no | yes |
@@ -2077,8 +2196,10 @@ A run with no terminal is refused: only the owner or a seat of this team runs th
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -2103,8 +2224,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -2127,8 +2250,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2154,7 +2279,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2178,9 +2305,11 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--assignee` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--id` | yes | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--priority` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2207,8 +2336,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--commit` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--version` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2234,8 +2365,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -2259,8 +2392,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--commit` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--version` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2287,8 +2422,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2315,8 +2452,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--pane` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
@@ -2343,7 +2482,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2367,8 +2508,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -2396,6 +2539,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--client` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -2428,6 +2572,7 @@ Usage:
 | `--abandon` | no | no | no |
 | `--client` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--keep` | no | no | no |
@@ -2461,8 +2606,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--renumber` | no | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
@@ -2492,8 +2639,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--close` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2524,6 +2673,7 @@ Usage:
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -2558,6 +2708,7 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
 | `--client` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -2593,8 +2744,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2621,8 +2774,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -2648,8 +2803,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -2673,8 +2830,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2706,6 +2865,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--client` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -2736,8 +2896,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2764,8 +2926,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2792,8 +2956,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2821,8 +2987,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -2852,6 +3020,7 @@ Usage:
 | `--all` | no | no | no |
 | `--client` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -2897,6 +3066,7 @@ Usage:
 | `--confirm` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -2937,6 +3107,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--by` | yes | no | no |
 | `--client` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -2969,8 +3140,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -2998,8 +3171,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -3029,8 +3204,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -3058,9 +3235,11 @@ Usage:
 | --- | --- | --- | --- |
 | `--credential-id` | yes | no | no |
 | `--edit` | no | no | no |
+| `--general` | yes | no | no |
 | `--grant-duration` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--public-key` | yes | no | no |
 | `--request-expiry` | yes | no | no |
 | `--roots` | yes | no | no |
@@ -3094,6 +3273,7 @@ Usage:
 | `--all` | no | no | no |
 | `--client` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
@@ -3128,8 +3308,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--rule` | no | no | no |
 | `--run` | no | no | no |
 | `-h` | no | no | yes |
@@ -3155,8 +3337,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -3184,8 +3368,10 @@ A run with no terminal is refused: only the owner runs this, from a terminal out
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -3211,8 +3397,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--to` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -3238,8 +3426,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -3264,8 +3454,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -3330,8 +3522,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--all` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--tree` | no | no | no |
 | `-h` | no | no | yes |
 
@@ -3358,7 +3552,9 @@ A run with no terminal is refused: only the owner or a placed seat runs this, fr
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `--no-notify` | no | no | no |
 | `--no-nudge` | no | no | no |
 | `--session` | yes | no | no |
@@ -3386,7 +3582,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -3409,8 +3607,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -3436,8 +3636,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--evidence` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
@@ -3464,8 +3666,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--dry` | no | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--script` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -3493,7 +3697,9 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
+| `--key` | yes | no | no |
 | `-h` | no | no | yes |
 
 ### Positionals
@@ -3517,8 +3723,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 
@@ -3543,8 +3751,10 @@ Usage:
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--kind` | yes | no | no |
 | `--seat` | yes | no | no |
 | `--session` | yes | no | no |
@@ -3574,8 +3784,10 @@ Usage:
 | --- | --- | --- | --- |
 | `--branch` | yes | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--session` | yes | no | no |
 | `-h` | no | no | yes |
 

@@ -21,8 +21,8 @@ must sit under ~/.config/team-client, outside every project, lobby and the OS te
 key isolation: enforced against team panes (key file still readable by same-user processes).
 
 general-grant issues a general grant: every entity (or the listed ones) and every op (or the listed
-ones: config, restart, up, down, abandon, send, messages, reply, init), applied with no per-action
-request. Without --ops the grant carries the wildcard \`*\`: every op, including ops later releases add.
+ones: any command's name, or abandon for down --abandon), applied with no per-action request: every
+command but this one takes --general <grant.json> --key <client.key>. Without --ops the grant carries the wildcard \`*\`: every op, including ops later releases add.
 The owner issues one through the owner seat (--request, Touch ID); a holder whose grant may issue
 gives another principal a grant within its own (--via, --key): never to itself, never wider.
 

@@ -498,6 +498,15 @@ function helpFlags(tokens: readonly string[], texts: readonly string[]): Flag[] 
   }));
 }
 
+const GENERAL_DOOR_FLAGS = ['--general', '--key'];
+function withGeneral(node: Node, programUsage: string): void {
+  for (const name of GENERAL_DOOR_FLAGS) {
+    if (node.flags.some((flag) => flag.name === name)) continue;
+    node.flags.push({ name, takesValue: true, repeatable: false, hidden: !tokenIn(programUsage, name) });
+  }
+  node.flags = sortFlags(node.flags);
+}
+
 function commandNode(
   name: string,
   hidden: boolean,
@@ -744,6 +753,17 @@ export function extract(root: string = rootOf(), overrides?: ReadonlyMap<string,
     commands.push(withWho(emptyNode(word, true, [programLine])));
   }
   commands.sort((a, b) => cmp(a.name, b.name));
+  // The general door (src/client/general-door.ts): the dispatcher admits `--general <grant.json>
+  // --key <client.key>` on every command and subcommand, so each carries the two options — all
+  // but `client general-grant`, the grant-issuing command, which the door refuses.
+  for (const command of commands) {
+    if (command.hidden) continue;
+    withGeneral(command, programUsage);
+    for (const sub of command.subcommands) {
+      if (command.name === 'client' && sub.name === 'general-grant') continue;
+      withGeneral(sub, programUsage);
+    }
+  }
 
   return {
     program: {

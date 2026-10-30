@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { generalDoor } from './client/general-door.ts';
 import type { Command, Io } from './io.ts';
-import { writeJson } from './output/index.ts';
+import { writeJson, writeJsonError } from './output/index.ts';
 import { NOT_PRETENDED, NOT_PRETENDED_ENTRIES } from './permissions/must-not-pretend.ts';
 import { description, homepage, license, version } from './version.ts';
 
@@ -99,9 +100,13 @@ Options:
   --about     print what this release is and what 0.5.0 must not pretend
   --help      print this text
 
+Every command but team client general-grant also takes --general <grant.json> --key <client.key>:
+a general grant the owner signed, covering the command and this team's entity, runs it as the owner,
+with no terminal. up, init and config read it themselves; every other command is admitted here.
+
 The team is the registry record. Edit it with team config. .agents/team.yaml is only an input to team migrate.
 
-Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error, 2 when no command or an unknown command is given.
+Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error or a general grant does not admit the run, 2 when no command or an unknown command is given, or --general is given without --key.
 `;
 
 // The hidden presence hook is written into a seat's settings file at install time, so no person
@@ -206,7 +211,22 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // The one path for every command's `--help`/`-h`: it prints the command's usage and stops,
   // before any option parsing, file reading, caller check or herdr call in the command itself.
   if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, command.USAGE);
-  return command.default(rest, io);
+  // The general door (src/client/general-door.ts): `--general <grant.json> --key <client.key>` on
+  // any command is verified here, once, for that command's op and this team's entity; an admitted
+  // run reaches the command as the owner, with the two options taken off its line.
+  const door = generalDoor(name, rest, io);
+  if (door.kind === 'usage') {
+    if (door.json) writeJsonError(io, 'team.general-usage', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 2; // exit: team.general-usage
+  }
+  if (door.kind === 'refused') {
+    if (door.json) writeJsonError(io, 'team.general-refused', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 1; // exit: team.general-refused
+  }
+  if (door.kind === 'admitted' && !door.json) io.stderr(`team ${name}: admitted by general grant ${door.grant.grant_id} (${door.grant.client_id})\n`);
+  return command.default(door.argv, door.io);
 }
 
 export function processIo(): Io {
