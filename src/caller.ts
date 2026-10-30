@@ -112,7 +112,19 @@ export function walkCaller(io: Pick<Io, 'env' | 'stdinIsTTY' | 'caller' | 'calle
 
 function walkOutside(ancestors: Process[], sources: Pick<CallerSources, 'env' | 'stdinIsTTY'>): Caller {
   const cli = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
-  if (cli) return { kind: 'unplaced', reason: `it is run by an agent (${cli.name}) outside herdr` };
+  if (cli) {
+    // An agent whose environment still names a herdr pane, but with no herdr server among its
+    // parents, was moved out of that pane (a Claude Code background session's pty host is one
+    // way). The variable never places anyone; the reason only names the cause and the repair.
+    const pane = sources.env.HERDR_PANE_ID;
+    if (pane) {
+      return {
+        kind: 'unplaced',
+        reason: `it is run by an agent (${cli.name}) outside herdr: its environment names pane ${pane}, but no herdr server is among its parent processes, so the agent was detached from that pane (for example a Claude Code background session); run the seat in its pane again (team restart <seat>)`,
+      };
+    }
+    return { kind: 'unplaced', reason: `it is run by an agent (${cli.name}) outside herdr` };
+  }
   if (sources.env.AGENT_UNATTENDED) return { kind: 'unplaced', reason: 'AGENT_UNATTENDED is set' };
   if (!sources.stdinIsTTY) return { kind: 'owner-no-tty' };
   return { kind: 'owner' };
