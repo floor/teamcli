@@ -111,7 +111,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // binds these words. Nothing is written on a request, and an approval for other words refuses.
   let seatApproved = false;
   if (args.flags.has('request') || args.values.approval !== undefined) {
-    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) });
+    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) });
     if (step.kind === 'requested') {
       // exit: config.approval-requested
       return 0;

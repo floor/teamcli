@@ -53,6 +53,8 @@ export type ConfigSources = {
   home?: string;
   /** The credential store a charter signature is confirmed against. Absent: the system one. */
   ownerSeatStore?: OwnerSeatKeyStore;
+  /** Present an owner-seat request to Touch ID at once (see OwnerSeatSources.present). */
+  present?: boolean;
   now?: () => Date;
   env?: Record<string, string | undefined>;
   /** Runs the editor on the file; returns its exit status. The user's $VISUAL/$EDITOR when absent. */

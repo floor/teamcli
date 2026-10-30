@@ -251,6 +251,16 @@ describe('send, down and bus through the owner seat', () => {
 });
 
 describe('config set through the owner seat', () => {
+  test('with Touch ID presented, one touch signs the request and the change applies in the same run', async () => {
+    const p = place();
+    const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
+    const file = join(p.root, '.agents', 'team.yaml');
+    const ran = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'touched', '--request'], ran, { home: p.home, env, now: () => NOW, ownerSeatStore: p.store, present: true }), ran.err + ran.out).toBe(0);
+    expect(ran.err).toContain('owner notified via touch-id: approved with a verified owner-seat signature');
+    expect(readFileSync(file, 'utf8')).toContain('project: touched');
+  });
+
   test('--request writes nothing; --approval for other words refuses; the signed words apply once', async () => {
     const p = place();
     const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
