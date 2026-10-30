@@ -648,3 +648,135 @@ describe('the owner-seat prompt and the owner page grant card', () => {
     }
   });
 });
+
+describe('honest owner delivery: confirmed channels, Touch ID presence, one-request link', () => {
+  const seated = async (w: World, store: OwnerSeatKeyStore) => {
+    const owner = { ...capture(w).io, caller: { kind: 'owner' } as Io['caller'] } as Io;
+    expect(await runGrant(['--add-owner-seat', '--team', 'floor', '--signer', 'mac'], owner, { home: w.home, ownerSeatStore: store })).toBe(0);
+  };
+  const request = async (w: World, options: Record<string, unknown>, json = true) => {
+    const io = capture(w);
+    const code = await runGrant([...ask(w), ...(json ? ['--json'] : [])], io.io, { home: w.home, ...options });
+    return { code, io, json: code === 0 && json ? JSON.parse(io.out()) : null };
+  };
+
+  test('a banner that exits cleanly but cannot confirm delivery is not marked shown; the link is printed', async () => {
+    const { systemNotifier } = await import('../src/client/emission.ts');
+    expect(systemNotifier.confirmsDelivery).toBe(false);
+    const w = world('dropped');
+    conversational(w);
+    const calls: string[] = [];
+    const dropped = Object.assign((_t: string, text: string) => { calls.push(text); return 'unconfirmed' as const; }, {});
+    const r = await request(w, { notify: dropped, present: false });
+    expect(r.code).toBe(0);
+    expect(calls.length).toBe(1);
+    expect(r.json.request.adapter).toBe('owner-answer');
+    expect(r.json.notified.delivered).toBe(false);
+    expect(r.json.choices.every((c: { needs_code: boolean }) => !c.needs_code)).toBe(true);
+    expect(r.json.link).toMatch(new RegExp(`^http://localhost:7392/r/${r.json.target}#[A-Za-z0-9_-]{32}$`));
+    // A notifier that says it can never confirm is not even sent a code.
+    const blind = Object.assign(() => { calls.push('x'); return true; }, { confirmsDelivery: false });
+    const r2 = await request(w, { notify: blind, present: false }, false);
+    expect(calls.length).toBe(1);
+    expect(r2.io.out()).toContain('owner NOT notified');
+    expect(r2.io.out()).toMatch(/link: http:\/\/localhost:7392\/r\/gr_[0-9a-f]{24}#/);
+    expect(r2.io.out()).not.toContain('owner notified via');
+  });
+
+  test('a confirmed screen code says notified via screen-code', async () => {
+    const w = world('confirmed');
+    conversational(w);
+    const s = screen();
+    const r = await request(w, { notify: s.notify, present: false });
+    expect(r.json.notified).toEqual({ delivered: true, channel: 'screen-code', approved: false });
+    expect(r.json.request.adapter).toBe('one-time-code');
+  });
+
+  test('Touch ID presence: a verified owner-seat signature is the approval; a cancelled prompt is not delivered', async () => {
+    const w = world('presence');
+    conversational(w);
+    const store = fakeStore();
+    await seated(w, store);
+    const r = await request(w, { notify: () => false, ownerSeatStore: store });
+    expect(r.json.notified).toEqual({ delivered: true, channel: 'touch-id', approved: true });
+    expect(store.prompts.at(-1)).toStartWith('Allow Grok Bot');
+    const done = await execute(w, r.json.target, [], undefined, store);
+    expect(done.code).toBe(0);
+    expect(done.io.out()).toContain('approved by: owner-seat');
+    // Cancelled: the store refuses to sign. Nothing is recorded, the agent is told to relay the link.
+    const cancelled: OwnerSeatKeyStore = { ...store, sign: () => ({ ok: false, why: 'the user-presence prompt was cancelled' }) };
+    const c = await request(w, { notify: () => false, ownerSeatStore: cancelled });
+    expect(c.json.notified.delivered).toBe(false);
+    expect(c.json.notified.why).toContain('cancelled');
+    expect(existsSync(join(grantRequestsFolder(w.home), `${c.json.target}.seat-answer.json`))).toBe(false);
+    expect((await execute(w, c.json.target, [], undefined, store)).code).not.toBe(0);
+  });
+
+  test('a signature from any other key is never taken as the owner\'s, at request or at execute', async () => {
+    const w = world('forged');
+    conversational(w);
+    const store = fakeStore();
+    await seated(w, store);
+    const other = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const forging: OwnerSeatKeyStore = { ...store, sign: (_l, message) => ({ ok: true, signature: cryptoSign('sha256', message, { key: other.privateKey, dsaEncoding: 'der' }).toString('hex') }) };
+    const r = await request(w, { notify: () => false, ownerSeatStore: forging });
+    expect(r.json.notified.delivered).toBe(false);
+    expect((await execute(w, r.json.target, [], undefined, store)).code).not.toBe(0);
+  });
+
+  test('the link nonce: wrong, other-request, reused and expired are refused; it never approves', async () => {
+    const { openRequestLink } = await import('../src/client/request-link.ts');
+    const w = world('link');
+    conversational(w);
+    const a = await request(w, { notify: () => false, present: false });
+    const b = await request(w, { notify: () => false, present: false });
+    const nonceA = String(a.json.link).split('#')[1]!;
+    const nonceB = String(b.json.link).split('#')[1]!;
+    expect(openRequestLink(w.home, a.json.target, nonceB).ok).toBe(false);
+    expect(openRequestLink(w.home, a.json.target, 'x'.repeat(32)).ok).toBe(false);
+    expect(openRequestLink(w.home, b.json.target, nonceB, new Date(Date.now() + 16 * 60_000)).ok).toBe(false);
+    expect(openRequestLink(w.home, a.json.target, nonceA).ok).toBe(true);
+    expect(openRequestLink(w.home, a.json.target, nonceA).ok).toBe(false);
+    expect(readdirSync(grantRequestsFolder(w.home)).some((f) => /answer/.test(f))).toBe(false);
+    expect((await execute(w, a.json.target, [])).code).not.toBe(0);
+  });
+
+  test('the link page: no page token needed, one card, single open, session bound to its request, answer still needs the owner signature', async () => {
+    const { serveOwnerPage } = await import('../src/security/owner-page.ts');
+    const w = world('link-page');
+    conversational(w);
+    const store = fakeStore();
+    await seated(w, store);
+    const a = await request(w, { notify: () => false, present: false });
+    const b = await request(w, { notify: () => false, present: false });
+    const page = await serveOwnerPage({ home: w.home, store, port: 0 });
+    try {
+      const post = async (path: string, body: unknown) => {
+        const res = await fetch(`http://localhost:${page.port}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        return { status: res.status, body: await res.json() as Record<string, unknown> };
+      };
+      const id = a.json.target as string;
+      const nonce = String(a.json.link).split('#')[1]!;
+      expect((await fetch(`http://localhost:${page.port}/r/${id}`)).status).toBe(200);
+      expect((await fetch(`http://localhost:${page.port}/api/state`)).status).toBe(403);
+      expect((await post(`/api/r/${b.json.target}/open`, { nonce })).status).toBe(403);
+      const opened = await post(`/api/r/${id}/open`, { nonce });
+      expect(opened.status).toBe(200);
+      expect((opened.body.request as { id: string }).id).toBe(id);
+      expect((await post(`/api/r/${id}/open`, { nonce })).status).toBe(403);
+      const session = String(opened.body.session);
+      // The session does not reach the other request, and opening wrote no answer.
+      expect((await post(`/api/r/${b.json.target}/touch-id`, { session, word: 'oui' })).status).toBe(403);
+      expect(existsSync(join(grantRequestsFolder(w.home), `${id}.seat-answer.json`))).toBe(false);
+      expect((await execute(w, id, [], undefined, store)).code).not.toBe(0);
+      // The answer is made only by the owner signer's Touch ID signature, then verified by execute.
+      const before = store.prompts.length;
+      const signed = await post(`/api/r/${id}/touch-id`, { session, word: 'oui' });
+      expect(signed.status).toBe(200);
+      expect(store.prompts.length).toBe(before + 1);
+      expect((await execute(w, id, [], undefined, store)).code).toBe(0);
+    } finally {
+      page.server.close();
+    }
+  });
+});

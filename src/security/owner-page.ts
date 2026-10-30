@@ -20,6 +20,7 @@ import { actionRequestsFolder, approveTeamCreate, teamCreateSummary, type TeamCr
 import { approveOwnerAction, OWNER_ACTION_ID_PATTERN, ownerActionSummary, type OwnerAction, type OwnerActionParams } from '../client/owner-action.ts';
 import { approveAsOwnerSeat, GRANT_REQUEST_ID_PATTERN, grantRequestsFolder, pendingGrantPrompt } from '../client/emission.ts';
 import { existsSync, readFileSync } from 'node:fs';
+import { openRequestLink } from '../client/request-link.ts';
 import { join } from 'node:path';
 import { ownerDeviceConsent, readProposal, readSecurityProfile, securityProfileChallenge, securityProfileLine, signSecurityProfile } from './profile.ts';
 
@@ -246,6 +247,43 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
     },
   };
 
+  // One-request link sessions: opened once with the link's nonce, bound to that one request id,
+  // in memory only, never longer than the request. A session reads that card and may ask for an
+  // answer; the answer is written only by approveAsOwnerSeat, which needs an owner-signer signature.
+  const linkSessions = new Map<string, { id: string; until: number }>();
+  const LINK_SESSION_MS = 15 * 60_000;
+  const sessionFor = (id: string, b: Record<string, unknown>): boolean => {
+    const s = linkSessions.get(String(b.session ?? ''));
+    return s !== undefined && s.id === id && s.until > now().getTime() && !answeredOrExpired(id);
+  };
+  const cardOf = (id: string) => {
+    const message = ownerSeatMessages(home).find((m) => m.request_id === id) as { request_id: string; text?: string; kind?: string; summary?: unknown } | undefined;
+    const prompt = pendingGrantPrompt(home, id, now(), webauthnSignerName());
+    return ownerPageRequest(message ?? { request_id: id, kind: 'grant-confirmation' }, prompt);
+  };
+  const linkRoute = (method: string, id: string, action: string, b: Record<string, unknown>): { status: number; body: unknown } => {
+    if (method === 'POST' && action === 'open') {
+      const opened = openRequestLink(home, id, String(b.nonce ?? ''), now());
+      if (!opened.ok || answeredOrExpired(id)) return { status: 403, body: { error: opened.ok ? 'this request is already answered or expired' : opened.why } };
+      const session = randomBytes(18).toString('base64url');
+      linkSessions.set(session, { id, until: now().getTime() + LINK_SESSION_MS });
+      const seat = readOwnerSeat(home);
+      return { status: 200, body: { session, request: cardOf(id), rp_id: OWNER_PAGE_RP_ID, signers: (seat?.signers ?? []).map((x) => ({ name: x.name, type: x.type, credential_id: x.credential_id })) } };
+    }
+    if (method !== 'POST' || !sessionFor(id, b)) return { status: 403, body: { error: 'open this request from its link first' } };
+    const word = String(b.word ?? '');
+    if (action === 'challenge') return routes['POST /api/team-create/challenge']!({ id, word, credentialId: b.credentialId });
+    if (action === 'answer') return routes['POST /api/team-create/answer']!({ ...b, id, word });
+    if (action === 'touch-id') {
+      // The Mac's Secure Enclave signer: Touch ID in the owner's session signs the answer.
+      const signer = readOwnerSeat(home)?.signers.find((x) => x.type === 'mac-keystore');
+      if (signer === undefined) return { status: 400, body: { error: 'no Touch ID signer on the owner seat' } };
+      const answered = approveAsOwnerSeat(home, id, word, store, now(), { signer: signer.name });
+      return answered.ok ? { status: 200, body: { ok: true, choice: answered.choice } } : { status: 400, body: { error: answered.why } };
+    }
+    return { status: 404, body: { error: 'not found' } };
+  };
+
   return async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const send = (status: number, body: unknown, type = 'application/json') => {
@@ -253,6 +291,27 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
       res.end(typeof body === 'string' ? body : JSON.stringify(body));
     };
     if (req.headers.host !== `localhost:${options.port}`) return send(403, { error: 'open the page at http://localhost:' + options.port });
+    // The one-request link: no page token; the nonce (fragment, posted once) opens one card.
+    const linkPage = /^\/r\/(gr_[0-9a-f]{24})$/.exec(url.pathname);
+    if (req.method === 'GET' && linkPage !== null) return send(200, REQUEST_PAGE_HTML, 'text/html; charset=utf-8');
+    const linkApi = /^\/api\/r\/(gr_[0-9a-f]{24})\/(open|challenge|answer|touch-id)$/.exec(url.pathname);
+    if (linkApi !== null) {
+      if (req.method !== 'POST') return send(405, { error: 'POST only' });
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      let b: Record<string, unknown>;
+      try {
+        b = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+      } catch {
+        return send(400, { error: 'not JSON' });
+      }
+      try {
+        const out = linkRoute(req.method, linkApi[1]!, linkApi[2]!, b);
+        return send(out.status, out.body);
+      } catch (error) {
+        return send(500, { error: String((error as Error).message ?? error) });
+      }
+    }
     if (url.searchParams.get('t') !== token) return send(403, { error: 'missing or wrong page token' });
     if (req.method === 'GET' && url.pathname === '/') return send(200, OWNER_PAGE_HTML, 'text/html; charset=utf-8');
     const route = routes[`${req.method} ${url.pathname}`];
@@ -372,5 +431,46 @@ async function load() {
 }
 load().catch(e => log(e.message));
 setInterval(() => { load().catch(() => {}); }, 2000);
+</script></body></html>
+`;
+
+/** The one-request page: shows one card and answers it only with an owner signature. */
+export const REQUEST_PAGE_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>TeamCLI – one request</title>
+<style>body{font:16px -apple-system,system-ui,sans-serif;max-width:640px;margin:2em auto;padding:0 1em;color:#222}
+button{font-size:16px;padding:.6em 1em;margin:.3em .3em .3em 0;border-radius:8px;border:1px solid #888;background:#f4f4f4}
+.card{border:1px solid #ddd;border-radius:10px;padding:1em;margin:1em 0}.hint{color:#555;font-size:14px}#log{color:#555;white-space:pre-wrap}</style></head>
+<body><h1>Owner approval</h1><div id="card"></div><p id="log"></p>
+<script>
+const id = location.pathname.split('/').pop();
+const nonce = location.hash.slice(1);
+history.replaceState(null, '', location.pathname);
+const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/') + '==='.slice((s.length+3)%4)), c => c.charCodeAt(0));
+const post = async (action, body) => { const r = await fetch('/api/r/' + id + '/' + action, { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(body) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; };
+const log = (m) => { document.getElementById('log').textContent = m; };
+const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+let S;
+async function answer(word) {
+  const passkey = S.signers.find(s => s.type === 'webauthn');
+  if (passkey) {
+    const ch = await post('challenge', { session: S.session, word, credentialId: passkey.credential_id });
+    const c = await navigator.credentials.get({ publicKey: { challenge: unb64u(ch.challenge), rpId: S.rp_id, allowCredentials: [{ type: 'public-key', id: unb64u(passkey.credential_id) }], userVerification: 'required', timeout: 120000 } });
+    const r = await post('answer', { session: S.session, word, credentialId: b64u(c.rawId), authenticatorData: b64u(c.response.authenticatorData), clientDataJSON: b64u(c.response.clientDataJSON), signature: b64u(c.response.signature) });
+    return log('Answer saved: ' + r.choice);
+  }
+  log('Confirm with Touch ID on the Mac…');
+  const r = await post('touch-id', { session: S.session, word });
+  log('Answer saved: ' + r.choice);
+}
+(async () => {
+  S = await post('open', { nonce });
+  const r = S.request;
+  const always = r.onceOnly ? '' : '<button data-w="always">Always allow</button>';
+  const d = document.getElementById('card'); d.className = 'card';
+  d.innerHTML = '<b>' + esc(r.title) + '</b> <span class="hint">' + esc(r.id) + '</span><p>' + esc(r.description) + '</p>' + (r.details ? '<details><summary>Details</summary><p class="hint">' + esc(r.details) + '</p></details>' : '') + '<button data-w="oui">Approve once</button>' + always + '<button data-w="non">Deny</button>';
+  d.querySelectorAll('button').forEach(b => b.onclick = () => answer(b.dataset.w).catch(e => log('Refused: ' + e.message)));
+})().catch(e => log(e.message));
 </script></body></html>
 `;

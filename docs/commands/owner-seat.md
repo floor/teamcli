@@ -55,3 +55,11 @@ Secure Enclave key handles), `~/.config/team/security-profile.json` (the signed 
 ## Exit codes
 
 0 when done, 1 when refused (including a cancelled prompt), 2 when the invocation is invalid.
+
+## One-request links
+
+`team grant --request` prints `http://localhost:7392/r/<request-id>#<nonce>`. With the page served
+on port 7392, that link shows only that request's card, without the page token. The nonce is
+single-use, bound to the request and expires with it; it grants nothing, and an answer from the
+card still needs an owner-signer signature. See `docs/commands/grant.md`.
+

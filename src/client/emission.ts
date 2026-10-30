@@ -8,8 +8,9 @@
 // The approval is never the requester's word. It comes through an approval adapter: the one-time
 // code adapter shows a six-digit code on the owner's screen through a channel the requesting agent
 // does not read (a system notification, never stdout, stderr or a file) and stores only a seal of
-// it that needs the owner key to check; the local user-presence adapter is the interface for a
-// system authentication dialog, not built in this build. The core text names no product.
+// it that needs the owner key to check, and only when the notifier confirms the owner saw it; the
+// local user-presence path (`presentToOwnerSeat`) asks the owner seat's Touch ID signer to sign the
+// answer itself. The core text names no product.
 
 import { createHash, randomBytes, randomInt, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -197,47 +198,92 @@ export type GrantApprovalAdapter = {
   verify: (ctx: ApprovalContext, stored: string, presented: { code?: string }) => boolean;
 };
 
-/** Shows text to the owner on screen. Returns false when it could not. */
-export type OwnerNotifier = (title: string, text: string) => boolean;
+/** What a notifier knows about one delivery. Only `confirmed` (or `true`, from a notifier that
+ *  can tell) counts as shown: a clean exit of a fire-and-forget banner is not a delivery. */
+export type NotifyOutcome = 'confirmed' | 'unconfirmed' | 'failed';
 
-/** The default notifier: a desktop notification on macOS. The script goes on stdin, never argv,
- *  so the code is not in the process list. Other systems have none in this build. */
-export const systemNotifier: OwnerNotifier = (title, text) => {
-  if (platform() !== 'darwin') return false;
+/** Shows text to the owner on screen. `confirmsDelivery: false` says it can never confirm one. */
+export type OwnerNotifier = ((title: string, text: string) => boolean | NotifyOutcome) & { confirmsDelivery?: boolean };
+
+function delivered(outcome: boolean | NotifyOutcome): boolean {
+  return outcome === true || outcome === 'confirmed';
+}
+
+/** The system notifier: a desktop notification on macOS. The script goes on stdin, never argv.
+ *  macOS gives no delivery receipt (notifications for the script host may be off, Focus may hold
+ *  them): osascript exits 0 either way, so this notifier is `unconfirmed` at best, and the
+ *  one-time-code adapter never sends a code through it. */
+export const systemNotifier: OwnerNotifier = Object.assign((title: string, text: string): NotifyOutcome => {
+  if (platform() !== 'darwin') return 'failed';
   const quote = (value: string) => `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   try {
     execFileSync('/usr/bin/osascript', ['-'], { input: `display notification ${quote(text)} with title ${quote(title)}\n`, stdio: ['pipe', 'ignore', 'ignore'], timeout: 10_000 });
-    return true;
+    return 'unconfirmed';
   } catch {
-    return false;
+    return 'failed';
   }
-};
+}, { confirmsDelivery: false });
 
-/** The one-time code adapter: six digits, shown only through the notifier, sealed with the owner key. */
+/** The one-time code adapter: six digits, shown only through the notifier, sealed with the owner
+ *  key. Issued only when the notifier confirms the owner's screen showed it: a notifier that cannot
+ *  confirm is never sent the code (a dropped banner must not leave a request waiting on a code). */
 export function oneTimeCodeAdapter(notify: OwnerNotifier = systemNotifier): GrantApprovalAdapter {
   return {
     name: 'one-time-code',
     available: () => true,
     issue: (ctx) => {
+      if (notify.confirmsDelivery === false) return { ok: false, why: 'the screen notifier cannot confirm delivery; no code was sent' };
       const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
       const seal = ctx.seal(code);
       const shown = notify('TeamCLI grant approval', `Code ${code} approves ${ctx.requestId}: ${ctx.summary}. Tell it to the agent only if you approve.`);
-      if (!shown) return { ok: false, why: 'the approval code could not be shown on the owner\'s screen; no request was recorded' };
+      if (!delivered(shown)) return { ok: false, why: 'the approval code was not confirmed shown on the owner\'s screen; no code approves this request' };
       return { ok: true, seal };
     },
     verify: (ctx, stored, presented) => presented.code !== undefined && /^[0-9]{6}$/.test(presented.code) && ctx.seal(presented.code) === stored,
   };
 }
 
+/** The outcome of presenting one request to the owner through the local-presence channel. */
+export type PresenceOutcome =
+  | { delivered: true; approved: true; channel: string; signer: string }
+  | { delivered: false; approved: false; channel: string; why: string };
+
+export const LOCAL_PRESENCE_CHANNEL = 'touch-id';
+
 /**
- * The local user-presence adapter: the interface for a system authentication dialog invoked by
- * `--execute` on the owner's machine. TODO: a native helper calling the system's
- * local-authentication facility; until then it is unavailable and approves nothing.
+ * The local user-presence adapter. It runs after the request is recorded: the owner seat's
+ * `mac-keystore` signer (the Secure Enclave key behind Touch ID, through the owner-seat keystore
+ * helper, in the owner's login session) is asked to sign the owner-seat answer — kind grant,
+ * request id, params_sha256, choice once — with the request's own prompt as the Touch ID reason.
+ * The owner approves by authenticating and declines by cancelling. The answer is recorded only
+ * when the signature verifies under the key the credential store confirms; `--execute` verifies it
+ * again. The requester never holds the key: it can only cause the prompt, as
+ * `--approve-as-owner-seat` always could.
  */
+export function presentToOwnerSeat(home: string, requestId: string, store: OwnerSeatKeyStore, now: Date = new Date()): PresenceOutcome {
+  const channel = LOCAL_PRESENCE_CHANNEL;
+  const no = (why: string): PresenceOutcome => ({ delivered: false, approved: false, channel, why });
+  const seat = readOwnerSeat(home);
+  if (seat === null) return no('no owner seat is registered');
+  const signer = seat.signers.find((s) => s.type === 'mac-keystore');
+  if (signer === undefined) return no('the owner seat has no Touch ID (mac-keystore) signer');
+  if (!store.available()) return no(`the ${store.name} adapter is not available here`);
+  const answered = approveAsOwnerSeat(home, requestId, 'oui', store, now, { signer: signer.name });
+  // A refusal here is a cancelled or failed prompt, or an unreachable store: nothing says the
+  // owner saw it, so it is reported as not delivered.
+  if (!answered.ok) return no(answered.why);
+  const key = ownerKey(home);
+  const record = key === null ? null : readPending(home, requestId, key);
+  const verified = record === null || typeof record === 'string' ? null : readOwnerSeatAnswer(home, record, store, now);
+  if (verified === null || !verified.ok || verified.choice !== 'once') return no('the Touch ID answer did not verify as the owner seat\'s');
+  return { delivered: true, approved: true, channel, signer: signer.name };
+}
+
+/** Kept for the `--execute` adapter list: presence answers are owner-seat answers, verified there. */
 export const localPresenceAdapter: GrantApprovalAdapter = {
   name: 'local-presence',
   available: () => false,
-  issue: () => ({ ok: false, why: 'local user-presence confirmation is not built in this build' }),
+  issue: () => ({ ok: false, why: 'local presence runs after the request is recorded (presentToOwnerSeat)' }),
   verify: () => false,
 };
 
@@ -451,7 +497,7 @@ export function createPendingGrant(
   home: string,
   params: PendingGrantParams,
   options: { now?: Date; adapter?: GrantApprovalAdapter } = {},
-): { ok: true; record: PendingGrantRecord; path: string } | { ok: false; why: string } {
+): { ok: true; record: PendingGrantRecord; path: string; notDelivered?: string } | { ok: false; why: string } {
   const now = options.now ?? new Date();
   const emission = grantEmissionOf(home, params.entity, now);
   if (emission.mode !== 'conversational') {
@@ -463,13 +509,12 @@ export function createPendingGrant(
   const planned = planPending(home, params, now);
   if (!planned.ok) return { ok: false, why: planned.why };
   const adapter = options.adapter ?? oneTimeCodeAdapter();
-  if (!adapter.available()) return { ok: false, why: `the ${adapter.name} approval adapter is not available` };
   const requestId = `gr_${randomBytes(12).toString('hex')}`;
   const paramsSha256 = pendingGrantHash(params);
   const ctx: ApprovalContext = { requestId, paramsSha256, summary: summaryOf(params), seal: sealWith(key, requestId, paramsSha256) };
   // The owner's terminal answer (`team grant --answer`) is always an approval path; the screen
   // code is an extra one. When the screen cannot show it, the request still stands on the answer.
-  const issuedRaw = adapter.issue(ctx);
+  const issuedRaw = adapter.available() ? adapter.issue(ctx) : { ok: false as const, why: `the ${adapter.name} approval adapter is not available` };
   const issued = issuedRaw.ok ? issuedRaw : { ok: true as const, seal: '' };
   const adapterName = issuedRaw.ok ? adapter.name : OWNER_ANSWER_ADAPTER;
   const record: PendingGrantRecord = {
@@ -493,7 +538,7 @@ export function createPendingGrant(
   if (writeExclusive(path, `${JSON.stringify({ grant_request: body, signature }, null, 2)}\n`) !== 'written') {
     return { ok: false, why: `the pending request could not be written in "${folder}"` };
   }
-  return { ok: true, record, path };
+  return { ok: true, record, path, ...(issuedRaw.ok ? {} : { notDelivered: issuedRaw.why }) };
 }
 
 function readPending(home: string, requestId: string, key: KeyObject): PendingGrantRecord | string {
