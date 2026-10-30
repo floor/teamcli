@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8-hotfix.1] - 2026-10-30
+
+The 0.5.8.1 fix (published under the SemVer name 0.5.8-hotfix.1, the line's hotfix form).
+
+### Fixed
+
+- **`team daemon install --general <grant.json> --key <client.key>` installs a unit that starts.**
+  Under the system service manager the run's parent processes cannot be read, so it was
+  `unplaced` and refused at every start ("only the owner or the system service manager runs the
+  machine daemon"). An install admitted by the general door now writes the grant and key paths
+  it was verified with into the unit's run command; each service start passes the same door,
+  which verifies the grant again (op `daemon`) and refuses, exit 1, once it is expired, revoked
+  by a missing file, another key, or no longer covers `daemon`. Only the paths the door verified
+  for that install are recorded; a plain install writes no grant, as before.
+
 ## [0.5.8] - 2026-10-30
 
 0.5.8 makes the general grant reach every command. Through 0.5.7 only `config`, `up` and `init`

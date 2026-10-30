@@ -639,6 +639,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // install writes no flag and starts exactly the daemon it did before.
     ...(parsed.presence ? { presence: true } : {}),
     ...(parsed.watch ? { watch: true } : {}),
+    // Only the paths the door verified for this run (io.general), never a path read elsewhere.
+    ...(io.general !== undefined ? { general: io.general } : {}),
   };
   const plan = manager.plan(home, fullProgram);
   if (parsed.dryRun) {

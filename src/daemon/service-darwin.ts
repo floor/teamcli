@@ -43,6 +43,8 @@ function programOf(program: ServiceProgram): string[] {
   if (program.presence === true) args.push('--presence');
   // The watch opt-in is separate: a unit may record either, both or neither.
   if (program.watch === true) args.push('--watch');
+  // An install admitted by a general grant: the run is admitted by the same grant, verified anew.
+  if (program.general !== undefined) args.push('--general', program.general.grant, '--key', program.general.key);
   return args;
 }
 

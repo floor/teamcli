@@ -67,7 +67,9 @@ export function generalDoor(name: string, rest: string[], io: Io, now: Date = ne
   const key = take(general.rest, 'key');
   if (!key.present || key.value === undefined) return { kind: 'usage', why: '--general needs --key <client.key>', json };
   const home = io.env.HOME ?? homedir();
-  const admitted = admitGeneral(home, resolve(io.cwd, general.value), resolve(io.cwd, key.value), name as GeneralOp, entityHere(io, home), now);
+  const grantPath = resolve(io.cwd, general.value);
+  const keyPath = resolve(io.cwd, key.value);
+  const admitted = admitGeneral(home, grantPath, keyPath, name as GeneralOp, entityHere(io, home), now);
   if (!admitted.ok) return { kind: 'refused', why: admitted.why, json };
-  return { kind: 'admitted', argv: key.rest, io: { ...io, caller: { kind: 'owner' } }, grant: admitted.grant, json };
+  return { kind: 'admitted', argv: key.rest, io: { ...io, caller: { kind: 'owner' }, general: { grant: grantPath, key: keyPath } }, grant: admitted.grant, json };
 }

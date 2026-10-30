@@ -142,3 +142,35 @@ test('every command in the contract declares --general and --key, but the grant-
   }
   expect(missing).toEqual([]);
 });
+
+test('an admitted run carries the verified grant and key paths to the command (io.general)', async () => {
+  const { generalDoor } = await import('../src/client/general-door.ts');
+  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false };
+  const door = generalDoor('daemon', ['install', '--general', all, '--key', a.path], io);
+  if (door.kind !== 'admitted') throw new Error(door.kind);
+  expect(door.io.general).toEqual({ grant: all, key: a.path });
+  const refused = generalDoor('daemon', ['install', '--general', all, '--key', b.path], io);
+  expect(refused.kind).toBe('refused');
+});
+
+test('a unit installed under a general grant runs the daemon under the same grant, and a plain one does not', async () => {
+  const { darwinServiceManager } = await import('../src/daemon/service-darwin.ts');
+  const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
+  const base = { execPath: '/bin/node', entry: '/x/cli.js', roots: ['/r'], presence: true, watch: true };
+  const granted = manager.plan(home, { ...base, general: { grant: all, key: a.path } }).program;
+  expect(granted.slice(-4)).toEqual(['--general', all, '--key', a.path]);
+  expect(granted).toContain('service-manager');
+  expect(manager.plan(home, base).program).not.toContain('--general');
+});
+
+test('the service-started run line passes the door while the grant holds, and is refused once it does not', async () => {
+  const { generalDoor } = await import('../src/client/general-door.ts');
+  const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: { kind: 'unplaced', reason: "its parent processes can't be read to the top" } };
+  const line = ['run', '--started-by', 'service-manager', '--root', '/r', '--general', all, '--key', a.path];
+  const ok = generalDoor('daemon', line, io);
+  expect(ok.kind).toBe('admitted');
+  const then = new Date(Date.now() - 3 * day);
+  const expired = grant(['*'], ['*'], new Date(then.getTime() + day), then);
+  expect(generalDoor('daemon', ['run', '--started-by', 'service-manager', '--general', expired, '--key', a.path], io).kind).toBe('refused');
+  expect(generalDoor('daemon', ['run', '--general', grant(['send']), '--key', a.path], io).kind).toBe('refused');
+});
