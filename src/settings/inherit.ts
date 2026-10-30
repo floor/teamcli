@@ -281,8 +281,13 @@ export function orderDeclarationsOf<L extends string>(declared: Partial<Record<S
  * the socket leg is this build's own frame on the receiver's socket, the native leg the sender's
  * own call. `headless-resume` is nobody's default: only a word that names it reaches it, and this
  * build carries no headless runtime yet, so the walk records the leg as unavailable and moves on.
+ * `channel` is the seat's own inbox server pushing the message into its CLI through the
+ * development channel; it is implied only, never a declared word: a launch that carries the
+ * development-channels flag and whose server is listening takes it, and every other receiver
+ * walks its order exactly as written. Its delivery is the notification itself, ended as
+ * `sent (channel)`; a push no signed receipt confirms in time is redelivered once by the watch.
  */
-export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume';
+export type DeliveryLeg = 'socket' | 'native' | 'mcp-inbox' | 'typed' | 'drop' | 'headless-resume' | 'channel';
 
 export const DELIVERY_LEGS: readonly DeliveryLeg[] = ['socket', 'native', 'mcp-inbox', 'typed', 'drop', 'headless-resume'];
 

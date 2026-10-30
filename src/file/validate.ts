@@ -78,6 +78,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
   const mode = valueOf<TeamFile['workspace']>(ctx, 'workspace').mode;
   for (const seat of seats) seat.mode ??= mode;
   const policies = valueOf<TeamFile['policies'] | null>(ctx, 'policies');
+  const bus = valueOf<TeamFile['bus'] | null>(ctx, 'bus');
 
   return {
     format: 1,
@@ -93,6 +94,7 @@ function readTeam(root: YamlNode, check: Check, home?: string, fs?: FsReader, ro
     deliveryOrder: valueOf<TeamFile['deliveryOrder']>(ctx, 'delivery_order'),
     senderName: valueOf<TeamFile['senderName']>(ctx, 'sender_name'),
     ...(policies !== null && policies !== undefined ? { policies } : {}),
+    ...(bus !== null && bus !== undefined ? { bus } : {}),
     tools: valueOf<TeamFile['tools']>(ctx, 'tools'),
     identity: valueOf<TeamFile['identity']>(ctx, 'identity'),
     rules: valueOf<string[]>(ctx, 'rules'),

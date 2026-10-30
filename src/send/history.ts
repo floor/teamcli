@@ -31,6 +31,7 @@ export type HistoryOutcome =
   | 'delivered'
   | 'delivered (read)'
   | 'sent (unconfirmed)'
+  | 'sent (channel)'
   | 'held'
   | 'queued (receiver busy)'
   | 'not-submitted'

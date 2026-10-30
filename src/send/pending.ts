@@ -14,7 +14,10 @@
 // same record with `leg: 'mcp-inbox'`: its message waits in the seat's own inbox, and the record
 // says which leg left it so a retry pass never mistakes it for a held typed send. The drop leg
 // writes `leg: 'drop'`: its reader is the seat's own watcher, whose receipt promotes the record
-// once the message is read, and the drop is never typed into a pane.
+// once the message is read, and the drop is never typed into a pane. The channel leg writes
+// `leg: 'channel'`: the seat's own server pushed the message, and a marker with no receipt after
+// the confirmation window is the watch's to redeliver exactly once (`redelivered` records that
+// it did), never a typed retry's to repeat.
 //
 // A Claude Code seat's native leg is the sender's own cross-session SendMessage, which an
 // external process cannot call. So `team send` resolves the recipient, judges the pair and
@@ -53,8 +56,12 @@ export type PendingDrop = {
   /** The leg that left the record. Absent on a held or not-submitted typed send, which is the
    *  retry's own business; `mcp-inbox` on a message left in the seat's inbox, whose marker is
    *  followed by the inbox leg rather than typed by the retry pass; `drop` on a message the drop
-   *  leg left, promoted by the seat's own receipt and never typed. */
-  leg?: 'mcp-inbox' | 'drop';
+   *  leg left, promoted by the seat's own receipt and never typed; `channel` on a message the
+   *  seat's channel server pushed, which the watch redelivers once if no receipt follows. */
+  leg?: 'mcp-inbox' | 'drop' | 'channel';
+  /** Set on a channel marker the watch has already redelivered, with the reason it did. The value
+   *  is what makes the redelivery one-shot: no pass redelivers a marker that carries it. */
+  redelivered?: string;
   /** The thread the message belongs to; absent on a marker written before the thread spine. */
   thread?: string;
 };
@@ -84,6 +91,12 @@ export function recordPendingTry(dropDir: string, drop: PendingDrop): void {
   writePendingDrop(dropDir, { ...drop, tries: drop.tries + 1 });
 }
 
+/** Marks a channel marker as redelivered, with the reason: written before the redelivery is
+ *  attempted, so a second pass — or a process that dies mid-attempt — can never redeliver again. */
+export function markRedelivered(dropDir: string, drop: PendingDrop, reason: string): void {
+  writePendingDrop(dropDir, { ...drop, redelivered: reason });
+}
+
 /** Forgets a drop: delivered, or given up on. */
 export function clearPending(dropDir: string, id: string): void {
   try {
@@ -110,7 +123,7 @@ function readPendingDrops(dropDir: string): PendingDrop[] {
       if (name !== `${parsed.id}.pending`) continue;
       // A leg this build does not know is not guessed at: a marker that names another kind of
       // delivery is skipped rather than retried as a typed send.
-      if (parsed.leg !== undefined && parsed.leg !== 'mcp-inbox' && parsed.leg !== 'drop') continue;
+      if (parsed.leg !== undefined && parsed.leg !== 'mcp-inbox' && parsed.leg !== 'drop' && parsed.leg !== 'channel') continue;
       drops.push({
         id: parsed.id,
         from: parsed.from,
@@ -118,7 +131,8 @@ function readPendingDrops(dropDir: string): PendingDrop[] {
         body: parsed.body,
         ts: parsed.ts,
         tries: typeof parsed.tries === 'number' && Number.isInteger(parsed.tries) && parsed.tries >= 0 ? parsed.tries : 0,
-        ...(parsed.leg === 'mcp-inbox' || parsed.leg === 'drop' ? { leg: parsed.leg } : {}),
+        ...(parsed.leg === 'mcp-inbox' || parsed.leg === 'drop' || parsed.leg === 'channel' ? { leg: parsed.leg } : {}),
+        ...(typeof parsed.redelivered === 'string' && parsed.redelivered !== '' ? { redelivered: parsed.redelivered } : {}),
         ...(typeof parsed.thread === 'string' && parsed.thread !== '' ? { thread: parsed.thread } : {}),
       });
     } catch {

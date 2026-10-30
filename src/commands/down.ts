@@ -1217,6 +1217,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     seats,
     extra,
     watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
+    // The bus `team up` started goes with the team, as the watch does; one the owner runs in a
+    // terminal of their own is not in the state and is left running.
+    busWorkspace: refusals.length === 0 ? null : state?.bus?.workspace ?? null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && clientDown === null && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
@@ -1418,6 +1421,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       allow: () => null,
       record() {},
       running() {},
+      dropBus() {
+        updateState(dir, (state) => {
+          const current = state.sessions[session];
+          if (current) delete current.bus;
+        });
+      },
       drop(name) {
         // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
         // before the record that names it goes. An endpoint whose process cannot be proven is

@@ -25,6 +25,7 @@ import { daemonNotes, daemonReading } from '../daemon/health_display.ts';
 import { hostedWatchNotes } from '../daemon/watch_display.ts';
 import { pendingGreenSlices } from '../tasks/green-slices.ts';
 import { idleWorkReport } from '../watch/idle-work.ts';
+import { busStatusNotes } from '../bus/notes.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { isParseError } from '../file/load.ts';
@@ -549,6 +550,12 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     swaps: Object.keys(whole.swaps ?? {}),
   });
   if (idleWork !== undefined) comparison.notes.push(...idleWorkNotes(idleWork));
+  comparison.notes.push(...busStatusNotes({
+    root,
+    alive: sources.alive ?? pidAlive,
+    recorded: state?.bus,
+    autostart: team.bus?.autostart !== false,
+  }));
   const leftoverLine = leftoverNote(current.leftover);
   if (leftoverLine !== null) comparison.notes.push(leftoverLine);
   const green = sources.pendingGreen === undefined ? null : readPendingGreen(sources.pendingGreen, dir);

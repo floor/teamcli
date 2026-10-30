@@ -17,6 +17,22 @@ record and verifies its signature with the checkout's message key before anythin
 tampered or unsigned file is refused with a tool error and no receipt, so a receipt only ever
 proves a read of a record the server authenticated.
 
+When the seat's own launch carries the development-channels flag naming this server
+(`--dangerously-load-development-channels server:team-inbox`), `serve` also declares the
+`claude/channel` capability, gives its client one instruction — acknowledge the id from a channel
+notification's meta in the same handling turn — and serves the `ack` tool beside `inbox_check` and
+`inbox_read`. Each signed record that arrives after the server starts is pushed once as
+`notifications/claude/channel`: the content opens with the message-display header and carries the
+signed body, and the meta carries identifiers only (`id`, `from`, `seat`, `team`). The push is not
+a read — the client acknowledges nothing at the transport — so the server writes
+`<id>.channel-push.json` beside the record, mode 0600, as the proof that the notification was
+written, and the sender's channel leg reads that marker. `ack` takes the id, verifies the record in
+this inbox as the read tools do, and writes the same signed `<id>.read.json` receipt as `team ack`
+with `read_by: channel`; an id this inbox does not hold, a client record and a general brief are
+refused with a tool error and no receipt. A pushed record already holding a marker is never pushed
+again, and a launch without the flag is the ordinary inbox server: no capability, no instructions,
+no push and no `ack`.
+
 A seat's launch registers the server with its CLI where a run measured a route. A codex seat's
 launch line carries the registration itself — two `-c` values naming the server and this
 install's runner, and no file written into the seat's folder; the team file the launch read is
@@ -54,7 +70,7 @@ carries the reason.
 | Caller | May |
 | --- | --- |
 | anyone, in any terminal | run `status` or `doctor`: both write nothing at all |
-| a seat's own launch line | start `serve` for that seat; it writes only that seat's listener marker and one receipt per verified read in the seat's own drop folder |
+| a seat's own launch line | start `serve` for that seat; it writes only that seat's listener marker, one receipt per verified read in the seat's own drop folder, and — when it declares the channel — one push marker per record it notifies |
 
 ## Output and exit codes
 
@@ -64,7 +80,7 @@ carries the reason.
 | `status`: a leg is down, or the lobby holds no bridge config at all | the same lines, with the `MISS` rows, closing with `state: down` or `state: not-set-up` | 1 |
 | `doctor`: nothing missing | the context line, then one finding per line — the level, then the sentence — with a `fix:` line under each finding that has one, then `team mcp doctor: nothing missing, <n> warnings` (`0 warnings` when there are none) | 0 |
 | `doctor`: at least one `MISS` | the same findings, and the closing count | 1 |
-| `serve`: the client closed stdin | nothing on stderr; on stdout only the JSON-RPC replies the client's requests asked for — `initialize`, `ping`, `tools/list`, and the two tools' results — then the process ends | 0 |
+| `serve`: the client closed stdin | nothing on stderr; on stdout only the JSON-RPC replies the client's requests asked for — `initialize`, `ping`, `tools/list`, each tool call's result — and, when the server declares the channel, one `notifications/claude/channel` per record that arrived while it ran — then the process ends | 0 |
 | `serve`: the invocation, the team placement or the inbox folder can't be read | `team mcp serve: <reason>` on stderr, nothing on stdout; the server never starts | 2 |
 | the invocation can't be read: no subcommand, an unknown one, an option this build does not know | `team mcp: <reason>`, with the usage | 2 |
 

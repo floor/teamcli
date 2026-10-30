@@ -133,7 +133,11 @@ export async function runBus(argv: string[], io: Io, sources: BusCommandSources 
     return badConfig(io, thresholds.refusals.map((refusal) => refusal.message).join('; '));
   }
 
-  if (!inherited && !seatApproved && !isOwner(caller)) {
+  // The agentless pane `team up` starts the bus in is admitted the way the watch's own pane is:
+  // its root process is among this caller's ancestors and it carries no agent, so it is never a
+  // seat's pane. Every other caller keeps the owner, inherited, owner-seat or `leads` gate.
+  const busPane = caller.kind === 'pane';
+  if (!inherited && !seatApproved && !isOwner(caller) && !busPane) {
     const standing = standingOf(dirname(loaded.path), loaded.team.session, caller);
     const verdict = gateVerdict(caller, loaded.team, loaded.root, home, 'bus', standing, sources.now ?? (() => new Date()));
     if (verdict.kind === 'no-pane') return refuse(io, noPaneRefusal(verdict.name));

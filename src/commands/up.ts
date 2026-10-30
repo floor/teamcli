@@ -102,7 +102,8 @@ import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel } from '../status/statusline.ts';
 import { watchSitting } from '../watch/liveness.ts';
-import { watchIdentity, watchLabel } from '../watch/pane.ts';
+import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
+import { busAnswers } from '../bus/follow.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
@@ -127,6 +128,10 @@ export type UpSources = {
   sleep?(ms: number): Promise<void>;
   alive?(pid: number): boolean;
   watchCommand?(session: string): string;
+  /** Whether this checkout's event bus answers on its socket. Absent: no bus step is planned, so a
+   *  world that does not probe it never starts one. */
+  busAlive?(root: string): Promise<boolean>;
+  busCommand?(): string;
   /** The machine daemon's reading, for the hosted watch that may own this team's route. Absent in
    *  a world that does not probe it, and then no pane watch is suppressed by a hosted one. */
   daemonHealth?(home: string): Promise<DaemonHealth>;
@@ -231,6 +236,13 @@ export function watchWouldRead(start: string, flagged: string, home?: string): b
 }
 
 /** The watchdog command, from this process and this install: `team` may not be on the PATH. */
+/** The bus command, from this process and this install, as the watch's is. */
+export function busCommand(): string {
+  const here = fileURLToPath(import.meta.url);
+  const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  return `${shellQuote(process.execPath)} ${shellQuote(cli)} bus`;
+}
+
 export function watchCommand(session: string): string {
   const here = fileURLToPath(import.meta.url);
   const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
@@ -305,6 +317,8 @@ export const realSources: UpSources = {
     }
   },
   watchCommand,
+  busAlive: (root) => busAnswers(root),
+  busCommand,
   daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
   /** Present on the shipped command only: a dead bus is started in its own process before launch. */
@@ -1751,6 +1765,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
     } else if (launchingIntoLobby) createLobby = !dry;
   }
+  // The team's event bus: started beside the watch unless the file sets `bus.autostart: false`,
+  // and only when the bus does not already answer. A world that cannot probe it plans none.
+  const startBus = team.bus?.autostart !== false && sources.busAlive !== undefined;
+  const busAlive = startBus ? await sources.busAlive!(root) : false;
   const watch = recorded?.watch;
   // Which watch owns this route now. A hosted watch the daemon carries — anything but standing
   // by — is doing the job, and this run starts no second one beside it. Otherwise the pane
@@ -1813,6 +1831,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(watchUnknown ? { watchUnknown: true } : {}),
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
+    ...(startBus ? { startBus, busAlive, busLabel: busLabel(team.project), busLine: (sources.busCommand ?? busCommand)() } : {}),
     teamFile: loaded.path,
     cliHooks,
     ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),
@@ -2457,6 +2476,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
           current.watchdog = { file, pane };
+        });
+      },
+      noteBus(pane, workspace) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          current.bus = { pane, started: now().toISOString(), ...(workspace ? { workspace } : {}) };
         });
       },
       noteWatch(pane, workspace) {
