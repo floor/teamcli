@@ -100,8 +100,8 @@ export type MessagesSources = {
   followReads?: number;
 };
 
-/** The pause between two `--follow` reads: short, so a reply prints within about a second. */
-export const FOLLOW_INTERVAL_MS = 1000;
+/** The pause between two `--follow` reads: short, so a reply prints within a few seconds without a replay record every second. */
+export const FOLLOW_INTERVAL_MS = 3000;
 
 export const realSources: MessagesSources = { home: homedir(), now: () => new Date() };
 

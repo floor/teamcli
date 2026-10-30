@@ -277,6 +277,7 @@ describe('owner page', () => {
       'team-bus': 'Start the bus',
       'team-revoke-approval': 'Revoke an approval rule',
       'team-forget': 'Forget a team record',
+      'team-config': "Change the team's record",
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({

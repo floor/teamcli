@@ -10,6 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
+import { ownerSeatStep } from '../client/owner-action-step.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
 import { approvalDifferences } from '../approve/approval.ts';
@@ -37,7 +38,7 @@ function runEditor(path: string, env: Record<string, string | undefined>): numbe
 export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, [], ['json']);
+  const args = readArgs(argv, ['approval'], ['json', 'request']);
   const [verb, rawPath, rawValue, extra] = args.rest;
   const usage = (await import('../commands/config.ts')).USAGE;
   const wants = verb === 'edit' ? 0 : verb === 'set' ? 2 : 1;
@@ -45,6 +46,9 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   let why: string | null = args.error ?? null;
   if (why === null && given !== wants) {
     why = given > wants ? `unexpected "${args.rest[wants + 1] ?? extra}"` : verb === 'set' && given === 1 ? 'a value is required: team config set <path> <value>' : 'a path is required';
+  }
+  if (why === null && (args.flags.has('request') || args.values.approval !== undefined) && verb !== 'set' && verb !== 'unset') {
+    why = '--request and --approval take set or unset';
   }
   const path = why === null && rawPath !== undefined ? parsePath(rawPath) : [];
   if (why === null && typeof path === 'string') why = path;
@@ -102,13 +106,29 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // A write. A verified charter that covers this folder admits it with no prompt. Outside that
   // charter the run is refused, and the owner re-signs only with `team setup --edit`. With no
   // charter, the write stays the owner's, from a terminal, as the file was.
+  // The owner-seat door for a set or unset: `--request` records exactly this change and sends it
+  // to the owner seat (Touch ID); `--approval <id>` applies it once the owner's verified signature
+  // binds these words. Nothing is written on a request, and an approval for other words refuses.
+  let seatApproved = false;
+  if (args.flags.has('request') || args.values.approval !== undefined) {
+    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) });
+    if (step.kind === 'requested') {
+      // exit: config.approval-requested
+      return 0;
+    }
+    if (step.kind === 'refused') {
+      // exit: config.approval-refused
+      return 1;
+    }
+    seatApproved = step.kind === 'admitted';
+  }
   const gate = charterGate(home, { operation: 'config', cwd: io.cwd }, sources.ownerSeatStore);
-  if (gate.kind === 'block') {
+  if (gate.kind === 'block' && !seatApproved) {
     refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
     // exit: config.charter
     return 1;
   }
-  if (gate.kind !== 'admit') {
+  if (gate.kind !== 'admit' && !seatApproved) {
     const caller = callerOf(rawIo);
     const detached = detachedRefusal(caller);
     if (detached !== undefined) {

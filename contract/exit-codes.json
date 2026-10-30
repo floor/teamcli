@@ -1236,6 +1236,13 @@
     {
       "code": 0,
       "command": "config",
+      "id": "config.approval-requested",
+      "meaning": "an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written",
+      "trigger": "team config set <path> <value> --request"
+    },
+    {
+      "code": 0,
+      "command": "config",
       "id": "config.shown",
       "meaning": "the settings registry is printed",
       "trigger": "team config keys"
@@ -1260,6 +1267,13 @@
       "id": "config.written",
       "meaning": "the change validated and was written",
       "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.approval-refused",
+      "meaning": "the owner-seat request or approval was refused; nothing was written",
+      "trigger": "team config set <path> <value> --approval <request-id>"
     },
     {
       "code": 1,

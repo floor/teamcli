@@ -2355,6 +2355,15 @@ scene('seats.not-yours', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'project', 'other'], other), "only the owner edits the team's record");
   });
+  scene('config.approval-requested', async (place) => {
+    write(place, TEAM);
+    seatOwner(place.home);
+    return show(await recordRun(place, ['set', 'project', 'other', '--request'], detachedCaller), 'owner-seat request');
+  });
+  scene('config.approval-refused', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'project', 'other', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id');
+  });
   scene('config.editor', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['edit'], owner, () => 3), 'the editor exited 3');

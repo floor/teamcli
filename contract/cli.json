@@ -1037,7 +1037,25 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--request",
               "repeatable": false,
               "takesValue": false
             },
@@ -1064,7 +1082,9 @@
           ],
           "subcommands": [],
           "usage": [
-            "team config set <path> <value>"
+            "team config set <path> <value>",
+            "team config set <path> <value> --request [--json]",
+            "team config set <path> <value> --approval <request-id> [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -1110,6 +1130,8 @@
         "team config get <path> [--json]",
         "team config set <path> <value>",
         "team config unset <path>",
+        "team config set <path> <value> --request [--json]",
+        "team config set <path> <value> --approval <request-id> [--json]",
         "team config edit"
       ],
       "who": {

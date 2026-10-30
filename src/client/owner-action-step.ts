@@ -43,7 +43,7 @@ export function teamNameAt(root: string, home: string): string {
 
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed. */
 export function ownerSeatStep(
-  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget',
+  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config',
   action: OwnerAction,
   argv: readonly string[],
   ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean },

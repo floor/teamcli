@@ -54,6 +54,7 @@ const ACTION_TITLES: Record<OwnerAction, string> = {
   'team-bus': 'Start the bus',
   'team-revoke-approval': 'Revoke an approval rule',
   'team-forget': 'Forget a team record',
+  'team-config': "Change the team's record",
 };
 
 const MIGRATION_ACTIONS = new Set<OwnerAction>(['team-migrate']);

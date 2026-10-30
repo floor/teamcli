@@ -182,10 +182,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.range` | `commits` | 2 | the range can't be resolved | `team commits check missing..also` |
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
+| `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
 | `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
 | `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
 | `config.written` | `config` | 0 | the change validated and was written | `team config set watch.unread_after 5m` |
+| `config.approval-refused` | `config` | 1 | the owner-seat request or approval was refused; nothing was written | `team config set <path> <value> --approval <request-id>` |
 | `config.charter` | `config` | 1 | the owner charter does not cover this edit | `team config set watch.unread_after 5m` |
 | `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |

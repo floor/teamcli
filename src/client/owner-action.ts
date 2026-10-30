@@ -29,7 +29,7 @@ import { presentOwnerRequest } from './owner-page-link.ts';
 import { deliverToOwnerSeat, readOwnerSeat, replaceOwnerSeatMessage, signOwnerAnswer, verifyOwnerAnswer, type OwnerSeatAnswer, type OwnerSeatKeyStore, type SignedOwnerAnswer } from './owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder } from './team-create.ts';
 
-export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-migrate', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget'] as const;
+export const OWNER_ACTIONS = ['team-create', 'team-import', 'team-migrate', 'team-add', 'team-up', 'team-send', 'team-down', 'team-bus', 'team-revoke-approval', 'team-forget', 'team-config'] as const;
 export type OwnerAction = (typeof OWNER_ACTIONS)[number];
 export const OWNER_ACTION_TTL_MS = 15 * 60 * 1000;
 export const OWNER_ACTION_ID_PATTERN = /^oa_[0-9a-f]{24}$/;
@@ -146,6 +146,7 @@ const ACTION_WORDS: Record<OwnerAction, string> = {
   'team-bus': 'start the bus',
   'team-revoke-approval': 'revoke an approval rule',
   'team-forget': 'forget a team record',
+  'team-config': "change the team's record",
 };
 
 /** The card for `team migrate`: team, project, seat count, and the canonical-record hash the signature binds. */

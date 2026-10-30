@@ -23,6 +23,8 @@ export const USAGE = `Usage: team config keys [<level>] [--json]
        team config get <path> [--json]
        team config set <path> <value>
        team config unset <path>
+       team config set <path> <value> --request [--json]
+       team config set <path> <value> --approval <request-id> [--json]
        team config edit
 
 keys prints the settings registry: each key's levels, allowed values, release default,
@@ -33,7 +35,7 @@ get, set, unset and edit read and edit this team's record. <path> is dotted keys
 index: watch.unread_after, seats.lead.model, seats.0.cli. <value> is read as YAML (a
 number, true, a one-line [list] or {map}), else as text. edit opens the record as YAML
 in $VISUAL or $EDITOR and writes it back once it validates. Every write is validated
-first and is the owner's; a change to an owner section is named as needing approval
+first and is the owner's (or, with --request, recorded for the owner seat to approve with Touch ID and applied with --approval <request-id> once signed); a change to an owner section is named as needing approval
 again. set and unset rewrite the record's text, so its comments are not kept; edit keeps
 them.
 
@@ -60,7 +62,7 @@ export type ConfigSources = {
 export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, [], ['json']);
+  const args = readArgs(argv, ['approval'], ['json', 'request']);
   const verb = args.rest[0];
   if (verb === 'get' || verb === 'set' || verb === 'unset' || verb === 'edit') {
     const { runTeamRecordEdit } = await import('../config/edit.ts');

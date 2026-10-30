@@ -18,6 +18,7 @@ import { runBatch } from '../../src/commands/batch.ts';
 import { runBus } from '../../src/commands/bus.ts';
 import { runDown, type DownSources } from '../../src/commands/down.ts';
 import { runForget } from '../../src/commands/forget.ts';
+import { runConfig } from '../../src/commands/config.ts';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import type { Io } from '../../src/io.ts';
 import { upsertProject, readProjects } from '../../src/registry/projects.ts';
@@ -246,6 +247,34 @@ describe('send, down and bus through the owner seat', () => {
     expect(await runBus(['--inherited', nonce], ran, { home: p.home, reconcileIntervalMs: 0, stop }), ran.err).toBe(0);
     expect(existsSync(token)).toBe(false);
     expect(ran.err).toContain('answering on .agents/bus.sock');
+  });
+});
+
+describe('config set through the owner seat', () => {
+  test('--request writes nothing; --approval for other words refuses; the signed words apply once', async () => {
+    const p = place();
+    const env = { ...process.env, TEAM_CONFIG_SOURCE: 'file' };
+    const sources = { home: p.home, env, now: () => NOW, ownerSeatStore: p.store };
+    const file = join(p.root, '.agents', 'team.yaml');
+    const before = readFileSync(file, 'utf8');
+    const plain = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'other'], plain, sources)).toBe(1);
+    const ask = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'other', '--request'], ask, sources), ask.err).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    const id = requestId(ask.out);
+    expect(id).not.toBe('');
+    const early = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'other', '--approval', id], early, sources)).toBe(1);
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const widened = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'wider', '--approval', id], widened, sources)).toBe(1);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+    const ran = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'other', '--approval', id], ran, sources), ran.err + ran.out).toBe(0);
+    expect(readFileSync(file, 'utf8')).toContain('project: other');
+    const replay = ioOf(p.root, detached);
+    expect(await runConfig(['set', 'project', 'again', '--approval', id], replay, sources)).toBe(1);
   });
 });
 

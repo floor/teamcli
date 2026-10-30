@@ -545,6 +545,8 @@ Usage:
     team config get <path> [--json]
     team config set <path> <value>
     team config unset <path>
+    team config set <path> <value> --request [--json]
+    team config set <path> <value> --approval <request-id> [--json]
     team config edit
 
 ### Who may run it
@@ -644,6 +646,8 @@ Hidden: no
 Usage:
 
     team config set <path> <value>
+    team config set <path> <value> --request [--json]
+    team config set <path> <value> --approval <request-id> [--json]
 
 #### Who may run it
 
@@ -653,7 +657,10 @@ Usage:
 
 | Flag | Takes a value | Repeatable | Hidden |
 | --- | --- | --- | --- |
+| `--approval` | yes | no | no |
 | `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--request` | no | no | no |
 | `-h` | no | no | yes |
 
 #### Positionals
