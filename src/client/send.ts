@@ -17,6 +17,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { logLine } from '../log.ts';
 import type { Args } from '../args.ts';
 import type { Io } from '../io.ts';
 import type { SendHost } from '../commands/send.ts';
@@ -335,11 +336,19 @@ export async function runClientSend(
     io.stdout(`sent: ${outcome.to} (drop ${outcome.id})\n`);
   }
   if (deliver !== undefined && outcome.record !== undefined && outcome.target !== undefined) {
+    // A walk that throws has still left the signed drop, which is the message, so it is never a
+    // client refusal. But it is never silent either: the reason goes to the receiving team's log
+    // and one warning line goes to stderr, so a drop left unread can be traced to its walk.
+    const logDir = join(outcome.target.teamRoot, '.agents');
+    const seatName = outcome.target.recipientSeat;
+    const from = outcome.record.from;
     try {
       await deliver({ record: outcome.record, target: outcome.target });
-    } catch {
-      // The walk records its own endings in the receiving team's log; a walk that throws has
-      // still left the signed drop, which is the message. It is never a client refusal.
+      logLine(logDir, 'send', from, `${seatName}: client delivery walk ended for drop ${outcome.id}`, host.now());
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      logLine(logDir, 'send', from, `${seatName}: client delivery walk failed for drop ${outcome.id} (${why}); the drop is written and waits to be read`, host.now());
+      io.stderr(`team send: warning: the drop was written but its delivery walk failed (${why}); see the receiving team's team.log\n`);
     }
   }
   return 0; // exit: send.client-sent

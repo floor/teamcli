@@ -467,6 +467,34 @@ describe('client grant and key records', () => {
 });
 
 describe('client send', () => {
+  test('a delivery walk that throws is logged in the receiving team log and warned on stderr, not swallowed', async () => {
+    const f = fixture('walk-throws');
+    const io = capture(f);
+    const host = { home: f.home, now: () => NOW, sendId: () => 'drop-1' } as unknown as SendHost;
+    const deliver = async (): Promise<void> => {
+      throw new Error('boom in the walk');
+    };
+    const code = await runClientSend(readArgs(clientArgs(f), ['file', 'client', 'key', 'request-id'], ['json']), io.io, host, false, deliver);
+    expect(code).toBe(0);
+    expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
+    expect(io.err()).toContain(`${KEY_ISOLATION_LINE}\n`);
+    expect(io.err()).toContain('team send: warning: the drop was written but its delivery walk failed (boom in the walk)');
+    expect(existsSync(join(f.dropDir, 'drop-1'))).toBe(true);
+    const log = readFileSync(join(f.teamRoot, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('client delivery walk failed for drop drop-1 (boom in the walk)');
+  });
+
+  test('a delivery walk that returns logs its ending in the receiving team log', async () => {
+    const f = fixture('walk-ends');
+    const io = capture(f);
+    const host = { home: f.home, now: () => NOW, sendId: () => 'drop-1' } as unknown as SendHost;
+    const code = await runClientSend(readArgs(clientArgs(f), ['file', 'client', 'key', 'request-id'], ['json']), io.io, host, false, async () => {});
+    expect(code).toBe(0);
+    expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
+    const log = readFileSync(join(f.teamRoot, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('client delivery walk ended for drop drop-1');
+  });
+
   test('writes one signed drop as the client, prints the declared limitation, and never reads a caller', async () => {
     const f = fixture('happy');
     const io = capture(f, { tty: true, caller: { kind: 'owner' } as Caller });
