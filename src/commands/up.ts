@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
+import { admitGeneral } from '../client/general-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
@@ -328,7 +329,7 @@ export const realSources: UpSources = {
 /** The reason the hold `up --no-launch` places carries. */
 export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told not to continue earlier work or read drops; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told not to continue earlier work or read drops; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -338,6 +339,7 @@ export default up;
 function clientInvocationProblem(args: Args): string | null {
   const client = args.values.client !== undefined;
   if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
+  if (args.values.general !== undefined) return client || args.values.key === undefined ? '--general takes --key <client-key-file> and no --client' : null;
   if (!client && args.values.key !== undefined) return '--key belongs to the --client form: team up --client <grant-file> --key <client-key-file>';
   if (!client && args.values.team !== undefined) return '--team belongs to the --client form: team up --client <grant-file> --key <client-key-file> --team <team>';
   if (client && (args.values.file !== undefined || args.values.session !== undefined)) {
@@ -1037,7 +1039,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -1109,7 +1111,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
   // returns; `--approval <id>` admits this run when the owner seat signed for exactly it. An
   // admitted run is a no-terminal owner launch: it never prompts and never types into a pane.
-  const seatStep = clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
+  // A general grant (src/client/general-grant.ts): the owner signed this principal once for this
+  // entity, so the run is admitted as an owner-seat approval would admit it, with no request.
+  if (args.values.general !== undefined) {
+    let entity: string | null = null;
+    try {
+      const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
+      if (here.ok) entity = here.team.entity;
+    } catch {}
+    const general = admitGeneral(sources.home ?? homedir(), resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key!), 'up', entity, sources.now?.() ?? new Date());
+    if (!general.ok) {
+      refuse(io, json, 'up', { id: 'up.general-refused', message: general.why, repair: null });
+      // exit: up.general-refused
+      return 1;
+    }
+    stderrLine(`team up: admitted by general grant ${general.grant.grant_id} (${general.grant.client_id})\n`);
+  }
+  const seatStep = args.values.general !== undefined
+    ? { kind: 'admitted' as const }
+    : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
     : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, sources);
   if (seatStep.kind === 'requested') {

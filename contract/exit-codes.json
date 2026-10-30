@@ -5408,6 +5408,13 @@
     {
       "code": 1,
       "command": "up",
+      "id": "up.general-refused",
+      "meaning": "the general grant does not admit this launch; nothing ran",
+      "trigger": "team up --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "up",
       "id": "up.grant-another-pane",
       "meaning": "the granted seat is not on its recorded pane",
       "trigger": "team up"

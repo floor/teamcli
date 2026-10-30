@@ -778,6 +778,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.deny` | `up` | 1 | deny | `team up` |
 | `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
+| `up.general-refused` | `up` | 1 | the general grant does not admit this launch; nothing ran | `team up --general <grant.json> --key <client.key>` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
 | `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |
 | `up.grant-caller` | `up` | 1 | only the seat the grant names runs this | `team up` |

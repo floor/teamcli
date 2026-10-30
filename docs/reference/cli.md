@@ -3279,6 +3279,7 @@ Usage:
 
     team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]
     team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]
+    team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]
     team up --request [--serial] [--json]
     team up --approval <request-id> [--dry-run] [--serial] [--json]
 
@@ -3294,6 +3295,7 @@ Usage:
 | `--client` | yes | no | no |
 | `--dry-run` | no | no | no |
 | `--file` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |

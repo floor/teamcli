@@ -6545,6 +6545,10 @@ scene('up.approval-requested', async (place) => {
   seatOwner(place.home);
   return show(await up(place, ['--request'], other, upSources(place)), 'owner-seat request');
 });
+scene('up.general-refused', async (place) => {
+  approve(place, TEAM);
+  return show(await up(place, ['--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], other, upSources(place)), 'cannot be read as a general grant');
+});
 scene('up.approval-refused', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--approval', 'oa_nope'], other, upSources(place)), 'is not an owner-seat request id');
