@@ -674,6 +674,7 @@ describe('the operator runs status, send, up and down from one grant, and the ob
     expect(JSON.stringify(drop)).toContain('client:grok-bot');
     expect(JSON.stringify(drop)).toContain(g.grantId);
     expect(sent.log).toContain(`client-send-authorized: grant ${g.grantId} client grok-bot team docs seat orchestrator`);
+    expect(sent.log).toContain('this route walks no delivery leg, so the drop waits');
 
     const up = await clientUp(w, g.path, w.grok.keyPath);
     expect(up.code, up.err + up.out).toBe(0);
