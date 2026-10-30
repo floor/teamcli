@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-10-30
+
+0.5.6 lets the owner approve from the owner seat instead of a terminal, adds general grants
+(one owner signature covering every entity or a listed set), delivers messages on a seat's
+development channel, and makes `team up --no-launch` quieter.
+
+### Upgrade notes
+
+- No migration. A 0.5.5 team keeps working; approvals made on 0.5.5 stay in force.
+- The client grant bundle formerly named `developer` is now the `default` bundle, and it may run
+  `team down --abandon`.
+
+### Added
+
+- **General grants:** one owner signature covers every entity or a listed set;
+  `team up --general` admits a launch under such a grant with no request.
+- **Owner seat:** approve several actions as one request; approve import, add, up, migrate,
+  send, down and bus from the owner seat with no owner terminal; owner-seat requests are shown
+  to Touch ID and applied in one run; `team config set/unset --request` lets the owner seat
+  approve a team-record change.
+- `team grant --request` reports honestly whether the owner was notified, presents a Touch ID
+  card, and prints a one-request link to the owner page; the owner page lists pending grants.
+- A team charter: one owner signature at team setup.
+- The team definition is read from the registry record.
+- Messages on a seat's development channel: `team send` delivers there and redelivers once; the
+  MCP inbox pushes new records and `message.arrived` from the bus.
+- The bus: `team up` starts it in its own workspace, `team down` closes it, and a dropped
+  follower is redialed with a doubling wait.
+- `team messages --client --follow` prints each reply on the client thread as it lands.
+- `team down --abandon` answers known prompts and saves unsent text before stopping a seat.
+- Resume a Grok seat with `grok -r <id>` and an Antigravity seat with `agy --conversation=<id>`.
+- Launches record the conversation id they carry; `config set` syncs the agent launch.
+
+### Changed
+
+- `team up --no-launch`: seats get their rules only (no general seat brief), the stop
+  instruction travels in the rules file, a busy seat is waited out, and the start is quiet.
+- Owner prompts and owner page strings come from one English message catalog; a short French
+  owner-seat prompt is available.
+- `team config set` writes a value with its unit as plain text.
+- Gate scripts live under `scripts/gates` and resolve siblings from their own directory.
+
+### Fixed
+
+- Client sends walk delivery for bundle-grant sends too, and log and warn when the walk fails.
+- The registry session is kept when the config omits it; wording names the registry config when
+  no team file is read.
+- A receipt publisher's temp file is ignored during a read race; an unwritten bus section leaves
+  the canonical record unchanged.
+- Several watch and MCP channel-push races (push name reservation, stale inbox server reload).
+- The codex daemon dialog closes on `team down`; a detached agent is named by `caller`.
+
 ## [0.5.5] - 2026-10-26
 
 0.5.5 moves the team's definition into the registry. The team is read from and written to
