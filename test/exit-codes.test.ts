@@ -38,6 +38,7 @@ import type { ServiceManager } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
+import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
@@ -1118,6 +1119,47 @@ scene('client.keygen.done', async (place) => {
     return show(ran, 'key isolation: enforced against team panes (key file still readable by same-user processes)');
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+function generalWorld(label: string) {
+  const home = clientHome(`gg-${label}`);
+  installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const dirA = join(home, '.config', 'team-client', 'a');
+  const dirB = join(home, '.config', 'team-client', 'b');
+  ranClient({ root: home } as Place, ['keygen', '--out', dirA], home);
+  ranClient({ root: home } as Place, ['keygen', '--out', dirB], home);
+  const pubA = JSON.parse(readFileSync(join(dirA, 'client.pub'), 'utf8')).public_key as string;
+  const root = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pubA, entities: ['*'], ops: ['send'], mayIssue: true, expires: new Date(Date.now() + 2 * 86_400_000) });
+  if (!root.ok) throw new Error(root.why);
+  return { home, dirA, dirB, rootPath: root.path };
+}
+scene('client.general-grant.invocation', async (place) => show(ranClient(place, ['general-grant', '--request']), '--to and --public-key are required'));
+scene('client.general-grant.requested', async (place) => {
+  seatOwner(place.home);
+  const home = place.home;
+  const pub = join(home, 'client.pub');
+  writeFileSync(pub, JSON.stringify({ public_key: 'a'.repeat(64) }));
+  return show(ranClient(place, ['general-grant', '--to', 'bot', '--public-key', pub, '--request']), 'owner-seat request');
+});
+scene('client.general-grant.refused', async (place) => {
+  const pub = join(place.home, 'client.pub');
+  writeFileSync(pub, JSON.stringify({ public_key: 'a'.repeat(64) }));
+  return show(ranClient(place, ['general-grant', '--to', 'bot', '--public-key', pub, '--approval', 'oa_nope']), 'is not an owner-seat request id');
+});
+scene('client.general-grant.failed', async (place) => {
+  const w = generalWorld('failed');
+  try {
+    return show(ranClient(place, ['general-grant', '--to', 'a', '--public-key', join(w.dirA, 'client.pub'), '--via', w.rootPath, '--key', join(w.dirA, 'client.key')], w.home), 'never issues a grant to itself');
+  } finally {
+    rmSync(w.home, { recursive: true, force: true });
+  }
+});
+scene('client.general-grant.issued', async (place) => {
+  const w = generalWorld('issued');
+  try {
+    return show(ranClient(place, ['general-grant', '--to', 'b', '--public-key', join(w.dirB, 'client.pub'), '--ops', 'send', '--days', '1', '--via', w.rootPath, '--key', join(w.dirA, 'client.key')], w.home), 'issued to b');
+  } finally {
+    rmSync(w.home, { recursive: true, force: true });
   }
 });
 scene('commits.invocation', async (place) => {
@@ -2359,6 +2401,10 @@ scene('seats.not-yours', async (place) => {
     write(place, TEAM);
     seatOwner(place.home);
     return show(await recordRun(place, ['set', 'project', 'other', '--request'], detachedCaller), 'owner-seat request');
+  });
+  scene('config.general-refused', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'project', 'other', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], detachedCaller), 'cannot be read as a general grant');
   });
   scene('config.approval-refused', async (place) => {
     write(place, TEAM);

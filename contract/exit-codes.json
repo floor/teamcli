@@ -1082,9 +1082,37 @@
     {
       "code": 0,
       "command": "client",
+      "id": "client.general-grant.issued",
+      "meaning": "the general grant was issued and written",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --request"
+    },
+    {
+      "code": 0,
+      "command": "client",
+      "id": "client.general-grant.requested",
+      "meaning": "the owner-seat request to issue a general grant was recorded; nothing was issued yet",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --request"
+    },
+    {
+      "code": 0,
+      "command": "client",
       "id": "client.keygen.done",
       "meaning": "the client key pair was written in the named directory",
       "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 1,
+      "command": "client",
+      "id": "client.general-grant.failed",
+      "meaning": "the grant could not be issued: wider than the holder, to itself, or not written",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --via <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "client",
+      "id": "client.general-grant.refused",
+      "meaning": "the owner-seat request or approval was refused; nothing was issued",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --approval <id>"
     },
     {
       "code": 1,
@@ -1106,6 +1134,13 @@
       "id": "client.keygen.write",
       "meaning": "the key directory already holds a key, or the pair could not be written 0600",
       "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 2,
+      "command": "client",
+      "id": "client.general-grant.invocation",
+      "meaning": "the general-grant invocation is invalid; nothing was issued",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub>"
     },
     {
       "code": 2,
@@ -1288,6 +1323,13 @@
       "id": "config.detached",
       "meaning": "an edit was run with no terminal",
       "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.general-refused",
+      "meaning": "the general grant does not admit this edit; nothing was written",
+      "trigger": "team config set <path> <value> --general <grant.json> --key <client.key>"
     },
     {
       "code": 1,

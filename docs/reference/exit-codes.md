@@ -160,10 +160,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-a-repo` | `check` | 2 | not inside a git repository and no team file here | `team check` |
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
+| `client.general-grant.issued` | `client` | 0 | the general grant was issued and written | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
+| `client.general-grant.requested` | `client` | 0 | the owner-seat request to issue a general grant was recorded; nothing was issued yet | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.general-grant.failed` | `client` | 1 | the grant could not be issued: wider than the holder, to itself, or not written | `team client general-grant --to <client-id> --public-key <client.pub> --via <grant.json> --key <client.key>` |
+| `client.general-grant.refused` | `client` | 1 | the owner-seat request or approval was refused; nothing was issued | `team client general-grant --to <client-id> --public-key <client.pub> --approval <id>` |
 | `client.keygen.pane` | `client` | 1 | keygen ran inside a team pane (a herdr seat or its child) and was refused before any directory was written | `team client keygen --out ~/.config/team-client/grok-bot` |
 | `client.keygen.refused` | `client` | 1 | the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked | `team client keygen --out .` |
 | `client.keygen.write` | `client` | 1 | the key directory already holds a key, or the pair could not be written 0600 | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.general-grant.invocation` | `client` | 2 | the general-grant invocation is invalid; nothing was issued | `team client general-grant --to <client-id> --public-key <client.pub>` |
 | `client.keygen.invocation` | `client` | 2 | the command arguments are invalid | `team client keygen` |
 | `client.unknown` | `client` | 2 | the subcommand is not one this command knows | `team client grant` |
 | `client.usage` | `client` | 2 | no subcommand was named | `team client` |
@@ -190,6 +195,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.approval-refused` | `config` | 1 | the owner-seat request or approval was refused; nothing was written | `team config set <path> <value> --approval <request-id>` |
 | `config.charter` | `config` | 1 | the owner charter does not cover this edit | `team config set watch.unread_after 5m` |
 | `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
+| `config.general-refused` | `config` | 1 | the general grant does not admit this edit; nothing was written | `team config set <path> <value> --general <grant.json> --key <client.key>` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |

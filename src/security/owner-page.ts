@@ -55,6 +55,7 @@ const ACTION_TITLES: Record<OwnerAction, string> = {
   'team-revoke-approval': 'Revoke an approval rule',
   'team-forget': 'Forget a team record',
   'team-config': "Change the team's record",
+  'team-general-grant': 'Issue a general grant',
 };
 
 const MIGRATION_ACTIONS = new Set<OwnerAction>(['team-migrate']);

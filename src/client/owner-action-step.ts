@@ -50,7 +50,7 @@ export function teamNameAt(root: string, home: string): string {
 
 /** `--request` and `--approval <id>` for one command. `none` when neither was passed. */
 export function ownerSeatStep(
-  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config',
+  command: 'up' | 'add' | 'import' | 'send' | 'down' | 'bus' | 'approvals' | 'forget' | 'config' | 'client',
   action: OwnerAction,
   argv: readonly string[],
   ask: { request: boolean; approval: string | undefined; dry: boolean; json: boolean },
@@ -58,7 +58,7 @@ export function ownerSeatStep(
   sources: OwnerSeatSources,
 ): OwnerSeatStep {
   const home = sources.home ?? homedir();
-  const gate = charterGate(home, { operation: command === 'import' ? 'import' : command, cwd: io.cwd }, sources.ownerSeatStore);
+  const gate = charterGate(home, { operation: command === 'client' ? 'grant' : command, cwd: io.cwd }, sources.ownerSeatStore);
   if (gate.kind === 'block') {
     refuse(io, ask.json, command, { id: `${command}.approval-refused`, message: gate.message, repair: null });
     return { kind: 'refused' };

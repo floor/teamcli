@@ -11,6 +11,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { ownerSeatStep } from '../client/owner-action-step.ts';
+import { admitGeneral } from '../client/general-grant.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
 import { approvalDifferences } from '../approve/approval.ts';
@@ -38,7 +40,7 @@ function runEditor(path: string, env: Record<string, string | undefined>): numbe
 export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['approval'], ['json', 'request']);
+  const args = readArgs(argv, ['approval', 'general', 'key'], ['json', 'request']);
   const [verb, rawPath, rawValue, extra] = args.rest;
   const usage = (await import('../commands/config.ts')).USAGE;
   const wants = verb === 'edit' ? 0 : verb === 'set' ? 2 : 1;
@@ -50,6 +52,8 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   if (why === null && (args.flags.has('request') || args.values.approval !== undefined) && verb !== 'set' && verb !== 'unset') {
     why = '--request and --approval take set or unset';
   }
+  if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
+  if (why === null && args.values.general !== undefined && verb !== 'set' && verb !== 'unset') why = '--general takes set or unset';
   const path = why === null && rawPath !== undefined ? parsePath(rawPath) : [];
   if (why === null && typeof path === 'string') why = path;
   if (why !== null || typeof path === 'string') {
@@ -121,6 +125,23 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       return 1;
     }
     seatApproved = step.kind === 'admitted';
+  }
+  // A general grant: the owner signed it once for this principal across these entities, so a set
+  // or unset under it applies directly, with no per-action request.
+  if (args.values.general !== undefined && !seatApproved) {
+    let entity: string | null = null;
+    try {
+      const loaded = readTeamConfig(root, { home });
+      if (loaded.ok) entity = loaded.team.entity;
+    } catch {}
+    const admitted = admitGeneral(home, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key as string), 'config', entity, sources.now?.() ?? new Date());
+    if (!admitted.ok) {
+      refuse(io, json, 'config', { id: 'config.general-refused', message: admitted.why, repair: null });
+      // exit: config.general-refused
+      return 1;
+    }
+    if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
+    seatApproved = true;
   }
   const gate = charterGate(home, { operation: 'config', cwd: io.cwd }, sources.ownerSeatStore);
   if (gate.kind === 'block' && !seatApproved) {

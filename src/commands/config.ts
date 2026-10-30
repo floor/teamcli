@@ -25,6 +25,8 @@ export const USAGE = `Usage: team config keys [<level>] [--json]
        team config unset <path>
        team config set <path> <value> --request [--json]
        team config set <path> <value> --approval <request-id> [--json]
+       team config set <path> <value> --general <grant.json> --key <client.key> [--json]
+       team config unset <path> --general <grant.json> --key <client.key> [--json]
        team config edit
 
 keys prints the settings registry: each key's levels, allowed values, release default,
@@ -64,7 +66,7 @@ export type ConfigSources = {
 export async function runConfig(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['approval'], ['json', 'request']);
+  const args = readArgs(argv, ['approval', 'general', 'key'], ['json', 'request']);
   const verb = args.rest[0];
   if (verb === 'get' || verb === 'set' || verb === 'unset' || verb === 'edit') {
     const { runTeamRecordEdit } = await import('../config/edit.ts');

@@ -278,6 +278,7 @@ describe('owner page', () => {
       'team-revoke-approval': 'Revoke an approval rule',
       'team-forget': 'Forget a team record',
       'team-config': "Change the team's record",
+      'team-general-grant': 'Issue a general grant',
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({
