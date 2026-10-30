@@ -5,7 +5,7 @@
 import { createPrivateKey, randomBytes, type KeyObject } from 'node:crypto';
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/keys.ts';
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
 
@@ -136,7 +136,7 @@ function load(path: string): Disk | string {
     if (typeof parsed?.signature !== 'string' || g === undefined || !GENERAL_GRANT_ID.test(g.grant_id) || !Array.isArray(g.entities) || !Array.isArray(g.ops)) return `"${path}" is not a general grant`;
     return parsed;
   } catch {
-    return `"${path}" cannot be read as a general grant`;
+    return `"${basename(path)}" cannot be read as a general grant`;
   }
 }
 

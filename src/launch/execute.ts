@@ -699,7 +699,7 @@ export async function executePlan(
   const relaunched = new Map<string, 'gone' | 'replaced' | 'drift'>();
   // The conversation id each launch is known to carry: the `--session-id` it minted, or the id its
   // line resumes. The seat state records it (and the registry's reach from it), so the next
-  // relaunch can resume it; herdr's reading after the launch is only the fallback.
+  // relaunch can resume it when herdr's reading after the launch has none (herdr's reading, when present, wins).
   const launchSessions = new Map<string, string>();
   const finishReady = (seat: string) => {
     ready.add(seat);
@@ -1211,7 +1211,7 @@ export async function executePlan(
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
-            const sessionId = launchSessions.get(op.seat) ?? host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session;
+            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session ?? launchSessions.get(op.seat);
             host.record(op.seat, {
               stage: 'launched',
               pane: here.pane,
