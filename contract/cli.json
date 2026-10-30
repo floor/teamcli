@@ -2742,6 +2742,12 @@
         },
         {
           "hidden": false,
+          "name": "--follow",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -2789,7 +2795,7 @@
       "subcommands": [],
       "usage": [
         "team messages [--json]",
-        "team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]"
+        "team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]"
       ],
       "who": {
         "gate": "seat-record",

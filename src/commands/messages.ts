@@ -60,7 +60,7 @@ import {
 import { publishRecordRead } from '../send/read-receipt.ts';
 
 export const USAGE = `Usage: team messages [--json]
-Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]
+Usage: team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
 
 Exits 0 when the inbox is read, 1 when the caller, team file, or message record is refused, 2 when the invocation can't be read or this folder is neither a checkout nor a team root.
 `;
@@ -94,7 +94,14 @@ export type LegacyReceiptPayload = {
 export type MessagesSources = {
   home: string;
   now(): Date;
+  /** The pause between `--follow` reads; tests hand in one that resolves at once. */
+  followWait?(): Promise<void>;
+  /** How many reads a `--follow` run makes before it returns; absent: until it is stopped. */
+  followReads?: number;
 };
+
+/** The pause between two `--follow` reads: short, so a reply prints within about a second. */
+export const FOLLOW_INTERVAL_MS = 1000;
 
 export const realSources: MessagesSources = { home: homedir(), now: () => new Date() };
 
@@ -615,12 +622,12 @@ export async function runMessages(argv: string[], io: Io, sources: MessagesSourc
   const clientFlag = argv.some((arg) => arg === '--client' || arg.startsWith('--client='));
   const keyFlag = argv.some((arg) => arg === '--key' || arg.startsWith('--key='));
   if (clientFlag || keyFlag) {
-    return runClientMessages(
-      readArgs(argv, ['client', 'key', 'since', 'ack', 'limit', 'request-id'], ['json']),
-      io,
-      sources,
-      json,
-    );
+    const parse = (words: string[]) => readArgs(words, ['client', 'key', 'since', 'ack', 'limit', 'request-id'], ['json', 'follow']);
+    const parsed = parse(argv);
+    if (parsed.error === undefined && parsed.flags.has('follow')) {
+      return followClientMessages(argv.filter((arg) => arg !== '--follow'), io, sources, json, parse);
+    }
+    return runClientMessages(parsed, io, sources, json);
   }
   const args = readArgs(argv, [], ['json']);
   if (args.error || args.rest.length) {
@@ -870,4 +877,71 @@ function renderMailbox(
   if (differences.length > 0) lines.push('', ...renderDifferences(differences, style));
   lines.push('', pluralCount(rows.length, 'message'));
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * `team messages --client … --follow`: the same signed, replay-checked client read, repeated,
+ * printing each reply on the client's thread once, as soon as a read finds it. Every read is an
+ * ordinary `runClientMessages` call with its own request id and `--since` the last reply printed,
+ * so the follow mode admits nothing a single read would not. A refused read ends the follow with
+ * its own exit and reason. Text mode prints one line per reply; `--json` prints one JSON row per line.
+ */
+export async function followClientMessages(
+  argv: string[],
+  io: Io,
+  sources: MessagesSources,
+  json: boolean,
+  parse: (words: string[]) => ReturnType<typeof readArgs>,
+): Promise<number> {
+  const base = argv.filter((arg) => arg !== '--json');
+  const sinceAt = base.indexOf('--since');
+  let cursor: string | null = sinceAt >= 0 ? (base[sinceAt + 1] ?? null) : null;
+  const rest = sinceAt >= 0 ? [...base.slice(0, sinceAt), ...base.slice(sinceAt + 2)] : base;
+  if (rest.includes('--ack') || rest.includes('--request-id')) {
+    // The client read's own usage refusal, with its own exit.
+    return runClientMessages({ ...parse(rest), error: '--follow takes neither --ack nor --request-id: each read signs its own request' }, io, sources, json);
+  }
+  const wait = sources.followWait ?? (() => new Promise<void>((resolve) => setTimeout(resolve, FOLLOW_INTERVAL_MS)));
+  let first = true;
+  let stopped = false;
+  for (let read = 0; sources.followReads === undefined || read < sources.followReads; read += 1) {
+    if (read > 0) await wait();
+    let out = '';
+    let err = '';
+    const quiet: Io = { ...io, stdout: (text) => { out += text; }, stderr: (text) => { err += text; } };
+    const code = runClientMessages(
+      parse([...rest, ...(cursor === null ? [] : ['--since', cursor]), '--json']),
+      quiet,
+      sources,
+      true,
+    );
+    if (first) {
+      // The declared key-isolation line, once per follow run.
+      const line = err.split('\n')[0];
+      if (line) io.stderr(`${line}\n`);
+      first = false;
+    }
+    let doc: { rows?: { id: string; from: string; sent: string; status: string; body?: string }[]; error?: { message: string } } = {};
+    try {
+      doc = JSON.parse(out) as typeof doc;
+    } catch {
+      doc = {};
+    }
+    if (code !== 0) {
+      io.stderr(`team messages: follow stopped: ${doc.error?.message ?? (err.split('\n').slice(1).join(' ').trim() || 'the read was refused')}\n`);
+      stopped = true;
+      break;
+    }
+    for (const row of doc.rows ?? []) {
+      if (row.status !== 'shown') continue;
+      if (json) io.stdout(`${JSON.stringify({ id: row.id, from: row.from, sent: row.sent, body: row.body ?? null })}\n`);
+      else io.stdout(`${row.sent} reply ${row.id} from ${row.from}: ${(row.body ?? '').replace(/\s+/g, ' ').trim()}\n`);
+      cursor = row.id;
+    }
+  }
+  // The follow ends with one last ordinary read, whose exit is the run's: a refusal answers with
+  // its own id and reason, and a follow a test bounded ends with the read's clean exit. Its rows are
+  // already printed, so its output goes nowhere unless it refuses.
+  const last: Io = stopped ? io : { ...io, stdout: () => {}, stderr: () => {} };
+  return runClientMessages(parse([...rest, ...(cursor === null ? [] : ['--since', cursor])]), last, sources, stopped ? json : true);
 }

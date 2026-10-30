@@ -1506,7 +1506,7 @@ Hidden: no
 Usage:
 
     team messages [--json]
-    team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]
+    team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]
 
 ### Who may run it
 
@@ -1518,6 +1518,7 @@ Usage:
 | --- | --- | --- | --- |
 | `--ack` | yes | no | no |
 | `--client` | yes | no | no |
+| `--follow` | no | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
 | `--key` | yes | no | no |
