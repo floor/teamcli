@@ -330,6 +330,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.exists` | `init` | 1 | the team file already exists | `team init` |
 | `init.from-archive` | `init` | 1 | the archive can’t be read or verified | `team init --from-archive <folder>` |
 | `init.from-archive-invalid` | `init` | 1 | the archived team file doesn’t validate | `team init --from-archive <folder>` |
+| `init.general-refused` | `init` | 1 | the general grant does not admit this create; nothing was written | `team init --general <grant.json> --key <client.key>` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
 | `init.legacy` | `init` | 1 | the record predates signed records | `team init --restore` |
 | `init.not-owner` | `init` | 1 | not the owner | `team init` |

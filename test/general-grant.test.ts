@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { admitGeneral, generalGrantPath, issueHeldGeneralGrant, issueOwnerGeneralGrant, readGeneralGrant } from '../src/client/general-grant.ts';
+import { admitGeneral, generalGrantPath, issueHeldGeneralGrant, issueOwnerGeneralGrant, parseOps, readGeneralGrant } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { installKey } from '../src/store/keys.ts';
 
@@ -70,4 +70,37 @@ test('a holder issues only to another principal, never wider, and the chain veri
   // b's grant may not issue at all
   expect(issueHeldGeneralGrant(w.home, child.path, w.b.path, { clientId: 'c', publicKey: w.c.pub, entities: ['material'], ops: ['send'], mayIssue: false, expires: later(1) }).ok).toBe(false);
   expect(generalGrantPath(w.home, child.grant.grant_id)).toBe(child.path);
+});
+
+test('init is a general-grant op; the wildcard covers it and every op, and never widens through a holder', () => {
+  const w = world();
+  const listed = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['floor'], ops: ['config', 'up'], mayIssue: true, expires: later(5) });
+  if (!listed.ok) throw new Error(listed.why);
+  expect(admitGeneral(w.home, listed.path, w.a.path, 'init', 'floor').ok).toBe(false);
+  const all = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['floor'], ops: ['*'], mayIssue: true, expires: later(5) });
+  if (!all.ok) throw new Error(all.why);
+  expect(admitGeneral(w.home, all.path, w.a.path, 'init', 'floor').ok).toBe(true);
+  expect(admitGeneral(w.home, all.path, w.a.path, 'reply', 'floor').ok).toBe(true);
+  expect(admitGeneral(w.home, all.path, w.a.path, 'init', 'material').ok).toBe(false);
+  expect(admitGeneral(w.home, all.path, w.a.path, 'init', null).ok).toBe(false);
+  // a listed holder never issues the wildcard; a wildcard holder still never issues to itself
+  expect(issueHeldGeneralGrant(w.home, listed.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['floor'], ops: ['*'], mayIssue: false, expires: later(1) }).ok).toBe(false);
+  expect(issueHeldGeneralGrant(w.home, listed.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: later(1) }).ok).toBe(false);
+  expect(issueHeldGeneralGrant(w.home, all.path, w.a.path, { clientId: 'a', publicKey: w.a.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: later(1) }).ok).toBe(false);
+  const child = issueHeldGeneralGrant(w.home, all.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: later(1) });
+  if (!child.ok) throw new Error(child.why);
+  expect(admitGeneral(w.home, child.path, w.b.path, 'init', 'floor').ok).toBe(true);
+  expect(admitGeneral(w.home, child.path, w.b.path, 'up', 'floor').ok).toBe(false);
+  // the op list is signed: rewriting it to the wildcard breaks verification
+  const disk = JSON.parse(readFileSync(listed.path, 'utf8'));
+  disk.general_grant.ops = ['*'];
+  writeFileSync(listed.path, JSON.stringify(disk));
+  expect(admitGeneral(w.home, listed.path, w.a.path, 'init', 'floor').ok).toBe(false);
+});
+
+test('parseOps defaults to the wildcard and still refuses unknown ops', () => {
+  expect(parseOps(undefined)).toEqual(['*']);
+  expect(parseOps('all')).toEqual(['*']);
+  expect(parseOps('init,up')).toEqual(['init', 'up']);
+  expect(typeof parseOps('create')).toBe('string');
 });

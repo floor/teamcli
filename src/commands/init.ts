@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
+import { admitGeneral } from '../client/general-grant.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
 import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
@@ -187,6 +188,7 @@ export default init;
 export const USAGE = `Usage: team init [--restore] [--from-archive <folder>] [--json]
        team init --request [--then-up] [--json]
        team init --execute <request-id> [--json]
+       team init --general <grant.json> --key <client.key> [--json]
        team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
        team init --approvals [--json]
        team init --revoke-approval <rule-id> [--json]
@@ -210,7 +212,7 @@ export async function runInit(
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope'], ['restore', 'json', 'request', 'approvals', 'approval-modes', 'then-up']);
+  const args = readArgs(argv, ['from-archive', 'execute', 'approve-as-owner-seat', 'signer', 'assertion', 'revoke-approval', 'approval-mode', 'scope', 'general', 'key'], ['restore', 'json', 'request', 'approvals', 'approval-modes', 'then-up']);
   const approving = args.values['approve-as-owner-seat'] !== undefined;
   if (args.error || (args.rest.length && !(approving && args.rest.length === 1))) {
     refuse(io, json, 'init', {
@@ -316,6 +318,27 @@ export async function runInit(
       actionRefusal(admitted.why);
       actionOutcome = 'refused';
     } else seatApproved = true;
+  }
+  // A general grant (src/client/general-grant.ts) covering `init`: the owner signed this principal
+  // once for the entity whose declared roots hold this place, so the create is admitted as an
+  // owner-seat approval would admit it, with no request and no owner terminal. Fail-closed: the
+  // grant must verify back to the owner key, be unexpired, match the key, and cover the entity.
+  if (actionOutcome === null && args.values.general !== undefined) {
+    const root = findRoot(io.cwd);
+    const admitted = args.values.key === undefined
+      ? { ok: false as const, why: '--general needs --key <client.key>' }
+      : args.values.execute !== undefined || args.flags.has('request') || args.flags.has('restore') || fromArchive !== undefined
+        ? { ok: false as const, why: '--general is its own door: it takes no --execute, --request, --restore or --from-archive' }
+        : root === null
+          ? { ok: false as const, why: 'not inside a git repository' }
+          : admitGeneral(actionHome, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key), 'init', declaredEntity(actionHome, root), now);
+    if (!admitted.ok) {
+      refuse(io, json, 'init', { id: 'init.general-refused', message: admitted.why, repair: null });
+      // exit: init.general-refused
+      return 1;
+    }
+    if (!json) io.stderr(`team init: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
+    seatApproved = true;
   }
   if (actionOutcome === 'done') {
     // exit: init.approval

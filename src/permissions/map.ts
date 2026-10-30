@@ -79,7 +79,7 @@ function buildGates(): Record<string, Gate> {
     },
     init: {
       kind: 'owner-only',
-      why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`',
+      why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it for an entity the grant covers (`team init --general <grant> --key <client.key>`)',
     },
     up: {
       kind: 'owner-or-leads',
