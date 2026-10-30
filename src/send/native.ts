@@ -79,7 +79,7 @@ export type TriggerSender = {
 };
 
 /** The line's opening: the team's template with this sender's signed identity in its slots. */
-function wakeHead(sender: TriggerSender): string {
+export function wakeHead(sender: TriggerSender): string {
   return renderMessageDisplay(sender.template ?? sender.format ?? MESSAGE_DISPLAY_DEFAULT, {
     name: sender.name ?? sender.seat,
     seat: sender.seat,

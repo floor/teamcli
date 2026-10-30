@@ -1,7 +1,19 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
+
+function saveTextFile(path: string, text: string): boolean {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text.endsWith('\n') ? text : `${text}\n`, { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, shellQuote, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
+import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -85,6 +97,10 @@ export type Host = {
   /** The live key exit, for a CLI whose TUI takes no exit text: the profile's keys, pressed at
    *  the seat's idle screen only; see `ExitKeys`. Present where a seat can be stopped. */
   pressKeys?(session: string, pane: string, cli: string, keys: readonly string[]): ExitKeys | Promise<ExitKeys>;
+  /** One raw key into a pane, for `--abandon`'s prompt answers. Absent: the answer is skipped. */
+  sendKey?(session: string, pane: string, key: string): boolean;
+  /** Writes the unsent text `--abandon` saves; absent, it is written with node:fs. */
+  saveText?(path: string, text: string): boolean;
   /** `false` is a delivery that stopped without a reading worth reporting (no host, or no live
    *  pane); a `Refusal` is one that stopped on a screen the report can name. `file` is the
    *  seat's rules delivery: the text the file holds, the file's path, the one line typed, and
@@ -99,6 +115,8 @@ export type Host = {
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
   closeWorkspace(session: string, workspace: string): boolean;
+  /** Forgets the bus record once its workspace closed. */
+  dropBus?(): void;
   stopSession(session: string): boolean;
   /** Clears the session this run has just stopped. Present on `down` only: `up` never deletes. */
   deleteSession?(session: string): boolean | Promise<boolean>;
@@ -186,6 +204,8 @@ export type Host = {
   noteWatchFile?(pane: string, file: string): void;
   /** Records the watch's pane once its command has started. */
   noteWatch?(pane: string, workspace?: string): void;
+  /** Records the bus's pane and workspace once its command started, so `team down` can close it. */
+  noteBus?(pane: string, workspace?: string): void;
   /** The seat's line: first drawn before its workspace is created, rewritten in place as it
    *  advances. Present on `up` and `add`; `down` has none, and its records keep their old lines. */
   progress?(seat: string, state: ProgressState): void;
@@ -677,6 +697,10 @@ export async function executePlan(
   // launched. Any other end of that seat keeps its own record, and the close is what the plan
   // and the state already show.
   const relaunched = new Map<string, 'gone' | 'replaced' | 'drift'>();
+  // The conversation id each launch is known to carry: the `--session-id` it minted, or the id its
+  // line resumes. The seat state records it (and the registry's reach from it), so the next
+  // relaunch can resume it when herdr's reading after the launch has none (herdr's reading, when present, wins).
+  const launchSessions = new Map<string, string>();
   const finishReady = (seat: string) => {
     ready.add(seat);
     const verdict = relaunched.get(seat);
@@ -1037,6 +1061,9 @@ export async function executePlan(
             host.record(op.seat, { stage: 'launched' });
             dropped.add(op.seat);
             final(op.seat, { kind: 'left out', reason: 'its workspace was not created; left at launched' });
+          } else if ('bus' in op && op.bus) {
+            host.say('bus: its workspace was not created; seats poll their inboxes\n');
+            host.log('bus', 'its workspace was not created');
           } else {
             watchFailed = true;
             host.say('watch: its workspace was not created\n');
@@ -1124,6 +1151,8 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
           break;
         }
+        const knownSession = launch.sessionId ?? (namedResumeTarget(op.cli ?? '', launch.command) || undefined);
+        if (knownSession !== undefined) launchSessions.set(op.seat, knownSession);
         host.sessionStarted?.(op.seat, {
           pane: here.pane,
           ...(here.workspace === undefined ? {} : { workspace: here.workspace }),
@@ -1182,7 +1211,7 @@ export async function executePlan(
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
-            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session;
+            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session ?? launchSessions.get(op.seat);
             host.record(op.seat, {
               stage: 'launched',
               pane: here.pane,
@@ -1534,6 +1563,18 @@ export async function executePlan(
         host.log('watch', 'started');
         break;
       }
+      case 'bus': {
+        const here = places.get(op.label);
+        if (!here || !host.paneRun(session, here.pane, op.command)) {
+          host.say('bus: it did not start; seats poll their inboxes\n');
+          host.log('bus', 'it did not start');
+          break;
+        }
+        host.noteBus?.(here.pane, here.workspace);
+        host.say('bus: started\n');
+        host.log('bus', 'started');
+        break;
+      }
       case 'type': {
         const typed = await host.typeLine(session, op.pane, op.text);
         if (typed === 'no-agent') {
@@ -1816,6 +1857,17 @@ export async function executePlan(
         relaunched.set(op.seat, op.drift || op.reload || verdict === 'same' ? 'drift' : verdict);
         break;
       }
+      case 'answer': {
+        if (op.saveTo !== undefined && op.text !== undefined) {
+          const saved = host.saveText ? host.saveText(op.saveTo, op.text) : saveTextFile(op.saveTo, op.text);
+          host.say(saved ? `${op.seat}: its unsent text was saved to ${op.saveTo}\n` : `${op.seat}: its unsent text could not be saved to ${op.saveTo}; it was not cleared\n`);
+          if (!saved) break;
+        }
+        for (const key of op.keys) {
+          if (!host.sendKey || !host.sendKey(session, op.pane, key)) break;
+        }
+        break;
+      }
       case 'close': {
         if (!host.closeWorkspace(session, op.workspace)) {
           held = true;
@@ -1824,6 +1876,15 @@ export async function executePlan(
         }
         host.drop(op.seat);
         finish(op.seat, op.said ?? 'stopped');
+        break;
+      }
+      case 'close-bus': {
+        if (!host.closeWorkspace(session, op.workspace)) {
+          host.say('bus: its workspace did not close\n');
+          break;
+        }
+        host.dropBus?.();
+        host.say('bus: stopped\n');
         break;
       }
       case 'kill': {
@@ -1893,7 +1954,7 @@ export async function executePlan(
     let end = steps.length;
     while (end > start) {
       const op = steps[end - 1]?.do;
-      if ((op?.do === 'create' && !op.seat) || op?.do === 'watch' || op?.do === 'kill' || op?.do === 'watch-gone' || op?.do === 'hold' || op?.do === 'stop') end--;
+      if ((op?.do === 'create' && !op.seat) || op?.do === 'watch' || op?.do === 'bus' || op?.do === 'kill' || op?.do === 'watch-gone' || op?.do === 'hold' || op?.do === 'stop') end--;
       else break;
     }
 

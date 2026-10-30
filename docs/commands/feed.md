@@ -7,11 +7,11 @@ timeline with the verified `presence.changed` records in the same state folder's
 (`events.jsonl`), which the daemon's presence publisher writes from each seat's durable presence
 log. It reads: it writes nothing, and following the logs never grows either of them.
 
-Each completed `team send` run (`delivered`, `delivered (read)`, `sent (unconfirmed)`,
+Each completed `team send` run (`delivered`, `delivered (read)`, `sent (unconfirmed)`, `sent (channel)`,
 `answered`, `held`, `queued (receiver busy)`, `not-submitted`, `timeout`, or `unreachable`) appends one JSON object per
 line to `messages.jsonl`:
 
-    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
+    {"ts":"<ISO-8601>","from":"<sender>","to":"<seat>","body":"<text>","id":"<uuid>","outcome":"<outcome>","from_team":"<team-id>","spec":"<address as written>","resolved":"<agt-id>","ms":<milliseconds>,"via":"<socket|typed|mcp-inbox|channel>","failed":["<leg>: <reason>",...],"note":"<qualifier>","thread":"<uuid>","in_reply_to":"<uuid>"}
 
 The fields after `outcome` are optional. `from_team` is the sending team's registry id, written by
 the send run (and by `--record`, `--confirm`, `reply` and the daemon) on the line it appends; a

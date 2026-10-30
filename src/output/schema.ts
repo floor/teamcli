@@ -1642,6 +1642,8 @@ export const UP_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
   required: ['seats'],
   properties: {
     seats: { type: 'array', items: { type: 'string', minLength: 1 } },
+    /** Present and true when `--no-launch` left the general seat brief out. */
+    no_launch: { type: 'boolean', const: true },
     notes: { type: 'array', items: { type: 'string' } },
     restore_summary: {
       type: 'object',
@@ -2005,12 +2007,12 @@ export const SEND_OUTPUT_SCHEMA: CommandSchemaSpec = {
         schema: schemaTagFragment('team.send', 1),
         format: { type: 'integer', const: 1 },
         dry_run: { type: 'boolean' },
-        status: { type: 'string', enum: ['delivered', 'delivered (read)', 'sent (unconfirmed)', 'queued (receiver busy)', 'answered', 'recorded', 'native', 'dry-run'] },
+        status: { type: 'string', enum: ['delivered', 'delivered (read)', 'sent (unconfirmed)', 'sent (channel)', 'queued (receiver busy)', 'answered', 'recorded', 'native', 'dry-run'] },
         action_summary: { type: 'string', minLength: 1 },
         project: { type: ['string', 'null'] },
         session: { type: ['string', 'null'] },
         seat: { type: 'string', minLength: 1 },
-        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', null] },
+        channel: { type: ['string', 'null'], enum: ['socket', 'typed', 'drop', 'mcp-inbox', 'native', 'headless-resume', 'channel', null] },
         to: { type: 'string', minLength: 1 },
         confirm: { type: 'string', minLength: 1 },
         message: { type: 'string' },

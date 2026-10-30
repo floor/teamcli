@@ -14,8 +14,9 @@ import { holdText, liveHold, updateState, type HoldRecord } from '../state.ts';
 // and `team hold --release` clears it. The hold lives in the state, never the team file: the
 // file waits for the owner's approval, and a hold that waits is no hold. `status` prints it as
 // a note and `doctor` as a `--` line; a record past its `until` reads as no hold at all
-// (`liveHold`), so nothing has to clear it on time. In this part nothing consults a hold before
-// acting: no command and no launch changes behaviour while one stands. The caller rule is
+// (`liveHold`), so nothing has to clear it on time. The watch consults it: while a hold stands it
+// types nothing automatic (no work offer, ring, unread wake or held-drop retry), as `--no-nudge`
+// does; `up --no-launch` places one for its quiet start. The caller rule is
 // `down`'s — the owner, or the team's orchestrator or operator — because a hold is shown to
 // the whole team like the stop is, and the same gate places and releases.
 

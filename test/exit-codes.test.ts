@@ -38,6 +38,7 @@ import type { ServiceManager } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
+import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
 import { commits } from '../src/commands/commits.ts';
 import { runDoctor, type DoctorSources } from '../src/commands/doctor.ts';
 import { runDown, type DownLaunch, type DownSources } from '../src/commands/down.ts';
@@ -1118,6 +1119,47 @@ scene('client.keygen.done', async (place) => {
     return show(ran, 'key isolation: enforced against team panes (key file still readable by same-user processes)');
   } finally {
     rmSync(home, { recursive: true, force: true });
+  }
+});
+function generalWorld(label: string) {
+  const home = clientHome(`gg-${label}`);
+  installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+  const dirA = join(home, '.config', 'team-client', 'a');
+  const dirB = join(home, '.config', 'team-client', 'b');
+  ranClient({ root: home } as Place, ['keygen', '--out', dirA], home);
+  ranClient({ root: home } as Place, ['keygen', '--out', dirB], home);
+  const pubA = JSON.parse(readFileSync(join(dirA, 'client.pub'), 'utf8')).public_key as string;
+  const root = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pubA, entities: ['*'], ops: ['send'], mayIssue: true, expires: new Date(Date.now() + 2 * 86_400_000) });
+  if (!root.ok) throw new Error(root.why);
+  return { home, dirA, dirB, rootPath: root.path };
+}
+scene('client.general-grant.invocation', async (place) => show(ranClient(place, ['general-grant', '--request']), '--to and --public-key are required'));
+scene('client.general-grant.requested', async (place) => {
+  seatOwner(place.home);
+  const home = place.home;
+  const pub = join(home, 'client.pub');
+  writeFileSync(pub, JSON.stringify({ public_key: 'a'.repeat(64) }));
+  return show(ranClient(place, ['general-grant', '--to', 'bot', '--public-key', pub, '--request']), 'owner-seat request');
+});
+scene('client.general-grant.refused', async (place) => {
+  const pub = join(place.home, 'client.pub');
+  writeFileSync(pub, JSON.stringify({ public_key: 'a'.repeat(64) }));
+  return show(ranClient(place, ['general-grant', '--to', 'bot', '--public-key', pub, '--approval', 'oa_nope']), 'is not an owner-seat request id');
+});
+scene('client.general-grant.failed', async (place) => {
+  const w = generalWorld('failed');
+  try {
+    return show(ranClient(place, ['general-grant', '--to', 'a', '--public-key', join(w.dirA, 'client.pub'), '--via', w.rootPath, '--key', join(w.dirA, 'client.key')], w.home), 'never issues a grant to itself');
+  } finally {
+    rmSync(w.home, { recursive: true, force: true });
+  }
+});
+scene('client.general-grant.issued', async (place) => {
+  const w = generalWorld('issued');
+  try {
+    return show(ranClient(place, ['general-grant', '--to', 'b', '--public-key', join(w.dirB, 'client.pub'), '--ops', 'send', '--days', '1', '--via', w.rootPath, '--key', join(w.dirA, 'client.key')], w.home), 'issued to b');
+  } finally {
+    rmSync(w.home, { recursive: true, force: true });
   }
 });
 scene('commits.invocation', async (place) => {
@@ -2354,6 +2396,19 @@ scene('seats.not-yours', async (place) => {
   scene('config.not-owner', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'project', 'other'], other), "only the owner edits the team's record");
+  });
+  scene('config.approval-requested', async (place) => {
+    write(place, TEAM);
+    seatOwner(place.home);
+    return show(await recordRun(place, ['set', 'project', 'other', '--request'], detachedCaller), 'owner-seat request');
+  });
+  scene('config.general-refused', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'project', 'other', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], detachedCaller), 'cannot be read as a general grant');
+  });
+  scene('config.approval-refused', async (place) => {
+    write(place, TEAM);
+    return show(await recordRun(place, ['set', 'project', 'other', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id');
   });
   scene('config.editor', async (place) => {
     write(place, TEAM);
@@ -5131,6 +5186,28 @@ scene('send.sent-unconfirmed', async (place) => {
   liveInbox(place);
   return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { inboxGraceMs: 0 })), 'lead: sent (unconfirmed) (mcp-inbox, 0 ms)');
 });
+/** The development channel: a Claude lead launched with the channel naming the team server, a
+ *  live listener that declared it, and no declared order. The server's push marker lands while
+ *  the sender waits, so the walk ends `sent (channel)` and nothing is typed. */
+scene('send.sent-channel', async (place) => {
+  const text = TEAM.replace('launch: claude --model claude-opus-5-5', 'launch: claude --model claude-opus-5-5 --dangerously-load-development-channels server:team-inbox')
+    .replace(/# The send scenes on this file[\s\S]*$/, '');
+  write(place, text);
+  const dropDir = liveInbox(place);
+  const listener = JSON.parse(readFileSync(join(dropDir, '.inbox-listener'), 'utf8')) as Record<string, unknown>;
+  writeFileSync(join(dropDir, '.inbox-listener'), `${JSON.stringify({ ...listener, channel: true })}\n`);
+  const host = sendHost(place, { socket: false });
+  host.native.wait = async () => {
+    const id = readdirSync(dropDir).find((name) => /^[0-9a-f-]{36}$/.test(name));
+    if (id === undefined) return;
+    try {
+      writeFileSync(join(dropDir, `${id}.channel-push.json`), `${JSON.stringify({ v: 1, kind: 'channel-push', id, seat: 'lead', session: 'acme', root: place.root, at: NOW.toISOString(), meta: { id, from: 'owner', seat: 'lead', team: 'acme' }, content_sha256: 'a'.repeat(64), status: 'sent (channel)' })}\n`, { flag: 'wx', mode: 0o600 });
+    } catch {
+      // Already pushed on an earlier wait.
+    }
+  };
+  return show(await sent(place, ['lead', 'hello'], owner, host), 'lead: sent (channel)');
+});
 scene('send.queued', async (place) => {
   write(place, TEAM);
   // A daemon that answers `queued`: the receiver is busy, the signed copy is stored, and the
@@ -6468,12 +6545,16 @@ scene('up.approval-requested', async (place) => {
   seatOwner(place.home);
   return show(await up(place, ['--request'], other, upSources(place)), 'owner-seat request');
 });
+scene('up.general-refused', async (place) => {
+  approve(place, TEAM);
+  return show(await up(place, ['--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], other, upSources(place)), 'cannot be read as a general grant');
+});
 scene('up.approval-refused', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--approval', 'oa_nope'], other, upSources(place)), 'is not an owner-seat request id');
 });
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record']);
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));

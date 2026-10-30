@@ -160,10 +160,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `check.not-a-repo` | `check` | 2 | not inside a git repository and no team file here | `team check` |
 | `check.not-yours` | `check` | 2 | the caller may not check this team | `team check` |
 | `check.state` | `check` | 2 | the state can't be read | `team check` |
+| `client.general-grant.issued` | `client` | 0 | the general grant was issued and written | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
+| `client.general-grant.requested` | `client` | 0 | the owner-seat request to issue a general grant was recorded; nothing was issued yet | `team client general-grant --to <client-id> --public-key <client.pub> --request` |
 | `client.keygen.done` | `client` | 0 | the client key pair was written in the named directory | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.general-grant.failed` | `client` | 1 | the grant could not be issued: wider than the holder, to itself, or not written | `team client general-grant --to <client-id> --public-key <client.pub> --via <grant.json> --key <client.key>` |
+| `client.general-grant.refused` | `client` | 1 | the owner-seat request or approval was refused; nothing was issued | `team client general-grant --to <client-id> --public-key <client.pub> --approval <id>` |
 | `client.keygen.pane` | `client` | 1 | keygen ran inside a team pane (a herdr seat or its child) and was refused before any directory was written | `team client keygen --out ~/.config/team-client/grok-bot` |
 | `client.keygen.refused` | `client` | 1 | the key directory is outside the client key folder, inside a checkout, lobby or temp folder, linked, or cannot be checked | `team client keygen --out .` |
 | `client.keygen.write` | `client` | 1 | the key directory already holds a key, or the pair could not be written 0600 | `team client keygen --out ~/.config/team-client/grok-bot` |
+| `client.general-grant.invocation` | `client` | 2 | the general-grant invocation is invalid; nothing was issued | `team client general-grant --to <client-id> --public-key <client.pub>` |
 | `client.keygen.invocation` | `client` | 2 | the command arguments are invalid | `team client keygen` |
 | `client.unknown` | `client` | 2 | the subcommand is not one this command knows | `team client grant` |
 | `client.usage` | `client` | 2 | no subcommand was named | `team client` |
@@ -182,12 +187,15 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.range` | `commits` | 2 | the range can't be resolved | `team commits check missing..also` |
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
+| `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
 | `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
 | `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
 | `config.written` | `config` | 0 | the change validated and was written | `team config set watch.unread_after 5m` |
+| `config.approval-refused` | `config` | 1 | the owner-seat request or approval was refused; nothing was written | `team config set <path> <value> --approval <request-id>` |
 | `config.charter` | `config` | 1 | the owner charter does not cover this edit | `team config set watch.unread_after 5m` |
 | `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
+| `config.general-refused` | `config` | 1 | the general grant does not admit this edit; nothing was written | `team config set <path> <value> --general <grant.json> --key <client.key>` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
@@ -653,6 +661,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.queued` | `send` | 0 | the receiver was busy, so the signed copy is stored and nothing was typed; the message is delivered when the seat's lock clears, and the id on the line is the one the delivery keeps | `team send lead hello` |
 | `send.record-dry-run` | `send` | 0 | a recorded native delivery was resolved and nothing was written | `team send --record builder-2 --channel native --ms 812 --dry-run` |
 | `send.recorded` | `send` | 0 | a native delivery the sender made itself was written to the history | `team send --record builder-2 --channel native --ms 812` |
+| `send.sent-channel` | `send` | 0 | the seat's own inbox server wrote the push notification and its marker; the signed read receipt that follows is the read | `team send lead hello` |
 | `send.sent-unconfirmed` | `send` | 0 | the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back | `team send worker hello` |
 | `send.approval-refused` | `send` | 1 | the owner-seat request or approval for this send was refused: missing, expired, mismatched, unsigned, self-approved or already used | `team send <seat> <message> --approval <request-id>` |
 | `send.brief-memory` | `send` | 1 | a --brief send is refused because the team's brief transport is memory; nothing was written and there is no fallback | `team send worker --brief brief.md` |
@@ -727,10 +736,12 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `swap.invocation` | `swap` | 2 | the invocation can't be read | `team swap queue` |
 | `team.command-help` | `team` | 0 | a command's help was printed | `team status --help` |
 | `team.help` | `team` | 0 | help was printed | `team --help` |
+| `team.mcp-serve-handed-over` | `team` | 0 | a stale inbox server started its fresh replacement on the same stdio and left | `team mcp serve` |
 | `team.presence-hook-ignored` | `team` | 0 | a notification other than the measured permission prompt was ignored and nothing was staged | `team presence-hook --event human-wait --notification permission_prompt` |
 | `team.presence-hook-staged` | `team` | 0 | the presence event was staged | `team presence-hook --event turn-end` |
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
+| `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
@@ -767,6 +778,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `up.deny` | `up` | 1 | deny | `team up` |
 | `up.detached` | `up` | 1 | a run with no terminal | `team up --session elsewhere` |
 | `up.doctor` | `up` | 1 | doctor refuses the launch | `team up` |
+| `up.general-refused` | `up` | 1 | the general grant does not admit this launch; nothing ran | `team up --general <grant.json> --key <client.key>` |
 | `up.grant-another-pane` | `up` | 1 | the granted seat is not on its recorded pane | `team up` |
 | `up.grant-approval` | `up` | 1 | a grant needs a verified approval | `team up` |
 | `up.grant-caller` | `up` | 1 | only the seat the grant names runs this | `team up` |

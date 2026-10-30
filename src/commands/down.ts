@@ -49,11 +49,12 @@ import { resetCliHookState } from '../launch/cli-hook.ts';
 import { boxHoldsOther, boxHoldsText, DRAW_WAIT_MS, settleScreen } from '../launch/deliver.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
+import { abandonAnswerKeys, isNotStartedScreen } from '../profiles/profile.ts';
 import { logLine } from '../log.ts';
 import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
-import { readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
+import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -186,7 +187,7 @@ export const realSources: DownSources = {
 /** How long `--wait` gives a working seat, in seconds. */
 export const WAIT_SECONDS = 120;
 
-export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]\n       team down --request [--dry-run] [--wait] [--json]\n       team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this stop (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-down covering this folder admits the run with no request. A seat the team marks leads, on its own pane, may run it too.\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
+export const USAGE = 'Usage: team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]\n       team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]\n       team down --request [--dry-run] [--wait] [--json]\n       team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this stop (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-down covering this folder admits the run with no request. A seat the team marks leads, on its own pane, may run it too.\n\nThe --client form is for a client with no terminal that the owner signed a down grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --down --request): it stops that one team at that one folder, as signed, and nothing else. It never prompts. --abandon (seats holding unsent text, unrecognised screens, or not launched by team) takes --client only on a default bundle grant (--bundle default, formerly developer), still for that one team; --file and --session never take --client.\n\nExits 0 when the session is down or the dry-run plan is printed, 1 when the stop is refused, 2 when the invocation, team file, or herdr can\'t be read.\n';
 
 export const down: Command = (argv, io) => runDown(argv, io, realSources);
 export default down;
@@ -199,8 +200,8 @@ function clientInvocationProblem(args: Args): string | null {
   if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
   if (!client && args.values.key !== undefined) return '--key belongs to the --client form: team down --client <grant-file> --key <client-key-file>';
   if (!client && args.values.team !== undefined) return '--team belongs to the --client form: team down --client <grant-file> --key <client-key-file> --team <team>';
-  if (client && (args.values.file !== undefined || args.values.session !== undefined || args.flags.has('abandon'))) {
-    return '--client stops the one team its grant names: --file, --session and --abandon are the owner\'s and take no --client';
+  if (client && (args.values.file !== undefined || args.values.session !== undefined)) {
+    return '--client stops the one team its grant names: --file and --session are the owner\'s and take no --client';
   }
   return null;
 }
@@ -539,6 +540,11 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
 
       io,    });
     if (!verified.ok) return clientRefusedFor(verified.why, verified.identified, clientNow);
+    // `--abandon` rides the client form only on a default (developer) bundle grant: the signed
+    // vocabulary 7 record, still for the one team and folder it names. Every other grant refuses it.
+    if (args.flags.has('abandon') && !clientMayAbandon(verified.grant)) {
+      return clientRefusedFor('--client --abandon needs a default (developer) bundle grant: this grant stops the team but abandons no seat (--abandon is the owner\'s otherwise)', verified.grant, clientNow);
+    }
     clientDown = { grant: verified.grant, signature: verified.signature, requestId: verified.requestId };
     // The folder is the grant's, whatever the caller's: from here every read is of that team.
     io = { ...io, cwd: verified.root };
@@ -809,7 +815,8 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A caller the create-grant admits is not a refused caller: the run remembers its file exactly
   // as `up`'s admitted runs do.
   const callerRefused = (rule.kind !== 'ok' && !branching() && !createGranted) || grantRefusal !== undefined;
-  const abandonRefused = args.flags.has('abandon') && granted === undefined && !callerOwns(caller) && verdict === undefined;
+  const clientAbandons = clientDown !== null && args.flags.has('abandon');
+  const abandonRefused = args.flags.has('abandon') && granted === undefined && !callerOwns(caller) && !clientAbandons && verdict === undefined;
   const mayRemember = !callerRefused && !abandonRefused && !dry && current.path !== undefined;
   const remember = (): void => {
     if (mayRemember && current.path !== undefined) rememberCurrent(current.dir, current.path, sources.now());
@@ -957,7 +964,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // has answered is the run's only refusal: today's abandon line stays out of the way of its own.
   const abandon = args.flags.has('abandon') && granted === undefined;
   let abandonLifted = false;
-  if (abandon && !callerOwns(caller) && !seatApproved && verdict === undefined) {
+  if (abandon && !callerOwns(caller) && !clientAbandons && !seatApproved && verdict === undefined) {
     // The owner's dev-mode admission for exactly this gate: a placed lead or
     // orchestrator continues with the warning; every other caller keeps the refusal.
     const lift = devModeOwnerLiftAtCwd(io, {
@@ -1152,24 +1159,46 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     // The process reading decides "its CLI exited" before the screen is consulted: a bare shell
     // draws nothing the profiles recognise, so the screen alone can never tell it from a live
     // CLI whose screen this profile can't read.
-    const reading = stateOfPane(agent.status, shown, {
+    let reading = stateOfPane(agent.status, shown, {
       foreground: sources.foreground(session, agent.pane),
       shellBack: sources.shellBack ? sources.shellBack(session, agent.pane) : null,
       processNames: profile?.processNames ?? [],
       cli,
     });
+    // A profile's not-started startup screen (Codex's daemon dialog): nothing ran in the pane, so
+    // it is closed like an exited CLI — its workspace closed, nothing typed, no option chosen.
+    if (reading === 'unknown' && isNotStartedScreen(profile, sources.screenText(session, agent.pane, cli))) reading = 'exited';
     // An unsent box that holds exactly the profile's exit text — an earlier run typed it and
     // never confirmed it — is named as such either way: the profile's one clearing key decides
     // whether this run empties it and asks again (the plan's run step) or the owner does (its
     // skip line). Anything else unsent keeps the ordinary unsent line.
     const exitInBox = reading === 'unsent' && profile !== null && profile.exit !== null
       && boxHoldsText(cli, profile.exit, sources.screenText(session, agent.pane, cli), { cwd: liveCwd ?? undefined, home: sources.home });
+    // `--abandon` only: a prompt the profile answers itself, or a box of unsent text saved under
+    // `.agents/abandoned-input/` and then cleared, so the seat can be asked to exit and close fully.
+    let abandonPlan: { answerKeys?: readonly string[]; unsentText?: string; saveTo?: string } = {};
+    if (args.flags.has('abandon') && profile !== null && !humanOf.has(name)) {
+      const text = sources.screenText(session, agent.pane, cli);
+      const answer = abandonAnswerKeys(profile, text);
+      if (answer !== null) abandonPlan = { answerKeys: answer };
+      else if (reading === 'unsent') {
+        const box = readBox(cli, text);
+        const rows = box === null ? [] : box.rows[0] === box.first ? box.rows : [box.first, ...box.rows];
+        const unsent = rows.map((row) => row.trimEnd()).join('\n').trim();
+        const stamp = sources.now().toISOString().replace(/[:.]/g, '-');
+        abandonPlan = {
+          answerKeys: [profile.exitClear ?? 'ctrl+u'],
+          ...(unsent !== '' ? { unsentText: unsent, saveTo: join(current.dir, 'abandoned-input', `${name.replace(/[^\w.-]/g, '_')}-${stamp}.txt`) } : {}),
+        };
+      }
+    }
     seats.push({
       name,
       cli,
       pane: agent.pane,
       workspace: agent.workspace,
       state: reading,
+      ...abandonPlan,
       ...(humanOf.has(name) ? { human: true as const } : {}),
       ...(exitInBox ? { exitInBox: true } : {}),
       ...(shown.kind === 'exit question' ? { atExitQuestion: true } : {}),
@@ -1188,13 +1217,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     seats,
     extra,
     watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
+    // The bus `team up` started goes with the team, as the watch does; one the owner runs in a
+    // terminal of their own is not in the state and is left running.
+    busWorkspace: refusals.length === 0 ? null : state?.bus?.workspace ?? null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && clientDown === null && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],
-    abandon: abandon && (callerOwns(caller) || abandonLifted),
+    abandon: abandon && (callerOwns(caller) || abandonLifted || clientAbandons),
     // A free seat is still asked. When that ask cannot be typed or confirmed, the owner's
     // `--abandon` closes it in this same run; every other run names that close and leaves it.
-    closeUnasked: abandon && (callerOwns(caller) || abandonLifted),
+    closeUnasked: abandon && (callerOwns(caller) || abandonLifted || clientAbandons),
     unasked: 'team down --abandon closes it',
   });
 
@@ -1341,6 +1373,7 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       },
       renameAgent: () => false,
       closeWorkspace: launch.closeWorkspace,
+      sendKey: (sessionName, pane, key) => launch.sendKey(sessionName, pane, key),
       stopSession: launch.stopSession,
       // Only the session this run has itself just stopped. Herdr keeps a stopped session listed
       // (`running: false`) until `session delete`; a delete while it still reports running is
@@ -1388,6 +1421,12 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       allow: () => null,
       record() {},
       running() {},
+      dropBus() {
+        updateState(dir, (state) => {
+          const current = state.sessions[session];
+          if (current) delete current.bus;
+        });
+      },
       drop(name) {
         // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
         // before the record that names it goes. An endpoint whose process cannot be proven is
@@ -1475,6 +1514,13 @@ function liveTeam(io: Io, home?: string): LiveFile | undefined {
   const loaded = readTeamConfig(io.cwd, home ? { home } : {});
   if (!loaded.ok) return undefined;
   return { team: loaded.team, root: loaded.root, dir: dirname(loaded.path), path: loaded.path };
+}
+
+/** Whether a verified client grant may `--abandon`: a default (formerly `developer`) bundle grant,
+ *  read from the signed vocabulary (7) and the signed bundle name together, so the grants already
+ *  signed as `developer` qualify without being re-signed. */
+export function clientMayAbandon(grant: ClientUpGrantRecord): boolean {
+  return grant.vocabulary === 7 && grant.bundle === 'developer' && grant.ops.includes('down');
 }
 
 function callerOwns(caller: Caller): boolean {

@@ -326,7 +326,9 @@ export function refusalReport(why: Refusal): string {
       return `rules not typed: the CLI never appeared as its pane's foreground process (${reading(why, 0)}); `
         + `check the seat's launch line — the wrapper it starts through, or the command itself — then run up again`;
     case 'working':
-      return `rules not confirmed: the seat is working; run up again when it is idle`;
+      return why.typed
+        ? `rules typed, not sent: the seat was busy with a turn until the deadline; the line sits in its box, unsent: run up again when it is idle (up sends the line it finds there), or press Enter in its pane once the turn ends`
+        : `rules not confirmed: the seat is working; run up again when it is idle`;
     case 'screen':
       return `rules not typed: ${reading(why, 0)}; ${nextStep(why)}`;
     case 'leftover':
@@ -379,6 +381,9 @@ export function refusalReport(why: Refusal): string {
  *  anything else is left alone, and a seat mid-turn is reported as such. A line this run typed
  *  whose rows do not read back is cleared with the profile's one key when the box is still the
  *  unsent composer. */
+/** Screens a typed line is never waited past: each asks the seat something, and Enter would answer it. */
+const DIALOGS: ReadonlySet<string> = new Set(['trust', 'permission', 'question', 'exit question', 'vendor notice', 'provider error', 'rate limit']);
+
 export async function deliverRules(cli: string, line: string, seconds: number, io: Delivery): Promise<boolean | 'no-agent'> {
   const names = profileFor(cli)?.processNames ?? [];
   const live = () => reportedLiveAgent(io.foreground(), names);
@@ -453,14 +458,28 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   const deadline = io.now() + seconds * 1000;
   // Terminal rendering can lag send-text. Never press Enter until the box is verified to hold
   // the line: an ordinary box reads `unsent` and every row of it reads back as the line.
+  // A seat that is busy — a turn started under the typed line (a resumed Codex seat working
+  // through its queued drops does exactly this), or a status the terminal host could not give —
+  // is not a mismatch: the line sits in the composer below the running turn, and Enter there does
+  // not submit it. The wait goes on until the seat is free again and the box reads back, and a
+  // seat still busy at the deadline is reported as busy with the line left in its box, never
+  // cleared: the next `up` finds it there and sends it.
+  const busyStop = (): false => report({ ...stoppedOn(cli, 'working', io.screen(), line), typed: true, sent: false });
   for (;;) {
-    if (!free()) return readBackStop();
-    const state = boxState(cli, line, io.screen());
+    const busy = !free();
+    // One screen read per look: the busy reading and the box are the same frame.
+    const screen = busy ? undefined : io.screen();
+    const working = !busy && readScreen(cli, screen).kind === 'working';
+    const state = busy || working ? 'wait' : boxState(cli, line, screen);
     if (state === 'ready') break;
-    if (state === 'no' || io.now() >= deadline) return readBackStop();
+    // A dialog is never waited past. Any other screen that is not the box yet — a frame the CLI
+    // is still drawing (Codex's MCP start-up row on a narrow pane), a reading the grammar does
+    // not know — is waited out to the deadline like a box still rendering.
+    if (state === 'no' && DIALOGS.has(readScreen(cli, screen).kind)) return readBackStop();
+    if (io.now() >= deadline) return busy || working ? busyStop() : readBackStop();
     const before = io.now();
     await io.sleep(100);
-    if (io.now() <= before) return readBackStop();
+    if (io.now() <= before) return busy || working ? busyStop() : readBackStop();
   }
   // Re-read immediately before Enter. The agent is asked again: it may have exited since the
   // line was typed, and a dialog that appeared gets no key; a box that no longer holds the line

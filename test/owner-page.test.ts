@@ -110,6 +110,20 @@ describe('owner page', () => {
     expect(String((await s.call('GET', '/api/state')).body.profile)).toContain('RELAXED');
   });
 
+  test('registering the same passkey again is a friendly no-op refusal, before any Touch ID', async () => {
+    const s = await setup();
+    const p = phone();
+    expect((await registerPhone(s, p)).status).toBe(200);
+    const again = await registerPhone(s, p);
+    expect(again.status).toBe(409);
+    expect(again.body.error).toBe('This Mac is already registered; nothing to do.');
+    expect(s.store.prompts.length).toBe(1);
+  });
+
+  test('the page has an empty state for no pending request', () => {
+    expect(OWNER_PAGE_HTML).toContain('No pending requests');
+  });
+
   test('a registration that is not for an issued challenge is refused', async () => {
     const s = await setup();
     const p = phone();
@@ -220,8 +234,9 @@ describe('owner page', () => {
     expect(OWNER_PAGE_HTML).toContain('data-w="oui"');
     expect(OWNER_PAGE_HTML).not.toContain('lang="fr"');
     expect(OWNER_PAGE_HTML).not.toContain('Oui');
-    expect(OWNER_PAGE_HTML).not.toContain('Toujours');
-    expect(OWNER_PAGE_HTML).not.toContain('Siège');
+    // Every card is English, from the message catalog.
+    expect(OWNER_PAGE_HTML).toContain('Always allow');
+    expect(OWNER_PAGE_HTML).not.toContain('Autoriser');
     const first = await s.call('GET', '/api/state');
     const before = Array.isArray(first.body.requests) ? first.body.requests.length : 0;
     const root = join(s.base, 'repo');
@@ -262,6 +277,8 @@ describe('owner page', () => {
       'team-bus': 'Start the bus',
       'team-revoke-approval': 'Revoke an approval rule',
       'team-forget': 'Forget a team record',
+      'team-config': "Change the team's record",
+      'team-general-grant': 'Issue a general grant',
     };
     for (const action of OWNER_ACTIONS) {
       const card = ownerPageRequest({
@@ -271,7 +288,7 @@ describe('owner page', () => {
         summary: { kind: 'owner-action', actions: [action], root: '/tmp/repo', team: 'demo', head: null, args: {}, requested_by: 'seat:iris' },
       });
       expect(card.title).toBe(titles[action] ?? '');
-      expect(card.description).not.toMatch(/oui|non|Toujours/);
+      expect(card.description).not.toMatch(/oui|non|Always allow/);
       expect(card.onceOnly).toBe(action === 'team-migrate');
     }
     const migration = ownerPageRequest({

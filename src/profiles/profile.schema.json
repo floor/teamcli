@@ -113,6 +113,16 @@
       "items": { "type": "string", "minLength": 1 },
       "description": "optional: paths this CLI reads at start in its working folder; a trailing slash names a directory and every file under it, and the lobby gate refuses each of these at any depth"
     },
+    "not_started": {
+      "type": "array", "minItems": 1,
+      "description": "optional: startup screens drawn before the CLI started a session; team down closes such a pane without typing, never choosing an option",
+      "items": { "type": "object", "additionalProperties": false, "required": ["all"], "properties": { "all": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } } } }
+    },
+    "abandon_answers": {
+      "type": "array", "minItems": 1,
+      "description": "optional: prompts team down --abandon answers so the seat closes fully; keys are only escape, ctrl+c or ctrl+u, never a menu option",
+      "items": { "type": "object", "additionalProperties": false, "required": ["all", "keys"], "properties": { "all": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "keys": { "type": "array", "minItems": 1, "items": { "enum": ["escape", "ctrl+c", "ctrl+u"] } } } }
+    },
     "mcp_inbox": {
       "type": "object",
       "additionalProperties": false,

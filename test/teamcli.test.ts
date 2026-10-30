@@ -3,7 +3,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { walkCaller } from '../src/caller.ts';
+import { placeCaller, walkCaller } from '../src/caller.ts';
 
 const repo = join(import.meta.dir, '..');
 
@@ -46,9 +46,9 @@ test('teamcli is the same version as team, and depends on that exact version', (
   expect(teamcli.publishConfig?.access).toBe('public');
   expect(teamcli.bin).toEqual({ teamcli: 'cli.js', team: 'cli.js' });
   expect(teamcli.version).toBe(root.version);
-  expect(teamcli.version).toBe('0.5.5');
+  expect(teamcli.version).toBe('0.5.6');
   expect(teamcli.dependencies?.team).toBe(root.version);
-  expect(teamcli.dependencies?.team).toBe('0.5.5');
+  expect(teamcli.dependencies?.team).toBe('0.5.6');
 });
 
 test('the teamcli tarball lists exactly the package manifest, the shim and the readme', () => {
@@ -186,6 +186,20 @@ test('a node parent is still the owner', () => {
   });
   // An owner with no terminal is this branch's owner-no-tty, not unplaced.
   expect(judge(['node', 'zsh'], false)).toEqual({ kind: 'owner-no-tty' });
+});
+
+test('an agent detached from its herdr pane is still unplaced, and the reason names the pane and the repair', () => {
+  const caller = placeCaller({
+    ancestors: () => [{ pid: 20, name: 'zsh' }, { pid: 10, name: 'claude' }],
+    agents: () => [],
+    paneRootPid: () => null,
+    env: { HERDR_PANE_ID: 'w2G:p1' },
+    stdinIsTTY: false,
+  });
+  expect(caller.kind).toBe('unplaced');
+  const reason = caller.kind === 'unplaced' ? caller.reason : '';
+  expect(reason).toStartWith('it is run by an agent (claude) outside herdr: its environment names pane w2G:p1');
+  expect(reason).toContain('team restart <seat>');
 });
 
 // A team dependency whose cli records every signal it receives, so a test can count

@@ -17,6 +17,7 @@ import { claimClientRequest } from './replay.ts';
 import { verifyClientUp } from './up-grant.ts';
 import { CLIENT_REQUEST_ID_PATTERN } from './verify.ts';
 import { writeClientDrop, type ResolvedClientTarget } from './send.ts';
+import type { RecordPayload } from '../send/record.ts';
 
 /** The bundles in force for an entity (and, when the team sits in one, its project): the release
  *  defaults with the `client-bundles` policy laid over them. A policy chain that cannot be read or
@@ -132,8 +133,10 @@ function cardTime(iso: string | null): string {
 
 /** The text the owner reads at signing, one plain sentence per grant, built from the EXPLICIT ops. */
 export function bundleCard(input: { clientId: string; project: string; ops: readonly BundleOp[]; seats: readonly string[]; expires: string | null; fileFingerprint?: string | null }): string {
-  const what = input.ops.map((op) => OP_PHRASES[op](input.seats, input.fileFingerprint ?? null)).join(', ');
   const developed = input.ops.some((op) => (DEVELOPER_ONLY_OPS as readonly string[]).includes(op));
+  // The default (developer) bundle's stop may also abandon seats (unsent text, unrecognised screens,
+  // panes team did not launch): `team down --client … --abandon`, for this one team.
+  const what = input.ops.map((op) => (op === 'down' && developed ? 'stop or abandon' : OP_PHRASES[op](input.seats, input.fileFingerprint ?? null))).join(', ');
   const managed = developed || input.ops.some((op) => (MANAGER_ONLY_OPS as readonly string[]).includes(op));
   // A grant may list an op whose client route is not built yet: it admits nothing until then, and the
   // card says which, so the owner never signs for a power the client does not have.
@@ -211,7 +214,7 @@ export const BUNDLE_SEND_RULE = 'a client bundle grant, to a granted seat';
 export function sendWithBundle(
   host: { home: string; now: () => Date; sendId?: () => string; clientLockWaitMs?: number },
   input: { grantFile: string; keyFile: string; cwd: string; address: string; body: string; requestId?: string },
-): { ok: true; to: string; id: string; requestId: string } | { ok: false; why: string } {
+): { ok: true; to: string; id: string; requestId: string; record: RecordPayload; target: ResolvedClientTarget } | { ok: false; why: string } {
   try {
     return withClientGrantLock(
       host.home,
@@ -242,7 +245,9 @@ export function sendWithBundle(
         const written = writeClientDrop({ home: host.home, grant: { clientId: grant.clientId, grantId: grant.grantId }, target: resolved.target, body: input.body, now, id: host.sendId?.(), rule: BUNDLE_SEND_RULE });
         if (!written.ok) return refuse(written.why);
         auditClientOp(grant.up.root, 'send', grant.clientId, 'authorized', `grant ${grant.grantId} client ${grant.clientId} team ${grant.up.project} seat ${seat} drop ${written.id} request ${id}`, now);
-        return { ok: true as const, to: `${seat}@${grant.up.project}`, id: written.id, requestId: id };
+        // The drop is the message; the caller then walks the same delivery legs a one-seat client
+        // send walks, with the same record and target.
+        return { ok: true as const, to: `${seat}@${grant.up.project}`, id: written.id, requestId: id, record: written.record, target: resolved.target };
       },
       host.clientLockWaitMs,
     );

@@ -1337,6 +1337,16 @@ describe('team watch', () => {
     screenNow = idle;
   });
 
+  test('a team hold (the quiet start of up --no-launch) types no ring: the pass reads and types nothing', async () => {
+    updateState(join(dir, '.agents'), (state) => {
+      state.hold = { reason: 'quiet start (team up --no-launch)', by: 'owner', at: new Date(clock).toISOString() };
+    });
+    const io = testIo(dir, { kind: 'owner' });
+    await runWatch(['--file', file], io, sources(1, waiting()));
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain('rang deepseek-acme');
+  });
+
   test('a ring held back by a prompt is typed on a later pass, once the prompt clears', async () => {
     let calls = 0;
     await runWatch(['--file', file], testIo(dir, { kind: 'owner' }), sources(2, {

@@ -32,6 +32,16 @@
       "type": "boolean",
       "$comment": "this team leads the project it sits in; one team per project declares it"
     },
+    "bus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "autostart": {
+          "type": "boolean",
+          "description": "whether team up starts the event bus in its own workspace and team down stops it; on unless set to false"
+        }
+      }
+    },
     "entity": {
       "type": "string",
       "minLength": 1,

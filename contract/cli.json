@@ -786,6 +786,101 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--days",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--entities",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--may-issue",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--ops",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--public-key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--request",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--to",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--via",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "general-grant",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --request [--json]",
+            "team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --approval <id> [--json]",
+            "team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the owner issues only through the owner seat (a verified Touch ID signature), and a holder issues only from a verified general grant, never to itself and never wider: the signatures, not the caller, are the authority"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
@@ -823,7 +918,10 @@
         }
       ],
       "usage": [
-        "team client keygen --out <dir> [--json]"
+        "team client keygen --out <dir> [--json]",
+        "team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --request [--json]",
+        "team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --approval <id> [--json]",
+        "team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]"
       ],
       "who": {
         "gate": "any-caller",
@@ -1037,7 +1135,37 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--approval",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--request",
               "repeatable": false,
               "takesValue": false
             },
@@ -1064,7 +1192,10 @@
           ],
           "subcommands": [],
           "usage": [
-            "team config set <path> <value>"
+            "team config set <path> <value>",
+            "team config set <path> <value> --request [--json]",
+            "team config set <path> <value> --approval <request-id> [--json]",
+            "team config set <path> <value> --general <grant.json> --key <client.key> [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -1075,9 +1206,27 @@
           "flags": [
             {
               "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
               "name": "--help",
               "repeatable": false,
               "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
             },
             {
               "hidden": true,
@@ -1097,7 +1246,8 @@
           ],
           "subcommands": [],
           "usage": [
-            "team config unset <path>"
+            "team config unset <path>",
+            "team config unset <path> --general <grant.json> --key <client.key> [--json]"
           ],
           "who": {
             "gate": "owner-only",
@@ -1110,6 +1260,10 @@
         "team config get <path> [--json]",
         "team config set <path> <value>",
         "team config unset <path>",
+        "team config set <path> <value> --request [--json]",
+        "team config set <path> <value> --approval <request-id> [--json]",
+        "team config set <path> <value> --general <grant.json> --key <client.key> [--json]",
+        "team config unset <path> --general <grant.json> --key <client.key> [--json]",
         "team config edit"
       ],
       "who": {
@@ -1667,7 +1821,7 @@
       "subcommands": [],
       "usage": [
         "team down [--dry-run] [--wait] [--abandon] [--session <name>] [--file <path>] [--json]",
-        "team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--json]",
+        "team down --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--wait] [--abandon] [--json]",
         "team down --request [--dry-run] [--wait] [--json]",
         "team down --approval <request-id> [--dry-run] [--wait] [--abandon] [--json]"
       ],
@@ -2156,8 +2310,8 @@
         "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO|never>] [--json]",
         "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down [--expires <ISO|never>] [--json]",
         "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --down --request [--expires <ISO|never>] [--json]",
-        "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> [--seat <seats>] [--expires <ISO|never>] [--json]",
-        "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <observer|operator|manager|developer> --request [--seat <seats>] [--expires <ISO|never>] [--json]",
+        "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --bundle <default|observer|operator|manager> [--seat <seats>] [--expires <ISO|never>] [--json]",
+        "team grant --client <client-id> --entity <entity> --public-key <file> --team <team> [--bundle <default|observer|operator|manager>] --request [--seat <seats>] [--expires <ISO|never>] [--json]",
         "team grant --execute <request-id> --code <code> [--approve <once|always>] [--json]",
         "team grant --execute <request-id> [--json]",
         "team grant --answer <request-id> <oui|always|non> [--json]",
@@ -2742,6 +2896,12 @@
         },
         {
           "hidden": false,
+          "name": "--follow",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -2789,7 +2949,7 @@
       "subcommands": [],
       "usage": [
         "team messages [--json]",
-        "team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]"
+        "team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]"
       ],
       "who": {
         "gate": "seat-record",
@@ -5982,6 +6142,12 @@
         },
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
           "name": "--help",
           "repeatable": false,
           "takesValue": false
@@ -5997,6 +6163,12 @@
           "name": "--key",
           "repeatable": false,
           "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--no-launch",
+          "repeatable": false,
+          "takesValue": false
         },
         {
           "hidden": false,
@@ -6034,8 +6206,9 @@
       "positionals": [],
       "subcommands": [],
       "usage": [
-        "team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]",
-        "team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]",
+        "team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]",
+        "team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]",
+        "team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]",
         "team up --request [--serial] [--json]",
         "team up --approval <request-id> [--dry-run] [--serial] [--json]"
       ],

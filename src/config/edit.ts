@@ -10,6 +10,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
+import { ownerSeatStep } from '../client/owner-action-step.ts';
+import { admitGeneral } from '../client/general-grant.ts';
+import { readTeamConfig } from '../file/team-config.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
 import { approvalDifferences } from '../approve/approval.ts';
@@ -20,6 +23,7 @@ import { cleanedIo, type Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
 import { getAt, parsePath, parseValue, recordText, shownValue, withValue } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
@@ -37,7 +41,7 @@ function runEditor(path: string, env: Record<string, string | undefined>): numbe
 export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: ConfigSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, [], ['json']);
+  const args = readArgs(argv, ['approval', 'general', 'key'], ['json', 'request']);
   const [verb, rawPath, rawValue, extra] = args.rest;
   const usage = (await import('../commands/config.ts')).USAGE;
   const wants = verb === 'edit' ? 0 : verb === 'set' ? 2 : 1;
@@ -46,6 +50,11 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   if (why === null && given !== wants) {
     why = given > wants ? `unexpected "${args.rest[wants + 1] ?? extra}"` : verb === 'set' && given === 1 ? 'a value is required: team config set <path> <value>' : 'a path is required';
   }
+  if (why === null && (args.flags.has('request') || args.values.approval !== undefined) && verb !== 'set' && verb !== 'unset') {
+    why = '--request and --approval take set or unset';
+  }
+  if (why === null && (args.values.general !== undefined) !== (args.values.key !== undefined)) why = '--general and --key go together';
+  if (why === null && args.values.general !== undefined && verb !== 'set' && verb !== 'unset') why = '--general takes set or unset';
   const path = why === null && rawPath !== undefined ? parsePath(rawPath) : [];
   if (why === null && typeof path === 'string') why = path;
   if (why !== null || typeof path === 'string') {
@@ -102,13 +111,46 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // A write. A verified charter that covers this folder admits it with no prompt. Outside that
   // charter the run is refused, and the owner re-signs only with `team setup --edit`. With no
   // charter, the write stays the owner's, from a terminal, as the file was.
+  // The owner-seat door for a set or unset: `--request` records exactly this change and sends it
+  // to the owner seat (Touch ID); `--approval <id>` applies it once the owner's verified signature
+  // binds these words. Nothing is written on a request, and an approval for other words refuses.
+  let seatApproved = false;
+  if (args.flags.has('request') || args.values.approval !== undefined) {
+    const step = ownerSeatStep('config', 'team-config', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, { home, ...(sources.now ? { now: sources.now } : {}), ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}), ...(sources.present !== undefined ? { present: sources.present } : {}) });
+    if (step.kind === 'requested') {
+      // exit: config.approval-requested
+      return 0;
+    }
+    if (step.kind === 'refused') {
+      // exit: config.approval-refused
+      return 1;
+    }
+    seatApproved = step.kind === 'admitted';
+  }
+  // A general grant: the owner signed it once for this principal across these entities, so a set
+  // or unset under it applies directly, with no per-action request.
+  if (args.values.general !== undefined && !seatApproved) {
+    let entity: string | null = null;
+    try {
+      const loaded = readTeamConfig(root, { home });
+      if (loaded.ok) entity = loaded.team.entity;
+    } catch {}
+    const admitted = admitGeneral(home, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key as string), 'config', entity, sources.now?.() ?? new Date());
+    if (!admitted.ok) {
+      refuse(io, json, 'config', { id: 'config.general-refused', message: admitted.why, repair: null });
+      // exit: config.general-refused
+      return 1;
+    }
+    if (!json) io.stderr(`team config: admitted by general grant ${admitted.grant.grant_id} (${admitted.grant.client_id})\n`);
+    seatApproved = true;
+  }
   const gate = charterGate(home, { operation: 'config', cwd: io.cwd }, sources.ownerSeatStore);
-  if (gate.kind === 'block') {
+  if (gate.kind === 'block' && !seatApproved) {
     refuse(io, json, 'config', { id: 'config.charter', message: gate.message, repair: 'team setup --edit' });
     // exit: config.charter
     return 1;
   }
-  if (gate.kind !== 'admit') {
+  if (gate.kind !== 'admit' && !seatApproved) {
     const caller = callerOf(rawIo);
     const detached = detachedRefusal(caller);
     if (detached !== undefined) {
@@ -174,6 +216,10 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   }
   if (kept !== null) rmSync(resolve(kept, '..'), { recursive: true, force: true });
   const checked = validateTeamFile(next);
+  // A seat whose launch line this edit changed: its agent record's launch recipe follows, so the
+  // next up or restart runs the line the team now declares, not the one the record kept.
+  const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats) : [];
+  if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
   const stale = checked.ok ? (approvalDifferences(checked.team, root, home) ?? []) : [];
   if (json) {
     writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, approval_differences: stale });
@@ -185,4 +231,26 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   }
   // exit: config.written
   return 0;
+}
+
+/** The seats whose `launch` differs between the old record text and the new seats, with an agent
+ *  record still holding the old line: that record is updated to the new line. Names updated. */
+export function syncAgentLaunches(home: string, teamId: string, oldText: string, seats: ReadonlyArray<{ name: string; launch: string }>): string[] {
+  const before = new Map<string, string>();
+  try {
+    const old = validateTeamFile(oldText);
+    if (old.ok) for (const seat of old.team.seats) before.set(seat.name, seat.launch);
+  } catch {}
+  const updated: string[] = [];
+  for (const seat of seats) {
+    const was = before.get(seat.name);
+    if (was === undefined || was === seat.launch) continue;
+    try {
+      const agent = findAgent(home, { team: teamId, seat: seat.name });
+      if (agent === null || agent.launch === seat.launch) continue;
+      updateAgent(home, agent.id, { launch: seat.launch });
+      updated.push(seat.name);
+    } catch {}
+  }
+  return updated;
 }

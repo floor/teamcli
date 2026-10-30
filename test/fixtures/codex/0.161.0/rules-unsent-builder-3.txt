@@ -1,0 +1,11 @@
+
+  [0m[38;2;99;168;248m>_ [0m[1mOpenAI Codex[0m[2m (v0.161.0)[0m
+     [0m[2m~/.config/team/lobbies/teamcli[0m
+[0m[2m  permissions: [0m[1m[38;5;5mYOLO mode[0m
+
+  [0m[1mTip:[0m Use the [0m[1mdesktop app[0m. Run [0m[38;2;166;227;161mcodex app[0m to open it. It installs automatically if needed.
+ 
+ 
+[0m[1m›[0m Read /Users/jvial/.config/team/teamcli-5e46a02374b3/rules/builder-3.md (sha256 8cf214db695d): your standing rules for this session; reply ready and wait for your brief.
+ 
+  [0m[38;2;246;226;183mGPT-6.1-Sol high[0m · [0m[38;2;242;181;144mContext 100% left[0m · [0m[38;2;233;144;169mweekly 99% left[0m                                                                                                                    ⚠ [0m[38;2;196;167;103m1 warning[0m · [0m[1mf2[0m to view

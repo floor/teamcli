@@ -143,6 +143,45 @@ describe('a client sends, the recipient seat replies, the client reads the reply
   });
 });
 
+describe('the client follows its thread', () => {
+  test('--follow prints a reply as soon as a read finds it, once, and only new ones after', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'follow me');
+    const io = testIo(w.root);
+    let reads = 0;
+    let firstId = '';
+    const sources = {
+      home: w.home,
+      now: () => new Date(NOW.getTime() + 120_000),
+      followReads: 4,
+      // Between the first and second read the seat answers; after the third, a second answer.
+      followWait: async () => {
+        reads += 1;
+        if (reads === 1) firstId = (await seatReply(w, 'orchestrator', sent.id, 'pong')).json.record;
+        if (reads === 3) await seatReply(w, 'orchestrator', sent.id, 'pong again');
+      },
+    };
+    const code = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--follow'], io, sources);
+    expect(code).toBe(0);
+    const lines = io.out.trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain(`reply ${firstId} from orchestrator:`);
+    expect(lines[0]).toEndWith(" pong");
+    expect(lines[1]).toContain('pong again');
+    expect(io.err.split('\n').filter((line) => line.startsWith('key isolation'))).toHaveLength(1);
+  });
+
+  test('--follow refuses --ack and stops with the read\'s own refusal', async () => {
+    const w = world(true);
+    const io = testIo(w.root);
+    expect(await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--follow', '--ack', 'x'], io, { home: w.home, now: () => NOW })).toBe(2);
+    const bad = testIo(w.root);
+    const code = await runMessages(['--client', join(w.root, 'missing.json'), '--key', w.keyPath, '--follow'], bad, { home: w.home, now: () => NOW, followReads: 3, followWait: async () => {} });
+    expect(code).not.toBe(0);
+    expect(bad.err).toContain('follow stopped');
+  });
+});
+
 describe('the reply is scoped by the grant; nothing widens it', () => {
   test('a send-only grant opens no conversation: the reply is refused and no inbox is written', async () => {
     const w = world(false);

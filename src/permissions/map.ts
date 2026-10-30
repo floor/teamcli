@@ -202,6 +202,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'any-caller',
       why: 'its one verb writes a fresh app key pair and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',
     },
+    'client:general-grant': {
+      kind: 'any-caller',
+      why: 'the owner issues only through the owner seat (a verified Touch ID signature), and a holder issues only from a verified general grant, never to itself and never wider: the signatures, not the caller, are the authority',
+    },
     'client:keygen': {
       kind: 'any-caller',
       why: 'it writes a fresh app key pair into a directory the caller names, and reads no team file, seat or terminal: the key is the caller\'s own, and only the owner\'s signed grant makes it authoritative',

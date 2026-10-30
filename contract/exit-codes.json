@@ -1082,9 +1082,37 @@
     {
       "code": 0,
       "command": "client",
+      "id": "client.general-grant.issued",
+      "meaning": "the general grant was issued and written",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --request"
+    },
+    {
+      "code": 0,
+      "command": "client",
+      "id": "client.general-grant.requested",
+      "meaning": "the owner-seat request to issue a general grant was recorded; nothing was issued yet",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --request"
+    },
+    {
+      "code": 0,
+      "command": "client",
       "id": "client.keygen.done",
       "meaning": "the client key pair was written in the named directory",
       "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 1,
+      "command": "client",
+      "id": "client.general-grant.failed",
+      "meaning": "the grant could not be issued: wider than the holder, to itself, or not written",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --via <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "client",
+      "id": "client.general-grant.refused",
+      "meaning": "the owner-seat request or approval was refused; nothing was issued",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub> --approval <id>"
     },
     {
       "code": 1,
@@ -1106,6 +1134,13 @@
       "id": "client.keygen.write",
       "meaning": "the key directory already holds a key, or the pair could not be written 0600",
       "trigger": "team client keygen --out ~/.config/team-client/grok-bot"
+    },
+    {
+      "code": 2,
+      "command": "client",
+      "id": "client.general-grant.invocation",
+      "meaning": "the general-grant invocation is invalid; nothing was issued",
+      "trigger": "team client general-grant --to <client-id> --public-key <client.pub>"
     },
     {
       "code": 2,
@@ -1236,6 +1271,13 @@
     {
       "code": 0,
       "command": "config",
+      "id": "config.approval-requested",
+      "meaning": "an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written",
+      "trigger": "team config set <path> <value> --request"
+    },
+    {
+      "code": 0,
+      "command": "config",
       "id": "config.shown",
       "meaning": "the settings registry is printed",
       "trigger": "team config keys"
@@ -1264,6 +1306,13 @@
     {
       "code": 1,
       "command": "config",
+      "id": "config.approval-refused",
+      "meaning": "the owner-seat request or approval was refused; nothing was written",
+      "trigger": "team config set <path> <value> --approval <request-id>"
+    },
+    {
+      "code": 1,
+      "command": "config",
       "id": "config.charter",
       "meaning": "the owner charter does not cover this edit",
       "trigger": "team config set watch.unread_after 5m"
@@ -1274,6 +1323,13 @@
       "id": "config.detached",
       "meaning": "an edit was run with no terminal",
       "trigger": "team config set watch.unread_after 5m"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.general-refused",
+      "meaning": "the general grant does not admit this edit; nothing was written",
+      "trigger": "team config set <path> <value> --general <grant.json> --key <client.key>"
     },
     {
       "code": 1,
@@ -4533,6 +4589,13 @@
     {
       "code": 0,
       "command": "send",
+      "id": "send.sent-channel",
+      "meaning": "the seat's own inbox server wrote the push notification and its marker; the signed read receipt that follows is the read",
+      "trigger": "team send lead hello"
+    },
+    {
+      "code": 0,
+      "command": "send",
       "id": "send.sent-unconfirmed",
       "meaning": "the record is written and left in the seat's own folder — its inbox on the mcp-inbox leg, its drop folder on the drop leg — and no signed read receipt has come back",
       "trigger": "team send worker hello"
@@ -5051,6 +5114,13 @@
     {
       "code": 0,
       "command": "team",
+      "id": "team.mcp-serve-handed-over",
+      "meaning": "a stale inbox server started its fresh replacement on the same stdio and left",
+      "trigger": "team mcp serve"
+    },
+    {
+      "code": 0,
+      "command": "team",
       "id": "team.presence-hook-ignored",
       "meaning": "a notification other than the measured permission prompt was ignored and nothing was staged",
       "trigger": "team presence-hook --event human-wait --notification permission_prompt"
@@ -5075,6 +5145,13 @@
       "id": "team.command-threw",
       "meaning": "a command threw",
       "trigger": "team init"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.mcp-serve-restart-failed",
+      "meaning": "a stale inbox server could not start its fresh replacement, said why and left",
+      "trigger": "team mcp serve"
     },
     {
       "code": 1,
@@ -5327,6 +5404,13 @@
       "id": "up.doctor",
       "meaning": "doctor refuses the launch",
       "trigger": "team up"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.general-refused",
+      "meaning": "the general grant does not admit this launch; nothing ran",
+      "trigger": "team up --general <grant.json> --key <client.key>"
     },
     {
       "code": 1,

@@ -103,6 +103,13 @@ export type InboxListener = {
   ts: string;
   version?: string;
   build?: string | null;
+  /** The commit the serving package was packed from, when it carries one. A source build has no
+   *  packaged head and writes none; a marker without it cannot vouch for the install it runs. */
+  head?: string;
+  /** True when this server declared the development channel: it pushes new messages and serves
+   *  the `ack` tool. A marker without it is a serving inbox with no channel, and the send walks
+   *  its next leg. */
+  channel?: true;
 };
 
 /** One waiting message, as `inbox_check` names it. `from` and the marker's `ts` are there when
@@ -187,6 +194,8 @@ export function readListener(dropDir: string): InboxListener | null {
       ts: parsed.ts,
       ...(typeof parsed.version === 'string' ? { version: parsed.version } : {}),
       ...(typeof parsed.build === 'string' || parsed.build === null ? { build: parsed.build } : {}),
+      ...(typeof parsed.head === 'string' ? { head: parsed.head } : {}),
+      ...(parsed.channel === true ? { channel: true as const } : {}),
     };
   } catch {
     return null;
@@ -241,6 +250,19 @@ export function listenerRuntime(listener: InboxListener, build: BuildIdentity): 
     if (listener.version !== build.version) {
       return { kind: 'stale', reason: `the inbox listener runs ${listener.version}, this build is ${build.version}; ${restart}` };
     }
+    // The packed commit is the install's own identity. A listener that records no head cannot
+    // vouch for the install it runs, and one from another commit is another install of the same
+    // version: either way its in-process parsers are not this build's.
+    const listenerHead = listener.head ?? null;
+    const buildHead = build.head ?? null;
+    if (listenerHead !== buildHead) {
+      return {
+        kind: 'stale',
+        reason: `the inbox listener runs another install of ${build.version}${
+          listenerHead === null ? ' and records no packaged commit' : ` (${listenerHead.slice(0, 12)})`
+        }, this build is ${buildHead === null ? 'not a packed install' : buildHead.slice(0, 12)}; ${restart}`,
+      };
+    }
     if (listener.build != null && build.build != null && listener.build !== build.build) {
       return { kind: 'stale', reason: `the inbox listener runs a different build of ${build.version}; ${restart}` };
     }
@@ -256,7 +278,9 @@ export function listenerRuntime(listener: InboxListener, build: BuildIdentity): 
   return { kind: 'stale', reason: `the inbox listener records no build identity; ${restart}` };
 }
 
-export type InboxLiveness = { live: true; listener: InboxListener } | { live: false; reason: string };
+export type InboxLiveness =
+  | { live: true; listener: InboxListener }
+  | { live: false; reason: string; listener?: InboxListener };
 
 /**
  * Whether a server is serving exactly this inbox: a well-formed marker for this seat, this
@@ -282,7 +306,7 @@ export function inboxLive(
   if (!listenerLive(listener)) return { live: false, reason: NO_INBOX_LISTENER };
   if (build !== undefined && build !== null) {
     const runtime = listenerRuntime(listener, build);
-    if (runtime.kind === 'stale') return { live: false, reason: runtime.reason };
+    if (runtime.kind === 'stale') return { live: false, reason: runtime.reason, listener };
   }
   return { live: true, listener };
 }

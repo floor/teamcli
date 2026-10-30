@@ -65,6 +65,9 @@ Every wait on the leg is bounded.
 | `INBOX_FALLBACK_MS` | 10 minutes | how long the watch leaves an unread inbox drop to the seat's own client before typing the drop's trigger |
 | `PENDING_MAX_TRIES` | 3 | typed retries once the fall-through starts |
 | `PENDING_MAX_AGE_MS` | 30 minutes | the marker's whole life, from the send |
+| `CHANNEL_TICK_MS` | 250 ms | how often a serving inbox looks for a record it has not pushed yet |
+| `CHANNEL_PUSH_GRACE_MS` | 2000 ms | how long `team send` waits for the server's push marker after writing the record |
+| `CHANNEL_CONFIRM_MS` | 3 minutes | how long a push waits for its signed read receipt before the one redelivery |
 
 A send with no receipt in the grace prints `sent (unconfirmed)`, keeps the drop and the marker,
 and ends the walk there: the message is safe, and the seat's client may still read it. The watch
@@ -80,6 +83,129 @@ and a drop that runs out of bounds is reported with its path rather than lost.
 
 `team feed` shows one row per message: a later line for the same id — receipt, fall-back or taken
 report — replaces the earlier outcome, and a `--follow` pass prints the update when it arrives.
+
+## The channel, when the launch carries the flag
+
+A seat's launch line may start its client with a development channel naming this server:
+`--dangerously-load-development-channels server:team-inbox`. That flag is the whole eligibility
+test on the server side. Only then does `serve` declare `experimental["claude/channel"]`, serve
+the `ack` tool beside `inbox_check` and `inbox_read`, and give its client one instruction — call
+`ack` with the id from a notification's meta in the same handling turn, before reading or acting
+on the message. No `claude/channel/permission` capability is ever declared: this server asks the
+person for nothing. A launch without the flag is the ordinary inbox server, with no capability,
+no instructions, no push and no `ack`, and the listener marker it writes carries no `channel`
+word.
+
+Every signed record that arrives after the server primes is pushed once as
+`notifications/claude/channel` with `{content, meta}`. Mail already waiting when the server starts
+is left to `inbox_check`, so a fresh session starts quiet. The content opens with the
+message-display header and carries the signed body whole; the meta carries identifiers only —
+`{id, from, seat, team}`. A record a client wrote, the seat's own general brief, and a record that
+does not verify with the home's message key are never pushed. After writing the notification the
+server writes `<id>.channel-push.json` beside the record, whole, mode 0600, with `wx` so a second
+write cannot replace it: `{v, kind: "channel-push", id, seat, session, root, at, meta,
+content_sha256, status: "sent (channel)"}`. That marker is the proof the notification was written,
+never the proof it was read, and a record already holding one is not pushed a second time.
+
+The transport acknowledges nothing. T1's independent replay of a spike server measured only the
+visible wrapper line, `← team: Message from Agamemnon`, with that spike server named `team`; the
+`ack` call is the only channel receipt. `ack` takes the id from the meta and writes the signed
+read receipt `team ack` writes — `{status: "read", read_by: "channel"}` at `<id>.read.json`,
+published with the same exclusive, no-clobber link as `inbox_read`. An id this inbox does not
+hold, a record addressed to another seat, session or checkout, a record a client wrote, the
+general brief, a record that does not verify, and a receipt name held by a file that does not
+verify for this message are each a tool error with no receipt. A verifying receipt already at the
+name means the message was already acknowledged: the call answers `{acknowledged, written:
+false}` and no receipt is rewritten, so `ack`, `inbox_read` and `team ack` all find the same
+evidence.
+
+`team send` walks the channel first only when the seat declares no order, the receiver's CLI is
+claude-code, the launch carries the flag naming this server, and the seat's live listener marker
+says `channel: true`. It writes the signed record and waits `CHANNEL_PUSH_GRACE_MS` for the push
+marker; the marker present ends the walk as `sent (channel)` with the pending marker's
+`leg: channel`. No marker clears that pending marker, records `channel: no push receipt within
+<n> ms` in the history line's `failed`, and continues the walk to the next leg — the inbox server
+still reads the record it holds. The watch promotes a signed receipt to one `delivered (read)`
+line and types nothing; no receipt after `CHANNEL_CONFIRM_MS` is the one case it redelivers. It
+redelivers exactly once, through the next leg — a socket frame when the seat's socket is eligible,
+else the typed trigger — and stamps the marker and the history line with `redelivered: channel
+unconfirmed` before the attempt, so no later pass selects it again. A receipt that arrives after
+the redelivery settles the message as `delivered (read)`; an acknowledged record is never touched
+again, and no seat whose receipt exists is typed into.
+
+The evidence rule above still holds: the push marker is not a read, and only the signed receipt at
+`<id>.read.json` makes a channel delivery `delivered (read)`.
+
+## An install under a running server
+
+`serve` keeps the code it started with: installing a build under it neither reloads it nor ends
+it. Two rules close that gap, one on each side.
+
+The listener marker names the install the server started from — its `version`, its `build` (a
+short digest of the entry module it loaded) and the packed `head` when the package carries one. A
+sender of another version or another packed commit judges the marker stale and walks its next
+leg, exactly as it does for a dead pid, and a marker that records no identity cannot vouch for
+the server's code. The channel leg and the `mcp-inbox` leg both require a marker this build can
+vouch for.
+
+On every channel tick, and after each line its client writes, the server compares the install
+under it — the version and packed commit the installed entry names — with the one it started
+from. When they differ it stops its channel, closes its input, removes its marker and starts the
+installed entry with the same arguments and this process's stdio, then exits 0 once the fresh
+process reports that it started: the installed build reads the same stdin, so the calls that
+arrive there next are answered by it. A line the old process had already read is not replayed.
+When the installed entry cannot be started — the start call fails, or it reports an error on the
+child after returning — the server says so on stderr and exits 1; the next launch starts the
+installed build. A server started from a build before this one has none of this: it cannot learn
+to reload, so restarting the seat's client is what moves it, and until then a sender of this
+build protects the seat itself by holding the push name whenever its walk wakes the seat.
+
+A sender that falls back from a stale channel listener has a second hazard: the old server still
+watches the folder and would push the record after the sender's own wake. Before it writes the
+record, when its walk holds a leg that wakes the seat (socket, native or typed), the sender
+writes a marker at the push marker's own name, `<id>.channel-push.json` — `{v, kind:
+"channel-held", id, at, reason}`. Every marker-aware serving server treats a marker for the id
+as a push already made and skips it; a build older than the marker rule cannot honor it, which is
+the case the reload rule above exists for. The marker is not a push: the sender's wait reads
+only the server's `channel-push` marker as delivery, and a wait that finds the held marker alone
+has delivered nothing.
+
+The watch's retry reserves the same name before its first wake leg — the socket frame or the
+typed trigger — and again before its typed line. It does not ask whether the listener is stale:
+an install, or a listener, can change between any check and the wake, so the name is held before
+the wake rather than after a verdict that could be stale by the time the wake lands. The one
+listener fact it reads is whether a channel-declaring server is running at all: a seat whose
+current launch no longer names the channel still reserves while a live listener started with the
+flag is alive, because that server can still push. The marker must name this seat, this session
+and this root, and its pid must be live; a marker naming another inbox proves nothing and holds
+nothing. The marker is one file and last-writer-wins: when a second server starts for the same
+inbox it overwrites the first's marker, so a newer marker that declares no channel hides an older
+channel server that is still running. This build has no per-seat singleton at server startup, so
+the launch-drift reservation covers one serving process per inbox. With two servers the older
+channel one is not covered and can still display the record after the wake — the same display
+duplicate the in-flight tick produces, the full body appearing once more, never a second record
+or id and never a second valid read receipt. A server started after the record arrived pushes
+nothing — its first listing is marked seen — so a dead marker leaves no push to race. The record
+stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the name never
+withholds the message.
+
+The hold is permanent for the id, and nothing removes it. If the wake it precedes is never taken
+— the typed line is not submitted and the retry gives up after `PENDING_MAX_TRIES`, a socket frame
+is refused and the pane never frees, or the pass cannot type at all — the name stays held, and no
+marker-aware server pushes this record afterwards, including a tick a still-running server has yet
+to make. Delivery then falls to the seat's own read: its turn-start drop read, `team messages`, or
+`inbox_check`/`inbox_read`. That is the price of holding before the wake; removing the marker
+after a wake that typed nothing would let a push land after the wake and reopen the duplicate the
+reservation exists to stop.
+
+One window remains, and it is a display duplicate, not a second message. A serving server writes
+the notification before its push marker. A tick that has already passed its marker check before
+the retry's write can therefore display the full body of the same id, and its own marker write
+then fails on the held name. No second record is created and no second valid read receipt is
+written: both are per id. So the claim is no second record or id, not at-most-once display. Two
+serving processes for one inbox are not excluded — the listener marker is last-writer-wins and
+each process's seen set is its own — so each live server can do that once; every later tick of
+every process finds the name held.
 
 ## The evidence rule
 
@@ -118,6 +244,9 @@ is ever derived from pane text or a status.
 The behaviour is pinned by these suites, run with `bun test`:
 
 - `test/mcp-inbox-server.test.ts` — the stdio server: tools, receipts, seat binding, refusals;
+- `test/mcp-channel-server.test.ts` — the channel declaration, push and meta, the push marker and
+  `ack`;
+- `test/channel-leg.test.ts` — the send side's channel walk and the watch's one redelivery;
 - `test/mcp-register.test.ts` — per-CLI routes, exact argv, the git rule, the file merge and its
   refusals;
 - `test/launch/inbox-launch.test.ts` — registration happens before the launch command, and a

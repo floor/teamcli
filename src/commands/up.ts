@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
+import { admitGeneral } from '../client/general-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
@@ -76,7 +77,7 @@ import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { processSignals, terminalReader, type Terminal } from '../launch/terminal.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
-import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
+import { quietRulesDelivery, rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lobby/gate.ts';
 import { lobbyOf } from '../lobby/recorded.ts';
@@ -94,7 +95,7 @@ import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, mintSeatId, pidAlive, readState, seatOfFile, updateState, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -102,7 +103,8 @@ import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel } from '../status/statusline.ts';
 import { watchSitting } from '../watch/liveness.ts';
-import { watchIdentity, watchLabel } from '../watch/pane.ts';
+import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
+import { busAnswers } from '../bus/follow.ts';
 import { readScreen } from '../watch/screen.ts';
 import { seatStart } from '../worktree/place.ts';
 import { registerInbox, type InboxRegistration } from '../mcp/register.ts';
@@ -127,6 +129,10 @@ export type UpSources = {
   sleep?(ms: number): Promise<void>;
   alive?(pid: number): boolean;
   watchCommand?(session: string): string;
+  /** Whether this checkout's event bus answers on its socket. Absent: no bus step is planned, so a
+   *  world that does not probe it never starts one. */
+  busAlive?(root: string): Promise<boolean>;
+  busCommand?(): string;
   /** The machine daemon's reading, for the hosted watch that may own this team's route. Absent in
    *  a world that does not probe it, and then no pane watch is suppressed by a hosted one. */
   daemonHealth?(home: string): Promise<DaemonHealth>;
@@ -231,6 +237,13 @@ export function watchWouldRead(start: string, flagged: string, home?: string): b
 }
 
 /** The watchdog command, from this process and this install: `team` may not be on the PATH. */
+/** The bus command, from this process and this install, as the watch's is. */
+export function busCommand(): string {
+  const here = fileURLToPath(import.meta.url);
+  const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  return `${shellQuote(process.execPath)} ${shellQuote(cli)} bus`;
+}
+
 export function watchCommand(session: string): string {
   const here = fileURLToPath(import.meta.url);
   const cli = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
@@ -305,13 +318,18 @@ export const realSources: UpSources = {
     }
   },
   watchCommand,
+  busAlive: (root) => busAnswers(root),
+  busCommand,
   daemonHealth: (home) => daemonHealth(home),
   launch: realLaunch,
   /** Present on the shipped command only: a dead bus is started in its own process before launch. */
   superviseBus: true,
 };
 
-export const USAGE = 'Usage: team up [--dry-run] [--serial] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
+/** The reason the hold `up --no-launch` places carries. */
+export const QUIET_HOLD_REASON = 'quiet start (team up --no-launch): the watch wakes no seat; release with team hold --release';
+
+export const USAGE = 'Usage: team up [--dry-run] [--serial] [--no-launch] [--session <name>] [--file <path>] [--json]\n       team up --client <grant-file> --key <client-key> [--team <team>] [--dry-run] [--serial] [--no-launch] [--json]\n       team up --general <grant.json> --key <client-key> [--dry-run] [--serial] [--no-launch] [--json]\n       team up --request [--serial] [--json]\n       team up --approval <request-id> [--dry-run] [--serial] [--json]\n\n--no-launch is a quiet start: the seats get their rules only, told not to continue earlier work or read drops; no general seat brief (the launch message) is dropped or typed, and a team hold stops the watch typing anything automatic until team hold --release.\n\nThe owner-seat form needs no owner terminal: --request records this launch (repository, team, HEAD, arguments; fifteen minutes) and sends it to the owner seat, where the owner answers on the owner page with a passkey or Touch ID; --approval <request-id> then runs it, once, as signed. A signed always rule for team-up covering this folder admits the run with no request. team init --request --then-up asks for the team and its first launch in one request.\n\nThe --client form is for a client with no terminal that the owner signed an up grant for (team grant --client <id> --entity <entity> --public-key <file> --team <team> --up --request): it brings up that one team at that one folder, as signed, and nothing else.\n\nExits 0 when the team is ready or the dry-run plan is printed, 1 when launch is refused or fails, 2 when the invocation or team file can\'t be read.\n';
 
 export const up: Command = (argv, io) => runUp(argv, io, realSources);
 export default up;
@@ -321,6 +339,7 @@ export default up;
 function clientInvocationProblem(args: Args): string | null {
   const client = args.values.client !== undefined;
   if (client && args.values.key === undefined) return '--client needs --key <client-key-file>';
+  if (args.values.general !== undefined) return client || args.values.key === undefined ? '--general takes --key <client-key-file> and no --client' : null;
   if (!client && args.values.key !== undefined) return '--key belongs to the --client form: team up --client <grant-file> --key <client-key-file>';
   if (!client && args.values.team !== undefined) return '--team belongs to the --client form: team up --client <grant-file> --key <client-key-file> --team <team>';
   if (client && (args.values.file !== undefined || args.values.session !== undefined)) {
@@ -1020,7 +1039,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A bad option stops the parser before `--json` is read when it comes first, and the
   // structured refusal is still the one the caller asked for.
   const json = hasJsonFlag(argv);
-  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval'], ['dry-run', 'serial', 'json', 'request']);
+  const args = readArgs(argv, ['session', 'file', 'client', 'key', 'team', 'approval', 'general'], ['dry-run', 'serial', 'json', 'request', 'no-launch']);
   // The lines plain output writes beside the records ride on the document as notes under
   // `--json`; stdout carries the one document and nothing else.
   const jsonNotes: string[] = [];
@@ -1043,6 +1062,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     return 2;
   }
   const dry = args.flags.has('dry-run');
+  // `--no-launch`: seats get their rules and nothing else — no general seat brief is dropped in
+  // their folder and no launch-line inbox route names a brief epoch.
+  const noLaunch = args.flags.has('no-launch');
   // The client form: a grant the owner signed for ONE team at ONE folder, proven by the client's own
   // key. It is verified whole here, before anything else is read, and then the run is the grant's
   // folder alone — a no-terminal owner launch that never prompts, whose seats are the signed team
@@ -1089,7 +1111,25 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
   // returns; `--approval <id>` admits this run when the owner seat signed for exactly it. An
   // admitted run is a no-terminal owner launch: it never prompts and never types into a pane.
-  const seatStep = clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
+  // A general grant (src/client/general-grant.ts): the owner signed this principal once for this
+  // entity, so the run is admitted as an owner-seat approval would admit it, with no request.
+  if (args.values.general !== undefined) {
+    let entity: string | null = null;
+    try {
+      const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
+      if (here.ok) entity = here.team.entity;
+    } catch {}
+    const general = admitGeneral(sources.home ?? homedir(), resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key!), 'up', entity, sources.now?.() ?? new Date());
+    if (!general.ok) {
+      refuse(io, json, 'up', { id: 'up.general-refused', message: general.why, repair: null });
+      // exit: up.general-refused
+      return 1;
+    }
+    stderrLine(`team up: admitted by general grant ${general.grant.grant_id} (${general.grant.client_id})\n`);
+  }
+  const seatStep = args.values.general !== undefined
+    ? { kind: 'admitted' as const }
+    : clientUp !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'up', { id: 'up.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
     : ownerSeatStep('up', 'team-up', argv, { request: args.flags.has('request'), approval: args.values.approval, dry, json }, io, sources);
   if (seatStep.kind === 'requested') {
@@ -1745,6 +1785,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       for (const seat of seats) if (seat.lobby) seat.cwd = gate.path;
     } else if (launchingIntoLobby) createLobby = !dry;
   }
+  // The team's event bus: started beside the watch unless the file sets `bus.autostart: false`,
+  // and only when the bus does not already answer. A world that cannot probe it plans none.
+  const startBus = team.bus?.autostart !== false && sources.busAlive !== undefined;
+  const busAlive = startBus ? await sources.busAlive!(root) : false;
   const watch = recorded?.watch;
   // Which watch owns this route now. A hosted watch the daemon carries — anything but standing
   // by — is doing the job, and this run starts no second one beside it. Otherwise the pane
@@ -1807,9 +1851,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(watchUnknown ? { watchUnknown: true } : {}),
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
+    ...(startBus ? { startBus, busAlive, busLabel: busLabel(team.project), busLine: (sources.busCommand ?? busCommand)() } : {}),
     teamFile: loaded.path,
     cliHooks,
-    briefEpochs: currentBriefEpochs(dir, session),
+    ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),
     home: sources.home,
     // A launch surface with no endpoint seam plans none: the marker is what makes the launch
     // start one, and a scene's fake launch must never reach a real process.
@@ -1921,6 +1966,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       writeJson(io, 'team.up', {
         format: 1,
         dry_run: true,
+        ...(noLaunch ? { no_launch: true } : {}),
         status: 'dry-run',
         action_summary: 'dry run: nothing was run',
         project: team.project,
@@ -2052,31 +2098,48 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       const claim = currentBriefClaim(recorded?.briefs?.[name]);
       return claim !== null && claim.stage === 'ready' && claim.sha256 === GENERAL_BRIEF_SHA256;
     };
-    const briefSeats = team.seats
+    const briefSeats = noLaunch ? [] : team.seats
       .filter((seat) => launchedSeats.includes(seat.name)
         || (recorded?.seats[seat.name] === undefined && !claimStands(seat.name)))
       .map((seat) => seat.name);
-    const briefs = deliverBriefForAttribution({
-      dir,
-      root,
-      session,
-      home: sources.home,
-      now: sources.now?.() ?? new Date(),
-      team,
-      state: recorded ?? emptySession(),
-      attributed: briefSeats,
-    });
-    await walkBriefDeliveries(briefs, { dir, home: sources.home });
-    for (const delivery of briefs.deliveries) {
-      if (delivery.ok) continue;
-      const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
-      stderrLine(`team up: ${said}\n`);
-      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+    // `--no-launch` is a quiet start: a team hold stands so the watch types nothing automatic
+    // (no unread wake, no ring, no work offer) until `team hold --release`. A hold already
+    // standing is kept as it is.
+    if (noLaunch) {
+      try {
+        const placedAt = sources.now?.() ?? new Date();
+        updateState(dir, (state) => {
+          if (liveHold(state, placedAt) !== null) return;
+          state.hold = { reason: QUIET_HOLD_REASON, by: callerLabel(caller), at: placedAt.toISOString() };
+        });
+      } catch (error) {
+        stderrLine(`team up: the quiet-start hold was not placed (${plainText(error instanceof Error ? error.message : String(error))})\n`);
+      }
     }
-    if (briefs.recording !== undefined) {
-      const said = `the general seat briefs were written and not recorded (${briefs.recording})`;
-      stderrLine(`team up: ${said}\n`);
-      logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+    // `--no-launch` delivers no brief at all: not to the launched seats, not to a seat behind.
+    if (!noLaunch) {
+      const briefs = deliverBriefForAttribution({
+        dir,
+        root,
+        session,
+        home: sources.home,
+        now: sources.now?.() ?? new Date(),
+        team,
+        state: recorded ?? emptySession(),
+        attributed: briefSeats,
+      });
+      await walkBriefDeliveries(briefs, { dir, home: sources.home });
+      for (const delivery of briefs.deliveries) {
+        if (delivery.ok) continue;
+        const said = `${delivery.seat}: the general seat brief was not delivered (${delivery.reason})`;
+        stderrLine(`team up: ${said}\n`);
+        logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+      }
+      if (briefs.recording !== undefined) {
+        const said = `the general seat briefs were written and not recorded (${briefs.recording})`;
+        stderrLine(`team up: ${said}\n`);
+        logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+      }
     }
     // The binding each planned seat holds before this install mints its successor. A seat whose
     // line never runs keeps it; one this install creates goes back out without a record.
@@ -2191,7 +2254,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         ? { renameWorkspace: (session: string, workspace: string, label: string) => launch.renameWorkspace!(session, workspace, label) }
         : {}),
       typeLine: () => false,
-      deliverRules: async (session, pane, cli, file, seconds) => {
+      deliverRules: async (session, pane, cli, planned, seconds) => {
+        // A quiet start (`--no-launch`) adds its stop instruction to the rules file itself, so the
+        // typed line keeps its ordinary length and shape — only the hash it names changes.
+        const file = noLaunch ? quietRulesDelivery(planned) : planned;
         // The rules go to the file first; nothing is typed until it holds them. The writer
         // builds the path itself, from the live project and the seat's name — the same folder
         // the typed line names.
@@ -2430,6 +2496,12 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         updateState(dir, (state) => {
           const current = (state.sessions[session] ??= emptySession());
           current.watchdog = { file, pane };
+        });
+      },
+      noteBus(pane, workspace) {
+        updateState(dir, (state) => {
+          const current = (state.sessions[session] ??= emptySession());
+          current.bus = { pane, started: now().toISOString(), ...(workspace ? { workspace } : {}) };
         });
       },
       noteWatch(pane, workspace) {
@@ -2683,6 +2755,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         writeJson(io, 'team.up', {
           format: 1,
           dry_run: false,
+          ...(noLaunch ? { no_launch: true } : {}),
           status: 'ready',
           action_summary: summaryLine,
           project: team.project,

@@ -104,6 +104,30 @@ changed file, since `down` never reads its fingerprints.
 
 Without `--request` the owner at a terminal signs the same grant directly.
 
+### How the owner hears of a `--request`
+
+`--request` says `owner notified via <channel>` only when the channel confirmed the delivery:
+
+- `touch-id`: the owner seat has a `mac-keystore` signer. The request is shown at once as the
+  system Touch ID prompt in the owner's login session, with the request's own prompt as the
+  reason. Authenticating signs the owner-seat answer (request id, `params_sha256`, `once`) with
+  the Secure Enclave key; the answer is recorded only when that signature verifies, and
+  `team grant --execute <request-id>` verifies it again. Cancelling records nothing.
+- `screen-code`: a notifier that can confirm delivery showed the six-digit code. The macOS banner
+  (`osascript display notification`) cannot confirm one — macOS drops banners silently when
+  notifications are off or Focus holds them — so it is never sent a code.
+
+Otherwise the output says `owner NOT notified (<why>)` and the agent relays the link it prints:
+
+    link: http://localhost:7392/r/<request-id>#<nonce>
+
+The link opens one card on the owner page (`team owner-seat serve --port 7392`) without the page
+token. The nonce is in the fragment, so it never reaches a request line or a log; it is bound to
+that request id, opens it once, and expires with the request. It authorizes nothing: the card's
+buttons answer only with an owner-signer signature (Touch ID through the Mac's signer, or a
+passkey), and the page cannot reach any other request. `--json` carries the same facts in
+`notified` (`delivered`, `channel`, `approved`, `why`) and `link`.
+
 `--expires` is an ISO timestamp. A team grant is meant to last: without `--expires` it expires
 ninety days after it is written (or sooner, when the owner's `client-grant-max-duration` policy
 caps up/down grants lower), and ninety days is the cap unless that policy changes it; `--expires

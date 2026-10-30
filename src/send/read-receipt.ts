@@ -25,6 +25,9 @@ export type RecordReadInput = {
   home: string;
   key: KeyObject;
   at: string;
+  /** How the message was read, when the reader names it: `channel` for the acknowledgement a
+   *  channel notification's handling turn makes. Absent, the receipt says only that it was read. */
+  readBy?: string;
 };
 
 /** What the act found or did. `held` names the entry at a receipt name this run will not touch;
@@ -36,7 +39,7 @@ export type RecordReadOutcome =
   | { kind: 'unwritten'; reason: 'changed' | 'write' | 'durable' };
 
 export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
-  const { dropDir, id, to, root, session, home, key, at } = input;
+  const { dropDir, id, to, root, session, home, key, at, readBy } = input;
   const context = { to, root, session };
   const servedNow = (): boolean => isRead(dropDir, id, context, key);
   // The caller's own filter may already have asked `isRead`; this re-check is the race with every
@@ -53,7 +56,16 @@ export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
     return servedNow() ? { kind: 'served' } : { kind: 'held', status: 'replied', entry: 'file' };
   }
   if (atReplied.kind !== 'missing') return { kind: 'held', status: 'replied', entry: atReplied.kind };
-  const receipt: ReceiptPayload = { kind: 'receipt', status: 'read', id, to, root, session, at };
+  const receipt: ReceiptPayload = {
+    kind: 'receipt',
+    status: 'read',
+    id,
+    to,
+    root,
+    session,
+    at,
+    ...(readBy === undefined ? {} : { read_by: readBy }),
+  };
   const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home), null, 2)}\n`);
   if (published === 'exists') {
     // A rival won the name between the checks and this link. Its entry is the one serving of this

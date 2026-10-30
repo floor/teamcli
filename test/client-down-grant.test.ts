@@ -27,6 +27,7 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, LOG_FILE, updateState } from '../src/state.ts';
 import { keyOf } from '../src/store/keys.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
+import { readScreen } from '../src/watch/screen.ts';
 
 const made: string[] = [];
 const realTmp = process.env.TMPDIR;
@@ -262,8 +263,8 @@ describe('request, owner-seat answer, execute, then the client stops the team', 
     teamRunning(w);
     const g = await issued(w, ['down']);
     expect(w.store.prompts).toHaveLength(1);
-    expect(w.store.prompts[0]).toContain('down');
-    expect(w.store.prompts[0]).toContain(w.docs);
+    expect(w.store.prompts[0]).toContain('stop (down)');
+    expect(w.store.prompts[0]).toContain('on team docs');
     const record = JSON.parse(readFileSync(g.path, 'utf8')).client_grant;
     expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', allowed_ops: ['down'], vocabulary: 4 });
     // A record that carries down keeps its binding under `team`; only the up-only form says `up`.
@@ -290,7 +291,7 @@ describe('request, owner-seat answer, execute, then the client stops the team', 
     const w = world();
     teamRunning(w);
     const g = await issued(w, ['up', 'down']);
-    expect(w.store.prompts[0]).toContain('team up and team down');
+    expect(w.store.prompts[0]).toContain('start/stop (up/down)');
     const record = JSON.parse(readFileSync(g.path, 'utf8')).client_grant;
     expect(record.allowed_ops).toEqual(['up', 'down']);
     expect(record.team.root).toBe(w.docs);
@@ -416,13 +417,85 @@ describe('the grant is for one team and one folder, and for nothing else', () =>
     const w = world();
     teamRunning(w);
     const g = await issued(w, ['down']);
-    for (const extra of [['--file', 'other.yaml'], ['--session', 'elsewhere'], ['--abandon']]) {
+    for (const extra of [['--file', 'other.yaml'], ['--session', 'elsewhere']]) {
       const run = await clientDown(w, g.path, w.grok.keyPath, extra);
       expect(run.code, extra.join(' ')).toBe(2);
       expect(run.err).toContain('--client');
       expect(run.closed).toEqual([]);
     }
+    // A plain down grant (no default bundle) still abandons nothing.
+    const abandoned = await clientDown(w, g.path, w.grok.keyPath, ['--abandon']);
+    expect(abandoned.code).toBe(1);
+    expect(abandoned.err).toContain('default (developer) bundle');
+    expect(abandoned.closed).toEqual([]);
   });
+
+  test('the default bundle (--bundle default, alias developer) may --abandon with --client; --file and --session stay the owner\'s', async () => {
+    for (const name of ['default', 'developer'] as const) {
+      const w = world();
+      teamRunning(w);
+      const docsId = teamIdOf(w.docs);
+      const lead = registerAgent(w.home, {
+        name: 'lead', signing: { model: 'Claude Opus', version: '5.5', role: 'coordinator' }, lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
+        reach: { team: docsId, seat: 'lead', session: 'docs', pane: 'w1:p0', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
+      });
+      const orch = registerAgent(w.home, {
+        name: 'orchestrator', signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' }, lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
+        reach: { team: docsId, seat: 'orchestrator', session: 'docs', pane: 'w1:p1', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
+      });
+      upsertTeam(w.home, docsId, { project: 'docs', entity: null, session: 'docs', root: w.docs, lobby: join(w.home, '.config', 'team', 'lobby'), lifecycle: 'running', roster: [{ agent: lead.id, seat: 'lead', role: 'coordinator', leads: true }, { agent: orch.id, seat: 'orchestrator', role: 'implementer' }] });
+      await seated(w);
+      const c = capture(w);
+      const code = await runGrant(['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--team', 'docs', '--bundle', name, '--seat', 'orchestrator', '--request', '--json'], c.io, { home: w.home, notify: () => false });
+      expect(code, c.out() + c.err()).toBe(0);
+      const id = JSON.parse(c.out().trim()).target as string;
+      expect((await answer(w, id, 'oui')).code).toBe(0);
+      const done = await execute(w, id);
+      expect(done.code, done.err).toBe(0);
+      const grantId = /client grant: (cg_[0-9a-f]{24})/.exec(done.out)![1]!;
+      const path = clientGrantPath(w.home, grantId);
+      const record = JSON.parse(readFileSync(path, 'utf8')).client_grant;
+      expect(record.bundle).toBe('developer');
+      expect(record.vocabulary).toBe(7);
+      for (const extra of [['--file', 'other.yaml'], ['--session', 'elsewhere']]) {
+        const run = await clientDown(w, path, w.grok.keyPath, [...extra, '--abandon']);
+        expect(run.code, extra.join(' ')).toBe(2);
+        expect(run.closed).toEqual([]);
+      }
+      const run = await clientDown(w, path, w.grok.keyPath, ['--abandon']);
+      expect(run.code, run.err).toBe(0);
+      expect(run.err).not.toContain('only the owner abandons');
+      if (name === 'default') {
+        // A seat holding unsent text: --abandon saves it under .agents/abandoned-input/, clears
+        // the box with the profile's key, and the seat is then stopped and closed.
+        teamRunning(w);
+        const { sources, closed } = downSourcesOf(w, () => new Date('2026-10-28T08:00:00Z'));
+        const keys: string[] = [];
+        let box = claudeBox('half a thought');
+        const launch = { ...sources.launch!, sendKey: (_s: string, _p: string, key: string) => { keys.push(key); if (key === 'ctrl+c') box = claudeBox(''); return true; } };
+        const io = testIo(w.docs, { kind: 'owner-no-tty' });
+        const code = await runDown(['--client', path, '--key', w.grok.keyPath, '--abandon'], io, { ...sources, launch, screenText: () => box, screen: () => readScreen('claude-code', box) });
+        expect(code, io.err + io.out).toBe(0);
+        expect(keys[0]).toBe('ctrl+c');
+        const saved = readdirSync(join(w.docs, '.agents', 'abandoned-input'));
+        expect(saved).toHaveLength(1);
+        expect(readFileSync(join(w.docs, '.agents', 'abandoned-input', saved[0]!), 'utf8')).toContain('half a thought');
+        void closed;
+      }
+    }
+  });
+
+  test('a --request naming a team and nothing narrower asks for the default bundle', async () => {
+    const w = world();
+    await seated(w);
+    const c = capture(w);
+    const code = await runGrant(['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--team', 'docs', '--request', '--json'], c.io, { home: w.home, notify: () => false });
+    // The default bundle carries send, and this team opens no seat to the client: the owner's
+    // visibility still decides, so the request is refused, by the default bundle's name.
+    expect(code).toBe(1);
+    expect(c.out() + c.err()).toContain('the default bundle carries send');
+  });
+
 
   test('a down grant is never asked with a seat, an inbox, grant, or without the team', async () => {
     const w = world();

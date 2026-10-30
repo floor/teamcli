@@ -70,13 +70,14 @@ test('a command with two parser forms carries both usage lines and the union of 
   const messages = contract.commands.find((command) => command.name === 'messages');
   expect(messages?.usage).toEqual([
     'team messages [--json]',
-    'team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--json]',
+    'team messages --client <grant-file> --key <key-file> [--since <id>] [--ack <id>] [--limit <n>] [--request-id <id>] [--follow] [--json]',
   ]);
   // The flags are the union of the two readArgs calls, never a whitelist: the client form's six
   // valued options and the --json switch both forms share.
   expect((messages?.flags ?? []).filter((flag) => !flag.hidden).map((flag) => [flag.name, flag.takesValue])).toEqual([
     ['--ack', true],
     ['--client', true],
+    ['--follow', false],
     ['--help', false],
     ['--json', false],
     ['--key', true],
@@ -119,7 +120,7 @@ test('two parser forms of the same shape are refused as ambiguous', () => {
   expect(source).toContain(needle);
   const broken = source.replace(
     needle,
-    "readArgs(argv, ['client', 'key', 'since', 'ack', 'limit', 'request-id'], ['json'])",
+    "readArgs(argv, ['client', 'key', 'since', 'ack', 'limit', 'request-id'], ['json', 'follow'])",
   );
   expect(() => renderContract(root, new Map([[rel, broken]]))).toThrow(/two readArgs calls declare the same form/);
 });

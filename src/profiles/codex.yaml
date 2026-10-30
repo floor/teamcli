@@ -108,6 +108,22 @@ status_model:
     model: '{1}'
     version: '{1}'
     yields: []
+# Codex's daemon dialog, drawn at startup before any session exists ('Background server has
+# incompatible feature settings', options 1 run without daemon / 2 restart / 3 cancel). Nothing
+# ran in the pane yet, so `team down` closes it without typing: no option is ever chosen, and
+# never 2, which would restart the shared background server.
+not_started:
+  - all:
+      - 'Background server has incompatible feature settings'
+      - '^\s*›?\s*1\. Run without daemon this time'
+      - '^\s*›?\s*2\. Restart with these settings'
+# Under `team down --abandon`, TeamCLI answers this dialog itself with Esc ('esc to cancel'), the
+# Cancel choice: never '2. Restart with these settings'.
+abandon_answers:
+  - all:
+      - 'Background server has incompatible feature settings'
+      - '^\s*›?\s*3\. Cancel'
+    keys: [escape]
 screen:
   unknown:
     - any: ['\bmodel:\s+loading\b']

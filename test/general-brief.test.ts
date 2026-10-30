@@ -10,10 +10,11 @@ import { briefOf, textModuleOf } from '../scripts/brief.ts';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { QUIET_START_NOTE, quietRulesDelivery, rulesFileHash, rulesLine } from '../src/launch/rules-file.ts';
 import { runApprove } from '../src/approve/command.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import { runDrops } from '../src/commands/drops.ts';
-import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
+import { QUIET_HOLD_REASON, runUp, USAGE, type Launch, type UpSources } from '../src/commands/up.ts';
 import { commands } from '../src/cli.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -457,6 +458,131 @@ seats:
       expect(looked.ok && looked.record?.payload.to === seat).toBe(true);
       expect(looked.ok && looked.record?.payload.incarnation === claim.incarnation).toBe(true);
     }
+  });
+
+  test('--no-launch delivers no general brief: no claim, no drop, and the JSON says no_launch', async () => {
+    // The human seat leads and the CLI seat is stopped in the file: the plan is skips alone, so
+    // no launch call can be mistaken for the delivery's work.
+    const trusted = `format: 1
+project: acme
+coordinator: desk
+operator: desk
+session: acme
+trust:
+  - ${lobbyOf(home, root, { project: 'acme', session: 'acme' })}
+  - ${root}
+workspace:
+  mode: shared
+seats:
+  - role: implementer
+    name: lead
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    stopped: true
+  - role: coordinator
+    name: desk
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude
+    human: true
+`;
+    writeFileSync(join(dir, 'team.yaml'), trusted);
+    const approveIo = testIo(root, { kind: 'owner' });
+    const approved = await runApprove(['--file', '.agents/team.yaml'], approveIo, {
+      ask: async () => '2',
+      waiting: () => 'empty',
+      now: () => NOW,
+      home,
+    });
+    if (approved !== 0) throw new Error(`${approved}: ${approveIo.out}${approveIo.err}`);
+    updateState(dir, (state) => {
+      state.sessions.acme = { ...emptySession(), watch: { pid: 999, heartbeat: NOW_ISO } };
+    });
+
+    const calls: string[] = [];
+    const launch: Launch = {
+      sessionState: () => 'running',
+      startServer: () => {
+        calls.push('startServer');
+        return true;
+      },
+      sessionUp: () => true,
+      createWorkspace: () => {
+        calls.push('createWorkspace');
+        return { pane: 'w1:p1', workspace: 'w1' };
+      },
+      paneRun: () => {
+        calls.push('paneRun');
+        return true;
+      },
+      renameAgent: () => true,
+      closeWorkspace: () => true,
+      agentPanes: () => [],
+      agents: () => [],
+      paneText: () => null,
+      typeText: () => {
+        calls.push('typeText');
+        return true;
+      },
+      pressEnter: () => {
+        calls.push('pressEnter');
+        return true;
+      },
+      foreground: () => null,
+      sleep: async () => {},
+      now: () => NOW,
+    };
+    const sources: UpSources = {
+      home,
+      now: () => NOW,
+      standing: (at) => approvalStanding(at, home),
+      sessionRunning: () => true,
+      sessionState: () => 'running',
+      agents: () => [],
+      workspaces: () => [],
+      alive: () => true,
+      sleep: async () => {},
+      launch,
+      terminal: () => ({
+        drain() {},
+        async key() {
+          return 'timeout';
+        },
+      }),
+    };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(['--no-launch', '--json'], io, sources);
+    expect(code).toBe(0);
+    expect(calls).toEqual([]);
+    const doc = JSON.parse(io.out) as { no_launch?: boolean };
+    expect(doc.no_launch).toBe(true);
+    // The quiet start's team hold stands, so the watch types nothing automatic.
+    expect(readState(dir).hold?.reason).toBe(QUIET_HOLD_REASON);
+    const briefs = readState(dir).sessions.acme?.briefs;
+    for (const seat of ['lead', 'desk']) {
+      expect(currentBriefClaim(briefs?.[seat])).toBeNull();
+      expect(existsSync(dropDir(seat))).toBe(false);
+    }
+  });
+
+  test('a quiet start adds the stop instruction to the rules file and keeps the typed line ordinary', () => {
+    const plain = { seat: 'lead', text: 'Rule one.\n', path: '/x/rules/lead.md', line: rulesLine('/x/rules/lead.md', rulesFileHash('Rule one.\n')) };
+    const quiet = quietRulesDelivery(plain);
+    expect(quiet.text).toBe(`Rule one.\n\n${QUIET_START_NOTE}\n`);
+    expect(quiet.line).toBe(rulesLine('/x/rules/lead.md', rulesFileHash(quiet.text)));
+    expect(quiet.line.length).toBe(plain.line.length);
+    expect(QUIET_START_NOTE).toContain('do not continue any earlier work and do not read drops');
+  });
+
+  test('the usage names --no-launch for the owner and the --client form', () => {
+    const lines = USAGE.split('\n');
+    expect(lines[0]).toContain('[--no-launch]');
+    expect(lines.find((line) => line.includes('--client'))).toContain('[--no-launch]');
   });
 });
 

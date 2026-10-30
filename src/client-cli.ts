@@ -34,9 +34,10 @@ import { bundleSignsFile, isBundleName, type BundleName, type BundleOp } from '.
 import { bundleCard, expandBundle, projectIdOfTeam } from './client/bundles.ts';
 import { verifyClientGrantIssue } from './client/verify.ts';
 import { expiresArgument, expiresField } from './client/duration-policy.ts';
-import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
+import { acceptOwnerSigner, addOwnerSigner, deliverToOwnerSeat, readOwnerSeat, ownerSeatMessages, registerOwnerSeat, ownerSeatHelperPath, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './client/owner-seat.ts';
 import { charterGate } from './charter/check.ts';
-import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, issueGrantUnderCharter, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
+import { createRequestLink } from './client/request-link.ts';
+import { approveAsOwnerSeat, GRANT_CHOICES, type PendingUpBinding, answerPendingGrant, confirmationLine, autoApprovePendingGrant, createPendingGrant, denyPendingGrant, executePendingGrant, grantEmissionOf, grantPrompt, issueGrantUnderCharter, listApprovalRules, matchingApprovalRule, oneTimeCodeAdapter, pendingSummary, presentToOwnerSeat, revokeApprovalRule, type OwnerNotifier, type PendingGrantParams } from './client/emission.ts';
 import type { Io } from './io.ts';
 import { plainText } from './launch/plain.ts';
 import { writeJson, writeJsonError } from './output/index.ts';
@@ -115,6 +116,28 @@ export function teamOpsOfArgs(args: Args): ClientTeamOp[] | null {
   return asked.length === 0 ? null : asked;
 }
 
+/** The bundle every client gets unless the owner asks for less: `default`, recorded as `developer`
+ *  (its signed name since vocabulary 7, so grants signed before the rename verify unchanged).
+ *  `--bundle default` is that bundle by its new name; `--bundle developer` stays its alias. A
+ *  `--request` that names a team and asks for nothing narrower (no --bundle, --up, --down, --seat,
+ *  --inbox, --allow-grant, --client-request) asks for the default bundle. The owner still signs it,
+ *  once per team; nothing here widens a grant already signed. */
+export const DEFAULT_BUNDLE_ALIAS = 'default';
+export function withDefaultBundle(args: Args): Args {
+  const asked = args.values.bundle;
+  if (asked === DEFAULT_BUNDLE_ALIAS) return { ...args, values: { ...args.values, bundle: 'developer' } };
+  if (asked !== undefined) return args;
+  const narrower = teamOpsOfArgs(args) !== null || args.values.seat !== undefined || args.flags.has('inbox') || args.flags.has('allow-grant')
+    || args.flags.has('client-request') || MASTER_SCOPE_FLAGS.some((flag) => args.values[flag] !== undefined);
+  if (args.flags.has('request') && args.values.team !== undefined && !narrower) return { ...args, values: { ...args.values, bundle: 'developer' } };
+  return args;
+}
+
+/** How a bundle is named to a person: `developer` is the `default` bundle. */
+export function bundleDisplayName(bundle: string): string {
+  return bundle === 'developer' ? 'default' : bundle;
+}
+
 /** The problems the `--client` form of `team grant` owns, or null when the arguments are whole. */
 export function clientGrantProblem(args: Args): string | null {
   if (args.error !== undefined) return args.error;
@@ -136,7 +159,7 @@ export function clientGrantProblem(args: Args): string | null {
     // A bundle is the owner's form alone, like `--up`: it never rides a master grant, so a sub-grant
     // can never carry one, and it carries only what its name expands to for the one team it names.
     const asked = args.values.bundle;
-    if (!isBundleName(asked)) return `--bundle takes observer, operator, manager or developer, not "${asked}"`;
+    if (!isBundleName(asked)) return `--bundle takes default, observer, operator or manager (developer is default's older name), not "${asked}"`;
     if (teamOps !== null) return `--bundle ${asked} and ${teamOpFlags(teamOps)} are two forms: a bundle's ops come from its name; ask for one or the other`;
     if (args.flags.has('client-request')) return `--bundle belongs to the owner form: a sub-grant never carries a bundle`;
     if (args.values.team === undefined) return `--bundle ${asked} needs --team <team>: a bundle binds one team and its folder`;
@@ -203,6 +226,7 @@ export function masterScopeOf(args: Args): ClientGrantScope {
 
 /** The client form of `team grant`: owner-only, one fresh id per issuance, as long as the `client-grant-max-duration` policy allows (seven days by default). */
 export function runClientGrantMode(rawIo: Io, io: Io, args: Args, json: boolean, home: string = homedir(), approval: GrantApprovalOptions = {}): 'ok' | 'refused' | 'invalid' {
+  args = withDefaultBundle(args);
   const problem = clientGrantProblem(args);
   if (problem !== null) {
     if (json) writeJsonError(rawIo, 'grant.invalid', plainText(problem), null);
@@ -284,7 +308,7 @@ export function bundleParamsOf(home: string, args: Args, now: Date, cwd: string)
       if (!admitted.ok) return admitted;
       const held = new Set(readRosterSeats(home, target.binding.teamId));
       seats = admitted.seats.filter((seat) => held.has(seat));
-      if (seats.length === 0) return { ok: false, why: `the ${bundle} bundle carries send but no seat of team ${target.binding.project} is open to client ${args.values.client!}; name the seats with --seat <seat>[,<seat>]` };
+      if (seats.length === 0) return { ok: false, why: `the ${bundleDisplayName(bundle)} bundle carries send but no seat of team ${target.binding.project} is open to client ${args.values.client!}; name the seats with --seat <seat>[,<seat>]` };
     }
   } else if (args.values.seat !== undefined) {
     return { ok: false, why: `--seat names where send goes, and the ${bundle} bundle in force does not carry send` };
@@ -292,7 +316,7 @@ export function bundleParamsOf(home: string, args: Args, now: Date, cwd: string)
   return { ok: true, up, bundle, bundle_ops: expanded.ops, bundle_seats: seats };
 }
 
-/** `team grant --client … --team <team> --bundle observer|operator|manager|developer`, at the owner's terminal. */
+/** `team grant --client … --team <team> --bundle default|observer|operator|manager` (developer = default), at the owner's terminal. */
 function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPublicInput, json: boolean, home: string, at?: Date): 'ok' | 'refused' {
   const refuse = (why: string): 'refused' => {
     if (json) writeJsonError(rawIo, 'grant.refused', plainText(why), null);
@@ -322,7 +346,7 @@ function runDirectBundleGrantMode(rawIo: Io, io: Io, args: Args, key: ClientPubl
   if (json) {
     writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'updated' as const, action_summary: 'grant: updated', project: null, session: null, target: result.grant.grantId });
   } else {
-    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nbundle: ${result.grant.bundle}\nops: ${result.grant.ops.join(', ')}\nteam: ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${expiresField(result.grant.expires)}\ncard: ${card}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
+    io.stdout(`grant: updated\nclient grant: ${result.grant.grantId}\nclient: ${result.grant.clientId}\nbundle: ${bundleDisplayName(result.grant.bundle ?? '')}\nops: ${result.grant.ops.join(', ')}\nteam: ${result.grant.up.project} at ${result.grant.up.root}\nexpires: ${expiresField(result.grant.expires)}\ncard: ${card}\ngrant file: ${result.path}\n${KEY_ISOLATION_LINE}\n`);
   }
   return 'ok';
 }
@@ -452,7 +476,7 @@ export function runClientGrantRequestMode(rawIo: Io, io: Io, args: Args, json: b
 }
 
 /** Test seams for the conversational path: the on-screen notifier and the clock. */
-export type GrantApprovalOptions = { notify?: OwnerNotifier; now?: Date; ownerSeatStore?: OwnerSeatKeyStore };
+export type GrantApprovalOptions = { notify?: OwnerNotifier; now?: Date; ownerSeatStore?: OwnerSeatKeyStore; /** false: skip the Touch ID presentation (tests). */ present?: boolean };
 
 /** `team grant --client … --request`: records a pending request; never writes a grant. */
 export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean, home: string, approval: GrantApprovalOptions = {}): 'ok' | 'refused' | 'invalid' {
@@ -535,13 +559,29 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
   });
   if (!created.ok) return refuse(created.why);
   const id = created.record.request_id;
-  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now, home).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary, at: now.toISOString() });
+  const delivered = deliverToOwnerSeat(home, { request_id: id, params_sha256: created.record.params_sha256, text: confirmationLine(id, params, now, home).replace(/\(team grant --answer[^)]*\)/, `(team grant --approve-as-owner-seat ${id} <oui|always|non>)`), summary: { ...summary, prompt: grantPrompt(params, now, home) }, at: now.toISOString() });
+  // Honest delivery: the owner is said to be notified only through a channel that confirmed it.
+  // First the owner seat's Touch ID signer (a verified owner signature is also the approval), then
+  // the screen code when its notifier confirmed it. Otherwise: not delivered, and the link is the way.
+  const store = approval.ownerSeatStore ?? systemOwnerSeatKeyStore(ownerSeatHelperPath(home));
+  const presence = approval.present === false ? null : presentToOwnerSeat(home, id, store, now);
+  const viaCode = created.record.adapter === 'one-time-code';
+  const notified: { delivered: boolean; channel: string | null; approved: boolean; why?: string } = presence?.delivered === true
+    ? { delivered: true, channel: presence.channel, approved: true }
+    : viaCode
+      ? { delivered: true, channel: 'screen-code', approved: false }
+      : { delivered: false, channel: null, approved: false, why: [presence !== null && !presence.delivered ? `${presence.channel}: ${presence.why}` : null, created.notDelivered ?? null].filter((x) => x !== null).join('; ') || 'no confirmed channel' };
+  const link = createRequestLink(home, id, created.record.expires_at);
+  const linkUrl = link.ok ? link.url : null;
   const choices = GRANT_CHOICES.filter((choice) => !(choice === 'always' && (params.allow_grant || up !== null))).map((choice) => ({
     id: choice,
     label: choice === 'once' ? 'Yes, once' : choice === 'always' ? 'Always for this' : 'No',
-    needs_code: choice !== 'deny',
-    command: choice === 'deny' ? `team grant --deny ${id}` : `team grant --execute ${id} --approve ${choice} --code <code>`,
+    needs_code: viaCode && choice !== 'deny',
+    command: choice === 'deny' ? `team grant --deny ${id}` : viaCode ? `team grant --execute ${id} --approve ${choice} --code <code>` : `team grant --execute ${id}`,
   }));
+  const notifiedLine = notified.delivered
+    ? `owner notified via ${notified.channel}${notified.approved ? ': approved with a verified owner-seat signature; run team grant --execute ' + id : ''}`
+    : `owner NOT notified (${notified.why}): relay the link below to the owner; it shows only this request and approval still needs his signature`;
   if (json) {
     writeJson(io, 'team.grant', {
       format: 1 as const,
@@ -557,9 +597,11 @@ export function runPendingGrantMode(rawIo: Io, io: Io, args: Args, json: boolean
       prompt: confirmationLine(id, params, now, home),
       answer_command: `team grant --answer ${id} <oui|always|non>`,
       owner_seat: delivered !== null ? { delivered: true, inbox: delivered, answer_command: `team grant --approve-as-owner-seat ${id} <oui|always|non>` } : { delivered: false },
+      notified,
+      link: linkUrl,
     });
   } else {
-    io.stdout(`grant: request recorded\nrequest: ${id}\nconfirmation: ${confirmationLine(id, params, now, home)}\nsummary: ${summary.text}\nparams sha256: ${created.record.params_sha256}\napproval: ${created.record.adapter} (shown to the owner on screen only)\nexpires: ${created.record.expires_at}\nchoices: ${choices.map((c) => c.id).join(' | ')}\n${choices.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\n`);
+    io.stdout(`grant: request recorded\nrequest: ${id}\nconfirmation: ${confirmationLine(id, params, now, home)}\nprompt: ${grantPrompt(params, now, home)}\nsummary: ${summary.text}\nparams sha256: ${created.record.params_sha256}\napproval: ${created.record.adapter}\n${notifiedLine}\nlink: ${linkUrl ?? '(none: ' + (link.ok ? '' : link.why) + ')'}\nexpires: ${created.record.expires_at}\nchoices: ${choices.map((c) => c.id).join(' | ')}\n${choices.map((c) => `  ${c.id}: ${c.command}`).join('\n')}\n`);
   }
   return 'ok';
 }
@@ -733,7 +775,7 @@ export function runOwnerSeatApproveMode(rawIo: Io, io: Io, requestId: string, wo
 export function runOwnerSeatInboxMode(io: Io, json: boolean, home: string): 'ok' {
   const messages = ownerSeatMessages(home);
   if (json) writeJson(io, 'team.grant', { format: 1 as const, dry_run: false, status: 'unchanged' as const, action_summary: 'grant: owner seat inbox', project: null, session: null, target: 'owner-seat', rules: messages });
-  else io.stdout(messages.length === 0 ? 'owner seat inbox: empty\n' : `${messages.map((m) => `${m.at}  ${m.text}`).join('\n')}\n`);
+  else io.stdout(messages.length === 0 ? 'owner seat inbox: empty\n' : `${messages.map((m) => { const line = (m as { summary?: { prompt?: unknown } }).summary?.prompt; return `${m.at}  ${m.text}${typeof line === 'string' ? `\n    ${line}` : ''}`; }).join('\n')}\n`);
   return 'ok';
 }
 

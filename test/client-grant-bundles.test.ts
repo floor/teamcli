@@ -502,12 +502,10 @@ describe('request, owner-seat answer (one Touch ID), execute: the operator bundl
     const g = await issued(w, 'operator', ['--seat', 'orchestrator']);
     // ONE owner signature, whose text is the card.
     expect(w.store.prompts).toHaveLength(1);
-    expect(w.store.prompts[0]).toContain('Grok Bot may, for team docs until');
-    expect(w.store.prompts[0]).toContain('see status');
+    expect(w.store.prompts[0]).toContain('Allow Grok Bot (client grok-bot) on team docs, operator bundle');
+    expect(w.store.prompts[0]).toContain('start/stop (up/down)');
     expect(w.store.prompts[0]).toContain('send to orchestrator');
-    expect(w.store.prompts[0]).toMatch(/start \(file [0-9a-f]{12}\)/);
-    expect(w.store.prompts[0]).toContain('stop');
-    expect(w.store.prompts[0]).toContain('It cannot change permissions, add or remove seats, or create teams.');
+    expect(w.store.prompts[0]).toContain('Signer: mac.');
     const record = recordOf(g.path);
     expect(record).toMatchObject({ client_id: 'grok-bot', entity: 'floor', bundle: 'operator', vocabulary: CLIENT_BUNDLE_VOCABULARY_VERSION, seats: ['orchestrator'] });
     expect(record.allowed_ops).toEqual([...OPERATOR_DEFAULT_OPS]);
@@ -589,7 +587,7 @@ describe('request, owner-seat answer (one Touch ID), execute: the operator bundl
     }
     const unknown = capture(w, { kind: 'owner' });
     expect(await runGrant(bundleFlags(w, 'admin'), unknown.io, { home: w.home })).toBe(2);
-    expect(unknown.err()).toContain('observer, operator, manager or developer');
+    expect(unknown.err()).toContain('default, observer, operator or manager');
     const bare = capture(w, { kind: 'owner' });
     expect(await runGrant(['team-less', '--bundle', 'operator', '--scope', 'x'], bare.io, { home: w.home })).toBe(2);
     expect(bare.err()).toContain('--bundle belongs to the --client form');
@@ -676,6 +674,11 @@ describe('the operator runs status, send, up and down from one grant, and the ob
     expect(JSON.stringify(drop)).toContain('client:grok-bot');
     expect(JSON.stringify(drop)).toContain(g.grantId);
     expect(sent.log).toContain(`client-send-authorized: grant ${g.grantId} client grok-bot team docs seat orchestrator`);
+    // A bundle-grant send walks the same delivery legs a one-seat client send walks: this host
+    // reads no pane and no inbox listens, so every leg is named as skipped and the walk's end is logged.
+    expect(sent.log).toContain('orchestrator: no leg of its delivery order took the client drop (mcp-inbox:');
+    expect(sent.log).toContain('client delivery walk ended for drop');
+    expect(sent.log).not.toContain('walks no delivery leg');
 
     const up = await clientUp(w, g.path, w.grok.keyPath);
     expect(up.code, up.err + up.out).toBe(0);

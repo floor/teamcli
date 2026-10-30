@@ -110,6 +110,10 @@
         "minLength": 1
       }
     },
+    "no_launch": {
+      "type": "boolean",
+      "const": true
+    },
     "notes": {
       "type": "array",
       "items": {

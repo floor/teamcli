@@ -1862,7 +1862,7 @@ export function planClientBundleGrant(home: string, request: ClientBundleGrantRe
   const now = options.now ?? new Date();
   const nowMs = now.getTime();
   if (!Number.isFinite(nowMs)) return refusal('the issued time is not a readable timestamp');
-  if (!isBundleName(request.bundle)) return refusal(`"${String(request.bundle)}" is not a bundle: observer, operator, manager or developer`);
+  if (!isBundleName(request.bundle)) return refusal(`"${String(request.bundle)}" is not a bundle: default (recorded as developer), observer, operator or manager`);
   for (const op of request.ops) {
     if (isForbiddenBundleCommand(op, request.bundle)) return refusal(`"${op}" can never be in a bundle (the ${request.bundle} bundle among them): it changes who may do what, and only the owner does that`);
   }
