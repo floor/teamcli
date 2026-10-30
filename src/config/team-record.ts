@@ -106,11 +106,13 @@ export function parseValue(raw: string): YamlValue {
 
 const PLAIN = /^[A-Za-z_./@~][A-Za-z0-9_./@~+-]*( [A-Za-z0-9_./@~+-]+)*$/;
 const RESERVED = /^(true|false|null|yes|no|on|off|~)$/i;
+// A value with its unit (30%, 10m, 500MB) stays plain: the validator reads a measure only unquoted.
+const MEASURE = /^[0-9]+(\.[0-9]+)?(%|ms|s|m|h|d|KB|MB|GB|TB)$/;
 
 function scalar(value: string | number | boolean | null): string {
   if (value === null) return 'null';
   if (typeof value !== 'string') return String(value);
-  return PLAIN.test(value) && !RESERVED.test(value) ? value : JSON.stringify(value);
+  return (PLAIN.test(value) && !RESERVED.test(value)) || MEASURE.test(value) ? value : JSON.stringify(value);
 }
 
 function key(name: string): string {
