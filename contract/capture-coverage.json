@@ -150,7 +150,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 16,
+        "real": 18,
         "constructed": 1,
         "undocumented": 0
       },
@@ -207,7 +207,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 25,
+        "real": 26,
         "constructed": 0,
         "undocumented": 0
       },
@@ -1017,6 +1017,63 @@
         "to": "0.161.0"
       },
       "byVersion": {
+        "0.161.0": {
+          "idle": {
+            "real": 2,
+            "constructed": 3,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 4,
+            "constructed": 1,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 1,
+            "constructed": 2,
+            "undocumented": 0
+          }
+        },
         "0.157.0": {
           "idle": {
             "real": 2,
@@ -1130,25 +1187,33 @@
             "constructed": 0,
             "undocumented": 0
           }
-        },
-        "0.161.0": {
+        }
+      }
+    },
+    "cursor": {
+      "tested": {
+        "from": "2026.10.01",
+        "to": "2026.10.19"
+      },
+      "byVersion": {
+        "2026.10.22": {
           "idle": {
-            "real": 2,
-            "constructed": 3,
+            "real": 0,
+            "constructed": 0,
             "undocumented": 0
           },
           "working": {
-            "real": 1,
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
           "unsent": {
-            "real": 2,
-            "constructed": 1,
+            "real": 1,
+            "constructed": 0,
             "undocumented": 0
           },
           "permission": {
-            "real": 1,
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1163,7 +1228,7 @@
             "undocumented": 0
           },
           "trust": {
-            "real": 1,
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1183,19 +1248,11 @@
             "undocumented": 0
           },
           "unknown": {
-            "real": 1,
-            "constructed": 2,
+            "real": 0,
+            "constructed": 0,
             "undocumented": 0
           }
-        }
-      }
-    },
-    "cursor": {
-      "tested": {
-        "from": "2026.10.01",
-        "to": "2026.10.19"
-      },
-      "byVersion": {
+        },
         "2026.10.01": {
           "idle": {
             "real": 10,
@@ -1819,12 +1876,13 @@
       "exit question": "reason not stated"
     },
     "cursor": {
-      "working": "reason not stated",
-      "unsent": "reason not stated",
-      "permission": "reason not stated",
-      "question": "reason not stated",
-      "trust": "reason not stated",
-      "unknown": "reason not stated"
+      "idle": "as their own frames at this version (no `unsent.txt` or `exit.txt`)",
+      "working": "as their own frames at this version (no `unsent.txt` or `exit.txt`)",
+      "unsent": "as their own frames at this version (no `unsent.txt` or `exit.txt`)",
+      "permission": "as their own frames at this version (no `unsent.txt` or `exit.txt`)",
+      "question": "as their own frames at this version (no `unsent.txt` or `exit.txt`)",
+      "trust": "as their own frames at this version (no `unsent.txt` or `exit.txt`)",
+      "unknown": "as their own frames at this version (no `unsent.txt` or `exit.txt`)"
     },
     "gemini": {},
     "grok": {
@@ -2748,6 +2806,18 @@
       "provenance": "constructed"
     },
     {
+      "file": "codex/0.161.0/rules-unsent-builder-3.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/rules-unsent-orchestrator.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/trust.txt",
       "cli": "codex",
       "kind": "trust",
@@ -3141,6 +3211,12 @@
       "file": "cursor/2026.10.19/idle.txt",
       "cli": "cursor",
       "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/rules-unsent-reviewer-cursor.txt",
+      "cli": "cursor",
+      "kind": "unsent",
       "provenance": "capture"
     },
     {
