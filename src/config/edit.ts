@@ -23,6 +23,7 @@ import { cleanedIo, type Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
 import { getAt, parsePath, parseValue, recordText, shownValue, withValue } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
@@ -215,6 +216,10 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   }
   if (kept !== null) rmSync(resolve(kept, '..'), { recursive: true, force: true });
   const checked = validateTeamFile(next);
+  // A seat whose launch line this edit changed: its agent record's launch recipe follows, so the
+  // next up or restart runs the line the team now declares, not the one the record kept.
+  const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats) : [];
+  if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
   const stale = checked.ok ? (approvalDifferences(checked.team, root, home) ?? []) : [];
   if (json) {
     writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, approval_differences: stale });
@@ -226,4 +231,26 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   }
   // exit: config.written
   return 0;
+}
+
+/** The seats whose `launch` differs between the old record text and the new seats, with an agent
+ *  record still holding the old line: that record is updated to the new line. Names updated. */
+export function syncAgentLaunches(home: string, teamId: string, oldText: string, seats: ReadonlyArray<{ name: string; launch: string }>): string[] {
+  const before = new Map<string, string>();
+  try {
+    const old = validateTeamFile(oldText);
+    if (old.ok) for (const seat of old.team.seats) before.set(seat.name, seat.launch);
+  } catch {}
+  const updated: string[] = [];
+  for (const seat of seats) {
+    const was = before.get(seat.name);
+    if (was === undefined || was === seat.launch) continue;
+    try {
+      const agent = findAgent(home, { team: teamId, seat: seat.name });
+      if (agent === null || agent.launch === seat.launch) continue;
+      updateAgent(home, agent.id, { launch: seat.launch });
+      updated.push(seat.name);
+    } catch {}
+  }
+  return updated;
 }

@@ -13,7 +13,7 @@ function saveTextFile(path: string, text: string): boolean {
 }
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, shellQuote, versionVerdict, withLaunchSession } from '../profiles/profile.ts';
+import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -697,6 +697,10 @@ export async function executePlan(
   // launched. Any other end of that seat keeps its own record, and the close is what the plan
   // and the state already show.
   const relaunched = new Map<string, 'gone' | 'replaced' | 'drift'>();
+  // The conversation id each launch is known to carry: the `--session-id` it minted, or the id its
+  // line resumes. The seat state records it (and the registry's reach from it), so the next
+  // relaunch can resume it; herdr's reading after the launch is only the fallback.
+  const launchSessions = new Map<string, string>();
   const finishReady = (seat: string) => {
     ready.add(seat);
     const verdict = relaunched.get(seat);
@@ -1147,6 +1151,8 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its launch command did not run; left at launched' });
           break;
         }
+        const knownSession = launch.sessionId ?? (namedResumeTarget(op.cli ?? '', launch.command) || undefined);
+        if (knownSession !== undefined) launchSessions.set(op.seat, knownSession);
         host.sessionStarted?.(op.seat, {
           pane: here.pane,
           ...(here.workspace === undefined ? {} : { workspace: here.workspace }),
@@ -1205,7 +1211,7 @@ export async function executePlan(
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
-            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session;
+            const sessionId = launchSessions.get(op.seat) ?? host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session;
             host.record(op.seat, {
               stage: 'launched',
               pane: here.pane,
