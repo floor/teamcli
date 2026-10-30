@@ -674,7 +674,11 @@ describe('the operator runs status, send, up and down from one grant, and the ob
     expect(JSON.stringify(drop)).toContain('client:grok-bot');
     expect(JSON.stringify(drop)).toContain(g.grantId);
     expect(sent.log).toContain(`client-send-authorized: grant ${g.grantId} client grok-bot team docs seat orchestrator`);
-    expect(sent.log).toContain('this route walks no delivery leg, so the drop waits');
+    // A bundle-grant send walks the same delivery legs a one-seat client send walks: this host
+    // reads no pane and no inbox listens, so every leg is named as skipped and the walk's end is logged.
+    expect(sent.log).toContain('orchestrator: no leg of its delivery order took the client drop (mcp-inbox:');
+    expect(sent.log).toContain('client delivery walk ended for drop');
+    expect(sent.log).not.toContain('walks no delivery leg');
 
     const up = await clientUp(w, g.path, w.grok.keyPath);
     expect(up.code, up.err + up.out).toBe(0);

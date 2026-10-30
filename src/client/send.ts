@@ -239,7 +239,7 @@ export async function runClientSend(
       path: string;
       id: string;
       recipientId: string;
-      /** Absent for a bundle-grant send: that route keeps its own delivery and is not walked. */
+      /** The signed record and its target, which the delivery walk carries. */
       record?: RecordPayload;
       target?: ResolvedClientTarget;
       to: string;
@@ -258,7 +258,7 @@ export async function runClientSend(
       ...(args.values['request-id'] !== undefined ? { requestId: args.values['request-id'] } : {}),
     });
     outcome = sent.ok
-      ? { ok: true, path: '', id: sent.id, recipientId: '', to: sent.to, request: { request_id: sent.requestId } as ClientRequest }
+      ? { ok: true, path: '', id: sent.id, recipientId: sent.target.recipientId, to: sent.to, request: { request_id: sent.requestId } as ClientRequest, record: sent.record, target: sent.target }
       : sent;
   } else try {
     outcome = withClientGrantLock(

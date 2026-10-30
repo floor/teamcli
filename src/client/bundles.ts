@@ -17,6 +17,7 @@ import { claimClientRequest } from './replay.ts';
 import { verifyClientUp } from './up-grant.ts';
 import { CLIENT_REQUEST_ID_PATTERN } from './verify.ts';
 import { writeClientDrop, type ResolvedClientTarget } from './send.ts';
+import type { RecordPayload } from '../send/record.ts';
 
 /** The bundles in force for an entity (and, when the team sits in one, its project): the release
  *  defaults with the `client-bundles` policy laid over them. A policy chain that cannot be read or
@@ -213,7 +214,7 @@ export const BUNDLE_SEND_RULE = 'a client bundle grant, to a granted seat';
 export function sendWithBundle(
   host: { home: string; now: () => Date; sendId?: () => string; clientLockWaitMs?: number },
   input: { grantFile: string; keyFile: string; cwd: string; address: string; body: string; requestId?: string },
-): { ok: true; to: string; id: string; requestId: string } | { ok: false; why: string } {
+): { ok: true; to: string; id: string; requestId: string; record: RecordPayload; target: ResolvedClientTarget } | { ok: false; why: string } {
   try {
     return withClientGrantLock(
       host.home,
@@ -244,10 +245,9 @@ export function sendWithBundle(
         const written = writeClientDrop({ home: host.home, grant: { clientId: grant.clientId, grantId: grant.grantId }, target: resolved.target, body: input.body, now, id: host.sendId?.(), rule: BUNDLE_SEND_RULE });
         if (!written.ok) return refuse(written.why);
         auditClientOp(grant.up.root, 'send', grant.clientId, 'authorized', `grant ${grant.grantId} client ${grant.clientId} team ${grant.up.project} seat ${seat} drop ${written.id} request ${id}`, now);
-        // The bundle route walks no delivery leg: say so in the receiving team's log, so an
-        // unread drop is never mistaken for a walk that ended silently.
-        logLine(join(grant.up.root, '.agents'), 'send', `client:${grant.clientId}`, `${seat}: bundle-grant client drop ${written.id} written; this route walks no delivery leg, so the drop waits for the seat's own read or the watch's unread ring`, now);
-        return { ok: true as const, to: `${seat}@${grant.up.project}`, id: written.id, requestId: id };
+        // The drop is the message; the caller then walks the same delivery legs a one-seat client
+        // send walks, with the same record and target.
+        return { ok: true as const, to: `${seat}@${grant.up.project}`, id: written.id, requestId: id, record: written.record, target: resolved.target };
       },
       host.clientLockWaitMs,
     );
