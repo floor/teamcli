@@ -78,6 +78,8 @@ test('a command with two parser forms carries both usage lines and the union of 
     ['--ack', true],
     ['--client', true],
     ['--follow', false],
+    // The dispatcher's general door: every command takes --general (and --key).
+    ['--general', true],
     ['--help', false],
     ['--json', false],
     ['--key', true],

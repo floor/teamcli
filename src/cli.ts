@@ -151,7 +151,8 @@ export function reportFailure(error: unknown, stderr: (text: string) => void): n
 }
 
 export async function main(argv: string[], io: Io): Promise<number> {
-  const [name, ...rest] = argv;
+  const [name, ...line] = argv;
+  let rest = line;
   if (!name || name === '--help' || name === '-h' || name === 'help') {
     io.stdout(helpText());
     // exit: team.help
@@ -226,7 +227,9 @@ export async function main(argv: string[], io: Io): Promise<number> {
     return 1; // exit: team.general-refused
   }
   if (door.kind === 'admitted' && !door.json) io.stderr(`team ${name}: admitted by general grant ${door.grant.grant_id} (${door.grant.client_id})\n`);
-  return command.default(door.argv, door.io);
+  rest = door.argv;
+  io = door.io;
+  return command.default(rest, io);
 }
 
 export function processIo(): Io {
