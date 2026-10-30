@@ -39,14 +39,14 @@ function holder(name: string) {
   if (!w.ok) throw new Error(w.why);
   return { pub: pair.publicKey, path: w.keyPath };
 }
-function grant(entities: string[], ops: GrantOp[], who = holder('iris')) {
-  const g = issueOwnerGeneralGrant(home, { clientId: 'iris', publicKey: who.pub, entities, ops, mayIssue: true, expires: new Date(Date.now() + 86_400_000) });
+function grant(entities: string[], ops: GrantOp[], who = holder('iris'), expires = new Date(Date.now() + 86_400_000)) {
+  const g = issueOwnerGeneralGrant(home, { clientId: 'iris', publicKey: who.pub, entities, ops, mayIssue: true, expires });
   if (!g.ok) throw new Error(g.why);
   return { path: g.path, key: who.path, who };
 }
-async function run(argv: string[]) {
+async function run(argv: string[], now?: Date) {
   const io = testIo(project, detached);
-  const code = await runInit(argv, io, home, undefined, { ...noLogin, registryHome: home });
+  const code = await runInit(argv, io, home, undefined, { ...noLogin, registryHome: home, ...(now ? { now: () => now } : {}) });
   return { code, out: io.out, err: io.err };
 }
 
@@ -99,4 +99,32 @@ test('self-grant is still refused: a holder never issues init to itself', () => 
   const g = grant(['floor'], ['*']);
   const self = issueHeldGeneralGrant(home, g.path, g.key, { clientId: 'iris', publicKey: g.who.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: new Date(Date.now() + 3_600_000) });
   expect(self.ok).toBe(false);
+});
+
+test('the all-ops all-entities grant admits init', async () => {
+  const g = grant(['*'], ['*']);
+  const r = await run(['--general', g.path, '--key', g.key]);
+  expect(r.code).toBe(0);
+  expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(true);
+});
+
+test('init under a fake clock: admitted just before expiry, refused after, nothing written', async () => {
+  const exp = new Date(Date.now() + 3_600_000);
+  const g = grant(['*'], ['*'], holder('iris'), exp);
+  const late = await run(['--general', g.path, '--key', g.key], new Date(exp.getTime() + 1000));
+  expect(late.code).toBe(1);
+  expect(late.out + late.err).toContain('expired');
+  expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(false);
+  const early = await run(['--general', g.path, '--key', g.key], new Date(exp.getTime() - 1000));
+  expect(early.code).toBe(0);
+});
+
+test('a child wildcard grant from a wildcard holder admits init; one from a listed holder is never issued', async () => {
+  const g = grant(['*'], ['*']);
+  const kid = holder('kid');
+  const child = issueHeldGeneralGrant(home, g.path, g.key, { clientId: 'kid', publicKey: kid.pub, entities: ['*'], ops: ['*'], mayIssue: false, expires: new Date(Date.now() + 3_600_000) });
+  if (!child.ok) throw new Error(child.why);
+  expect((await run(['--general', child.path, '--key', kid.path])).code).toBe(0);
+  const listed = grant(['*'], ['init', 'up'], holder('iris2'));
+  expect(issueHeldGeneralGrant(home, listed.path, listed.key, { clientId: 'kid', publicKey: kid.pub, entities: ['*'], ops: ['*'], mayIssue: false, expires: new Date(Date.now() + 3_600_000) }).ok).toBe(false);
 });
