@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-10-30
+
+### Upgrade notes
+
+- No migration. Grants signed before 0.5.7 keep their listed ops; only a grant whose ops are `*`
+  covers ops added in later releases.
+
+### Added
+
+- **`team init --general <grant.json> --key <client.key>`:** a general grant that covers `init`
+  admits creating a team with no owner terminal, for an entity whose declared roots hold the
+  folder. It fails closed: the grant must verify to the owner key, be unexpired, match the key,
+  and cover the entity; it is never self-issued and never wider than its parent. A refusal exits
+  with `init.general-refused`.
+- `init` joins the general-grant op vocabulary.
+- A grant's ops may be the wildcard `*` (every op, including ops later releases add). It is
+  signed like any list, and a parent with a listed set of ops can never issue it.
+
+### Changed
+
+- `team client general-grant` defaults to `--ops '*'` when `--ops` is absent, so one owner
+  signature covers every command.
+
 ## [0.5.6] - 2026-10-30
 
 0.5.6 lets the owner approve from the owner seat instead of a terminal, adds general grants
