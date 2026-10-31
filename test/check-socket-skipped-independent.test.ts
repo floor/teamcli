@@ -406,7 +406,11 @@ test('a retained pane whose CLI ended is named once, by its pane reading', async
   });
   const out = `${io.out}${io.err}`;
   expect(out).toContain('difference: lead: its pane runs no CLI and its process was never recorded');
-  expect(out).not.toContain('no cross-session socket is live');
+  // The negatives are the lead seat's alone: the helper has no socket either, and a live seat
+  // with no socket is named by its class on every pass — that note is not the second line this
+  // scene is about, which is the one a retained pane would draw for the seat it no longer holds.
+  expect(out).not.toContain('lead: sends go to its drop folder');
+  expect(out).not.toContain('note: lead: no cross-session socket is live');
   expect(code).toBe(1);
   const { status, sent } = await agree(made, 'lead', names, 'typed');
   expect(status.line).toMatch(/ typed$/);
