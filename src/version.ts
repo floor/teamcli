@@ -29,12 +29,9 @@ export function description(): string {
   return manifest().description;
 }
 
-/** The commit a packaged install was built from, or null in a source checkout. The daemon
- *  records it beside its version: an install that changes either one is a new identity, and the
- *  watch it restarts is the one belonging to that identity. */
+/** The daemon's packaged commit reading, shared with the install and inbox identities. */
 export function gitHead(): string | null {
-  const value = manifest().gitHead;
-  return typeof value === 'string' && value !== '' ? value : null;
+  return packagedHead();
 }
 
 export function license(): string {
