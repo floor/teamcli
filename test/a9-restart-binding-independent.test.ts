@@ -8,6 +8,11 @@
 // These fixtures are this file's own: the holder in the lock scenes is a real other process
 // (`sleep`) whose token this test publishes, never a lock taken in the test's own process. The
 // route is asserted where a send decides it — `recordedSeatSession` — never by sending.
+//
+// Round 2 pins operator-3's two review findings: a ready seat's same-pane refresh must not rebind
+// its record to a handle another seat holds, nor lend it the conversation a replaced process
+// reports while the launch identity the state records does not hold; and a restart whose registry
+// write fails may not present a plain ready — the native route it could not bind is reported.
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -34,6 +39,10 @@ const NOW = new Date('2026-10-31T10:00:00Z');
 const OWNER = { kind: 'owner' as const };
 const LIVE = 'seat_0123456789ab';
 const OTHER = 'seat_fedcba987654';
+/** This seat's own handle, when the scenes need the state and the record to disagree. */
+const OWN = 'seat_0000000000aa';
+/** The handle another seat's live record holds, seeded into the state as the review did. */
+const FOREIGN = OTHER;
 // The bound the fix declares: 15 seconds in 200 ms poll steps. Written out rather than imported,
 // so this file runs unchanged at the parent the fix is measured against.
 const WAIT_STEPS = 15_000 / 200;
@@ -355,14 +364,82 @@ function seedRecordHoldingAnotherAgent(fixture: Fixture): { id: string } {
   return { id: record.id };
 }
 
-function bindingOf(fixture: Fixture) {
+function bindingOfSeat(fixture: Fixture, seat: string) {
   return recordedSeatSession({
     home: fixture.home,
     root: fixture.root,
     herdrSession: 'acme',
-    seat: { name: 'worker', cli: 'claude-code' },
-    state: readState(fixture.dir).sessions.acme?.seats.worker,
+    seat: { name: seat, cli: 'claude-code' },
+    state: readState(fixture.dir).sessions.acme?.seats[seat],
   });
+}
+
+function bindingOf(fixture: Fixture) {
+  return bindingOfSeat(fixture, 'worker');
+}
+
+/** A seat's ready state, with the process identity its launch recorded and its conversation. */
+function placeReadySeat(
+  fixture: Fixture,
+  seat: string,
+  input: { pane: string; id: string; agentSession: string; launched: { shell: number; cli: number[] } },
+): void {
+  updateState(fixture.dir, (state) => {
+    (state.sessions.acme ??= emptySession()).seats[seat] = {
+      stage: 'ready',
+      pane: input.pane,
+      workspace: 'ws-1',
+      id: input.id,
+      agent_session: input.agentSession,
+      launched: input.launched,
+    };
+  });
+}
+
+/** A seat's live registry record, written the way a launch writes it. */
+function seedRecord(
+  fixture: Fixture,
+  seat: string,
+  input: { handle: string; agentSession: string; pane: string; role: 'coordinator' | 'implementer' },
+): { id: string } {
+  const record = registerAgent(fixture.home, {
+    name: seat,
+    signing: { model: 'Claude Opus', version: '5.5', role: input.role },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: {
+      team: teamIdOf(fixture.root),
+      seat,
+      session: 'acme',
+      pane: input.pane,
+      address: null,
+      agent_session: input.agentSession,
+    },
+    seat_handle: input.handle,
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  });
+  return { id: record.id };
+}
+
+/** The register command's own seams: herdr's list, the pane's process, the pane's screen. */
+function registerSources(
+  fixture: Fixture,
+  input: { agents: HerdrAgent[]; process: { shell: number; foreground: number[] } },
+): RegisterSources {
+  return {
+    home: fixture.home,
+    sessionState: () => 'running',
+    agents: () => input.agents,
+    processInfo: () => input.process,
+    foreground: () => ['claude'],
+    paneText: () => CLAUDE_IDLE,
+    now: () => NOW,
+  };
 }
 
 describe('A9 independent: a launch binds a record left on another incarnation', () => {
@@ -451,5 +528,110 @@ describe('A9 independent: an ordinary write leaves a handle it cannot prove', ()
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.seat_handle).toBe(OTHER);
     // Left alone, and said so: the route cannot bind the record and names it another agent's.
     expect(bindingOf(fixture)).toEqual({ kind: 'refused', why: 'the record is another agent for this seat' });
+  });
+});
+
+describe('A9 round 2: a refresh needs proof before it rebinds', () => {
+  test('a state id another seat\'s live record holds is not rebound to that seat\'s handle', async () => {
+    const fixture = makeFixture();
+    placeReadySeat(fixture, 'worker', {
+      pane: 'fixture-pane-1', id: OWN, agentSession: 'worker-session', launched: { shell: 400, cli: [401] },
+    });
+    placeReadySeat(fixture, 'lead', {
+      pane: 'pane-lead', id: FOREIGN, agentSession: 'lead-session', launched: { shell: 500, cli: [501] },
+    });
+    seedRecord(fixture, 'worker', { handle: OWN, agentSession: 'worker-session', pane: 'fixture-pane-1', role: 'implementer' });
+    seedRecord(fixture, 'lead', { handle: FOREIGN, agentSession: 'lead-session', pane: 'pane-lead', role: 'coordinator' });
+    // The corruption operator-3's first repro seeds: the worker's state names the handle its own
+    // record does not hold and the lead's live record does.
+    updateState(fixture.dir, (state) => {
+      state.sessions.acme!.seats.worker!.id = FOREIGN;
+    });
+    const io = testIo(fixture.root, OWNER);
+    const code = await runRegister(['worker'], io, registerSources(fixture, {
+      agents: [
+        { name: 'worker', agent: 'claude-code', pane: 'fixture-pane-1', workspace: 'ws-1', status: 'idle', cwd: null, session: 'worker-session' },
+        { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: null, session: 'lead-session' },
+      ],
+      process: { shell: 400, foreground: [401] },
+    }));
+
+    // Whatever the refresh decides, it must not hand the worker a handle another seat's live
+    // record holds: that is the identity the reader exists to refuse, not to confer. The lead's
+    // own binding is untouched, so the two seats never share one handle.
+    const workerRecord = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(workerRecord?.seat_handle).not.toBe(FOREIGN);
+    const workerBinding = bindingOfSeat(fixture, 'worker');
+    if (workerBinding.kind === 'bound') expect(workerBinding.recorded.seatHandle).not.toBe(FOREIGN);
+    expect(bindingOfSeat(fixture, 'lead')).toMatchObject({ kind: 'bound', recorded: { seatHandle: FOREIGN } });
+    // A refusal writes nothing and names whose handle it is.
+    expect(code).toBe(1);
+    expect(io.err).toContain("is lead's handle; the record was not refreshed");
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.seat_handle).toBe(OWN);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.id).toBe(FOREIGN);
+  });
+
+  test('a replaced process\'s reported conversation is not lent to the seat it stands for', async () => {
+    const fixture = makeFixture();
+    placeReadySeat(fixture, 'worker', {
+      pane: 'fixture-pane-1', id: OWN, agentSession: 'worker-session', launched: { shell: 400, cli: [401] },
+    });
+    placeReadySeat(fixture, 'lead', {
+      pane: 'pane-lead', id: FOREIGN, agentSession: 'lead-session', launched: { shell: 500, cli: [501] },
+    });
+    seedRecord(fixture, 'worker', { handle: OWN, agentSession: 'worker-session', pane: 'fixture-pane-1', role: 'implementer' });
+    seedRecord(fixture, 'lead', { handle: FOREIGN, agentSession: 'lead-session', pane: 'pane-lead', role: 'coordinator' });
+    const io = testIo(fixture.root, OWNER);
+    const code = await runRegister(['worker'], io, registerSources(fixture, {
+      // The pane reports another seat's conversation, and its process is not the one the
+      // worker's launch recorded: neither reading is proof of this seat's continuity.
+      agents: [
+        { name: 'worker', agent: 'claude-code', pane: 'fixture-pane-1', workspace: 'ws-1', status: 'idle', cwd: null, session: 'lead-session' },
+        { name: 'lead', agent: 'claude-code', pane: 'pane-lead', workspace: 'ws-lead', status: 'idle', cwd: null, session: 'lead-session' },
+      ],
+      process: { shell: 999, foreground: [998] },
+    }));
+
+    const state = readState(fixture.dir).sessions.acme!.seats.worker!;
+    const binding = bindingOfSeat(fixture, 'worker');
+    // The state still records the identity the launch left (400/401); a refresh that could not
+    // prove the pane's process is that launch must not adopt the pane's conversation on top of
+    // it — the review's defect is both seats binding one conversation while the state keeps the
+    // stale process. A refresh that binds the conversation must stand on the identity it saw.
+    if (binding.kind === 'bound' && binding.recorded.sessionId === 'lead-session') {
+      expect(state.launched).toEqual({ shell: 999, cli: [998] });
+    }
+    expect(state.agent_session === 'lead-session' && state.launched?.shell === 400).toBe(false);
+    // The lead's own binding is untouched.
+    expect(bindingOfSeat(fixture, 'lead')).toMatchObject({ kind: 'bound', recorded: { seatHandle: FOREIGN } });
+    // A refusal names the changed process; nothing is written.
+    expect(code).toBe(1);
+    expect(io.err).toContain("holds a process other than the one its record's launch started; the record was not refreshed");
+    expect(state.agent_session).toBe('worker-session');
+    expect(state.launched).toEqual({ shell: 400, cli: [401] });
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.seat_handle).toBe(OWN);
+  });
+});
+
+describe('A9 round 2: a restart reports a route it could not bind', () => {
+  test('a failed registry write is not presented as a plain ready', async () => {
+    const fixture = makeFixture();
+    readyWorker(fixture);
+    const { sources } = fakeRestart(fixture);
+    // The registry cannot be written: the agents folder is a regular file.
+    mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+    writeFileSync(join(fixture.home, '.config', 'team', 'agents'), 'synthetic blocked registry\n');
+    const io = testIo(fixture.root, OWNER);
+
+    const code = await runRestart(['worker'], io, sources);
+
+    // The launch reached its prompt and the state stands ready; the native route to it does not
+    // bind, and the failure is the run's to report, not the log's alone.
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.stage).toBe('ready');
+    expect(bindingOf(fixture)).toEqual({ kind: 'none', why: 'no agent record for this seat' });
+    // The restart still says ready — the seat runs — but names the route it could not bind.
+    expect(code).toBe(0);
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new; pull-only: no agent record for this seat');
   });
 });
