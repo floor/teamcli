@@ -28,7 +28,7 @@ import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
-import { readRecord, verifyRecord } from '../send/record.ts';
+import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
 import { wakeHead } from '../send/native.ts';
 import { wakeTrigger } from '../send/wake.ts';
 import { messageKeyState } from '../store/keys.ts';
@@ -246,18 +246,22 @@ function negotiate(params: unknown): string {
   return PROTOCOL_VERSION;
 }
 
-/** One channel notification: the message-display header, then the signed body whole. */
+/** One channel notification: the message-display header, then the signed body whole. The record's
+ *  complete raw payload must carry this key's signature before any field is read: a tampered or
+ *  unsupported record is shown nowhere, not even as a header. */
 function channelPushOf(serving: Serving, id: string): { content: string; meta: Record<string, string> } | null {
-  const looked = readRecord(join(serving.dropDir, id), id);
-  if (!looked.ok || looked.record === null) return null;
-  const payload = looked.record.payload;
+  const looked = readSealedRecord(join(serving.dropDir, id));
+  if (!looked.ok || looked.sealed === null) return null;
+  const key = messageKeyState(serving.home);
+  if (key.kind !== 'key') return null;
+  const auth = recordAuthOfSealed(looked.sealed, key.key);
+  if (auth.kind !== 'ok' || auth.value.payload.id !== id) return null;
+  const payload = auth.value.payload;
   if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) return null;
   // A record a client wrote, and the seat's own general brief, are never channel messages: the
   // brief is served at the turn start under its claim, and an ack here would hold the receipt
   // name that reader needs.
   if (payload.from_client !== undefined || isGeneralBriefRecord(payload)) return null;
-  const key = messageKeyState(serving.home);
-  if (key.kind !== 'key' || !verifyRecord(looked.record, key.key)) return null;
   const sender = wakeTrigger(payload, serving.home, { root: serving.root, session: serving.session, team: serving.team });
   if (sender === null) return null;
   const header = wakeHead(sender);
@@ -396,17 +400,22 @@ function ackTool(args: unknown, serving: Serving): unknown {
   if (!inboxFolderHeld(serving.root, serving.session, serving.seat)) {
     return toolError('the inbox folder is not a real folder: a link or a file stands in its path');
   }
-  const looked = readRecord(join(serving.dropDir, id), id);
-  if (!looked.ok || looked.record === null) return toolError(`no message ${id} is waiting in this inbox`);
-  const payload = looked.record.payload;
+  const looked = readSealedRecord(join(serving.dropDir, id));
+  if (!looked.ok || looked.sealed === null) return toolError(`no message ${id} is waiting in this inbox`);
+  // The complete raw payload is authenticated before any field is read or any receipt written.
+  const key = messageKeyState(serving.home);
+  if (key.kind !== 'key') return toolError('no message key; nothing was acknowledged');
+  const auth = recordAuthOfSealed(looked.sealed, key.key);
+  if (auth.kind === 'shape') return toolError(`message ${id} is not a signed record`);
+  if (auth.kind === 'tampered') return toolError(`message ${id} does not verify with this home's key`);
+  if (auth.kind === 'unsupported') return toolError(`message ${id} is signed, and this version cannot read it: ${auth.reason}`);
+  const payload = auth.value.payload;
+  if (payload.id !== id) return toolError(`no message ${id} is waiting in this inbox`);
   if (payload.to !== serving.seat || payload.session !== serving.session || !sameFolder(payload.root, serving.root)) {
     return toolError(`message ${id} is not addressed to this inbox`);
   }
   if (payload.from_client !== undefined) return toolError(`message ${id} was written by a client; its read belongs to the client inbox`);
   if (isGeneralBriefRecord(payload)) return toolError(`message ${id} is the general seat brief; it is read by the seat's own turn-start reader`);
-  const key = messageKeyState(serving.home);
-  if (key.kind !== 'key') return toolError('no message key; nothing was acknowledged');
-  if (!verifyRecord(looked.record, key.key)) return toolError(`message ${id} does not verify with this home's key`);
   const outcome = publishRecordRead({
     dropDir: serving.dropDir,
     id,
@@ -417,6 +426,7 @@ function ackTool(args: unknown, serving: Serving): unknown {
     key: key.key,
     at: new Date().toISOString(),
     readBy: CHANNEL_READ_BY,
+    ...(serving.brief?.epoch === undefined ? {} : { epoch: serving.brief.epoch }),
   });
   if (outcome.kind === 'held') {
     return toolError(`${id}: not acknowledged: the ${outcome.status} receipt name is held by a file that does not verify for this message`);

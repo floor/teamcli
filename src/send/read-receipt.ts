@@ -28,6 +28,8 @@ export type RecordReadInput = {
   /** How the message was read, when the reader names it: `channel` for the acknowledgement a
    *  channel notification's handling turn makes. Absent, the receipt says only that it was read. */
   readBy?: string;
+  /** The runtime epoch this reader was started under, when it has one. */
+  epoch?: string;
 };
 
 /** What the act found or did. `held` names the entry at a receipt name this run will not touch;
@@ -39,7 +41,7 @@ export type RecordReadOutcome =
   | { kind: 'unwritten'; reason: 'changed' | 'write' | 'durable' };
 
 export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
-  const { dropDir, id, to, root, session, home, key, at, readBy } = input;
+  const { dropDir, id, to, root, session, home, key, at, readBy, epoch } = input;
   const context = { to, root, session };
   const servedNow = (): boolean => isRead(dropDir, id, context, key);
   // The caller's own filter may already have asked `isRead`; this re-check is the race with every
@@ -66,7 +68,7 @@ export function publishRecordRead(input: RecordReadInput): RecordReadOutcome {
     at,
     ...(readBy === undefined ? {} : { read_by: readBy }),
   };
-  const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home), null, 2)}\n`);
+  const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home, epoch === undefined ? undefined : { epoch }), null, 2)}\n`);
   if (published === 'exists') {
     // A rival won the name between the checks and this link. Its entry is the one serving of this
     // id: verify it, and leave it exactly as it is either way.
