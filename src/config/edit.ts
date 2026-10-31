@@ -24,12 +24,27 @@ import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
-import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
+import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
 import { editedRecordText, getAt, parsePath, parseValue, shownValue, withValue } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
 
 function realRoot(cwd: string): string {
   return findRoot(cwd) ?? resolve(cwd);
+}
+
+/** One line saying why a record's reader refused the text: the parser's own reason, with the
+ *  line it names. */
+function unreadableReason(error: unknown): string {
+  if (error instanceof YamlError) return `line ${error.line}: ${error.message}`;
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** A record that cannot be read is refused through the documented end, with its reader's own
+ *  one-line reason — never a stack trace. Nothing is written by the path that calls this. */
+function unreadable(io: Io, json: boolean, message: string): number {
+  refuse(io, json, 'config', { id: 'config.no-record', message, repair: null });
+  // exit: config.no-record
+  return 2;
 }
 
 function runEditor(path: string, env: Record<string, string | undefined>): number {
@@ -90,13 +105,16 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   try {
     text = readTeamText(file, { home, env });
   } catch (error) {
-    refuse(io, json, 'config', { id: 'config.no-record', message: error instanceof Error ? error.message : String(error), repair: null });
-    // exit: config.no-record
-    return 2;
+    return unreadable(io, json, error instanceof Error ? error.message : String(error));
   }
   const where = target.kind === 'registry' ? "the registry's record" : TEAM_FILE;
   if (verb === 'get') {
-    const record = toValue(parseYaml(text));
+    let record: YamlValue;
+    try {
+      record = toValue(parseYaml(text));
+    } catch (error) {
+      return unreadable(io, json, `${where} cannot be read: ${unreadableReason(error)}`);
+    }
     const got = getAt(record, path);
     if (!got.found) {
       refuse(io, json, 'config', { id: 'config.no-value', message: `${rawPath} is not set in ${where}`, repair: null });
@@ -189,7 +207,12 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     kept = draft;
     if (next === text) rmSync(dir, { recursive: true, force: true });
   } else {
-    const record = toValue(parseYaml(text));
+    let record: YamlValue;
+    try {
+      record = toValue(parseYaml(text));
+    } catch (error) {
+      return unreadable(io, json, `${where} cannot be read: ${unreadableReason(error)}`);
+    }
     const value: YamlValue | undefined = verb === 'set' ? parseValue(rawValue as string) : undefined;
     const changed = withValue(record, path, value);
     if (!changed.ok) {
