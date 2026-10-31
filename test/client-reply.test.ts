@@ -149,7 +149,7 @@ describe('the client follows its thread', () => {
   test('--follow prints a reply as soon as a read finds it, once, and only new ones after', async () => {
     const w = world(true);
     const sent = await clientSend(w, 'follow me');
-    const io = testIo(w.root);
+    const io = testIo(w.root, { kind: 'owner' });
     let reads = 0;
     let firstId = '';
     const sources = {
@@ -175,9 +175,9 @@ describe('the client follows its thread', () => {
 
   test('--follow refuses --ack and stops with the read\'s own refusal', async () => {
     const w = world(true);
-    const io = testIo(w.root);
+    const io = testIo(w.root, { kind: 'owner' });
     expect(await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--follow', '--ack', 'x'], io, { home: w.home, now: () => NOW })).toBe(2);
-    const bad = testIo(w.root);
+    const bad = testIo(w.root, { kind: 'owner' });
     const code = await runMessages(['--client', join(w.root, 'missing.json'), '--key', w.keyPath, '--follow'], bad, { home: w.home, now: () => NOW, followReads: 3, followWait: async () => {} });
     expect(code).not.toBe(0);
     expect(bad.err).toContain('follow stopped');
