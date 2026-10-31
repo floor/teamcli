@@ -257,16 +257,19 @@ describe('team up, live', () => {
     const made = world((_pane, label) => (label === 'codex-acme · implementer' ? fileModel(capture('idle')) : IDLE));
     const sent: string[] = [];
     made.launch.agentStatus = () => 'idle';
-    // A shell holds the pane and never hands it to the CLI: the delivery waits it out, types
-    // nothing into the shell, and gives up at the deadline saying the CLI never appeared.
-    made.launch.foreground = () => ['zsh'];
+    // A2b (b7260405a): retained idle text proves no CLI while only the shell is in front.
+    // The admitted no-prompt run waits to its deadline and keeps the seat at launched.
+    made.launch.foreground = () => ['fixture-shell'];
     made.launch.typeText = (_session, _pane, text) => { sent.push(text); return true; };
     made.launch.pressEnter = () => { sent.push('Enter'); return true; };
-    const io = testIo(root, { kind: 'owner' });
+    const io = quietIo();
     const code = await runUp(FILE, io, sources({}, made));
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(sent).toEqual([]);
-    expect(io.out).not.toContain('codex-acme: left out');
+    expect(made.terminal.reads).toBe(0);
+    expect(io.out).toContain('codex-acme: left out: timeout\n');
+    expect(io.out).not.toContain('codex-acme: ready\n');
+    expect(readState(join(root, '.agents')).sessions['acme-web']?.seats['codex-acme']?.stage).toBe('launched');
   });
 
   test.each(['accepted', 'trust', 'startup', 'swallowed'] as const)('Codex first-message rules: %s', async (outcome) => {
@@ -954,7 +957,12 @@ describe('team up, live', () => {
       return run(session, pane, command);
     };
     const polls = new Map<string, number>();
-    made.launch.shellBack = () => true;
+    // A2b (b7260405a) requires both the idle frame and the CLI in front: the captured
+    // stall ends when that process appears, so the shell-back reading must end with it.
+    made.launch.shellBack = (_session, pane) => (polls.get(pane) ?? 0) <= 5;
+    const foreground = made.launch.foreground;
+    made.launch.foreground = (session, pane) => (polls.get(pane) ?? 0) <= 5
+      ? ['fixture-shell'] : foreground(session, pane);
     const read = made.launch.paneText.bind(made.launch);
     made.launch.paneText = (session, pane) => {
       const command = commands.get(pane);
@@ -3561,24 +3569,29 @@ describe('team up, the pause', () => {
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(FILE, io, sources({}, made));
     expect(code).toBe(0);
+    const [firstPane, secondPane, thirdPane, watchPane] = made.runs.map(({ pane }) => pane);
+    // A7 (ed422f96d): named and ready each refresh the live session only after proving
+    // this run's recorded process still holds the pane. Keep those reads in the exact trace.
+    const sessionProof = (pane: string | undefined) => [`process:${pane}`, 'agents', 'agent-panes'];
     expect(calls).toEqual([
       // The fresh reading that stopped the seat, the identity read when the dialog was found
       // (nothing is recorded for the seat yet), and the entry write's identity read.
-      'create:claude-coordinator-acme · project coordinator', 'rename:w1:p1:claude-coordinator-acme', 'run:w1:p1', 'read:w1:p1', 'process:w1:p1', 'process:w1:p1',
+      'create:claude-coordinator-acme · project coordinator', `rename:${firstPane}:claude-coordinator-acme`, `run:${firstPane}`, `read:${firstPane}`, `process:${firstPane}`, `process:${firstPane}`,
       // o: the key, then the lock's own reads (the pane is still the seat's — herdr's list,
       // then the process), the manual write with its identity read, and the focus. No key,
       // no text.
-      'key:o', 'agents', 'agent-panes', 'process:w1:p1', 'process:w1:p1', 'focus:w1:p1',
+      'key:o', 'agents', 'agent-panes', `process:${firstPane}`, `process:${firstPane}`, `focus:${firstPane}`,
       // The first poll: the sleep (the owner answers), then fresh reads — the pane is idle.
-      'sleep:2000', 'agents', 'agent-panes', 'process:w1:p1', 'read:w1:p1',
-      // The ordinary path from the idle prompt: the model read, the identity, the agent list
-      // (so the session id can be stored with it), the rename.
-      'read:w1:p1', 'process:w1:p1', 'agents', 'agent-panes', 'agent-panes',
+      'sleep:2000', 'agents', 'agent-panes', `process:${firstPane}`, `read:${firstPane}`,
+      // The model and identity/session read, the naming list, then both later session proofs.
+      `read:${firstPane}`, ...sessionProof(firstPane), 'agent-panes', ...sessionProof(firstPane), ...sessionProof(firstPane),
       // Then the later seats, the same way.
-      'create:deepseek-acme · implementer', 'rename:w2:p1:deepseek-acme', 'run:w2:p1', 'read:w2:p1', 'read:w2:p1', 'process:w2:p1', 'agents', 'agent-panes', 'agent-panes',
-      'create:deepseek-acme-2 · implementer', 'rename:w3:p1:deepseek-acme-2', 'run:w3:p1', 'read:w3:p1', 'read:w3:p1', 'process:w3:p1', 'agents', 'agent-panes', 'agent-panes',
+      'create:deepseek-acme · implementer', `rename:${secondPane}:deepseek-acme`, `run:${secondPane}`, `read:${secondPane}`, `read:${secondPane}`,
+      ...sessionProof(secondPane), 'agent-panes', ...sessionProof(secondPane), ...sessionProof(secondPane),
+      'create:deepseek-acme-2 · implementer', `rename:${thirdPane}:deepseek-acme-2`, `run:${thirdPane}`, `read:${thirdPane}`, `read:${thirdPane}`,
+      ...sessionProof(thirdPane), 'agent-panes', ...sessionProof(thirdPane), ...sessionProof(thirdPane),
       // Then the watch's workspace and its command line, the plan's last step.
-      'create:Watch · acme-web', 'run:w4:p1',
+      'create:Watch · acme-web', `run:${watchPane}`,
     ]);
     expect(typed).toEqual([]);
     expect(lockedWhileWaiting.length).toBeGreaterThanOrEqual(2);
