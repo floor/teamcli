@@ -719,3 +719,13 @@ test('team restart briefs only the seat it restarts', () => {
   expect(call).toContain('onlyAttributed: true');
   expect(call).not.toContain('broadcast: true');
 });
+
+test('team register briefs only the seat it registers, on both its paths', () => {
+  const source = readFileSync(new URL('../src/commands/register.ts', import.meta.url), 'utf8');
+  const calls = source.split('deliverBriefForAttribution(').slice(1).map((rest) => rest.slice(0, 600));
+  expect(calls.length).toBe(2);
+  for (const call of calls) {
+    expect(call).toContain('onlyAttributed: true');
+    expect(call).not.toContain('broadcast: true');
+  }
+});

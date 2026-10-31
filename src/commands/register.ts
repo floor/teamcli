@@ -31,7 +31,8 @@ import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, pan
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { deliverRules } from '../launch/deliver.ts';
-import { deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
+import { currentBriefClaim, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
+import { GENERAL_BRIEF_SHA256 } from '../launch/general-brief-text.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -685,8 +686,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         now: refreshedAt,
         team,
         state: readState(dir).sessions[session] ?? emptySession(),
-        attributed: [],
-        broadcast: true,
+        // Registering one seat refreshes that seat's brief alone, never the rest of the team:
+        // a fresh lifetime only where this seat's own claim is missing or another build's.
+        attributed:
+          currentBriefClaim(readState(dir).sessions[session]?.briefs?.[name])?.sha256 === GENERAL_BRIEF_SHA256
+            ? []
+            : [name],
+        onlyAttributed: true,
       });
       await walkBriefDeliveries(briefs, { dir, home: sources.home });
       for (const delivery of briefs.deliveries) {
@@ -898,7 +904,8 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     team,
     state: readState(dir).sessions[session] ?? emptySession(),
     attributed: [name],
-    broadcast: true,
+    // One seat registered: its brief alone, never a drop to the rest of the team.
+    onlyAttributed: true,
   });
   await walkBriefDeliveries(briefs, { dir, home: sources.home });
   for (const delivery of briefs.deliveries) {
