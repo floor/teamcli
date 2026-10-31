@@ -12,40 +12,52 @@ import { screenData, statusRow } from '../watch/screen.ts';
 
 export type Running = { model: string; version: string };
 
-function words(text: string): string[] {
-  return text.toLowerCase().split(/\s+/).filter((word) => word !== '');
+/** A field token that spells only version words: digits, a leading `v` before a digit dropped
+ *  (`v4`). A token carrying a letter word of its own (`A4`, `B2`, `2B`) is a model word — the
+ *  letter is the model's identity, never a version's family letter. */
+function numericToken(token: string): boolean {
+  return tokenWords(token).every((word) => /^[0-9]+$/.test(word));
 }
 
-/** The words of a model name, lowercased and in one set: the order a CLI or a file writes the
- *  name in is display, not identity — agy's footer reads `Gemini 4 Argon`, the profile splits it
- *  into model `Gemini Argon`, version `4`, and a file may write either. The side's own version
- *  words are taken out first, because where the version is spelled inside the model name it is
- *  compared as the version, not as a name word. */
-function modelWords(model: string, version: string): Set<string> {
-  const name = new Set(words(model));
-  for (const word of words(version)) name.delete(word);
-  return name;
-}
-
-/** The version as the comparison reads it: trimmed, case-insensitive. */
-function versionOf(version: string): string {
-  return version.trim().toLowerCase();
+/** One side of the comparison as one reading: its model and its version field read together.
+ *  The version is the field's numeric tokens, as their words in the order written; the rest of
+ *  the field, and the model, are the name. A model word the version field carries (`4 Argon`) is
+ *  still a name word, in either field order, and a letter-bearing token (`A4`) is the model's
+ *  word wherever it is written — its letter is identity, not a version's family letter. A
+ *  version the model spells once, whole or its opening words, is taken out of the name. */
+function sideReading(model: string, version: string): { name: string; version: string[] } {
+  const field = idTokens(version);
+  const versionWordsOfSide = field.filter(numericToken).flatMap((token) => tokenWords(token));
+  const named = [...idTokens(model), ...field.filter((token) => !numericToken(token))].join(' ');
+  let tokens = nameTokens(named, versionWordsOfSide, false);
+  const name: string[] = [];
+  // A version word repeated in the model name counts once: every run it writes is taken out.
+  for (let found = findVersion(tokens, versionWordsOfSide, false); found !== null; found = findVersion(tokens, versionWordsOfSide, false)) {
+    name.push(...tokens.slice(0, found.at));
+    tokens = tokens.slice(found.at + found.span);
+  }
+  name.push(...tokens);
+  return { name: sortedTokens([...new Set(name)]), version: versionWordsOfSide };
 }
 
 /**
- * The screen names a model, and it is not the file's: its words as a set, plus its version — the
- * same name in another order is not a difference, and neither is the version spelled inside one
- * side's model name, but another word or another version is. Unread is never a difference.
+ * The screen names a model, and it is not the file's: each side's model and version are compared
+ * as one reading — the name as words in one set, since the order a CLI or a file writes the name
+ * in is display, and the version as the order its words are written in. The same name in another
+ * order is not a difference, nor is the version spelled inside the model name, nor a model word
+ * the version field carries (`Gemini` with version `4 Argon` is `Gemini Argon` version `4`);
+ * another word, another version, or the version's words out of order is a difference, and a digit
+ * belonging to a model word (`2B`) stays the model's identity. Unread is never a difference.
  */
 export function modelDiffers(
   running: Running | null,
   declared: { model: string; version: string },
 ): running is Running {
   if (running === null) return false;
-  if (versionOf(running.version) !== versionOf(declared.version)) return true;
-  const shown = modelWords(running.model, running.version);
-  const file = modelWords(declared.model, declared.version);
-  return shown.size !== file.size || [...shown].some((word) => !file.has(word));
+  const shown = sideReading(running.model, running.version);
+  const file = sideReading(declared.model, declared.version);
+  if (shown.name !== file.name) return true;
+  return shown.version.length !== file.version.length || shown.version.some((word, at) => word !== file.version[at]);
 }
 
 export function runningModel(cli: string, screen: string): Running | null {
@@ -150,14 +162,15 @@ function versionWords(version: string): string[] {
  *  it. A model may write the whole version (`GLM 5.3` for version 5.3, `Kimi K2.5` for 2.5), or
  *  only its opening words (`GLM 5` for version 5.3). A token with words of its own — the `2B` of
  *  a model whose version is 2.5 shares a digit with it but no word — spells no part of the
- *  version and stays. */
-function nameTokens(model: string, version: string[]): string[] {
+ *  version and stays. `family` asks for the banner's single-letter reading (`K2.5` for 2.5): it
+ *  is the provider banner's spelling against a declaration, never a model identity's. */
+function nameTokens(model: string, version: string[], family: boolean): string[] {
   const tokens = idTokens(model);
-  const found = findVersion(tokens, version);
+  const found = findVersion(tokens, version, family);
   if (found !== null) return [...tokens.slice(0, found.at), ...tokens.slice(found.at + found.span)];
   for (let at = 0; at < tokens.length; at += 1) {
     for (let count = version.length - 1; count >= 1; count -= 1) {
-      const span = versionSpan(tokens, at, version.slice(0, count));
+      const span = versionSpan(tokens, at, version.slice(0, count), family);
       if (span !== null) return [...tokens.slice(0, at), ...tokens.slice(at + span)];
     }
   }
@@ -190,13 +203,15 @@ function versionSpanAt(tokens: string[], at: number, version: string[], lead: nu
 }
 
 /** The tokens an id spends writing a version from `at`, or null when the tokens there name other
- *  words. The run's first token may lead with the version's family letter, written against its
- *  number (`k2.5` for 2.5, `k2` then `5` across a separator); it is tried as a version word too,
- *  since a version may itself begin with a letter (`K25` is `k 25`). */
-function versionSpan(tokens: string[], at: number, version: string[]): number | null {
+ *  words. With `family`, the run's first token may lead with the version's family letter,
+ *  written against its number (`k2.5` for 2.5, `k2` then `5` across a separator); it is tried as
+ *  a version word too, since a version may itself begin with a letter (`K25` is `k 25`). Without
+ *  it the token's words must be version words from its first — a model's own letter is identity,
+ *  so a letter-bearing token (`A4`, `B2`) is never read as the version. */
+function versionSpan(tokens: string[], at: number, version: string[], family: boolean): number | null {
   const first = tokenWords(tokens[at] ?? '');
-  const leads = first.length > 1 && /^[a-z]$/.test(first[0] ?? '') && /^[0-9]/.test(first[1] ?? '') ? [1, 0] : [0];
-  for (const lead of leads) {
+  const letterLead = first.length > 1 && /^[a-z]$/.test(first[0] ?? '') && /^[0-9]/.test(first[1] ?? '');
+  for (const lead of family && letterLead ? [1, 0] : [0]) {
     const span = versionSpanAt(tokens, at, version, lead);
     if (span !== null) return span;
   }
@@ -204,10 +219,10 @@ function versionSpan(tokens: string[], at: number, version: string[]): number | 
 }
 
 /** Where the id writes the declaration's version, as the tokens it spends. */
-function findVersion(tokens: string[], version: string[]): { at: number; span: number } | null {
+function findVersion(tokens: string[], version: string[], family: boolean): { at: number; span: number } | null {
   if (version.length === 0) return null;
   for (let at = 0; at < tokens.length; at += 1) {
-    const span = versionSpan(tokens, at, version);
+    const span = versionSpan(tokens, at, version, family);
     if (span !== null) return { at, span };
   }
   return null;
@@ -226,10 +241,10 @@ function findVersion(tokens: string[], version: string[]): { at: number; span: n
 function bannerNames(id: string, declared: Running): boolean {
   const tokens = idTokens(id);
   const version = versionWords(declared.version);
-  const name = nameTokens(declared.model, version);
+  const name = nameTokens(declared.model, version, true);
   // The declaration's version, held as one unbroken run in its own order — wherever in the id the
   // provider wrote it. A run out of order (`glm-3.5` for 5.3) names another version.
-  const found = findVersion(tokens, version);
+  const found = findVersion(tokens, version, true);
   if (found === null) {
     // An id naming no version at all names the family alone; one naming a version that is not the
     // declaration's names another model.

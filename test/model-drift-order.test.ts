@@ -23,6 +23,37 @@ describe('a model name is compared as words, not as one spelling order', () => {
     expect(modelDiffers(RUNNING, { model: 'Gemini 4 Argon 4', version: '4' })).toBe(false);
   });
 
+  test('a model word the version field carries is still a model word', () => {
+    // The registry's live record: the triple signs model `Gemini`, version `4 Argon` — the
+    // profile split the vendor's `Gemini 4 Argon` into model `Gemini Argon`, version `4` — so the
+    // version field carries a model word beside its version. The version field is read with the
+    // model: its digit is the version, its word a name word, in either order.
+    expect(modelDiffers(RUNNING, { model: 'Gemini', version: '4 Argon' })).toBe(false);
+    expect(modelDiffers({ model: 'Gemini', version: '4 Argon' }, RUNNING)).toBe(false);
+    expect(modelDiffers(RUNNING, { model: 'Gemini', version: 'Argon 4' })).toBe(false);
+    expect(modelDiffers({ model: 'Gemini Argon', version: '4 Argon' }, RUNNING)).toBe(false);
+    // Another model word in the version field, and another digit, are other models.
+    expect(modelDiffers(RUNNING, { model: 'Gemini', version: '4 Flash' })).toBe(true);
+    expect(modelDiffers(RUNNING, { model: 'Gemini Argon', version: '5' })).toBe(true);
+    expect(modelDiffers(RUNNING, { model: 'Gemini', version: '5 Argon' })).toBe(true);
+    expect(modelDiffers({ model: 'Gemini 4 Argon', version: '4' }, { model: 'Gemini 4 Flash', version: '4' })).toBe(true);
+  });
+
+  test('a letter-bearing token is a word of the name, never a version word', () => {
+    // A variant tag written against its number (`A4`, `B2`) spells a letter of its own: it is
+    // not the version with a family letter, so erasing it as the version would erase identity.
+    expect(modelDiffers(RUNNING, { model: 'Gemini Argon A4', version: '4' })).toBe(true);
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini Argon B4', version: '4' })).toBe(true);
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini Argon A5', version: '4' })).toBe(true);
+    expect(modelDiffers({ model: 'GLM B2', version: '2.5' }, { model: 'GLM', version: '2.5' })).toBe(true);
+    // The same tag read from the version field is the same model word, in either order.
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini', version: '4 Argon A4' })).toBe(false);
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini', version: 'Argon A4 4' })).toBe(false);
+    // A version field that carries its own letter-bearing word compares as that word.
+    expect(modelDiffers({ model: 'GLM', version: 'A4' }, { model: 'GLM', version: 'B4' })).toBe(true);
+    expect(modelDiffers({ model: 'GLM', version: 'A4' }, { model: 'GLM', version: '4' })).toBe(true);
+  });
+
   test('a genuinely different model still drifts', () => {
     expect(modelDiffers(RUNNING, { model: 'Gemini Flash', version: '4' })).toBe(true);
     expect(modelDiffers(RUNNING, { model: 'Gemini Pro 4', version: '4' })).toBe(true);
