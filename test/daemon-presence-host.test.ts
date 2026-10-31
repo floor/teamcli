@@ -141,6 +141,11 @@ afterEach(async () => {
   for (const one of made) rmSync(one.base, { recursive: true, force: true });
 });
 
+/** Cleanups run last in, first out, and `start` registers its daemon close first. A scene that
+ *  holds a close or step gate therefore registers the release here after starting the daemon: if
+ *  an assertion fails before the scene resolves the gate, the release still runs before the close,
+ *  so the close finishes on its own and no listener or socket is left behind. A release called
+ *  again after the scene released it itself is a no-op. */
 function later(fn: () => Promise<void> | void): void {
   cleanups.push(fn);
 }
@@ -241,6 +246,8 @@ describe('the presence pass', () => {
       presenceIngest: () => ingester,
       presenceActivity: () => async () => { activities += 1; return activityResult(); },
     });
+    // The first pass waits on the scene's gate; the close drain waits on that pass.
+    later(() => release?.());
     await waitUntil(() => steps === 1);
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(steps).toBe(1);
@@ -280,6 +287,9 @@ describe('closing', () => {
         }),
       }),
     });
+    // A failed assertion above the scene's own resolve must not leave the close (and its socket)
+    // waiting on this gate.
+    later(() => resolveClose?.({ quiesced: true }));
     let settled = false;
     const closing = daemon.close().then(() => { settled = true; });
     await waitUntil(() => order.includes('watch-stop') && order.includes('ingest-close'));
@@ -295,10 +305,12 @@ describe('closing', () => {
 
   test('a truthful non-quiescence retains the lock, socket and record and says pending', async () => {
     let closeCalls = 0;
+    let quiesced = false;
     const ingester: PresenceIngester = {
       step: async () => emptyIngest(),
       close: async () => {
         closeCalls += 1;
+        if (quiesced) return { quiesced: true };
         return { quiesced: false, why: 'the presence log write is stuck' } as unknown as { quiesced: true };
       },
       isClosed: () => false,
@@ -308,6 +320,12 @@ describe('closing', () => {
       presenceEveryMs: 10,
       presenceIngest: () => ingester,
       presenceActivity: () => async () => activityResult(),
+    });
+    // A failed assertion must not leave the retained listener behind: cleanup makes the handle
+    // truthful and closes it, which releases the ownership this scene proved was held.
+    later(async () => {
+      quiesced = true;
+      await daemon.close();
     });
     await daemon.close();
     expect(closeCalls).toBe(1);
@@ -325,6 +343,14 @@ describe('closing', () => {
     await daemon.close();
     expect(closeCalls).toBe(2);
     expect(existsSync(daemonLockPath(world.home))).toBe(true);
+    // Once the handle does answer truthfully, the retry releases the retained lock, socket and
+    // record: the scene ends with nothing open, and the retention above was ownership, not a leak.
+    quiesced = true;
+    await daemon.close();
+    expect(closeCalls).toBe(3);
+    expect(existsSync(daemonLockPath(world.home))).toBe(false);
+    expect(existsSync(daemonSocketPath(world.home))).toBe(false);
+    expect(readDaemonState(world.home).kind).toBe('missing');
   }, 15_000);
 
   test('a false, then a rejected, then a truthful close: one retry per handle and release only on true', async () => {
@@ -347,6 +373,12 @@ describe('closing', () => {
       presenceEveryMs: 10,
       presenceIngest: () => ingester,
       presenceActivity: () => async () => activityResult(),
+    });
+    // However far the scene gets, cleanup gives the handle a truthful answer and closes: a scene
+    // that failed on the false or rejected step must not retain the lock and socket.
+    later(async () => {
+      answer = 'true';
+      await daemon.close();
     });
 
     await daemon.close();
@@ -501,6 +533,9 @@ describe('the health answer', () => {
       }),
       presenceActivity: () => async () => activityResult(),
     });
+    // The scene starts the close before it resolves this gate; cleanup resolves it first so a
+    // failed assertion cannot leave the close waiting and the socket bound.
+    later(() => release?.());
     await waitUntil(() => daemon.health().roots?.[0]?.presence?.healthy === true);
 
     // Admission stops synchronously at the first line of the close; the endpoint refuses, and
@@ -798,6 +833,8 @@ describe('the per-seat runtime sources', () => {
       presenceActivity: () => createPresenceActivity({ stateDir, session: 'crew', seats: ['worker-1'] }),
       presenceSubscriptions: (): PresenceSource[] => [source],
     });
+    // The held ingest step is drained by the close; cleanup releases it before the close runs.
+    later(() => releaseIngest());
     // The old idle event goes through the real pipeline and is proven applied in both places.
     await waitUntil(() => seatOf()?.healthy === true && seatOf()?.appliedEventId === OLD);
     expect(currentOf()).toMatchObject({ id: OLD, state: 'idle', seq: 1 });
@@ -872,6 +909,12 @@ describe('the per-seat runtime sources', () => {
           return { quiesced: true };
         }),
       ],
+    });
+    // A scene that fails while the source still rejects must not retain the lock and socket:
+    // cleanup lets the retry resolve the source and drain the ingester before its close runs.
+    later(async () => {
+      reject = false;
+      await daemon.close();
     });
     await waitUntil(() => daemon.health().roots?.[0]?.presence?.seats !== undefined);
 
