@@ -3,7 +3,8 @@
 // are the ones a launch depends on — a record is written under the seat's current binding, a
 // server this call started is stopped when its record cannot land, a reused pid is never
 // signalled, and only the endpoint's own socket under the seat's own run folder is ever removed.
-// A socket no record names is left where it is, and said.
+// A socket no record names is left where it is, and said. A missing socket is no proof its
+// server is gone, and a record that is present but unreadable is unproven, never absent.
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -763,15 +764,59 @@ describe('stopping a recorded endpoint', () => {
     }
   });
 
-  test('with no socket there is nothing to stop, and nothing else is touched', () => {
+  test('a missing socket is no proof the server is gone: a proven live pid is stopped by pid', () => {
+    const one = scene();
+    try {
+      const terminated: number[] = [];
+      const dropped: string[] = [];
+      const answer = one.stop({
+        alive: () => true,
+        commandOf: () => `codex app-server --listen ${one.record.url}`,
+        startOf: () => T0_MS,
+        isPlainDir: () => true,
+        isSocket: () => false,
+        terminate: (pid) => { terminated.push(pid); },
+        drop: (path) => { dropped.push(path); },
+      });
+      expect(answer).toEqual({ stopped: true });
+      expect(terminated).toEqual([700]);
+      expect(dropped).toEqual([]);
+    } finally {
+      rmSync(one.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing socket leaves a live pid it cannot prove untouched, and says so', () => {
+    const one = scene();
+    try {
+      let signalled = 0;
+      const answer = one.stop({
+        alive: () => true,
+        commandOf: () => 'codex app-server --listen elsewhere',
+        startOf: () => T0_MS,
+        isPlainDir: () => true,
+        isSocket: () => false,
+        terminate: () => { signalled++; },
+        drop: () => { throw new Error('removed a socket that was not there'); },
+      });
+      expect(answer).toEqual({
+        stopped: false,
+        why: 'the recorded process cannot be proven to serve this endpoint; it was not signalled',
+      });
+      expect(signalled).toBe(0);
+    } finally {
+      rmSync(one.dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing socket and a dead pid have nothing to stop', () => {
     const one = scene();
     try {
       const answer = one.stop({
-        alive: () => true,
-        commandOf: () => { throw new Error('read a process with no endpoint to stop'); },
+        alive: () => false,
         isPlainDir: () => true,
         isSocket: () => false,
-        terminate: () => { throw new Error('signalled with no endpoint to stop'); },
+        terminate: () => { throw new Error('signalled a dead process'); },
         drop: () => { throw new Error('removed a file that was not there'); },
       });
       expect(answer).toEqual({ stopped: true });
@@ -856,10 +901,38 @@ describe('stopping the endpoint recorded on a seat', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('a present record it cannot read is unproven, not absent: the stop says why and keeps it', () => {
+    const dir = scratch();
+    try {
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      // Values a launch that died mid-write, or a hand-edited state, could leave behind: each is
+      // present, and none names a process this build could have recorded.
+      const broken = [
+        { url: `unix://${socketPath}`, binding: BINDING },
+        { url: `unix://${socketPath}`, binding: BINDING, pid: '700', started_at: T0 },
+        { url: `unix://${socketPath}`, binding: BINDING, pid: 700 },
+      ];
+      for (const value of broken) {
+        seedRecord(dir, value as unknown as CodexEndpointRecord);
+        const answer = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT }, {
+          alive: () => { throw new Error('read a pid the record does not name'); },
+          terminate: () => { throw new Error('signalled a process it could not read'); },
+        });
+        expect(answer).toEqual({
+          stopped: false,
+          why: 'the seat’s endpoint record cannot be read; the process it names cannot be proved, so it was not stopped',
+        });
+        expect(recordedAt(dir)).toEqual(value as unknown as CodexEndpointRecord);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('whether a seat records an endpoint of its own', () => {
-  test('true only under the strict read a stop acts on', () => {
+  test('true for every record a stop must account for, readable or not', () => {
     const dir = scratch();
     try {
       seed(dir);
@@ -869,6 +942,13 @@ describe('whether a seat records an endpoint of its own', () => {
       // A record for another binding is not this seat's current endpoint, as the stop reads it.
       seedRecord(dir, ownedRecord(dir, { binding: OTHER, url: `unix://${join(rootOf(dir), `${OTHER}.sock`)}` }));
       expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(false);
+      // A present record this build cannot read is unproven, not absent: the stop is attempted
+      // and says why, rather than the record passing as if the seat had none.
+      seedRecord(dir, {
+        url: `unix://${join(rootOf(dir), `${BINDING}.sock`)}`,
+        binding: BINDING,
+      } as unknown as CodexEndpointRecord);
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

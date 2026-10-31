@@ -296,8 +296,11 @@ function sameEndpointConfig(recorded: readonly string[] | undefined, needed: rea
 
 /** Stops the process a record names, only after proving it is the app-server the launch started:
  *  a live `codex` command line carrying the exact `app-server --listen <url>` of this record, a
- *  plain (non-symlink) seat folder, and a socket file (not a symlink) at the owned path. An
- *  unprovable pid is never signalled; the socket file is removed only when it is that socket. */
+ *  plain (non-symlink) seat folder, and — before anything is removed — a socket file (not a
+ *  symlink) at the owned path. An unprovable pid is never signalled. A missing socket file is no
+ *  proof the server is gone: an app-server that lost or could not create its socket still owns
+ *  the pid, so a live pid is proved and stopped by pid whether or not the socket is there, and
+ *  the socket file is removed only when it is that socket. */
 export function stopRecordedCodexEndpoint(
   input: {
     dir: string;
@@ -322,10 +325,6 @@ export function stopRecordedCodexEndpoint(
   if (!plainDir(dirname(path))) {
     return { stopped: false, why: 'the endpoint folder is not a plain directory; nothing was removed' };
   }
-  if (!socket(path)) {
-    // No socket file: there is no endpoint at the owned path to stop, and nothing else is touched.
-    return { stopped: true };
-  }
   const pid = input.record.pid;
   if (alive(pid)) {
     if (!provenOwner(input.record, { alive, commandOf, startOf })) {
@@ -335,7 +334,8 @@ export function stopRecordedCodexEndpoint(
     }
     terminate(pid);
   }
-  drop(path);
+  // Only the socket this record owns is removed; a path that holds something else is left as it is.
+  if (socket(path)) drop(path);
   return { stopped: true };
 }
 
@@ -352,8 +352,19 @@ export function stopSeatCodexEndpoint(
   } catch {
     return { stopped: false, why: 'the team state is unreadable; nothing was stopped' };
   }
-  const record = readRecordedCodexEndpoint(seatState?.codex_endpoint, seatState?.presence_binding);
-  if (record === null) return { stopped: false, why: 'the seat records no endpoint for its current binding' };
+  const value = seatState?.codex_endpoint;
+  const record = readRecordedCodexEndpoint(value, seatState?.presence_binding);
+  if (record === null) {
+    // A record that is present but unreadable is unproven, not absent: the process it names may
+    // be alive, so the stop says why it cannot act instead of reading as "nothing recorded".
+    if (value !== undefined && value !== null && readCodexEndpointRecord(value) === null) {
+      return {
+        stopped: false,
+        why: 'the seat’s endpoint record cannot be read; the process it names cannot be proved, so it was not stopped',
+      };
+    }
+    return { stopped: false, why: 'the seat records no endpoint for its current binding' };
+  }
   const stopped = stopRecordedCodexEndpoint({ ...input, record }, deps);
   if (!stopped.stopped) return stopped;
   updateState(input.dir, (file) => {
@@ -366,10 +377,12 @@ export function stopSeatCodexEndpoint(
   return stopped;
 }
 
-/** Whether the seat records a managed endpoint for the presence binding it holds now: the same
- *  strict read a stop acts on. A seat that records none — every seat whose launch managed no
- *  endpoint — has nothing to stop, and no notice is owed for it. A state that cannot be read
- *  answers true, so the stop itself says why nothing was stopped. */
+/** Whether the seat records a managed endpoint it must account for: the strict read a stop acts
+ *  on for a record this build can read, and true for a record that is present but unreadable —
+ *  the same unproven state a stop reports, never "no record" — so the stop is attempted and says
+ *  why. A seat that records no value — every seat whose launch managed no endpoint — has nothing
+ *  to stop, and no notice is owed for it. A state that cannot be read answers true, so the stop
+ *  itself says why nothing was stopped. */
 export function seatRecordsCodexEndpoint(input: { dir: string; session: string; seat: string }): boolean {
   let seatState;
   try {
@@ -377,7 +390,11 @@ export function seatRecordsCodexEndpoint(input: { dir: string; session: string; 
   } catch {
     return true;
   }
-  return readRecordedCodexEndpoint(seatState?.codex_endpoint, seatState?.presence_binding) !== null;
+  const value = seatState?.codex_endpoint;
+  if (value === undefined || value === null) return false;
+  // A record the shape reader cannot use is present all the same: unproven, not absent.
+  if (readCodexEndpointRecord(value) === null) return true;
+  return readRecordedCodexEndpoint(value, seatState?.presence_binding) !== null;
 }
 
 /** Starts (or reuses) the seat's managed app-server and records it on the seat state under the
