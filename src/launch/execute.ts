@@ -200,7 +200,9 @@ export type Host = {
   ): void;
   /** The seat is really running, so the next seat's ceiling check counts it. */
   running(seat: string): void;
-  drop(seat: string): void;
+  /** Drops the seat's launch record. `false`: the record was kept because its endpoint stop could
+   *  not be proven; anything else: the record went. */
+  drop(seat: string): boolean | void;
   say(line: string): void;
   log(who: string, what: string): void;
   /** Records the file the watch's pane may read, before that pane's command runs. */

@@ -97,7 +97,9 @@ export type DownSources = {
   // Present on the shipped command. A dry run never calls it.
   launch?: DownLaunch;
   /** Stops the managed Codex endpoint a seat's launch recorded, before the record that names it
-   *  is dropped. Absent on a world with no endpoint seam: nothing is stopped or said. */
+   *  is dropped. A read that did not stop it — whatever reason it names, or none — keeps the
+   *  record and holds the run. Absent on a world with no endpoint seam: nothing is stopped or
+   *  said. */
   codexEndpoint?: {
     stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
   };
@@ -1455,13 +1457,16 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       drop(name) {
         // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
         // before the record that names it goes. A seat that records none for the binding it holds
-        // now has no managed endpoint, and is not mentioned. An endpoint whose process cannot be
-        // proven is left alone — its pid is never signalled on trust alone — and the refusal is
-        // said.
+        // now has no managed endpoint, and is not mentioned. A stop that cannot prove its process
+        // — one that names a reason, or one that names none — signals nothing, and the seat keeps
+        // its whole record, endpoint claim and presence binding included, so a later cleanup can
+        // still account for the process.
         if (sources.codexEndpoint !== undefined && seatRecordsCodexEndpoint({ dir, session, seat: name })) {
           const endpoint = sources.codexEndpoint.stop({ dir, session, seat: name });
-          if (!endpoint.stopped && endpoint.why !== undefined) {
-            io.stderr(`team down: ${name}: ${endpoint.why}\n`);
+          if (!endpoint.stopped) {
+            const why = endpoint.why ?? 'the endpoint stop could not be proven';
+            io.stderr(`team down: ${name}: ${why}; its launch record was kept\n`);
+            return false;
           }
         }
         let pane: string | undefined;

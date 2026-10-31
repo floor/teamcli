@@ -1,7 +1,9 @@
 // What `team down` does with a seat's managed Codex endpoint and with the watch the state
 // records. A seat that records an endpoint for the presence binding it holds now is stopped
 // through the same proof `remove` uses, before the record that names it goes; a seat that
-// records none — every seat whose launch managed no endpoint — is never mentioned. A watch whose
+// records none — every seat whose launch managed no endpoint — is never mentioned. A stop that
+// cannot prove its process, or that names no reason at all, signals nothing: the whole record
+// stays where a later cleanup can find it and the run holds. A watch whose
 // pid the state records and whose pane is not is stopped only when the live process's command
 // line proves this install's own CLI entry running this session's watch and its start instant is
 // the one the watch recorded; a reused pid, another install's entry, a watch word inside some
@@ -226,10 +228,11 @@ describe('a seat and its managed endpoint', () => {
     const run = await down(at, sources);
     expect(run.code).toBe(0);
     expect(stops).toEqual([{ dir: at.dir, session: 'acme', seat: 'worker', recordPresent: true }]);
+    expect(run.out).toContain('stopped');
     expect(stateSeat(at)).toBeUndefined();
   });
 
-  test('an endpoint that cannot be proven is left alone and the refusal is said', async () => {
+  test('an endpoint that cannot be proven keeps the whole record and holds the run', async () => {
     const at = place();
     seedSeat(at, { stage: 'ready', pane: 'pane-a', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
     const { sources, stops } = sourcesOf(at, {}, () => ({
@@ -237,9 +240,45 @@ describe('a seat and its managed endpoint', () => {
       why: 'the recorded process cannot be proven to serve this endpoint; it was not signalled',
     }));
     const run = await down(at, sources);
-    expect(run.code).toBe(0);
+    expect(run.code).toBe(1);
     expect(stops).toHaveLength(1);
     expect(run.err).toContain('the recorded process cannot be proven');
+    expect(run.err).toContain('its launch record was kept');
+    // The record that names the process stays whole — the endpoint claim and the presence
+    // binding it was recorded under — so a later cleanup can still account for it.
+    expect(stateSeat(at)?.codex_endpoint).toEqual(ENDPOINT);
+    expect(stateSeat(at)?.presence_binding).toBe(BINDING);
+    expect(readState(at.dir).sessions.acme?.retained_seats?.worker).toBeUndefined();
+  });
+
+  test('a stop that names no reason keeps the record too, with a word of its own', async () => {
+    const at = place();
+    seedSeat(at, { stage: 'ready', pane: 'pane-a', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
+    const { sources, stops } = sourcesOf(at, {}, () => ({ stopped: false }));
+    const run = await down(at, sources);
+    expect(run.code).toBe(1);
+    expect(stops).toHaveLength(1);
+    expect(run.err).toContain('the endpoint stop could not be proven; its launch record was kept');
+    expect(stateSeat(at)?.codex_endpoint).toEqual(ENDPOINT);
+    expect(stateSeat(at)?.presence_binding).toBe(BINDING);
+  });
+
+  test('a record that cannot be read is unproven, not absent: the stop is attempted and the record kept', async () => {
+    const at = place();
+    seedSeat(at, {
+      stage: 'ready', pane: 'pane-a', workspace: 'w1', presence_binding: BINDING,
+      codex_endpoint: { ...ENDPOINT, pid: 'unreadable' },
+    });
+    const { sources, stops } = sourcesOf(at, {}, () => ({
+      stopped: false,
+      why: 'the seat’s endpoint record cannot be read; the process it names cannot be proved, so it was not stopped',
+    }));
+    const run = await down(at, sources);
+    expect(run.code).toBe(1);
+    expect(stops).toHaveLength(1);
+    expect(run.err).toContain('endpoint record cannot be read');
+    // The raw value the state holds: present, and still exactly what the launch recorded.
+    expect(stateSeat(at)?.codex_endpoint as unknown).toEqual({ ...ENDPOINT, pid: 'unreadable' });
   });
 
   test('a record for another binding names no endpoint of this seat and is not stopped', async () => {

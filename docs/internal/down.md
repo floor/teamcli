@@ -54,8 +54,9 @@ session it stops and the stopped session it clears — its own, just stopped. A 
 records a managed endpoint for the presence binding it holds now is stopped through it before its
 record goes — the same ownership proof `team remove` uses, with the record still there at the stop
 — and a seat that records none, every seat whose launch managed no endpoint, is not named. An
-endpoint whose process cannot be proven is left alone and the refusal is said on stderr before the
-seat is dropped as any other stopped seat is. A name the copy does
+endpoint whose process cannot be proven — or whose stop names no reason — is left alone, the
+refusal is said on stderr, and the seat is not dropped: its whole record, endpoint claim and
+presence binding included, stays for a later cleanup, and the run holds. A name the copy does
 not carry, whose pane and workspace match no seat record, is left running, rules file included;
 the owner removes it with `team remove <name> --abandon`. A pane those ids do match is closed and
 the seat is dropped, whatever name herdr gave it. A team file that no longer validates is replaced
