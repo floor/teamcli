@@ -1,7 +1,7 @@
 # Antigravity (agy) 1.2.16 terminal captures
 
 Captured from the installed macOS Antigravity CLI on 2026-10-03 with herdr 0.7.1,
-`pane read --source visible --lines 80`, in the scratch session `team-test-agy`.
+`pane read --source visible --lines 80`, in the scratch session `sandbox-agy`.
 There was at most one Antigravity seat at a time. The session was stopped and deleted;
 the default session had nine agents before and after. Config and auth hashes were unchanged.
 

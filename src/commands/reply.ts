@@ -53,7 +53,9 @@ import {
   closeFile,
   readClose,
   readRecord,
+  recordAuthOfSealed,
   recordNameOk,
+  sealedOfRecord,
   signClose,
   signReceiptPayload,
   signRecord,
@@ -208,6 +210,12 @@ export function findRecord(hits: { seat: string; path: string }[], root: string,
     if (!read.ok) return { kind: 'refused', why: `record ${id} cannot be read: ${read.reason}` };
     if (read.record === null) continue;
     if (!verifyRecord(read.record, key)) {
+      // A signature that holds over a record this version cannot read is refused on its own
+      // ground: it authenticated, and the refusal is the schema, not the key.
+      const auth = recordAuthOfSealed(sealedOfRecord(read.record), key);
+      if (auth.kind === 'unsupported') {
+        return { kind: 'refused', why: `record ${id} is signed, and this version cannot read it: ${auth.reason}` };
+      }
       return { kind: 'refused', why: `record ${id} does not verify against this message key` };
     }
     verified.push({ seat: hit.seat, path: hit.path, record: read.record });

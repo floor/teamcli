@@ -21,6 +21,7 @@ import type { Command, Io } from '../io.ts';
 import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, type DeliveryClass } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
+import { readState, type SeatState } from '../state.ts';
 import { logLine } from '../log.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
@@ -42,7 +43,6 @@ import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
-import { readState, type SeatState } from '../state.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -149,6 +149,14 @@ the message and a short wait for the receipt its \`inbox_read\` call leaves; tha
 receipt is \`delivered (read)\` — the seat read the message, not that it acted on
 it — and its absence is \`sent (unconfirmed)\`, exit 0: the file is safe on disk
 and the walk ends rather than typing into a pane the inbox was chosen over.
+
+Every sent, sent (unconfirmed), sent (channel) and queued (receiver busy) line ends
+with the receiving seat's delivery class in plain words: \`woken through its event
+adapter\` for a seat an event adapter wakes, \`woken through its runtime queue\` for a
+runtime that holds the message between turns, \`queued; <seat> reads it at its next turn
+(pull-only)\` for a seat that reads its inbox when it takes a turn, and \`queued; <seat>
+has no way to be woken while idle\` for a person or a launch with no route at all. A
+delivered line needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
   delivered    the socket path (exit 0): the frame was taken, or herdr reported the
@@ -470,6 +478,10 @@ type Report = {
   /** The resolved walk's legs, in order: a real send fills each state as the walk runs, and a
    *  dry run lists the candidates it would walk. Absent on a run that never resolved a walk. */
   delivery?: LegReport[];
+  /** The receiving seat's delivery class in plain words, when the run resolved one. A line that
+   *  ends without a delivery appends it, so `sent (unconfirmed)` never stands as the whole answer
+   *  to whether the seat will read the message. Absent on paths that never read the class. */
+  deliveryWords?: string;
 };
 
 /** The address as the caller wrote it, kept on the history line beside the resolved seat: the
@@ -480,6 +492,45 @@ type SentAs = { spec: string; resolved: string };
 /** The sender's team as every history line this run writes carries it. */
 function historySender(report: Report): { from_team?: string } {
   return report.from_team === undefined ? {} : { from_team: report.from_team };
+}
+
+/** The receiving seat's runtime record, when the team's state can be read: the launch's own
+ *  words, which the class reader trusts over the file's. A state that cannot be read is no
+ *  record: the class then falls to what the file and the launch line prove, never to a guess. */
+function seatStateOf(dir: string, session: string, seat: string): SeatState | undefined {
+  try {
+    return readState(dir).sessions[session]?.seats[seat];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The receiving seat's delivery class in plain words, ready for an outcome line. The runtime
+ *  record wins over the team file's row; a state that cannot be read is no record, so the class
+ *  falls to what the file and its launch line prove, never to a guess. */
+function deliveryWordsOf(input: {
+  dir: string;
+  root: string;
+  session: string;
+  seat: string;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human'>;
+}): string {
+  const state = seatStateOf(input.dir, input.session, input.seat);
+  return seatDeliveryClass({
+    dir: input.dir,
+    root: input.root,
+    session: input.session,
+    seat: input.seat,
+    ...(input.declared === undefined ? {} : { declared: input.declared }),
+    ...(state === undefined ? {} : { state }),
+  }).words;
+}
+
+/** A console summary with the receiving seat's delivery class appended when the run read one: a
+ *  line that ended at the leg's own word would leave "unconfirmed" as the whole answer to
+ *  whether the seat ever reads the message. */
+function withDelivery(summary: string, report: Report): string {
+  return report.deliveryWords === undefined ? summary : `${summary}; ${report.deliveryWords}`;
 }
 
 /** Where one send goes: the registry's answer for the spec, or the declared seat of the
@@ -897,6 +948,18 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
+  // The receiving seat's delivery class, read once for this send. An outcome that cannot claim
+  // delivery appends it, so `sent (unconfirmed)` never stands as the whole answer to whether the
+  // seat will read the message: the line says whether it is woken, holds the message between
+  // turns, or reads it at its next turn. The class comes from the launch's own records, never
+  // from the CLI's shipped profile alone.
+  report.deliveryWords = deliveryWordsOf({
+    dir: to.dir,
+    root: to.root,
+    session: to.session,
+    seat: to.seat,
+    ...(declared === undefined ? {} : { declared }),
+  });
   // The registry's signing model is the running seat's authority. A pane whose live status
   // names another model is held before the body is read and before any delivery leg is walked;
   // the team file is only the roster projection and cannot override that signed record.
@@ -1220,6 +1283,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     { seat: record.from, ...(record.from_id === null ? {} : { id: record.from_id }) },
     { ...naming, mode: 'nickname' },
   );
+  const wakeHeader = renderMessageDisplay(wakeTemplate, {
+    name: wakeName,
+    seat: record.from,
+    team: team.project,
+    ...(record.subject === undefined ? {} : { subject: record.subject }),
+    summary: messageSummaryOf(record.body),
+    age: '0s',
+    id: '',
+  });
   // A direct-only caller hands in the pane and CLI its own pass saw for this seat: the send is
   // bound to them, never re-aimed at a pane the caller did not read. A seat the session no longer
   // lists at that pane, or whose file now names another CLI, is refused here — before any route
@@ -1468,7 +1540,17 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameDisplayHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null, wakeTemplate), human);
+      // The accepted frame opens with the sender's identity line alone. `#682` pinned that shape:
+      // no summary, no rule. The message-display line is the typed wake's, where the seat reads
+      // it in its own composer; an agent handling a socket frame has the whole signed record.
+      const identityHeader = frameIdentityHeader(
+        record,
+        naming,
+        fileTeamId,
+        team.project,
+        caller.kind === 'seat' ? labelNameOf(team, caller.name) : null,
+      );
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, identityHeader, human);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -2544,6 +2626,20 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     screen !== null &&
     showsTranscriptToken(screen, record.nonce, `team send --confirm ${record.id}`);
   const outcome: 'delivered' | 'sent (unconfirmed)' = verified ? 'delivered' : 'sent (unconfirmed)';
+  // An unconfirmed confirm appends the receiving seat's class, read from the receiving team's
+  // own records: the sender learns whether the seat is woken, holds the message between turns,
+  // or reads it at its next turn. A verified delivery needs none.
+  if (outcome === 'sent (unconfirmed)') {
+    const receiving = readTeamConfig(record.root, { home: host.home });
+    const receivingSeat = receiving.ok ? receiving.team.seats.find((seat) => seat.name === record.to) : undefined;
+    report.deliveryWords = deliveryWordsOf({
+      dir: join(record.root, '.agents'),
+      root: record.root,
+      session: record.session,
+      seat: record.to,
+      ...(receivingSeat === undefined ? {} : { declared: receivingSeat }),
+    });
+  }
   // Take before writing: only the confirm that renamed the record writes the line.
   const taken = takePending(team.project, root, host.home, id);
   if (!taken.ok) return refuse(io, dir, who, `${id}: ${taken.reason}`, host, report);
@@ -2586,7 +2682,7 @@ function confirmed(
   report: Report,
 ): number {
   report.sent = id;
-  const summary = `${seat}: ${outcome} (native, ${String(ms)} ms)`;
+  const summary = withDelivery(`${seat}: ${outcome} (native, ${String(ms)} ms)`, report);
   if (report.json) {
     writeAction(io, report, { status: outcome, summary, channel: 'native' });
   } else {
@@ -2691,7 +2787,7 @@ function queuedBusy(
     logLine(dir, 'send', who, `${seatName}: queued (receiver busy) (${leg}; ${why}; id ${msgId})`, host.now());
   }
   const ms = host.now().getTime() - startedAt;
-  const summary = `${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`;
+  const summary = withDelivery(`${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`, report);
   if (report.json) {
     writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: leg });
   } else {
@@ -4144,25 +4240,20 @@ function labelNameOf(team: TeamFile, seat: string): string | null {
 }
 
 /**
- * The display line an accepted socket frame opens with: the receiving team's `message-display`
- * template, the sender as a person reads it — the nickname the registry (or the seat's own
- * setting) holds, the name its written label carries before the middle dot, then the seat name —
- * and the address it sits at in the team this run sends from, with the body's first content line
- * as the summary. Display only: the signed record below it is the message, and the record's body
+ * The display line an accepted socket frame opens with: the sender as a person reads it — the
+ * nickname the registry (or the seat's own setting) holds, the name its written label carries
+ * before the middle dot, then the seat name — and the address it sits at in the team this run
+ * sends from. Display only: the signed record below it is the message, and the record's body
  * keeps its own `from … — admitted by: …` line. A registry that cannot answer reads as no
  * nickname, so a frame always names its sender.
  */
-function frameDisplayHeader(
-  record: RecordPayload,
-  naming: SenderNaming,
-  teamName: string,
-  labelName: string | null,
-  template: string,
-): string {
+function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, senderTeam: string, teamName: string, labelName: string | null): string {
   let name = '';
   try {
     name = senderNickname(
-      { seat: record.from, ...(record.from_id === null ? {} : { id: record.from_id }) },
+      // This is a frame header for the sender's own team. Omitting the id keeps senderNickname's
+      // team lookup pinned here even if a stale or foreign roster also repeats that id.
+      { seat: record.from, team: senderTeam },
       naming,
     ) ?? '';
   } catch {
@@ -4171,15 +4262,7 @@ function frameDisplayHeader(
   // A nickname wins; then the name the seat's written label carries; then the seat name, so the
   // line always names its sender.
   if (name === '') name = labelName ?? '';
-  return renderMessageDisplay(template, {
-    name: name === '' ? record.from : name,
-    seat: record.from,
-    team: teamName,
-    ...(record.subject === undefined ? {} : { subject: record.subject }),
-    summary: messageSummaryOf(record.body),
-    age: '0s',
-    id: '',
-  });
+  return `Message from ${name === '' ? record.from : name} (${record.from}@${teamName})`;
 }
 
 /** Reads the target pane until the held-message dialog shows, or ~1s passes: the dialog renders
@@ -4395,9 +4478,6 @@ export async function redeliverChannelOnSocket(input: {
     root,
     cross: false,
   };
-  // The frame opens with the same display words the original send would have written: the
-  // receiving team's template in force now, so a redelivery never opens differently from a send.
-  const wakeTemplate = messageDisplayInForce({ home: host.home, root, team: input.team, now: host.now() });
   const attempt = await deliverSocketFrame(
     dir,
     payload.from,
@@ -4411,7 +4491,7 @@ export async function redeliverChannelOnSocket(input: {
     false,
     inbound,
     root,
-    frameDisplayHeader(payload, naming, input.team.project, labelNameOf(input.team, seat), wakeTemplate),
+    frameIdentityHeader(payload, naming, fromTeam, input.team.project, labelNameOf(input.team, seat)),
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };
@@ -4964,7 +5044,7 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
  *  composer and the drop is still the message. The `note` says which — a typed send's names the
  *  trigger and the receipt that has not come back. Exit 0, always. */
 function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed' | 'native' | 'headless-resume', note?: string): number {
-  const summary = `${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`;
+  const summary = withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
   } else {
@@ -4978,7 +5058,7 @@ function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 
  *  channel's own word says so. The push is not a read — the signed receipt that follows is — so
  *  a channel ending is never `delivered (read)`. Exit 0, always. */
 function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = `${seat}: sent (channel) (${String(ms)} ms)`;
+  const summary = withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (channel)', summary, channel: 'channel' });
   } else {

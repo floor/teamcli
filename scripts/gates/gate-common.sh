@@ -59,7 +59,7 @@ HUB_IMPORTERS=${HUB_IMPORTERS:-10}
 # "depth-1 tail over DEPTH1_MAX". A very large value disables the cap.
 DEPTH1_MAX=${DEPTH1_MAX:-60}
 
-# A lock whose owner pid is gone is reclaimed, never waited on (Atlas, 2026-10-17: a light slot
+# A lock whose owner pid is gone is reclaimed, never waited on (Reviewer, 2026-10-17: a light slot
 # sat four hours under a dead pid). The owner's pid is the second word of its second line — the
 # `<holder> <pid> <utc-epoch>` token the heavy and hourly scripts write — or, failing that, of
 # its first line (`<branch> <pid> <time>` in a light slot). A lock with no readable pid, or

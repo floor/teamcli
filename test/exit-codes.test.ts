@@ -26,6 +26,7 @@ import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
+import { runAgents } from '../src/commands/agents.ts';
 import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
@@ -48,7 +49,7 @@ import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runRoute } from '../src/commands/route.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
-import { pendingPath } from '../src/send/pending.ts';
+import { markPending, pendingPath } from '../src/send/pending.ts';
 import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
@@ -103,6 +104,7 @@ import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { GENERAL_BRIEF_FROM, generalBriefBody, generalBriefId } from '../src/launch/general-brief.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
@@ -112,7 +114,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
-import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
@@ -967,6 +969,54 @@ scene('brief.file', async (place) => show(await briefed(place, ['rollout', '--fi
 scene('brief.file-invalid', async (place) => {
   invalid(place);
   return show(await briefed(place, ['rollout', '--file', 'team.yaml'], owner), 'line');
+});
+
+/** A launch-brief retry marker beside a delivery: what a walk leaves when it is held. */
+function launchMarker(place: Place, seat: string, id: string): string {
+  const folder = join(place.root, '.agents', 'send-drops', 'acme', seat);
+  mkdirSync(folder, { recursive: true });
+  markPending(folder, { id, from: GENERAL_BRIEF_FROM, to: seat, body: 'the brief\n', ts: NOW.toISOString() });
+  return join(folder, `${id}.pending`);
+}
+
+/** A marker of a delivery the settled seat's claim no longer names. */
+function supersededMarker(place: Place, seat: string): string {
+  return launchMarker(place, seat, generalBriefId('inc_ffffffffffff', generalBriefBody()));
+}
+
+scene('brief.prune-clean', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['prune'], leadSeat), '0 files to retire');
+});
+scene('brief.prune-due', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  supersededMarker(place, 'lead');
+  return show(await briefed(place, ['prune'], leadSeat), 'would retire');
+});
+scene('brief.prune-applied', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  supersededMarker(place, 'lead');
+  return show(await briefed(place, ['prune', '--apply'], leadSeat), '1 file retired');
+});
+scene('brief.prune-incomplete', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  const marker = supersededMarker(place, 'lead');
+  // The folder without its write bit: the marker lists, and its removal fails.
+  chmodSync(dirname(marker), 0o555);
+  try {
+    return show(await briefed(place, ['prune', '--apply'], leadSeat), 'could not be removed');
+  } finally {
+    chmodSync(dirname(marker), 0o755);
+  }
+});
+scene('brief.prune-refused', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['prune'], owner), 'only a seat of this team');
 });
 
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {
@@ -2527,12 +2577,12 @@ function tamperedSeatSetting(place: Place): void {
   scene('settings.set', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'settings: set nickname=Atlas at seat (lead)');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']), 'settings: set nickname=Reviewer at seat (lead)');
   });
   scene('settings.unset', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    const set = await settingsRun(place, ['set', 'lead', 'nickname=Atlas']);
+    const set = await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']);
     if (set.code !== 0) throw new Error(`the set before the unset failed: ${set.err}`);
     return show(await settingsRun(place, ['unset', 'lead', 'nickname']), 'settings: unset nickname at seat (lead)');
   });
@@ -2540,8 +2590,8 @@ function tamperedSeatSetting(place: Place): void {
     write(place, TEAM);
     registeredSeat(place);
     return show(
-      await settingsRun(place, ['set', 'lead', 'nickname=Atlas', '--dry-run']),
-      'settings: would set nickname=Atlas at seat (lead)',
+      await settingsRun(place, ['set', 'lead', 'nickname=Reviewer', '--dry-run']),
+      'settings: would set nickname=Reviewer at seat (lead)',
     );
   });
   scene('settings.key', async (place) => {
@@ -2565,7 +2615,7 @@ function tamperedSeatSetting(place: Place): void {
   scene('settings.not-owner', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas'], other), 'only the owner sets a seat');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer'], other), 'only the owner sets a seat');
   });
   scene('settings.no-agent', async (place) => {
     write(place, TEAM);
@@ -2573,7 +2623,7 @@ function tamperedSeatSetting(place: Place): void {
     // where the agent registry belongs cannot hold it, and the refusal names that instead.
     mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
     writeFileSync(join(place.home, '.config', 'team', 'agents'), 'not a directory');
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'has no registered agent record');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']), 'has no registered agent record');
   });
   scene('settings.not-set', async (place) => {
     write(place, TEAM);
@@ -3672,13 +3722,16 @@ function startEvent(id: string, seat: string, ts: string): Record<string, unknow
   };
 }
 
-async function sessionsRun(place: Place, argv: string[] = []): Promise<Ran> {
-  const io = testIo(place.root);
+// The client-key guard judges the caller, so a scene that reads a client's own grant pins the
+// owner: the scene reads the same run from a seat (under herdr) and from CI, never as whatever
+// the suite itself happens to run as.
+async function sessionsRun(place: Place, argv: string[] = [], caller?: Caller): Promise<Ran> {
+  const io = testIo(place.root, caller);
   return { code: await runSessions(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
 }
 
 scene('sessions.none', async (place) => show(await sessionsRun(place), '0 sessions'));
-scene('sessions.client-refused', async (place) => show(await sessionsRun(place, ['--client', 'missing-grant.json', '--key', 'missing.key']), 'no client grant can verify'));
+scene('sessions.client-refused', async (place) => show(await sessionsRun(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], owner), 'no client grant can verify'));
 scene('sessions.shown', async (place) => {
   const file = sessionsRegistry(place);
   mkdirSync(dirname(file), { recursive: true });
@@ -4988,7 +5041,7 @@ scene('messages.client-shown', async (place) => {
     plantClientRoot(place, world, CLIENT_ROOT);
     plantClientReply(place, world, CLIENT_ROOT, CLIENT_REPLY);
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], owner),
       'shown',
     );
   } finally {
@@ -5001,7 +5054,7 @@ scene('messages.client-none', async (place) => {
   try {
     messageKeyOf(world.home);
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], owner),
       'nothing is waiting',
     );
   } finally {
@@ -5011,10 +5064,11 @@ scene('messages.client-none', async (place) => {
 
 scene('messages.client-key', async (place) => {
   const world = clientWorld(place, { inbox: true });
+  const key = join(world.base, 'missing.key');
   try {
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
-      'team messages:',
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', key], owner),
+      `team messages: the key file "${key}" cannot be read`,
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });
@@ -5035,14 +5089,14 @@ scene('messages.client-pane', async (place) => {
 
 scene('messages.client-refused', async (place) => {
   return show(
-    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')]),
-    'team messages: refused:',
+    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')], owner),
+    'the owner signing key is absent or unreadable: no client grant can verify',
   );
 });
 
 scene('messages.client-usage', async (place) => {
   return show(
-    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0']),
+    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0'], owner),
     '--limit is a page bound',
   );
 });
@@ -5784,6 +5838,66 @@ scene('forget.approval-requested', async (place) => {
 });
 scene('forget.approval-refused', async (place) =>
   show(await forgetRun(place, ['abc123abc123', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id'));
+async function agentsRun(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runAgents(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+/** An agent record for `seat` under this place's team id, and the registry record that names the
+ *  team, so the record's team is one the registry holds. */
+function agentUnderTeam(place: Place, seat: string): void {
+  registerAgent(place.home, {
+    name: seat,
+    signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: teamIdOf(place.root), seat, session: 'acme', pane: null, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'stopped',
+    by: 'test',
+  });
+  upsertTeam(place.home, teamIdOf(place.root), { project: 'acme', session: 'acme', root: place.root, by: 'test' });
+}
+
+scene('agents.invocation', async (place) => show(await agentsRun(place, ['nope']), 'unknown subcommand "nope"'));
+scene('agents.registry', async (place) => {
+  mkdirSync(dirname(teamsFile(place.home)), { recursive: true });
+  writeFileSync(teamsFile(place.home), 'teams: [\n');
+  return show(await agentsRun(place, ['prune']), 'teams.yaml');
+});
+scene('agents.plan', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'lead');
+  return show(await agentsRun(place, ['prune']), 'none to retire');
+});
+scene('agents.stale', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune']), '1 record to retire');
+});
+scene('agents.retired', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune', '--apply']), '1 record retired');
+});
+scene('agents.incomplete', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  chmodSync(agentsDir(place.home), 0o555);
+  try {
+    return show(await agentsRun(place, ['prune', '--apply']), 'could not be retired');
+  } finally {
+    chmodSync(agentsDir(place.home), 0o755);
+  }
+});
+scene('agents.owner', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune', '--apply'], detachedCaller), 'only the owner runs this');
+});
 async function batchRun(place: Place, argv: string[], caller: Caller = owner, store?: ReturnType<typeof seatOwner>): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await runBatch(argv, io, { home: place.home, ...(store ? { ownerSeatStore: store } : {}) }), out: io.out, err: io.err };

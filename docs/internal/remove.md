@@ -28,11 +28,23 @@ so a seat herdr reports working, or one whose screen shows a running turn, is ne
 seat the profile reads as free is stopped and taken out as always, and a box holding exactly this
 CLI's exit text is cleared inside that stop. Every other seat, and the session, are left alone.
 
+A seat whose launch started a managed Codex endpoint is stopped through the process its state
+records, before the record that names it goes: the pid is signalled only after the same ownership
+proof `down` uses — the live process is the Codex binary, its command line carries this record's
+exact `app-server --listen <url>`, and its start instant sits in the window the record was written
+in — so a pid the OS reused is never signalled. That holds for a seat that exits when asked, one
+its owner abandons, and one herdr no longer lists. A stop that cannot prove the recorded process
+is never forced: the removal is refused, and the seat, its file entry and the record stay as they
+are. The record is cleared only after the stop succeeded, in the same state write that drops the
+seat.
+
 ## What it reads and writes
 
-Reads the team file, the session's state (`.agents/team.state.json`, for a temporary seat's record),
-herdr: whether the session runs, its agents, each pane's screen and status, and the pane's
-foreground processes, which is how it knows the CLI has really exited, and the approval store:
+Reads the team file, the session's state (`.agents/team.state.json`: a temporary seat's record,
+the seat's own record, and the managed endpoint it records under the presence binding the seat
+holds now), herdr: whether the session runs, its agents, each pane's screen and status, and the
+pane's foreground processes, which is how it knows the CLI has really exited, and the approval
+store:
 stopping a seat and editing the file are changes the owner approves first. Without an approval in
 force — never approved, a record from before records were signed, or one the verification refused —
 nothing is stopped and nothing is written, with the one-line repair every command prints.

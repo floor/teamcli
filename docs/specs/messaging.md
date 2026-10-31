@@ -131,12 +131,19 @@ nothing and writes nothing. Fields (`src/commands/messages.ts`):
 | `brief_epoch` | string | no | absent | 0.5.1 | the runtime epoch the reading process was started under |
 | `brief_seat_handle` | string | no | absent | 0.5.1 | the seat's `seat_` handle as the read copied it from the state |
 | `brief_pane_root_pid` | number | no | absent | 0.5.1 | the pane's root process as the read copied it from the state |
+| `writer` | object | no | absent | 0.5.4 | the signed writer provenance: `version` (the build that signed), `pid` (the signing process) and `epoch` (its runtime epoch, when it had one) — never the key's generation |
 
 A brief read's binding is all three of `brief_sha256`, `incarnation` and `brief_epoch`, or none:
 the receipt an `inbox_read` or a `team drops --read` writes for the general seat brief carries
 them, and no ordinary receipt does. The three must still be the claim's when the receipt is read —
 the epoch ties the receipt to the runtime process that wrote it, so a receipt an earlier process,
 an earlier text or an earlier delivery left does not count for the current claim.
+
+Every signed file — record, receipt, close — is authenticated over its complete payload exactly as
+it was parsed, before any field is projected or read. A field inserted, altered or removed after
+signing does not verify; a signed field this version does not read authenticates and is then
+refused as unsupported, never interpreted and never reported as a signature failure. A receipt
+without `writer` was written by an earlier build and is read exactly as it was.
 
 ### The route record
 
@@ -348,7 +355,12 @@ status read before Enter), or the transcript shows the drop being read — is a 
 reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a message read
 (`src/send/deliver.ts`). A line that left the box with no status, transcript or receipt evidence
 inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed send, and
-never a read. Only a signed read receipt makes a message `delivered (read)`. A seat
+never a read. The console line for a send that ends without a delivery carries the receiving
+seat's delivery class in plain words after the leg's own parenthetical — `woken through its event
+adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next turn
+(pull-only)`, or `queued; <seat> has no way to be woken while idle` — because `unconfirmed` is a
+fact about the receipt, not an answer to whether the seat will read the message. Only a signed
+read receipt makes a message `delivered (read)`. A seat
 whose CLI builds its own work item from its screens gets the drop file but the body typed
 through those screens; `delivered` there means the CLI printed the line that creates the item. A
 hold on the receiver's side — a message that reached

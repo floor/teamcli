@@ -38,7 +38,7 @@ test('the baseline stages are the seven the design note names, each with its man
 
 test('the workspace path is replaced in its plain, realpath and tilde forms, padded so rows keep their width', () => {
   const dir = scratch();
-  const home = '/Users/example';
+  const home = '/home/example';
   const plain = scrubCapture(`launch ${dir} now`, { workspaceDir: dir, homeDir: home });
   expect(plain).toContain('<workspace>');
   expect(plain).not.toContain(dir);
@@ -73,7 +73,7 @@ test('session ids, emails, the account and the plan are replaced without touchin
     'owner jane.doe@example.test on the Pro plan',
     'plain text stays: team.log and team/team',
   ].join('\n');
-  const scrubbed = scrubCapture(raw, { workspaceDir: '/nowhere', homeDir: '/Users/example', account: 'jane.doe@example.test', plan: 'Pro' });
+  const scrubbed = scrubCapture(raw, { workspaceDir: '/nowhere', homeDir: '/home/example', account: 'jane.doe@example.test', plan: 'Pro' });
   expect(scrubbed).not.toContain(session);
   expect(scrubbed).not.toContain('9a8b7c6d5e4f');
   expect(scrubbed).not.toContain('jane.doe@example.test');
@@ -87,11 +87,11 @@ test('session ids, emails, the account and the plan are replaced without touchin
 });
 
 test('the home folder itself is never written into a fixture', () => {
-  const scrubbed = scrubCapture('home is /Users/example and venv /Users/example/.venv', {
+  const scrubbed = scrubCapture('home is /home/example and venv /home/example/.venv', {
     workspaceDir: '/tmp/team-capture-x',
-    homeDir: '/Users/example',
+    homeDir: '/home/example',
   });
-  expect(scrubbed).not.toContain('/Users/example');
+  expect(scrubbed).not.toContain('/home/example');
   expect(scrubbed).toContain('<home>');
 });
 

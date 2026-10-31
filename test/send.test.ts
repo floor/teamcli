@@ -16,7 +16,8 @@ import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
 import { receiptPath } from '../src/mcp/inbox.ts';
-import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
+import { readPending } from '../src/send/pending.ts';
+import { signedRecordOf } from '../src/send/record.ts';
 import { dropMessage, readTriggerLine, sawSubmission, triggerLine, TRIGGER_MAX, type NativePane } from '../src/send/native.ts';
 import { FRAME_LIMIT, sendFrame, type SendOutcome } from '../src/send/uds.ts';
 import { readReply } from '../src/send/reply.ts';
@@ -213,7 +214,7 @@ describe('team send: the typed trigger', () => {
     expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
     // The trigger left the composer, and no signed read receipt came back: the send is
     // `sent (unconfirmed)`, never delivered.
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
     expect(host.frames).toEqual([]);
     expect(pane.typed.length).toBe(0);
     // The body's first line is the summary the typed line carries; the body itself stays in the drop.
@@ -252,7 +253,7 @@ describe('team send: the typed trigger', () => {
     const code = await runSend(['lead', 'a note'], io, fake(sockets, { native: scripted(['idle', 'working']) }));
 
     expect(code).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
       'from lead — admitted by: an orchestrator to another orchestrator\n\na note',
@@ -269,7 +270,7 @@ describe('team send: the typed trigger', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
       "from helper — admitted by: a seat to its own team's orchestrator\n\na note",
@@ -287,7 +288,7 @@ describe('team send: the typed trigger', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
       "from the file's seat helper (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\na note",
@@ -324,7 +325,7 @@ describe('team send: refused', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)\n');
     const drops = join(dir, 'send-drops', 'acme', 'native');
     expect(recordBody(join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string))).toBe(
       'from helper — admitted by: a seat to a declared seat of its own team\n\nhello',
@@ -424,7 +425,7 @@ describe('team send: refused', () => {
     // nothing is dialed or typed, and the run answers with the id the delivery keeps.
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out).toMatch(/lead: queued \(receiver busy\) \(drop, \d+ ms; id [0-9a-f-]+\)\n$/);
+    expect(io.out).toMatch(/lead: queued \(receiver busy\) \(drop, \d+ ms; id [0-9a-f-]+\); queued; lead reads it at its next turn \(pull-only\)\n$/);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const names = readdirSync(drops);
     // The record's own name is the bare id; the marker and the walk's own sidecars carry a
@@ -438,24 +439,47 @@ describe('team send: refused', () => {
 });
 
 describe('team send: unreachable', () => {
-  test('no pane messaging, nothing typed and the bus inbox keeps it; was: a session that cannot be read is unreachable', async () => {
-    const { root, sockets } = world();
+  test('a session that cannot be read still hands the send to the drop, and the history names the leg that could not take it', async () => {
+    const { root, dir, sockets } = world();
     const host = fake(sockets, { agents: () => null });
     const io = owner(root);
 
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    expect(recordBody(join(drops, records[0]!))).toBe('from the owner — admitted by: the owner\n\nhello');
+    const history = readHistory('acme', root, host.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]).toMatchObject({ to: 'lead', id: records[0], outcome: 'sent (unconfirmed)', via: 'drop' });
+      expect(history.entries[0]?.failed).toEqual([
+        "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
+        'mcp-inbox: no live inbox listener',
+      ]);
+    }
   });
 
-  test('no pane messaging, nothing typed and the bus inbox keeps it; was: no live agent of that name is unreachable', async () => {
-    const { root, sockets } = world();
+  test('no live agent of that name still hands the send to the drop, with the failure history', async () => {
+    const { root, dir, sockets } = world();
     const host = fake(sockets, { agents: () => [] });
     const io = owner(root);
 
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    const records = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(records).toHaveLength(1);
+    const history = readHistory('acme', root, host.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) expect(history.entries.map((entry) => entry.failed)).toEqual([
+      [
+        "typed: typing into a seat's pane is never a delivery: messages go through the bus and an event adapter",
+        'mcp-inbox: no live inbox listener',
+      ],
+    ]);
   });
 
   test('--wait never looks for a cross-session socket', async () => {
@@ -832,13 +856,27 @@ describe('team send: --json documents', () => {
     }
   });
 
-  test('no pane messaging, nothing typed and the bus inbox keeps it; was: an unreachable seat is a document too', async () => {
-    const { root, sockets } = world();
+  test('a seat with no readable session is a sent document too, naming the leg that skipped and the drop that took it', async () => {
+    const { root, dir, sockets } = world();
     const io = owner(root);
 
-    const retired = await runSend(['lead', 'hello', '--json'], io, fake(sockets, { agents: () => null }));
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
+    expect(await runSend(['lead', 'hello', '--json'], io, fake(sockets, { agents: () => null }))).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      status: string;
+      seat: string;
+      channel: string;
+      delivery: { leg: string; state: string; reason?: string }[];
+      ids: { sent: string; reply: string | null };
+    }>(io.out, SEND_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('sent (unconfirmed)');
+    expect(doc.seat).toBe('lead');
+    expect(doc.channel).toBe('drop');
+    expect(doc.delivery).toEqual([
+      { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+      { leg: 'drop', state: 'attempted' },
+    ]);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(readdirSync(drops).filter((name) => !name.includes('.'))).toEqual([doc.ids.sent]);
   });
 
   test('a sent send carries the drop file\'s id', async () => {
@@ -870,7 +908,7 @@ describe('team send: --json documents', () => {
       format: 1,
       dry_run: false,
       status: 'sent (unconfirmed)',
-      action_summary: 'lead: sent (unconfirmed) (drop, 0 ms)',
+      action_summary: 'lead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)',
       project: 'acme',
       session: 'acme',
       seat: 'lead',
@@ -920,7 +958,7 @@ function nativeHost(sockets: string, samples: string[]): { host: Fake; pane: Scr
 }
 
 describe('team send: native drop', () => {
-  test('no pane messaging, nothing typed and the bus inbox keeps it; was: a codex seat is delivered when herdr reports working, and the body is not typed', async () => {
+  test('a codex seat\'s send writes the 0700 folders and the 0600 record, and types nothing', async () => {
     const { root, dir, sockets } = world();
     const { host, pane } = nativeHost(sockets, ['idle', 'working']);
     const io = owner(root);
@@ -928,48 +966,67 @@ describe('team send: native drop', () => {
     const dropsRoot = join(dir, 'send-drops');
     const sessionDir = join(dropsRoot, 'acme');
     mkdirSync(sessionDir, { recursive: true });
+    // Folders a past run left looser than the state tree should be: the seal tightens them.
     chmodSync(dropsRoot, 0o755);
     chmodSync(sessionDir, 0o755);
 
-    const retired = await runSend(['native', body], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
+    const code = await runSend(['native', body], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)\n');
+    expect(host.frames).toEqual([]);
+    expect(pane.typed.length).toBe(0);
+    expect(pane.enters).toBe(0);
+    const drops = join(dir, 'send-drops', 'acme', 'native');
+    const files = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(files.length).toBe(1);
+    const path = join(drops, files[0] as string);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(statSync(dropsRoot).mode & 0o777).toBe(0o700);
+    expect(statSync(sessionDir).mode & 0o777).toBe(0o700);
+    expect(statSync(drops).mode & 0o777).toBe(0o700);
+    expect(recordBody(path)).toBe(`from the owner — admitted by: the owner\n\n${body}`);
+    const history = readHistory('acme', root, host.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.entries.map((entry) => ({ id: entry.id, outcome: entry.outcome, via: entry.via }))).toEqual([
+        { id: files[0] as string, outcome: 'sent (unconfirmed)', via: 'drop' },
+      ]);
+    }
+    const log = existsSync(join(dir, LOG_FILE)) ? readFileSync(join(dir, LOG_FILE), 'utf8') : '';
+    expect(log).not.toContain(body);
   });
 
-  test('no pane messaging, nothing typed and the bus inbox keeps it; was: a seat that writes its signed receipt is delivered (read): the receipt ends the window', async () => {
+  test('a drop send keeps its signed record and marker whole, and its history line never claims a read', async () => {
     const { root, dir, sockets } = world();
     const dropDir = join(dir, 'send-drops', 'acme', 'native');
-    // In an object, so the closure's write is a property write the compiler does not narrow away.
-    const written = { at: null as string | null };
     const pane = scripted(['idle', 'working']);
-    const enter = pane.pressEnter;
-    // The trigger is the seat's own `team drops --read`, whose first act is the signed receipt:
-    // a seat that runs it has read the message before the line even leaves the box. The status
-    // never has to move, because the receipt — not the status — is the read.
-    pane.pressEnter = () => {
-      const id = readdirSync(dropDir).find((entry) => !entry.includes('.'));
-      if (id === undefined) throw new Error(`no drop was written in ${dropDir}`);
-      const receipt = writeReceipt(dropDir, signReceiptPayload({
-        kind: 'receipt',
-        status: 'read',
-        id,
-        to: 'native',
-        root,
-        session: 'acme',
-        at: NOW.toISOString(),
-      }, host.home), host.home);
-      written.at = receipt.ok ? receipt.path : receipt.reason;
-      return enter('acme', 'w9:p1');
-    };
     const host = fake(sockets, {
       agents: () => [{ name: 'native', pane: 'w9:p1' }],
       native: pane,
     });
     const io = owner(root);
 
-    const retired = await runSend(['native', 'hello'], io, host);
-    expect(await retired).toBe(0);
-    expect(io.err).toContain('queued, no event adapter');
+    const code = await runSend(['native', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)\n');
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    const name = readdirSync(dropDir).find((entry) => !entry.includes('.')) as string;
+    // The file is a signed message record, not the raw body, and the body rides in its payload.
+    const parsed: unknown = JSON.parse(readFileSync(join(dropDir, name), 'utf8'));
+    expect(signedRecordOf(parsed)).not.toBeNull();
+    expect(recordBody(join(dropDir, name))).toBe('from the owner — admitted by: the owner\n\nhello');
+    // No receipt is written by the send: only the seat's own signed read receipt can turn this
+    // into `delivered (read)`, so the marker waits for the watcher and the history says sent.
+    expect(existsSync(receiptPath(dropDir, name))).toBe(false);
+    expect(readPending(dropDir).map((entry) => ({ id: entry.id, from: entry.from, to: entry.to, leg: entry.leg }))).toEqual([
+      { id: name, from: 'owner', to: 'native', leg: 'drop' },
+    ]);
+    const history = readHistory('acme', root, host.home);
+    expect(history.ok).toBe(true);
+    if (history.ok) expect(history.entries.map((entry) => entry.outcome)).toEqual(['sent (unconfirmed)']);
   });
 
   test('cursor, grok and antigravity take the same drop path', async () => {
@@ -1120,7 +1177,7 @@ describe('team send: native drop', () => {
     expect(plans.out).toBe('team acme, session "acme"\nnative: dry-run: codex via the seat\'s own MCP inbox, falling back to its native runtime queue, then a 0600 drop file, with nothing typed into the pane; nothing was written\n');
     const sent = owner(root);
     expect(await runSend(['native', 'hello'], sent, host)).toBe(0);
-    expect(sent.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(sent.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)\n');
     expect(existsSync(join(dir, 'send-drops'))).toBe(true);
   });
 
@@ -1182,7 +1239,7 @@ describe('team send: native drop', () => {
     const io = owner(root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   });
 });
 

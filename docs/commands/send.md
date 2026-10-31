@@ -27,7 +27,7 @@ The drop leg writes that same record and types nothing at all — no trigger lin
 frame, nothing read from a pane — so a receiver that watches its own drop folder finds the
 message there. When no inbox listener serves the seat, the default order walks it after
 `mcp-inbox`; it is chosen alone with `delivery_order: [drop]`, and a human's seat always walks
-it alone. Its console line is `<seat>: sent (unconfirmed) (drop, <n> ms)`, exit 0, with
+it alone. Its console line is `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>`, exit 0, with
 `via: drop` on the history line: the record is the message, safely on disk, and no receipt has
 come back yet. Beside the record the send leaves the marker `<id>.pending`, which says the drop
 leg left it. The seat's own watcher reads it: at turn start its hook runs `team drops --read`,
@@ -41,7 +41,7 @@ called lost.
 When another command holds the seat's lock, the send is queued rather than refused: the reachable
 legs — `mcp-inbox`, `typed` and `drop` — write the signed record and its `<id>.pending` marker
 without that lock, type nothing and dial nothing, and answer
-`<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>)`, exit 0. The id on that line is the id
+`<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>); <delivery>`, exit 0. The id on that line is the id
 the delivery keeps, and the marker is the one the watch already delivers — the typed retry for a
 typed marker, the inbox window's fallback for an `mcp-inbox` one, and the seat's own watcher read
 for the `drop` leg's — so the queue ends in the retry's or the watcher's own word, with its own
@@ -429,7 +429,7 @@ no caller check.
 | an orchestrator | an orchestrator of its own team or entity |
 | a team's orchestrator or operator | any seat of its own team |
 | a seat whose line writes `role: operator` | another such seat of its own team |
-| an assistant seat | its entity's main coordinator |
+| an assistant seat | its entity's lead coordinator |
 | any seat | its own team's orchestrator |
 | a caller an owner-signed grant names for `send` | what the grant names |
 
@@ -607,22 +607,38 @@ Every run that reads a team file opens on stdout with one context line,
 `team <project>, session "<session>"`, before the outcome line or table; a refused run prints its
 line on stderr and has none.
 
+A line that ends without a delivery — `sent (channel)`, every `sent (unconfirmed)`,
+`queued (receiver busy)` — carries the receiving seat's delivery class in plain words after the
+leg's own parenthetical, so `unconfirmed` is never the whole answer to whether the seat will read
+the message:
+
+```
+woken through its event adapter                        an event adapter wakes the seat
+woken through its runtime queue                        the runtime holds the message between turns
+queued; <seat> reads it at its next turn (pull-only)   the seat reads its inbox when it takes a turn
+queued; <seat> has no way to be woken while idle       a person, or a launch with no route at all
+```
+
+`<delivery>` below stands for one of those four sentences. It is read from the seat's launch as
+the send runs — the watched endpoint, the channel, the socket accept, the watcher — and a
+delivered line has none, because the delivery itself is the answer.
+
 | Outcome | Exit | Printed |
 | --- | --- | --- |
 | delivered | 0 | `<seat>: delivered` on stdout, or `<seat>: delivered (native, <n> ms)` when a `--confirm` run finds the handoff's nonce in the recipient's transcript |
 | delivered (read) | 0 | `<seat>: delivered (read)` on stdout, for a signed read receipt — the mcp-inbox leg's, the channel's ack, the typed leg's own `team drops --read`, or the drop leg's watcher read: the seat read the message, which is not a claim that it acted on it |
-| sent (channel) | 0 | `<seat>: sent (channel) (<n> ms)` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
-| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms)` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
-| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms)` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
-| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (typed, <n> ms; trigger taken, no read receipt yet)` on stdout, for the typed leg: the trigger line left the seat's input box, and no signed receipt has come back, so the message is not called read |
-| queued (receiver busy) | 0 | `<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>)` on stdout, when another command holds the seat's lock: the leg named on the line wrote the signed record and its marker without typing, and the delivery follows when the seat is free — the id is the one it keeps |
+| sent (channel) | 0 | `<seat>: sent (channel) (<n> ms); <delivery>` on stdout, for the channel leg: the seat's own inbox server wrote the push notification and its `<id>.channel-push.json` marker, and the record's pending marker waits for the seat's signed receipt; the client acknowledges nothing at the transport, so this line is never a read |
+| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (mcp-inbox, <n> ms); <delivery>` on stdout, for the mcp-inbox leg: the message is the signed 0600 record in the seat's inbox, no receipt came back inside the grace, and nothing was typed |
+| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (drop, <n> ms); <delivery>` on stdout, for the drop leg: the message is the signed 0600 record and its `<id>.pending` marker in the seat's drop folder, no receipt has come back yet, and nothing was typed; the seat's own read promotes it to `delivered (read)` later |
+| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (typed, <n> ms; trigger taken, no read receipt yet); <delivery>` on stdout, for the typed leg: the trigger line left the seat's input box, and no signed receipt has come back, so the message is not called read |
+| queued (receiver busy) | 0 | `<seat>: queued (receiver busy) (<leg>, <n> ms; id <id>); <delivery>` on stdout, when another command holds the seat's lock: the leg named on the line wrote the signed record and its marker without typing, and the delivery follows when the seat is free — the id is the one it keeps |
 | answered | 0 | `<seat>: answered` and the reply on stdout |
 | held | 1 | `team send: <seat>: held: <reason>` on stderr, or `held (socket)` when the socket's frame is what the dialog keeps |
 | not-submitted | 1 | `team send: <seat>: not-submitted: <reason>` on stderr, naming what the box holds |
 | listed | 0 | a `SEAT  NICKNAME  ROLE  PROJECT  REACH` table, one row per seat, then `<n> seat` or `<n> seats` on stdout; `NICKNAME` is `-` without one, `@<nickname>` for the file's own seats and `<nickname>@<team>` for another team's, the word a seat signed standing where the file's word does, and a seat of another team of the same entity reads `<seat>@<team>` in `SEAT` |
 | recorded | 0 | `<seat>: recorded (native, <n> ms)` on stdout, for a `--record` run |
 | native | 0 | `<seat>: native: nothing was sent; make the call with your own SendMessage, then record it`, then the `to:` target, the body and the `team send --confirm <id>` line, on stdout, for a handoff |
-| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (native, <n> ms)` on stdout, when `--confirm` runs before the recipient's transcript shows the handoff's nonce |
+| sent (unconfirmed) | 0 | `<seat>: sent (unconfirmed) (native, <n> ms); <delivery>` on stdout, when `--confirm` runs before the recipient's transcript shows the handoff's nonce; the class is read from the seat's recorded launch, so a handoff confirmed after that launch went away still says how the seat would be woken now |
 | timeout | 1 | `team send: <seat>: timeout: sent, no reply on the thread within <s>s; the thread stays open` on stderr |
 | unreachable | 1 | `team send: <seat>: unreachable: <reason>` on stderr |
 | refused | 1 | `team send: refused: <reason>` on stderr |
@@ -807,7 +823,7 @@ read receipt yet`.
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
 team send: claude-keeper: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (drop, 0 ms)
+claude-keeper: sent (unconfirmed) (drop, 0 ms); queued; claude-keeper reads it at its next turn (pull-only)
 exit 0
 ```
 
@@ -819,7 +835,7 @@ like any other:
 $ team send operator-b "the handover is ready" ; echo "exit $?"
 team send: operator-b: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (drop, 0 ms)
+operator-b: sent (unconfirmed) (drop, 0 ms); queued; operator-b reads it at its next turn (pull-only)
 exit 0
 ```
 
@@ -995,7 +1011,7 @@ the receipt it writes is what the watch promotes:
 $ team send gpt-reviewer "hello" ; echo "exit $?"
 team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (drop, 0 ms)
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms); queued; gpt-reviewer reads it at its next turn (pull-only)
 exit 0
 ```
 

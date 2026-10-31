@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { paneProcesses, workspaceList, workspacePanes, type PaneProcesses } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { isWatchEpoch } from './epoch.ts';
@@ -95,6 +99,200 @@ export function watchIdentity(
   return { kind: 'unproven', why: `pid ${watch.pid} is not the process in its recorded pane ${watch.pane}` };
 }
 
+/** How much later than its record the watch process may have started. The record's instant is
+ *  captured when the watch reaches its loop, after the process is up, so the process always
+ *  starts first; the slack is the start line's own one-second resolution. */
+export const WATCH_START_SKEW_MS = 2_000;
+/** How much earlier than its record the watch process may have started: the CLI's start-up
+ *  before the loop captures the instant. */
+export const WATCH_START_WINDOW_MS = 120_000;
+
+/** The words of a shell-quoted command line, split the way the shell that ran it would split
+ *  them. The watch's own command is built with `shellQuote`; its entry and any session name can
+ *  carry spaces, so matching on the raw line would miss its own watch. */
+function shellWords(line: string): string[] {
+  const words: string[] = [];
+  let word = '';
+  let inWord = false;
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]!;
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      else word += char;
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"') quote = null;
+      else if (char === '\\' && ['"', '\\', '$', '`'].includes(line[i + 1] ?? '')) word += line[++i]!;
+      else word += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      inWord = true;
+    } else if (char === '\\' && i + 1 < line.length) {
+      word += line[++i]!;
+      inWord = true;
+    } else if (char === ' ' || char === '\t') {
+      if (inWord) {
+        words.push(word);
+        word = '';
+        inWord = false;
+      }
+    } else {
+      word += char;
+      inWord = true;
+    }
+  }
+  if (inWord) words.push(word);
+  return words;
+}
+
+/** The CLI entries this install runs as, each resolved to its real path: the script this process
+ *  loaded (`process.argv[1]`), and the CLI entry beside this module in the same install
+ *  (`src/cli.ts`, or `dist/cli.js` in a built install). A path that does not resolve is left out:
+ *  it names no entry this install runs as. */
+export function installCliEntries(): string[] {
+  const here = fileURLToPath(import.meta.url);
+  const beside = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  const entries: string[] = [];
+  for (const candidate of [process.argv[1], beside]) {
+    if (typeof candidate !== 'string' || candidate === '') continue;
+    try {
+      const real = realpathSync(candidate);
+      if (!entries.includes(real)) entries.push(real);
+    } catch {
+      // No file there (or no path at all): not an entry this install runs as.
+    }
+  }
+  return entries;
+}
+
+/** Where a command line names this CLI, if the shape could: the installed executable (or a CLI
+ *  entry script) at position 0 with `watch` next, or a node/bun runtime with the entry exactly at
+ *  position 1 and `watch` at position 2. The position is fixed before the word is resolved, so a
+ *  watch word inside another program's arguments never becomes the entry. */
+function entryPosition(words: readonly string[]): { entryAt: number; watchAt: number } | null {
+  const first = words[0];
+  if (first === undefined) return null;
+  const name = basename(first);
+  if (name === 'team' || name === 'cli.ts' || name === 'cli.js') return { entryAt: 0, watchAt: 1 };
+  if (name === 'node' || name === 'bun') return { entryAt: 1, watchAt: 2 };
+  return null;
+}
+
+/** Whether a live process's command line is this session's `team watch`. The entry is proved, not
+ *  searched for: its position is fixed (`entryPosition`), and its real path must be one of this
+ *  install's own CLI entries (`installCliEntries`) — a different install's `cli.js`, or an entry
+ *  named later in some other program's arguments, is that other program, not this team's watch.
+ *  The next word is `watch`, and the session is named by `--session` — absent only for the
+ *  `default` session. */
+export function watchCommandLine(
+  command: string,
+  session: string,
+  entries: readonly string[] = installCliEntries(),
+): boolean {
+  const words = shellWords(command);
+  const place = entryPosition(words);
+  if (place === null) return false;
+  let entry: string;
+  try {
+    entry = realpathSync(words[place.entryAt]!);
+  } catch {
+    return false;
+  }
+  if (!entries.includes(entry)) return false;
+  if (words[place.watchAt] !== 'watch') return false;
+  let named: string | undefined;
+  for (let i = place.watchAt + 1; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === '--session') {
+      named = words[++i];
+    } else if (word.startsWith('--session=')) {
+      named = word.slice('--session='.length);
+    }
+  }
+  return named === undefined ? session === 'default' : named === session;
+}
+
+/** The command line of the process at `pid`, or null when it is gone or cannot be read. */
+export function processCommandOf(pid: number): string | null {
+  try {
+    const line = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return line === '' ? null : line;
+  } catch {
+    return null;
+  }
+}
+
+/** The instant the process at `pid` started, in epoch milliseconds, or null when it is gone or
+ *  its start line does not read. Measured on this machine: `ps -o lstart= -p <pid>` prints
+ *  `Tue Oct 20 05:19:15 2026` (one-second resolution, local time), which `Date.parse` reads as
+ *  that instant. */
+export function processStartOf(pid: number): number | null {
+  try {
+    const line = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const at = Date.parse(line);
+    return Number.isFinite(at) ? at : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What `team down` may do with the watch the state records. A record with a pane is `up`'s to
+ *  verify, a record fenced by the session's epoch is the session host's own process, and a pid
+ *  that is no longer alive has nothing to stop: all three are `nothing`. A pane-less, live pid is
+ *  `proven` only under the full ownership proof: the live process's command line proves this
+ *  install's own CLI entry running this team's `team watch` for this session, and its start
+ *  instant matches the one the watch recorded. A pid alone is never proof — the OS can hand it
+ *  to an unrelated process after the watch exited — so anything less is `unproven` and is never
+ *  signalled. */
+export type WatchStopRead =
+  | { kind: 'nothing' }
+  | { kind: 'proven'; pid: number }
+  | { kind: 'unproven'; pid: number; why: string };
+
+export function watchStopRead(
+  watch: { pid?: number; pane?: string; epoch?: string; started_at?: string } | undefined,
+  session: string,
+  proof: {
+    alive(pid: number): boolean;
+    commandOf(pid: number): string | null;
+    startOf(pid: number): number | null;
+  },
+): WatchStopRead {
+  if (watch === undefined || watch.pid === undefined || watch.pane !== undefined) return { kind: 'nothing' };
+  if (isWatchEpoch(watch.epoch)) return { kind: 'nothing' };
+  const pid = watch.pid;
+  if (!proof.alive(pid)) return { kind: 'nothing' };
+  const command = proof.commandOf(pid);
+  if (command === null) {
+    return { kind: 'unproven', pid, why: `pid ${pid}'s command line cannot be read` };
+  }
+  if (!watchCommandLine(command, session)) {
+    return { kind: 'unproven', pid, why: `pid ${pid} is not running this team's watch for session ${session}` };
+  }
+  if (watch.started_at === undefined) {
+    return { kind: 'unproven', pid, why: `pid ${pid} has no recorded start instant to match` };
+  }
+  const recordedAt = Date.parse(watch.started_at);
+  const started = proof.startOf(pid);
+  if (!Number.isFinite(recordedAt) || started === null) {
+    return { kind: 'unproven', pid, why: `pid ${pid}'s start instant cannot be read` };
+  }
+  if (started > recordedAt + WATCH_START_SKEW_MS || started < recordedAt - WATCH_START_WINDOW_MS) {
+    return { kind: 'unproven', pid, why: `pid ${pid} started at a time its record does not match` };
+  }
+  return { kind: 'proven', pid };
+}
+
 /** The hand-over guard's question: whether a recorded watch still holds its pane. It stays
  *  deliberate about a pid — a live process counts even when its heartbeat is old, because another
  *  `team watch` must not hand over to a pane that is still writing there. `paneWatchHealth` is
@@ -161,13 +359,19 @@ export function placedWatch(
  *  already recorded, and writes none for a watch that has not seen itself in one. A pane beat
  *  carries no epoch, so it leaves any record holding a well-formed epoch untouched — the same
  *  pid included: only `renewWatchAuthority` with the captured epoch and pid writes a fenced
- *  heartbeat. An ordinary epochless pane record beats as before. */
+ *  heartbeat. An ordinary epochless pane record beats as before.
+ *
+ *  `startedAt` is the instant the watch process captured when it reached its loop. It is written
+ *  as `started_at` for the pid that owns the record — once: a later beat of the same pid keeps
+ *  the first instant, so the record always names when that process started. `down` proves a
+ *  pane-less record by it and by the process's command line before it signals anything. */
 export function beatWatch(
   dir: string,
   session: string,
   pid: number,
   heartbeat: string,
   place: WatchPlace | 'keep',
+  startedAt?: string,
 ): void {
   updateState(dir, (state) => {
     const record = (state.sessions[session] ??= emptySession());
@@ -181,9 +385,13 @@ export function beatWatch(
         ? { pane: prior.pane, ...(prior.workspace ? { workspace: prior.workspace } : {}) }
         : undefined)
       : place;
+    const started = prior !== undefined && prior.pid === pid && prior.started_at !== undefined
+      ? prior.started_at
+      : startedAt;
     record.watch = {
       pid,
       heartbeat,
+      ...(started !== undefined ? { started_at: started } : {}),
       ...(kept?.pane ? { pane: kept.pane } : {}),
       ...(kept?.workspace ? { workspace: kept.workspace } : {}),
     };

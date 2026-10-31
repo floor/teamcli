@@ -13,7 +13,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, reportDisplayAgent, sendKey as herdrSendKey, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
@@ -24,8 +24,9 @@ import type { Live } from '../status/compare.ts';
 import { readMachine, readingsText } from '../watch/machine.ts';
 import type { Machine } from '../watch/machine.ts';
 import { beatWatch, ownWatchPane, placedWatch, watchLabel, watchRunning } from '../watch/pane.ts';
+import { watchPushWork } from '../watch/direct-send.ts';
 import { watchCommand, watchWouldRead } from './up.ts';
-import { realHost, redeliverChannelOnSocket, sendDirect } from './send.ts';
+import { realHost, redeliverChannelOnSocket } from './send.ts';
 import { notify } from '../watch/notify.ts';
 import { dropMessage, readTriggerLine, triggerLine } from '../send/native.ts';
 import { listUnacked, listUnackedMessages } from './messages.ts';
@@ -39,7 +40,7 @@ import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
-import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
+import { dispatchIdleWork, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
 import { nativeHeldSeats } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';
@@ -252,23 +253,6 @@ async function prefetchBrokerWork(
   }
 }
 
-/** The streams a direct dispatch writes through: the watch process's own, with an optional copy
- *  of what it said on stderr, so a refusal that names no route still reaches the dispatcher. */
-function watchIo(onStderr?: (text: string) => void): Io {
-  return {
-    stdout: (text) => void process.stdout.write(text),
-    stderr: (text) => {
-      onStderr?.(text);
-      void process.stderr.write(text);
-    },
-    cwd: process.cwd(),
-    env: process.env,
-    stdinIsTTY: Boolean(process.stdin.isTTY),
-    stdoutIsTTY: Boolean(process.stdout.isTTY),
-    stderrIsTTY: Boolean(process.stderr.isTTY),
-  };
-}
-
 export const realWatchSources: WatchSources = {
   // The status live read, handed no state: the watch compares each live pane's process with its
   // seat's record itself, through `processes` below — only `status` needs the panes the state
@@ -312,14 +296,11 @@ export const realWatchSources: WatchSources = {
   busSubscribe: (root, cursor) => subscribeBusOnce(root, { seat: 'owner', cursor }, { deadlineMs: 500 }),
   busPublish: (root, event) => publishToBus(root, event, { deadlineMs: 500 }),
   statusSource: herdrStatusSource(),
-  pushWork: async (request) => {
-    // The send runs in this process, through the same admission, delivery order and route rules
-    // an ordinary send runs; only routes that reach a live receiver without a keystroke are
-    // walked. What the dispatcher reads back is that route's own ending, never an exit code.
-    const said: string[] = [];
-    const run = await sendDirect(watchIo((text) => said.push(text)), realHost, request);
-    return workPushResultOf(run.result, said.join(''));
-  },
+  // The direct-work route: this process holds no verified watch authority (a hand-started watch
+  // records no epoch), so the wake is held with a refusal and no transport is attempted. The
+  // hosted watch wires its own verified sender over `sendWatchDirect`; an infrastructure pane is
+  // never used as the sender, and no placement, grant or registration stands in for the watch.
+  pushWork: watchPushWork(null),
 };
 
 /**
@@ -414,6 +395,11 @@ async function admittedWatchdog(
 const READINGS_EVERY = 600;
 
 export async function runWatch(argv: string[], io: Io, sources: WatchSources): Promise<number> {
+  // The instant this process reached its loop, recorded once on the first beat the record takes:
+  // `down` stops a pane-less watch only when the live process's command line and start instant
+  // prove it is this watch. Captured before any read, so it is this process's start, not the
+  // first pass's.
+  const watchStartedAt = sources.now().toISOString();
   // Raw argv, before the parser: `--json` is not a flag this daemon takes, and its refusal
   // must still answer with the structured error document when the flag is present.
   const json = hasJsonFlag(argv);
@@ -1287,7 +1273,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           break;
         }
         paneGoneOnce = place === 'end';
-        beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place);
+        beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place, watchStartedAt);
       }
       // The label sweep, inside the wait: a running seat's own status line reaches line 2 in
       // about five seconds, not a whole interval. It repeats the pass's own rule on the panes

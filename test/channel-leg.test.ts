@@ -280,7 +280,7 @@ describe('the channel leg', () => {
 
     expect(code).toBe(0);
     expect(io.err).toBe('');
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms)\n`);
+    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (channel) (0 ms); woken through its event adapter\n`);
     // Nothing was typed and no pane was read: the push is the delivery.
     expect(one.typed).toEqual([]);
     expect(one.enters).toEqual([]);
@@ -361,7 +361,7 @@ describe('the channel leg', () => {
     const code = await runSend(['lead', TRIGGER], io, host);
 
     expect(code).toBe(0);
-    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (mcp-inbox, 0 ms)\n`);
+    expect(io.out).toBe(`team acme, session "acme"\nlead: sent (unconfirmed) (mcp-inbox, 0 ms); woken through its event adapter\n`);
     expect(io.out).not.toContain('sent (channel)');
     expect(existsSync(channelPushPath(dir, SEND_ID))).toBe(false);
     expect(one.typed).toEqual([]);
@@ -396,8 +396,44 @@ describe('the channel redelivery', () => {
     const early = sceneOf(made, box, new Date(NOW.getTime() + CHANNEL_CONFIRM_MS - 1_000), said);
 
     // Before the window ends the push still belongs to the seat's own client: nothing is typed.
-    const retired = await retryHeldDrops(early);
-    await retired;
+    await retryHeldDrops(early);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([
+      { id: REDELIVER_ID, from: 'owner', to: 'lead', body: BODY, ts: NOW.toISOString(), tries: 0, leg: 'channel', thread: REDELIVER_ID },
+    ]);
+    expect(entries(made)).toEqual([]);
+
+    const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
+    const scene = sceneOf(made, box, due, said);
+    await retryHeldDrops(scene);
+    // The redelivery is recorded once, and it types nothing: no socket wake is configured and
+    // the retry never writes into a pane. The marker carries the reason and there is no history
+    // line — the send is neither confirmed nor given up on.
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([
+      {
+        id: REDELIVER_ID,
+        from: 'owner',
+        to: 'lead',
+        body: BODY,
+        ts: NOW.toISOString(),
+        tries: 0,
+        leg: 'channel',
+        thread: REDELIVER_ID,
+        redelivered: CHANNEL_UNCONFIRMED,
+      },
+    ]);
+    expect(entries(made)).toEqual([]);
+    expect(said).toEqual([]);
+
+    // The one redelivery is spent: a later pass types nothing, even though the send was never
+    // confirmed as read.
+    const later = sceneOf(made, box, new Date(due.getTime() + CHANNEL_CONFIRM_MS), said);
+    await retryHeldDrops(later);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
   });
 
   test('a redelivery the box cannot take stays marked once, and a later ack settles it without typing', async () => {
@@ -614,8 +650,30 @@ describe('the channel redelivery', () => {
       socketRedeliver: async () => ({ ok: false, reason: 'the receiving seat does not declare crossSessionInbound accept' }),
     });
 
-    const retired = await retryHeldDrops(scene);
-    await retired;
+    await retryHeldDrops(scene);
+
+    // The socket's refusal is the one word the watch gives, and the fallback types nothing:
+    // the box is untouched, the marker keeps the reason the channel is unconfirmed, and no
+    // history line claims either delivery or a retry.
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
+    expect(readPending(dir)).toEqual([
+      {
+        id: SOCKET_ID,
+        from: 'owner',
+        to: 'lead',
+        body: BODY,
+        ts: NOW.toISOString(),
+        tries: 0,
+        leg: 'channel',
+        thread: SOCKET_ID,
+        redelivered: CHANNEL_UNCONFIRMED,
+      },
+    ]);
+    expect(entries(made)).toEqual([]);
+    expect(said).toEqual([
+      'lead: a channel send from owner was not confirmed; the socket was not taken (the receiving seat does not declare crossSessionInbound accept); the message waits in the bus inbox',
+    ]);
   });
 });
 

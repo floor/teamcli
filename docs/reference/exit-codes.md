@@ -73,6 +73,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
 | `add.temporary-flags` | `add` | 2 | --until and --worktree need --temporary | `team add worker --until result:out.md` |
 | `add.temporary-unexpected` | `add` | 2 | an unexpected argument was passed to --temporary | `team add extra --temporary` |
+| `agents.plan` | `agents` | 0 | the dry run found no record to retire | `team agents prune` |
+| `agents.retired` | `agents` | 0 | every listed record that needed retiring was retired | `team agents prune --apply` |
+| `agents.incomplete` | `agents` | 1 | --apply left a record unretired because it could not be written | `team agents prune --apply` |
+| `agents.owner` | `agents` | 1 | --apply was aimed by a caller who is not the owner | `team agents prune --apply` |
+| `agents.registry` | `agents` | 1 | the team registry cannot be read | `team agents prune` |
+| `agents.stale` | `agents` | 1 | the dry run found records to retire | `team agents prune` |
+| `agents.invocation` | `agents` | 2 | the invocation cannot be read | `team agents prune --nope` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
 | `answer.ambiguous` | `answer` | 1 | herdr lists more than one agent of this name | `team answer lead trust` |
@@ -120,8 +127,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `batch.invocation` | `batch` | 2 | the invocation can't be read | `team batch` |
 | `brief.current` | `brief` | 0 | --apply left every live or human seat current; the read is not demanded here | `team brief rollout --apply` |
 | `brief.plan` | `brief` | 0 | the dry run found every live or human seat current, and wrote nothing | `team brief rollout` |
+| `brief.prune-applied` | `brief` | 0 | prune's --apply removed every launch-brief retry marker it listed | `team brief prune --apply` |
+| `brief.prune-clean` | `brief` | 0 | prune's dry run found no launch-brief retry marker to retire | `team brief prune` |
 | `brief.file-owner` | `brief` | 1 | --file is the owner's | `team brief rollout --file .agents/team.yaml` |
 | `brief.incomplete` | `brief` | 1 | --apply left a seat stale or failed | `team brief rollout --apply` |
+| `brief.prune-due` | `brief` | 1 | prune's dry run listed launch-brief retry markers to retire | `team brief prune` |
+| `brief.prune-incomplete` | `brief` | 1 | prune's --apply left a launch-brief retry marker unremoved | `team brief prune --apply` |
+| `brief.prune-refused` | `brief` | 1 | the caller is not a seat of this team on the pane the state records for it, the drop folder is not a real folder, or the seat's current brief claim can't be read or changed while the run read its markers | `team brief prune` |
 | `brief.session-owner` | `brief` | 1 | --session is the owner's | `team brief rollout --session other` |
 | `brief.stale` | `brief` | 1 | the dry run found a live or human seat that needs delivery | `team brief rollout` |
 | `brief.file` | `brief` | 2 | the team file can't be read | `team brief rollout` |

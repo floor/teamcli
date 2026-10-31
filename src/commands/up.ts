@@ -58,7 +58,8 @@ import {
   type SessionState,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import type { Host } from '../launch/execute.ts';
+import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
+import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
@@ -179,7 +180,7 @@ export type Launch = {
    *  process. */
   codexEndpoint?: {
     managed(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
-    stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+    stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
@@ -237,6 +238,39 @@ function sameFile(a: string, b: string): boolean {
 export function watchWouldRead(start: string, flagged: string, home?: string): boolean {
   const found = readTeamConfig(start, home ? { home } : {});
   return found.ok && sameFile(found.path, flagged);
+}
+
+/** Whether a pane holds no live process: its foreground list is empty or holds only the pane's
+ *  own shell. Null when the pane cannot be read, which is not proof of an idle pane. */
+function paneHoldsNoProcess(info: PaneProcesses | null): boolean | null {
+  if (info === null) return null;
+  return info.foreground.every((pid) => pid === info.shell);
+}
+
+/**
+ * The legacy watch workspaces this run may close: a workspace labelled as this team's watch
+ * whose every pane is readable and holds no live process. A workspace with a process is left
+ * alone — the pane-to-daemon hand-over is what stops a pane watch, and this run never closes a
+ * pane something is running in. A workspace whose panes cannot be read is left alone too.
+ */
+export function closableLegacyWatchWorkspaces(input: {
+  label: string;
+  workspaces(): HerdrWorkspace[] | null;
+  panes(workspace: string): string[] | null;
+  processInfo(pane: string): PaneProcesses | null;
+}): string[] {
+  const spaces = input.workspaces();
+  if (spaces === null) return [];
+  const closable: string[] = [];
+  for (const space of spaces) {
+    if (space.label !== input.label) continue;
+    const panes = input.panes(space.id);
+    if (panes === null) continue;
+    if (panes.every((pane) => paneHoldsNoProcess(input.processInfo(pane)) === true)) {
+      closable.push(space.id);
+    }
+  }
+  return closable;
 }
 
 /** The watchdog command, from this process and this install: `team` may not be on the PATH. */
@@ -1880,6 +1914,19 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
   });
 
+  /** The legacy watch workspaces this run closes, or would close on a dry run: only when the
+   *  daemon's hosted watch owns this route. A pane watch still holding a workspace keeps it. */
+  const legacyWatchWorkspaces = (launch: Launch): string[] => sitting.kind !== 'hosted'
+    ? []
+    : closableLegacyWatchWorkspaces({
+        label: watchLabel(team.project),
+        workspaces: () => sources.workspaces?.(session) ?? null,
+        panes: (workspace) => launch.workspacePanes?.(session, workspace) ?? null,
+        processInfo: (pane) => launch.processInfo?.(session, pane) ?? null,
+      });
+  const legacyCount = (count: number): string =>
+    `${String(count)} legacy watch workspace${count === 1 ? '' : 's'}`;
+
   // A dry run only reports a CLI whose trust record is unknown. The real run writes
   // the records below, after the lobby exists.
   const stampLobbyTrust = (write: boolean) => {
@@ -1954,6 +2001,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // nothing in the file changes it, the owner's run does. So the dry run names that command.
       if (said.includes(placementRefusal(caller))) {
         out.stdout(`! to unblock: ${plainText(unblockingUpRun(args.values))}\n`);
+      }
+      if (sources.launch !== undefined) {
+        const legacy = legacyWatchWorkspaces(sources.launch);
+        if (legacy.length > 0) {
+          out.stdout(
+            `watch: the machine daemon hosts this route's watch; ${legacyCount(legacy.length)} with no live process would be closed\n`,
+          );
+        }
       }
       out.stdout(plainText(formatPlan(buildPlan())));
     }
@@ -2107,6 +2162,23 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
     stampGrantedTrust();
+    // The daemon's hosted watch owns this route: every legacy `Watch · <team>` workspace with
+    // no live process is closed before this run plans anything, so activation leaves no second
+    // watch's pane behind. A workspace a process still holds is left for the hand-over.
+    const legacy = legacyWatchWorkspaces(launch);
+    if (legacy.length > 0) {
+      const closed = legacy.filter((workspace) => launch.closeWorkspace(session, workspace));
+      if (closed.length > 0) {
+        const said = `closed ${legacyCount(closed.length)} with no live process`;
+        logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+        stderrLine(`team up: ${said}\n`);
+      }
+      if (closed.length < legacy.length) {
+        const said = `${legacyCount(legacy.length - closed.length)} with no live process did not close`;
+        logLine(dir, 'up', callerLabel(caller), said, sources.now?.() ?? new Date());
+        stderrLine(`team up: ${said}\n`);
+      }
+    }
     // The general seat brief goes first: one signed drop in the folder of every seat this plan
     // launches or relaunches, and of every declared seat the session records no launch of that
     // does not already hold a ready claim for this brief. A seat the state records as already
@@ -2252,7 +2324,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         };
       });
     };
-    const host: Host = {
+    const host = endpointCleanupHost({
       startServer: launch.startServer,
       sessionUp: launch.sessionUp,
       createWorkspace: launch.createWorkspace,
@@ -2566,7 +2638,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         });
       },
       seatLock: (name) => acquireSeatLock(dir, session, name),
-    };
+    });
 
     // §2: the owner's terminal. Only a run that may prompt builds a reader, and a read only
     // happens from the pause's own key(): a caller whose stdin is not a terminal never gets here
@@ -2609,10 +2681,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       drop: () => host.drop(input.seat),
       screen: () => {
         const kind = readScreen(seatCli(input.seat), launch.paneText(session, input.pane) ?? undefined).kind;
-        if (kind === 'idle' || kind === 'working') return kind;
+        if (kind === 'working') return kind;
+        const cliSeen = reportedLiveAgent(launch.foreground(session, input.pane), profileFor(seatCli(input.seat))?.processNames ?? []);
+        const back = launch.shellBack?.(session, input.pane) ?? null;
+        if (kind === 'idle') return back !== true && cliSeen ? 'idle' : 'timeout';
         if (
           kind === 'unknown'
-          && (launch.shellBack?.(session, input.pane) ?? null) !== true
+          && back !== true && cliSeen
           && unreadIdle(launch.agentStatus?.(session, input.pane) ?? null)
         ) {
           return 'idle';

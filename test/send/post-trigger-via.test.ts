@@ -1,10 +1,12 @@
-// The typed path's post-trigger outcomes: a pane that already holds an unsent draft (`held`) or a
-// screen the classifier reads as a dialog (`unreachable`) records the path the send took —
-// `via: 'typed'`, the same field the daemon's own handler writes at those points. Fixtures only:
-// a fake seat and a scripted pane; no live session is touched.
+// The post-trigger outcomes, after 0.5.9: a pane that already holds an unsent draft, or a screen
+// the classifier reads as a dialog, is left exactly as it is — nothing is typed into a seat — and
+// the send's history names the bus drop that carried it, with the typed leg's refusal recorded as
+// the reason the pane was never walked. Fixtures only: a fake seat and a scripted pane; no live
+// session is touched.
+import { NO_PANE_MESSAGING } from '../../src/send/no-pane-messaging.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
@@ -12,7 +14,8 @@ import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readHistory } from '../../src/send/history.ts';
 import type { NativePane } from '../../src/send/native.ts';
 import { sendFrame, type SendOutcome } from '../../src/send/uds.ts';
-import { testIo } from '../helpers.ts';
+import { recordBody, testIo } from '../helpers.ts';
+import { filed } from '../send-native-fixtures.ts';
 
 const NOW = new Date('2026-10-16T04:00:00.000Z');
 
@@ -133,8 +136,8 @@ function lastEntry(root: string, home: string): Record<string, unknown> {
   return last as unknown as Record<string, unknown>;
 }
 
-describe('the typed path names itself after the trigger', () => {
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a composer that already holds a draft is held, and the history says via typed', async () => {
+describe('the history names the channel that carried the send', () => {
+  test('a composer that already holds an unsent draft is left as it is, and the history names the drop', async () => {
     const { root, home, sockets } = world();
     const draft = readFileSync(new URL('../fixtures/codex/0.157.0/unsent.txt', import.meta.url), 'utf8');
     const pane = scripted(['idle']);
@@ -142,11 +145,26 @@ describe('the typed path names itself after the trigger', () => {
     const host = fake(sockets, { native: pane });
     const io = owner(root);
 
-    const retired = await runSend(['native', 'hello'], io, host);
-    expect(await retired).toBe(0);
+    expect(await runSend(['native', 'hello'], io, host)).toBe(0);
+
+    // The box is never touched: the draft stays the seat's own, and nothing is typed or entered.
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    // The signed record is the drop file, and the history names that channel; the typed leg's
+    // refusal is the recorded reason the pane was not walked.
+    const dir = join(root, '.agents', 'send-drops', 'acme', 'native');
+    const id = readdirSync(dir).filter((name) => !name.includes('.'))[0] as string;
+    expect(recordBody(join(dir, id))).toBe(filed('hello'));
+    const entry = lastEntry(root, home);
+    expect(entry).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop', body: filed('hello') });
+    expect(entry.failed).toEqual([
+      `typed: ${NO_PANE_MESSAGING}`,
+      'mcp-inbox: no live inbox listener',
+      'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+    ]);
   });
 
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a screen that reads as a dialog is unreachable, and the history says via typed', async () => {
+  test('a screen that reads as a dialog is left alone, and the history names the drop', async () => {
     const { root, home, sockets } = world();
     const permission = readFileSync(new URL('../fixtures/codex/0.157.0/permission.txt', import.meta.url), 'utf8');
     const pane = scripted(['idle']);
@@ -154,7 +172,19 @@ describe('the typed path names itself after the trigger', () => {
     const host = fake(sockets, { native: pane });
     const io = owner(root);
 
-    const retired = await runSend(['native', 'hello'], io, host);
-    expect(await retired).toBe(0);
+    expect(await runSend(['native', 'hello'], io, host)).toBe(0);
+
+    expect(pane.typed).toEqual([]);
+    expect(pane.enters).toBe(0);
+    const dir = join(root, '.agents', 'send-drops', 'acme', 'native');
+    const id = readdirSync(dir).filter((name) => !name.includes('.'))[0] as string;
+    expect(recordBody(join(dir, id))).toBe(filed('hello'));
+    const entry = lastEntry(root, home);
+    expect(entry).toMatchObject({ id, outcome: 'sent (unconfirmed)', via: 'drop', body: filed('hello') });
+    expect(entry.failed).toEqual([
+      `typed: ${NO_PANE_MESSAGING}`,
+      'mcp-inbox: no live inbox listener',
+      'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+    ]);
   });
 });

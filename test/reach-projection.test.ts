@@ -52,13 +52,13 @@ function seatOf(name: string, text: string = teamText()): TeamFile['seats'][numb
 
 describe('the projection', () => {
   test('derives one default each, and a written value wins', () => {
-    const home = '/Users/x';
+    const home = '/home/x';
     expect(projectionOf(team(teamText(REACH)), home)).toEqual({
       version: 1,
-      seats: [{ alias: 'iris', route: 'iris', key_id: 'seat-iris-1', guard_dir: '/Users/x/.config/team/lobby/guard-floor-iris', reach: ['grokbot'] }],
+      seats: [{ alias: 'iris', route: 'iris', key_id: 'seat-iris-1', guard_dir: '/home/x/.config/team/lobby/guard-floor-iris', reach: ['grokbot'] }],
     });
-    const named = projectionOf(team(teamText('    reach:\n      to: [grokbot]\n      alias: "Lead-X"\n      route: floor-20\n      key_id: seat-iris-1\n      guard_dir: /Users/x/guard-floor-iris\n')), home);
-    expect(named.seats).toEqual([{ alias: 'lead-x', route: 'floor-20', key_id: 'seat-iris-1', guard_dir: '/Users/x/guard-floor-iris', reach: ['grokbot'] }]);
+    const named = projectionOf(team(teamText('    reach:\n      to: [grokbot]\n      alias: "Lead-X"\n      route: session-20\n      key_id: seat-iris-1\n      guard_dir: /home/x/guard-floor-iris\n')), home);
+    expect(named.seats).toEqual([{ alias: 'lead-x', route: 'session-20', key_id: 'seat-iris-1', guard_dir: '/home/x/guard-floor-iris', reach: ['grokbot'] }]);
   });
 
   test('the generator emits only seats whose reach.to includes a known front', () => {
@@ -77,7 +77,7 @@ describe('the projection', () => {
         { ...granted, name: 'granted' },
       ],
     };
-    expect(projectionOf(hand, '/Users/x').seats.map((seat) => seat.alias)).toEqual(['granted']);
+    expect(projectionOf(hand, '/home/x').seats.map((seat) => seat.alias)).toEqual(['granted']);
   });
 });
 

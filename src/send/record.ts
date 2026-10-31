@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { isBriefEpoch, isBriefIncarnation, type BriefBinding } from '../launch/brief-id.ts';
 import { heldAt } from '../launch/rules-file.ts';
 import { messageKeyOf, messageKeyState, MESSAGE_DOMAIN, RECEIPT_DOMAIN, signDomain, verifyDomain, type Json } from '../store/keys.ts';
+import { version } from '../version.ts';
 import { readNoFollow, type MessageStatus } from './history.ts';
 import { dropMessage } from './native.ts';
 
@@ -86,13 +87,33 @@ export type RecordPayload = {
   to_client?: { client_id: string; grant_id: string };
 };
 
-export type SignedRecord = { payload: RecordPayload; signature: string };
+export type SignedRecord = {
+  payload: RecordPayload;
+  signature: string;
+  /** The payload exactly as parsed, when the record came from a file or a signer. A record a
+   *  caller built by hand carries none, and its projection is the payload the signature covers. */
+  raw?: RawPayload;
+  /** The signed field names this version does not read, when the record came from a file. */
+  unknown?: readonly string[];
+};
 
 /** The statuses a receipt can record. `sent` is the absence of a receipt, never written. */
 export type ReceiptStatus = Exclude<MessageStatus, 'sent'>;
 
 /** The statuses in the one order they move; a later receipt is the one that stands. */
 export const RECEIPT_STATUSES: readonly ReceiptStatus[] = ['held', 'delivered', 'read', 'replied'];
+
+/**
+ * The process that signed a receipt, as the writer's own signed assertion. `version` is the
+ * build's version string, `pid` the process that signed, and `epoch` the runtime epoch that
+ * process was started under, when it had one — never the key generation or a key epoch. It is
+ * evidence of which process wrote the receipt, not a new per-process cryptographic identity.
+ */
+export type ReceiptWriter = {
+  version: string;
+  pid: number;
+  epoch?: string;
+};
 
 export type ReceiptPayload = {
   kind: 'receipt';
@@ -116,9 +137,17 @@ export type ReceiptPayload = {
    *  the rest of the payload, so a receipt that names another taker than the one written does
    *  not verify. */
   read_by?: string;
+  /** Signed writer provenance: the build, process and runtime epoch that signed this receipt.
+   *  Absent on a receipt a previous build wrote, which still verifies and counts. */
+  writer?: ReceiptWriter;
 };
 
-export type SignedReceipt = { payload: ReceiptPayload; signature: string };
+export type SignedReceipt = {
+  payload: ReceiptPayload;
+  signature: string;
+  raw?: RawPayload;
+  unknown?: readonly string[];
+};
 
 /**
  * One thread's close: the record it answers (`id`), the thread it ends, and the side that closed
@@ -139,7 +168,127 @@ export type ClosePayload = {
   at: string;
 };
 
-export type SignedClose = { payload: ClosePayload; signature: string };
+export type SignedClose = {
+  payload: ClosePayload;
+  signature: string;
+  raw?: RawPayload;
+  unknown?: readonly string[];
+};
+
+/** The payload a signed file carried, exactly as parsed. The signature covers these bytes; the
+ *  projection into this version's fields runs only after that check holds. */
+export type RawPayload = { [key: string]: Json };
+
+/** A signed envelope as the file wrote it: the raw payload and the signature over it. */
+export type Sealed = { payload: RawPayload; signature: string };
+
+/** The signed fields this version reads on a message record. A signed field outside this set is
+ *  authenticated with the rest and then refused as unsupported: this version cannot know whether
+ *  the field narrows or widens what the record means, so it never acts on the record. */
+const RECORD_FIELDS: readonly string[] = [
+  'kind', 'id', 'to', 'to_id', 'root', 'session', 'at', 'body', 'from', 'from_id', 'rule',
+  'thread', 'subject', 'in_reply_to', 'brief_sha256', 'incarnation', 'from_client', 'to_client',
+];
+
+/** The signed fields this version reads on a receipt. The last is the writer's signed
+ *  provenance; a receipt a previous build wrote carries none and still verifies. */
+const RECEIPT_FIELDS: readonly string[] = [
+  'kind', 'status', 'id', 'to', 'root', 'session', 'at', 'brief_sha256', 'incarnation',
+  'brief_epoch', 'brief_seat_handle', 'brief_pane_root_pid', 'read_by', 'writer',
+];
+
+/** The signed fields this version reads on a thread's close. */
+const CLOSE_FIELDS: readonly string[] = ['kind', 'id', 'thread', 'by', 'root', 'session', 'at'];
+
+/** The signed field names outside this version's set, sorted; empty when every field is read. */
+function unreadFields(payload: RawPayload, known: readonly string[]): string[] {
+  return Object.keys(payload).filter((key) => !known.includes(key)).sort();
+}
+
+/**
+ * The envelope a signed file wrote: `{payload, signature}` and nothing else. Nothing is
+ * projected or interpreted here; this is only the shape the signature is checked against. A key
+ * beside the two is outside the signature, so nothing on this machine vouches for it and the
+ * file is refused whole.
+ */
+export function sealedOf(value: unknown): Sealed | null {
+  if (!isRecordValue(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !('payload' in value) || !('signature' in value)) return null;
+  if (!nonEmpty(value.signature)) return null;
+  if (!isRecordValue(value.payload)) return null;
+  return { payload: value.payload as RawPayload, signature: value.signature };
+}
+
+export function sealedRecordOf(value: unknown): Sealed | null {
+  return sealedOf(value);
+}
+
+export function sealedReceiptOf(value: unknown): Sealed | null {
+  return sealedOf(value);
+}
+
+export function sealedCloseOf(value: unknown): Sealed | null {
+  return sealedOf(value);
+}
+
+/** The sealed form of a projected record: the payload it was parsed from. A record a caller
+ *  built by hand has no separate raw payload, and its projection is what the signature covers. */
+export function sealedOfRecord(record: SignedRecord): Sealed {
+  return { payload: record.raw ?? (record.payload as unknown as RawPayload), signature: record.signature };
+}
+
+export function sealedOfReceipt(receipt: SignedReceipt): Sealed {
+  return { payload: receipt.raw ?? (receipt.payload as unknown as RawPayload), signature: receipt.signature };
+}
+
+export function sealedOfClose(close: SignedClose): Sealed {
+  return { payload: close.raw ?? (close.payload as unknown as RawPayload), signature: close.signature };
+}
+
+/**
+ * Whether the signature covers this exact payload: the domain tag, then the canonical encoding
+ * of the payload as parsed. A payload the canonical encoding cannot represent — a fractional or
+ * out-of-range number — is not one any signature covers, so this is false and never a throw.
+ */
+export function signatureCovers(domain: string, sealed: Sealed, key: KeyObject): boolean {
+  try {
+    return verifyDomain(domain, sealed.payload as unknown as Json, sealed.signature, key);
+  } catch {
+    return false;
+  }
+}
+
+export function verifySealedRecord(sealed: Sealed, key: KeyObject): boolean {
+  return signatureCovers(MESSAGE_DOMAIN, sealed, key);
+}
+
+export function verifySealedReceipt(sealed: Sealed, key: KeyObject): boolean {
+  return signatureCovers(RECEIPT_DOMAIN, sealed, key);
+}
+
+export function verifySealedClose(sealed: Sealed, key: KeyObject): boolean {
+  return signatureCovers(RECEIPT_DOMAIN, sealed, key);
+}
+
+/**
+ * What one signed file is once its signature has been checked over the raw payload. `ok` means
+ * every signed field is one this version reads and the known schema holds. `shape` is not a
+ * `{payload, signature}` envelope. `tampered` is an envelope whose signature does not cover the
+ * payload as parsed: a field was inserted, altered or removed after signing. `unsupported` is a
+ * signed file this version cannot act on — a known field fails its schema, or a signed field is
+ * one this version does not read — and it is refused on its own ground, never as a signature
+ * failure.
+ */
+export type Auth<T> =
+  | { kind: 'ok'; value: T }
+  | { kind: 'shape' }
+  | { kind: 'tampered' }
+  | { kind: 'unsupported'; reason: string };
+
+export type RecordAuth = Auth<SignedRecord>;
+export type ReceiptAuth = Auth<SignedReceipt>;
+export type CloseAuth = Auth<SignedClose>;
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -154,12 +303,16 @@ export function recordNameOk(id: string): boolean {
   return id !== '' && id !== '.' && id !== '..' && !id.includes('/') && !id.includes('\\') && !id.includes('\0');
 }
 
+export type RecordProjection = { payload: RecordPayload; unknown: string[] };
+
 /**
- * The payload a message record carries, or null when the value is not one this version writes.
- * `thread` and the admitting rule are required: every record carries them, and a file without
- * them is not the record a send of this version wrote.
+ * Projects a raw message-record payload into this version's fields, or null when a known field
+ * is not the shape this version writes. `thread` and the admitting rule are required: every
+ * record carries them. Unknown signed fields do not fail the projection: they are returned as
+ * `unknown`, and the caller decides — after the signature over the raw payload has been checked
+ * — that it cannot act on a record carrying them.
  */
-export function recordPayloadOf(value: unknown): RecordPayload | null {
+export function projectRecord(value: unknown): RecordProjection | null {
   if (!isRecordValue(value)) return null;
   if (value.kind !== RECORD_KIND) return null;
   for (const field of ['id', 'to', 'root', 'session', 'at', 'body', 'from', 'rule', 'thread'] as const) {
@@ -220,7 +373,12 @@ export function recordPayloadOf(value: unknown): RecordPayload | null {
     if (payload.to !== `client:${toClient.client_id}` || payload.to_id !== null) return null;
     payload.to_client = toClient;
   }
-  return payload;
+  return { payload, unknown: unreadFields(value as unknown as RawPayload, RECORD_FIELDS) };
+}
+
+/** The payload a message record carries, or null when the value is not one this version writes. */
+export function recordPayloadOf(value: unknown): RecordPayload | null {
+  return projectRecord(value)?.payload ?? null;
 }
 
 /** The `{client_id, grant_id}` map a client record carries, or null when it is not exactly one. */
@@ -232,17 +390,48 @@ function clientMapOf(value: unknown): { client_id: string; grant_id: string } | 
   return { client_id: value.client_id, grant_id: value.grant_id };
 }
 
-/** The whole signed envelope: `{payload, signature}` and nothing else. */
+/**
+ * The whole signed envelope, projected once its fields are this version's: the raw payload and
+ * any signed field names this version does not read are carried on the record. The signature is
+ * not checked here — `recordAuthOf` is the check that covers the raw payload.
+ */
 export function signedRecordOf(value: unknown): SignedRecord | null {
-  if (!isRecordValue(value)) return null;
-  if (!nonEmpty(value.signature)) return null;
-  const payload = recordPayloadOf(value.payload);
-  if (payload === null) return null;
-  return { payload, signature: value.signature };
+  const sealed = sealedOf(value);
+  if (sealed === null) return null;
+  return signedRecordFromSealed(sealed);
 }
 
-/** The receipt payload, or null when the value is not one this version writes. */
-export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
+/**
+ * A signed value with its raw payload kept beside it. `raw` and `unknown` are the verifier's own
+ * copy of the bytes the signature covers: they are non-enumerable, so writing the value to a
+ * file writes the `{payload, signature}` envelope alone — exactly the envelope every earlier
+ * writer wrote — while verification still judges the raw payload as parsed.
+ */
+function withRaw<T extends { payload: unknown; signature: string }>(
+  value: T,
+  raw: RawPayload,
+  unknown: readonly string[],
+): T & { raw: RawPayload; unknown: readonly string[] } {
+  Object.defineProperty(value, 'raw', { value: raw, enumerable: false, writable: true, configurable: true });
+  Object.defineProperty(value, 'unknown', { value: unknown, enumerable: false, writable: true, configurable: true });
+  return value as T & { raw: RawPayload; unknown: readonly string[] };
+}
+
+function signedRecordFromSealed(sealed: Sealed): SignedRecord | null {
+  const projected = projectRecord(sealed.payload);
+  if (projected === null) return null;
+  return withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown);
+}
+
+export type ReceiptProjection = { payload: ReceiptPayload; unknown: string[] };
+
+/**
+ * Projects a raw receipt payload into this version's fields, or null when a known field is not
+ * the shape this version writes. Unknown signed fields are returned as `unknown`, not refused
+ * here: a receipt is an authority claim, so a caller refuses one carrying them only after the
+ * signature over the raw payload has been checked.
+ */
+export function projectReceipt(value: unknown): ReceiptProjection | null {
   if (!isRecordValue(value)) return null;
   if (value.kind !== 'receipt') return null;
   if (typeof value.status !== 'string' || !RECEIPT_STATUSES.includes(value.status as ReceiptStatus)) return null;
@@ -284,19 +473,49 @@ export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
   if (value.brief_seat_handle !== undefined) payload.brief_seat_handle = value.brief_seat_handle as string;
   if (value.brief_pane_root_pid !== undefined) payload.brief_pane_root_pid = value.brief_pane_root_pid as number;
   if (value.read_by !== undefined) payload.read_by = value.read_by as string;
-  return payload;
+  // The signed writer provenance: the build, process and runtime epoch that signed the receipt.
+  // A receipt a previous build wrote carries none, and is still one this version reads.
+  if (value.writer !== undefined) {
+    const writer = writerOf(value.writer);
+    if (writer === null) return null;
+    payload.writer = writer;
+  }
+  return { payload, unknown: unreadFields(value as unknown as RawPayload, RECEIPT_FIELDS) };
+}
+
+/** The `{version, pid, epoch?}` map a receipt's writer provenance carries, or null when it is
+ *  not exactly that map. `epoch` is a runtime epoch, never a key generation. */
+function writerOf(value: unknown): ReceiptWriter | null {
+  if (!isRecordValue(value)) return null;
+  if (Object.keys(value).some((key) => key !== 'version' && key !== 'pid' && key !== 'epoch')) return null;
+  if (!nonEmpty(value.version)) return null;
+  if (typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid <= 0) return null;
+  if (value.epoch !== undefined && !isBriefEpoch(value.epoch)) return null;
+  return { version: value.version, pid: value.pid, ...(value.epoch === undefined ? {} : { epoch: value.epoch }) };
+}
+
+/** The receipt payload, or null when the value is not one this version writes. */
+export function receiptPayloadOf(value: unknown): ReceiptPayload | null {
+  return projectReceipt(value)?.payload ?? null;
 }
 
 export function signedReceiptOf(value: unknown): SignedReceipt | null {
-  if (!isRecordValue(value)) return null;
-  if (!nonEmpty(value.signature)) return null;
-  const payload = receiptPayloadOf(value.payload);
-  if (payload === null) return null;
-  return { payload, signature: value.signature };
+  const sealed = sealedOf(value);
+  if (sealed === null) return null;
+  return signedReceiptFromSealed(sealed);
 }
 
-/** The close payload, or null when the value is not one this version writes. */
-export function closePayloadOf(value: unknown): ClosePayload | null {
+function signedReceiptFromSealed(sealed: Sealed): SignedReceipt | null {
+  const projected = projectReceipt(sealed.payload);
+  if (projected === null) return null;
+  return withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown);
+}
+
+export type CloseProjection = { payload: ClosePayload; unknown: string[] };
+
+/** Projects a raw close payload into this version's fields, or null when a known field is not
+ *  the shape this version writes. Unknown signed fields ride along as `unknown`. */
+export function projectClose(value: unknown): CloseProjection | null {
   if (!isRecordValue(value)) return null;
   if (value.kind !== CLOSE_KIND) return null;
   for (const field of ['id', 'thread', 'by', 'root', 'session', 'at'] as const) {
@@ -304,7 +523,7 @@ export function closePayloadOf(value: unknown): ClosePayload | null {
   }
   if (!recordNameOk(value.id as string) || !recordNameOk(value.thread as string)) return null;
   if (!Number.isFinite(Date.parse(value.at as string))) return null;
-  return {
+  const payload: ClosePayload = {
     kind: CLOSE_KIND,
     id: value.id as string,
     thread: value.thread as string,
@@ -313,14 +532,24 @@ export function closePayloadOf(value: unknown): ClosePayload | null {
     session: value.session as string,
     at: value.at as string,
   };
+  return { payload, unknown: unreadFields(value as unknown as RawPayload, CLOSE_FIELDS) };
+}
+
+/** The close payload, or null when the value is not one this version writes. */
+export function closePayloadOf(value: unknown): ClosePayload | null {
+  return projectClose(value)?.payload ?? null;
 }
 
 export function signedCloseOf(value: unknown): SignedClose | null {
-  if (!isRecordValue(value)) return null;
-  if (!nonEmpty(value.signature)) return null;
-  const payload = closePayloadOf(value.payload);
-  if (payload === null) return null;
-  return { payload, signature: value.signature };
+  const sealed = sealedOf(value);
+  if (sealed === null) return null;
+  return signedCloseFromSealed(sealed);
+}
+
+function signedCloseFromSealed(sealed: Sealed): SignedClose | null {
+  const projected = projectClose(sealed.payload);
+  if (projected === null) return null;
+  return withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown);
 }
 
 /** The record's path: the folder `team send` writes to, and the id as the file's name. */
@@ -341,31 +570,115 @@ export function closeFile(dropDir: string, id: string): string {
 /** Signs a payload with the checkout's message key. The key is created on the first sign. */
 export function signRecord(payload: RecordPayload, home: string): SignedRecord {
   const key = messageKeyOf(home);
-  return { payload, signature: signDomain(MESSAGE_DOMAIN, payload as unknown as Json, key) };
+  const raw = payload as unknown as RawPayload;
+  return withRaw({ payload, signature: signDomain(MESSAGE_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }
 
+/**
+ * The use gate for a record: true only when the signature covers the payload as parsed and
+ * every signed field is one this version reads. A record carrying signed fields this version
+ * does not read is false here — it is authenticated, and refused rather than acted on.
+ */
 export function verifyRecord(record: SignedRecord, key: KeyObject): boolean {
-  return verifyDomain(MESSAGE_DOMAIN, record.payload as unknown as Json, record.signature, key);
+  const raw = record.raw ?? (record.payload as unknown as RawPayload);
+  if (!signatureCovers(MESSAGE_DOMAIN, { payload: raw, signature: record.signature }, key)) return false;
+  return unreadFields(raw, RECORD_FIELDS).length === 0;
 }
 
-export function signReceiptPayload(payload: ReceiptPayload, home: string): SignedReceipt {
+/**
+ * Signs a receipt with the checkout's message key, adding the signed writer provenance: this
+ * build's version and this process's id, and the runtime epoch the process was started under
+ * when the caller has one (`options.epoch`). The provenance is part of the signed payload; the
+ * signer is the writer, so a writer already on `payload` is replaced.
+ */
+export function signReceiptPayload(payload: ReceiptPayload, home: string, options?: { epoch?: string }): SignedReceipt {
   const key = messageKeyOf(home);
-  return { payload, signature: signDomain(RECEIPT_DOMAIN, payload as unknown as Json, key) };
+  const epoch = options?.epoch;
+  if (epoch !== undefined && !isBriefEpoch(epoch)) {
+    throw new Error(`${JSON.stringify(epoch)} is not a runtime epoch; a receipt names the epoch its writer ran under`);
+  }
+  const writer: ReceiptWriter = { version: version(), pid: process.pid, ...(epoch === undefined ? {} : { epoch }) };
+  const signed: ReceiptPayload = { ...payload, writer };
+  const raw = signed as unknown as RawPayload;
+  return withRaw({ payload: signed, signature: signDomain(RECEIPT_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }
 
+/** The use gate for a receipt: signature over the raw payload and no signed field this version
+ *  does not read. A legacy receipt, which carries no `writer`, is read exactly as before. */
 export function verifyReceipt(receipt: SignedReceipt, key: KeyObject): boolean {
-  return verifyDomain(RECEIPT_DOMAIN, receipt.payload as unknown as Json, receipt.signature, key);
+  const raw = receipt.raw ?? (receipt.payload as unknown as RawPayload);
+  if (!signatureCovers(RECEIPT_DOMAIN, { payload: raw, signature: receipt.signature }, key)) return false;
+  return unreadFields(raw, RECEIPT_FIELDS).length === 0;
 }
 
 /** Signs a close with the checkout's message key, under the receipt domain: a close is derived
  *  state beside a message, not a message. */
 export function signClose(payload: ClosePayload, home: string): SignedClose {
   const key = messageKeyOf(home);
-  return { payload, signature: signDomain(RECEIPT_DOMAIN, payload as unknown as Json, key) };
+  const raw = payload as unknown as RawPayload;
+  return withRaw({ payload, signature: signDomain(RECEIPT_DOMAIN, raw as unknown as Json, key) }, raw, []);
 }
 
 export function verifyClose(close: SignedClose, key: KeyObject): boolean {
-  return verifyDomain(RECEIPT_DOMAIN, close.payload as unknown as Json, close.signature, key);
+  const raw = close.raw ?? (close.payload as unknown as RawPayload);
+  if (!signatureCovers(RECEIPT_DOMAIN, { payload: raw, signature: close.signature }, key)) return false;
+  return unreadFields(raw, CLOSE_FIELDS).length === 0;
+}
+
+/**
+ * A record authenticated over its raw payload and only then projected: `ok` only when every
+ * signed field is one this version reads. An unsupported file is refused on its own ground,
+ * never as a signature failure.
+ */
+export function recordAuthOf(value: unknown, key: KeyObject): RecordAuth {
+  const sealed = sealedRecordOf(value);
+  if (sealed === null) return { kind: 'shape' };
+  return recordAuthOfSealed(sealed, key);
+}
+
+export function recordAuthOfSealed(sealed: Sealed, key: KeyObject): RecordAuth {
+  if (!verifySealedRecord(sealed, key)) return { kind: 'tampered' };
+  const projected = projectRecord(sealed.payload);
+  if (projected === null) return { kind: 'unsupported', reason: 'the signed record is not one this version writes' };
+  if (projected.unknown.length > 0) {
+    return { kind: 'unsupported', reason: `the signed record carries fields this version does not read: ${projected.unknown.join(', ')}` };
+  }
+  return { kind: 'ok', value: withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown) };
+}
+
+/** A receipt authenticated over its raw payload and projected, in that order; a receipt carrying
+ *  a signed field this version does not read is unsupported and does not count. */
+export function receiptAuthOf(value: unknown, key: KeyObject): ReceiptAuth {
+  const sealed = sealedReceiptOf(value);
+  if (sealed === null) return { kind: 'shape' };
+  return receiptAuthOfSealed(sealed, key);
+}
+
+export function receiptAuthOfSealed(sealed: Sealed, key: KeyObject): ReceiptAuth {
+  if (!verifySealedReceipt(sealed, key)) return { kind: 'tampered' };
+  const projected = projectReceipt(sealed.payload);
+  if (projected === null) return { kind: 'unsupported', reason: 'the signed receipt is not one this version writes' };
+  if (projected.unknown.length > 0) {
+    return { kind: 'unsupported', reason: `the signed receipt carries fields this version does not read: ${projected.unknown.join(', ')}` };
+  }
+  return { kind: 'ok', value: withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown) };
+}
+
+/** A close authenticated over its raw payload and projected, in that order. */
+export function closeAuthOf(value: unknown, key: KeyObject): CloseAuth {
+  const sealed = sealedCloseOf(value);
+  if (sealed === null) return { kind: 'shape' };
+  return closeAuthOfSealed(sealed, key);
+}
+
+export function closeAuthOfSealed(sealed: Sealed, key: KeyObject): CloseAuth {
+  if (!verifySealedClose(sealed, key)) return { kind: 'tampered' };
+  const projected = projectClose(sealed.payload);
+  if (projected === null) return { kind: 'unsupported', reason: 'the signed close is not one this version writes' };
+  if (projected.unknown.length > 0) {
+    return { kind: 'unsupported', reason: `the signed close carries fields this version does not read: ${projected.unknown.join(', ')}` };
+  }
+  return { kind: 'ok', value: withRaw({ payload: projected.payload, signature: sealed.signature }, sealed.payload, projected.unknown) };
 }
 
 export type RecordWrite = { ok: true; path: string; existing?: true } | { ok: false; reason: string };
@@ -415,6 +728,9 @@ export function ensureRecord(dropDir: string, record: SignedRecord): RecordWrite
 
 export type RecordRead = { ok: true; record: SignedRecord | null } | { ok: false; reason: string };
 
+/** One record's envelope read: the file as parsed, before any projection. */
+export type SealedRead = { ok: true; sealed: Sealed | null } | { ok: false; reason: string };
+
 /**
  * Writes the record whole, replacing a regular file already at its name. This is the writer for
  * a record whose name is derived from its content (the general seat brief): a file there that is
@@ -453,9 +769,13 @@ export function writeRecordOver(dropDir: string, record: SignedRecord): RecordWr
 export function recordHolds(path: string, expected: RecordPayload, home: string, options?: { body?: false; to_id?: false }): boolean {
   const key = messageKeyState(home);
   if (key.kind !== 'key') return false;
-  const read = readRecord(path, expected.id);
-  if (!read.ok || read.record === null) return false;
-  const held = read.record.payload;
+  const read = readSealedRecord(path);
+  if (!read.ok || read.sealed === null) return false;
+  // The raw payload is authenticated before any field is read from it: a record carrying signed
+  // fields this version does not read is refused whole, never compared on its known fields.
+  const auth = recordAuthOfSealed(read.sealed, key.key);
+  if (auth.kind !== 'ok') return false;
+  const held = auth.value.payload;
   const fields = ['kind', 'id', 'to', 'to_id', 'session', 'body', 'from', 'from_id', 'rule', 'thread', 'in_reply_to', 'brief_sha256', 'incarnation'] as const;
   for (const field of fields) {
     if (field === 'body' && options?.body === false) continue;
@@ -465,13 +785,15 @@ export function recordHolds(path: string, expected: RecordPayload, home: string,
   if (JSON.stringify(held.from_client) !== JSON.stringify(expected.from_client)) return false;
   if (JSON.stringify(held.to_client) !== JSON.stringify(expected.to_client)) return false;
   if (!sameFolder(held.root, expected.root)) return false;
-  return verifyRecord(read.record, key.key);
+  return true;
 }
 
-/** One record by path, or why it cannot be read. A missing file is `record: null`. */
-export function readRecord(path: string, expectedId?: string): RecordRead {
+/** One record's envelope by path, before any projection: a missing file is `sealed: null`. The
+ *  fs checks are `readRecord`'s; a file that is not a `{payload, signature}` envelope is a
+ *  refusal, since nothing about it can be authenticated. */
+export function readSealedRecord(path: string): SealedRead {
   const held = heldAt(path);
-  if (held.kind === 'missing') return { ok: true, record: null };
+  if (held.kind === 'missing') return { ok: true, sealed: null };
   if (held.kind === 'link') return { ok: false, reason: 'a symbolic link was found and not followed' };
   if (held.kind === 'fifo') return { ok: false, reason: 'a FIFO was found and not followed' };
   if (held.kind !== 'file') return { ok: false, reason: 'the record is not a regular file' };
@@ -484,7 +806,17 @@ export function readRecord(path: string, expectedId?: string): RecordRead {
   } catch {
     return { ok: false, reason: 'the record is not JSON' };
   }
-  const record = signedRecordOf(parsed);
+  const sealed = sealedRecordOf(parsed);
+  if (sealed === null) return { ok: false, reason: 'the record is not a signed record' };
+  return { ok: true, sealed };
+}
+
+/** One record by path, or why it cannot be read. A missing file is `record: null`. */
+export function readRecord(path: string, expectedId?: string): RecordRead {
+  const read = readSealedRecord(path);
+  if (!read.ok) return read;
+  if (read.sealed === null) return { ok: true, record: null };
+  const record = signedRecordFromSealed(read.sealed);
   if (record === null) return { ok: false, reason: 'the record is not one this version wrote' };
   if (expectedId !== undefined && record.payload.id !== expectedId) {
     return { ok: false, reason: `the record's id is ${record.payload.id}, not ${expectedId}` };
@@ -563,9 +895,9 @@ export function receiptHolds(
   } catch {
     return false;
   }
-  const receipt = signedReceiptOf(parsed);
-  if (receipt === null) return false;
-  const payload = receipt.payload;
+  const auth = receiptAuthOf(parsed, key);
+  if (auth.kind !== 'ok') return false;
+  const payload = auth.value.payload;
   if (payload.id !== id || payload.status !== status) return false;
   if (payload.to !== context.to || payload.session !== context.session) return false;
   if (!sameFolder(payload.root, context.root)) return false;
@@ -574,7 +906,7 @@ export function receiptHolds(
     if (payload.brief_sha256 !== brief.sha256) return false;
     if (payload.brief_epoch !== brief.epoch) return false;
   }
-  return verifyReceipt(receipt, key);
+  return true;
 }
 
 /**

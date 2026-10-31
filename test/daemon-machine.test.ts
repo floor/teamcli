@@ -752,6 +752,26 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(refused.err).toContain('--presence belongs to run or install');
   });
 
+  test('run records the packaged commit beside the version, so an install identity is tellable', async () => {
+    const { root, home } = scratch();
+    const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
+    const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
+      seen.push(input);
+      return { kind: 'already-running' as const, pid: 42 };
+    };
+    const sha = 'a'.repeat(40);
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, {
+      start,
+      version: '0.5.5',
+      gitHead: sha,
+    }))).toBe(0);
+    expect(seen[0]?.version).toBe('0.5.5');
+    expect(seen[0]?.gitHead).toBe(sha);
+    // A source checkout has no packaged commit; the record says so rather than inventing one.
+    expect(await runDaemon(['run'], testIo(root, owner), sourcesOf(home, { start, gitHead: null }))).toBe(0);
+    expect(seen[1]?.gitHead).toBeNull();
+  });
+
   test('run hosts a watch only when --watch is given; --watch belongs to run or install', async () => {
     const { root, home } = scratch();
     const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];

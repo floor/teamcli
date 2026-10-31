@@ -324,11 +324,13 @@ export type SessionState = {
    * The watch: the pane and workspace it runs in, the process once a pass has recorded one, and
    * the last heartbeat. `pid` is absent from the moment `up` — or an owner's own run — starts the
    * watch until that pane's first pass records its process; `pane` is absent only on a record an
-   * older detached watch left. `epoch` is the host's authority fence (`watch_` and 32 lowercase
-   * hex); its absence marks a pane watch record, and a value this build cannot read is dropped at
-   * the read door.
+   * older detached watch left. `started_at` is the instant the recorded process captured when it
+   * reached its loop: a pane-less record is stopped only when the live process's start instant
+   * matches it, so a record an older build wrote without one is never signalled. `epoch` is the
+   * host's authority fence (`watch_` and 32 lowercase hex); its absence marks a pane watch
+   * record, and a value this build cannot read is dropped at the read door.
    */
-  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string };
+  watch?: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string; started_at?: string };
   /** The event bus `team up` started for this session: its pane and workspace, for `team down`. */
   bus?: { pane: string; workspace?: string; started: string };
   /**
@@ -611,8 +613,15 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
       if (typeof session.watch !== 'object' || session.watch === null || Array.isArray(session.watch)
         || typeof session.watch.heartbeat !== 'string') {
         delete session.watch;
-      } else if (session.watch.epoch !== undefined && !isWatchEpoch(session.watch.epoch)) {
-        delete session.watch.epoch;
+      } else {
+        if (session.watch.epoch !== undefined && !isWatchEpoch(session.watch.epoch)) {
+          delete session.watch.epoch;
+        }
+        // A start instant this build cannot read is no proof: the record stays a watch record,
+        // and a pane-less pid it names is left alone rather than signalled on trust.
+        if (session.watch.started_at !== undefined && typeof session.watch.started_at !== 'string') {
+          delete session.watch.started_at;
+        }
       }
     }
     // A stored classification is validated here, at the one door a value from outside the program

@@ -25,8 +25,10 @@ import { FEED_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { appendHistory, historyPath, MAX_HISTORY_BYTES, readHistory } from '../src/send/history.ts';
 import type { NativePane } from '../src/send/native.ts';
+import { readRecord, verifyRecord } from '../src/send/record.ts';
 import type { SendOutcome } from '../src/send/uds.ts';
 import { LOG_FILE, updateState } from '../src/state.ts';
+import { messageKeyState } from '../src/store/keys.ts';
 import { storePath } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
@@ -137,7 +139,7 @@ function recordSeat(dir: string, seat: string, pane: string): void {
 
 /** The agent record `up` writes for a launched seat: the identity admission reads, and the id
  *  the drop file's header names. */
-function registerSeat(home: string, seat: string, role: string, cli = 'claude-code'): void {
+function registerSeat(home: string, seat: string, role: string, cli = 'claude-code'): string {
   const id = `agt_${Buffer.from(seat).toString('hex').slice(0, 12).padEnd(12, '0')}`;
   const file = join(home, '.config', 'team', 'agents', `${id}.yaml`);
   mkdirSync(dirname(file), { recursive: true });
@@ -170,6 +172,7 @@ function registerSeat(home: string, seat: string, role: string, cli = 'claude-co
       '',
     ].join('\n'),
   );
+  return id;
 }
 
 /** What the owner's send opens the filed body with: `senderHeader`'s owner line, then the empty
@@ -177,17 +180,125 @@ function registerSeat(home: string, seat: string, role: string, cli = 'claude-co
 const OWNER_HEADER = 'from the owner — admitted by: the owner\n\n';
 
 describe('team send history log & team feed', () => {
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: writes 0600 JSONL under the state folder, never in a lobby or the repo, and an A->B send appears once', async () => {
+  test('an A->B send leaves one signed drop and one 0600 history line under the state folder, never in a lobby or the repo, and appears once; was: writes 0600 JSONL under the state folder, never in a lobby or the repo, and an A->B send appears once', async () => {
     const { root, dir, home, sockets } = world();
     // A seat to its own team's orchestrator: the pair the authority rules admit without a grant.
     recordSeat(dir, 'helper', 'pane-helper');
-    registerSeat(home, 'helper', 'implementer', 'codex');
+    const helperId = registerSeat(home, 'helper', 'implementer', 'codex');
     const host = hostFor(home, sockets);
     const callerIo = testIo(root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
 
     const secret = 'distinctive-secret-payload';
-    const retired = await runSend(['lead', secret, '--json'], callerIo, host);
-    expect(await retired).toBe(0);
+    const code = await runSend(['lead', secret, '--json'], callerIo, host);
+    expect(code).toBe(0);
+    const sentDoc = JSON.parse(callerIo.out) as { ids: { sent: string } };
+    expect(sentDoc.ids.sent).toEqual(expect.any(String));
+
+    // The history line lands in the project's state folder, never beside the checkout's own files
+    // or in a lobby: the store folder is 0700 and the one-line file is 0600.
+    const logPath = historyPath('acme', root, home);
+    const store = storePath('acme', root, home);
+    expect(logPath.startsWith(store)).toBe(true);
+    expect(logPath.includes('.agents')).toBe(false);
+    expect(logPath.includes('lobbies')).toBe(false);
+    expect(statSync(store).mode & 0o777).toBe(0o700);
+    expect(statSync(logPath).mode & 0o777).toBe(0o600);
+
+    const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
+    expect(rawLines.length).toBe(1);
+    const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
+    // The seat's send files the body under its header: the seat's readable name, and the rule.
+    const seatHeader = 'from helper — admitted by: a seat to its own team\'s orchestrator\n\n';
+    expect(parsed).toEqual({
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      from_team: teamIdOf(root),
+      body: `${seatHeader}${secret}`,
+      id: sentDoc.ids.sent,
+      outcome: 'sent (unconfirmed)',
+      // The thread is the first message's id; a first message is its own thread's id.
+      thread: sentDoc.ids.sent,
+      ms: 0,
+      via: 'drop',
+      // The walk passed the declared typed word, set aside with the ruling's reason, and the
+      // inbox ahead of the drop: no server was listening. The drop is what took the send, so
+      // nothing is claimed beyond the stored copy.
+      failed: [
+        `typed: ${NO_PANE_MESSAGING}`,
+        'mcp-inbox: no live inbox listener',
+      ],
+    });
+
+    // The bus drop: the one signed record the walk wrote, at 0600 under 0700 folders, beside the
+    // pending marker the watch reads and the fallback episode's own summary. Nothing types it,
+    // so the seat's own read is the only way its body is delivered.
+    const dropDir = join(dir, 'send-drops', 'acme', 'lead');
+    const recordPath = join(dropDir, sentDoc.ids.sent);
+    expect(statSync(dropDir).mode & 0o777).toBe(0o700);
+    expect(readdirSync(dropDir).sort()).toEqual([
+      sentDoc.ids.sent,
+      `${sentDoc.ids.sent}.fallback.json`,
+      `${sentDoc.ids.sent}.pending`,
+    ]);
+    for (const name of readdirSync(dropDir)) expect(statSync(join(dropDir, name)).mode & 0o777).toBe(0o600);
+    const held = readRecord(recordPath, sentDoc.ids.sent);
+    const key = messageKeyState(home);
+    if (!held.ok || held.record === null || key.kind !== 'key') throw new Error('the drop record does not read');
+    expect(verifyRecord(held.record, key.key)).toBe(true);
+    expect(held.record.payload).toEqual({
+      kind: 'message',
+      id: sentDoc.ids.sent,
+      to: 'lead',
+      to_id: null,
+      root,
+      session: 'acme',
+      at: NOW.toISOString(),
+      body: `${seatHeader}${secret}`,
+      from: 'helper',
+      from_id: helperId,
+      rule: 'a seat to its own team\'s orchestrator',
+      thread: sentDoc.ids.sent,
+    });
+
+    // Team log in .agents/ keeps only byte counts, never the message body; lobbies stay empty.
+    const teamLog = readFileSync(join(dir, LOG_FILE), 'utf8');
+    expect(teamLog).not.toContain(secret);
+    expect(existsSync(join(dir, 'messages.jsonl'))).toBe(false);
+    expect(readdirSync(lobbyDir(home))).toEqual([]);
+
+    // The table's KIND keeps the path and the timing, and DETAIL folds the filed body's header
+    // and blank line onto the one line its cell can hold.
+    const feedIo = testIo(root);
+    expect(await runFeed([], feedIo, { home })).toBe(0);
+    expect(feedIo.out).toBe(
+      'team acme, session "acme"\n' +
+        '  TIME      KIND                                   SEAT            DETAIL\n' +
+        `  15:30:00  sent (unconfirmed) (via drop in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
+        '1 event\n',
+    );
+
+    // One envelope, not one line per event; it carries the legs that failed before the drop.
+    const jsonIo = testIo(root);
+    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
+    const doc = assertMatchesOutputSchema<FeedDoc>(jsonIo.out, FEED_OUTPUT_SCHEMA);
+    expect(doc.schema).toEqual({ name: 'team.feed', version: 1 });
+    expect(doc).toMatchObject({ format: 1, project: 'acme', session: 'acme' });
+    expect(doc.events).toHaveLength(1);
+    expect(doc.events[0]).toMatchObject({
+      ts: NOW.toISOString(),
+      from: 'helper',
+      to: 'lead',
+      id: sentDoc.ids.sent,
+      outcome: 'sent (unconfirmed)',
+      ms: 0,
+      via: 'drop',
+    });
+    expect(doc.events[0]?.failed).toEqual([
+      `typed: ${NO_PANE_MESSAGING}`,
+      'mcp-inbox: no live inbox listener',
+    ]);
   });
 
   test('--json carries the address a send kept beside the seat, and the line keeps it', async () => {
@@ -369,14 +480,53 @@ describe('team send history log & team feed', () => {
     expect((io.out.match(/delivered \(read\)/g) ?? []).length).toBe(1);
   });
 
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
+  test('skips refused, --list and --dry-run, and every walked ending writes its own history line; was: records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
     const { root, home, sockets } = world();
     // A file at the measured socket name stands while every send below runs: no path consults it.
     writeFileSync(join(sockets, '222.sock'), '');
 
     // 1. refused (unknown seat), --list, --dry-run write nothing to messages.jsonl
-    const retired = await runSend(['ghost', 'nope'], testIo(root, { kind: 'owner' }), hostFor(home, sockets));
-    expect(await retired).toBe(1);
+    expect(await runSend(['ghost', 'nope'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(1);
+    expect(await runSend(['--list'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(0);
+    expect(await runSend(['native', 'dry', '--dry-run'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(0);
+    expect(existsSync(historyPath('acme', root, home))).toBe(false);
+
+    // 2. The walk closes on the drop leg. A send whose session lists a pane and one whose agent
+    //    list names no seat both write the bus copy, and neither claims more than that.
+    expect(await runSend(['native', 'msg-dropped'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(0);
+    expect(
+      await runSend(['native', 'msg-no-agent'], testIo(root, { kind: 'owner' }), hostFor(home, sockets, { agents: () => [] })),
+    ).toBe(0);
+
+    // 3. answered and timeout: a waited send that gets no reply within its window records timeout
+    // with the thread open; answered is seeded alongside it so the feed renders both waited outcomes.
+    appendHistory('acme', root, home, {
+      ts: NOW.toISOString(),
+      from: 'owner',
+      to: 'lead',
+      body: `${OWNER_HEADER}msg-answered`,
+      id: 'seed-answered',
+      outcome: 'answered',
+      ms: 0,
+      via: 'socket',
+    });
+    expect(
+      await runSend(
+        ['lead', 'msg-timeout', '--wait', '--timeout', '1'],
+        testIo(root, { kind: 'owner' }),
+        hostFor(home, sockets, { waitMs: 0 }),
+      ),
+    ).toBe(1);
+
+    const read = readHistory('acme', root, home);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.entries.map((e) => ({ from: e.from, to: e.to, body: e.body, outcome: e.outcome, via: e.via }))).toEqual([
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-dropped`, outcome: 'sent (unconfirmed)', via: 'drop' },
+      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-no-agent`, outcome: 'sent (unconfirmed)', via: 'drop' },
+      { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-answered`, outcome: 'answered', via: 'socket' },
+      { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-timeout`, outcome: 'timeout', via: 'drop' },
+    ]);
   });
 
   test('tightens a 0644 history log back to 0600 and refuses a planted symlink', async () => {

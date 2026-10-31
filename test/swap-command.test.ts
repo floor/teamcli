@@ -818,11 +818,28 @@ describe('team swap now and --run', () => {
     expect(world.did.typed.join('\n')).not.toContain('write a handover');
   });
 
-  test('no pane messaging, no handover is typed into the old conversation; was: a swap to another CLI asks for a handover, and the launch reads it first', async () => {
+  test('a swap to another CLI queues the target recipe and names the handover file', async () => {
     place();
     setRule('*=!anthropic');
-    const retired = await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
-    expect((await retired).code).toBe(0);
+    const queued = await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
+    expect(queued.code).toBe(0);
+    // The record is what the queue keeps: the seat's words, the target recipe the launch will
+    // read, and the handover file named now, so a run retried later offers the same path.
+    const stamp = NOW.toISOString().replace(/[:.]/g, '-');
+    expect(queue().lead).toMatchObject({
+      from: { cli: 'claude-code', vendor: 'anthropic', model: 'Claude Opus', version: '5.5', display: 'Claude Opus 5.5' },
+      to: {
+        cli: 'codex',
+        vendor: 'openai',
+        model: 'GPT Sol',
+        version: '5.0',
+        display: 'GPT Sol 5.0',
+        launch: 'codex --model gpt-sol',
+      },
+      reason: 'model-rule',
+      rule: '*=!anthropic',
+      handover: join(root, '.agents', 'handovers', `lead-${stamp}.md`),
+    });
   });
 
   test('the run writes the recipe into the seat and leaves the other seats alone', async () => {

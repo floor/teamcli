@@ -37,6 +37,7 @@ import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
+import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
 export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'provider error' | 'rate limit' | 'unsent' | 'unknown';
 
@@ -75,10 +76,10 @@ export type Host = {
    */
   managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
   /**
-   * Stops the endpoint a launch this run started when its pane never ran, so a partial launch
-   * leaves no orphaned server. The record is cleared only after a proven stop.
+   * Stops the endpoint a launch this run started, including after a later failure. The record
+   * is cleared only after a proven stop; an expected URL binds cleanup to this launch.
    */
-  stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   /** Whether the conversation a resume line names is on disk for its CLI; null when unknown. */
   conversationExists?(cli: string, cwd: string, id: string): boolean | null;
   /**
@@ -455,9 +456,13 @@ export type ExecuteOptions = {
 export async function executePlan(
   steps: readonly Step[],
   session: string,
-  host: Host,
+  source: Host,
   options?: ExecuteOptions,
 ): Promise<Report> {
+  const host = endpointCleanupHost(source, (seat, why) => {
+    held = true;
+    hold(seat, `${seat}: ${why}\n`);
+  });
   const concurrency = Math.max(1, options?.concurrency ?? 1);
   const parallel = concurrency > 1;
   const closing = options?.isClosing ?? (() => false);
@@ -670,6 +675,12 @@ export async function executePlan(
     return 'settled';
   };
 
+  const dropRecord = (seat: string): boolean => {
+    if (host.drop(seat)) return true;
+    leftOut(seat, 'its endpoint was not stopped; its launch record was kept');
+    return false;
+  };
+
   /** A pause's outcome, become this run's final record or its continuation into the seat's
    *  ordinary steps. `stopped` carries `q` out to the pass after the loop. */
   const settle = (seat: string, result: PauseResult): 'idle' | 'settled' => {
@@ -724,6 +735,23 @@ export async function executePlan(
   };
   // The identity read after the idle prompt, to carry into every later record of the seat.
   const identities = new Map<string, LaunchedIdentity>();
+  const liveSession = (seat: string, pane: string, cli: string): string | undefined => {
+    const listed = host.agentList?.(session)?.find((agent) => agent.pane === pane
+      && (agent.name === null || agent.name === undefined || agent.name === seat));
+    // A reading explicitly attributed to another CLI is never a resume id for this one.
+    if (listed?.agent && !reportedLiveAgent([listed.agent], profileFor(cli)?.processNames ?? [])) return undefined;
+    return listed?.session || undefined;
+  };
+  const laterLaunchSession = (seat: string, pane: string, cli: string): { agent_session?: string } => {
+    // Only finish a launch this run owns. A later command finding a different live thread
+    // must still refuse the mismatch rather than rewriting the record to make it agree.
+    if (!launchedThisRun.has(seat)
+      || seatProcessVerdict(identities.get(seat), host.processInfo?.(session, pane)) !== 'same') return {};
+    const id = liveSession(seat, pane, cli);
+    if (id === undefined) return {};
+    launchSessions.set(seat, id);
+    return { agent_session: id };
+  };
 
   // The display label may be shared. The seat's name is the only key; the watch has no seat.
   const place = (key: string, pane?: string, workspace?: string): Place | null => {
@@ -832,7 +860,7 @@ export async function executePlan(
           return leftOut(seat, `${classification}; its workspace did not close; left as it is`);
         }
       }
-      host.drop(seat);
+      if (!dropRecord(seat)) return 'settled';
       dropped.add(seat);
       if (here.workspace) closed.add(seat);
       final(seat, { kind: 'left out', reason: `${classification} (no terminal for owner)` }, '  its workspace was closed without input\n');
@@ -880,12 +908,13 @@ export async function executePlan(
       if (problem) return leftOut(op.seat, problem.reason, problem.detail);
       const kind = host.classify(session, op.pane, op.cli);
       const back = host.shellBack?.(session, op.pane) ?? null;
-      if (kind === 'idle' || (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, op.pane)))) {
+      const cliSeen = reportedLiveAgent(host.foreground?.(session, op.pane) ?? null, profileFor(op.cli)?.processNames ?? []);
+      if (back !== true && cliSeen && (kind === 'idle' || (kind === 'unknown' && unreadIdle(host.agentStatus?.(session, op.pane))))) {
         // The owner answered in the pane between runs: the seat carries on and finishes.
         host.clearWaiting?.(op.seat);
         return 'idle';
       }
-      classification = kind === 'working' ? op.record.classification : classificationOf(kind);
+      classification = kind === 'working' || kind === 'idle' ? op.record.classification : classificationOf(kind);
       if (dialog.mode === 'keep') {
         host.recordWaiting?.(op.seat, { state: 'waiting-owner', classification }, op.pane, op.workspace);
         dropped.add(op.seat);
@@ -992,8 +1021,7 @@ export async function executePlan(
           held = true;
           finish(asked.seat, `${closedLine}; its workspace did not close`);
         } else {
-          host.drop(asked.seat);
-          finish(asked.seat, closedLine);
+          if (dropRecord(asked.seat)) finish(asked.seat, closedLine);
         }
       } else {
         held = true;
@@ -1127,6 +1155,27 @@ export async function executePlan(
           if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
         }
         const here = place(op.seat, op.pane);
+        // The rules line rides this launch: its file is written before anything starts, so the
+        // CLI reads it on its first turn, and a file that cannot be written leaves the seat out
+        // before a managed endpoint is started for it. Whether the launch carries the line is the
+        // plan's own decision (`rulesCarried`), never a search of the built command: the line is
+        // shell-quoted on it, and a profile with no launch prompt carries none at all.
+        const rulesOp = steps
+          .map((step) => step.do)
+          .find((d): d is Extract<Op, { do: 'deliver' }> => d?.do === 'deliver' && d.seat === op.seat);
+        if (here && rulesOp && host.deliverRules && op.rulesCarried === true) {
+          const written = await host.deliverRules(
+            session, here.pane, rulesOp.cli,
+            { text: rulesOp.rules, path: rulesOp.path, line: rulesOp.line, seat: rulesOp.seat, writeOnly: true },
+            rulesOp.seconds,
+          );
+          if (written !== true) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: typeof written === 'object' ? refusalReport(written) : 'its rules file was not written; nothing was launched' });
+            break;
+          }
+          rulesAtLaunch.add(op.seat);
+        }
         // The managed Codex endpoint is started here, after the seat was allowed and its inbox
         // registered: the plan's command stays the deterministic line a dry run prints, and the
         // attach is added only once an endpoint exists to attach to. A start failure is said
@@ -1139,9 +1188,6 @@ export async function executePlan(
             : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
             const attached = remoteCodexCommand(command);
-            if (attached !== command) {
-              hold(op.seat, `${op.seat}: starts a fresh Codex thread on its managed endpoint: codex-cli refuses permission overrides on a remote resume, and without them the seat would run under the default sandbox\n`);
-            }
             command = `${attached} --remote ${shellQuote(read.url)}`;
             startedEndpoint = read.started;
             for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
@@ -1164,24 +1210,6 @@ export async function executePlan(
         const launch = withLaunchSession(op.cli ?? '', command);
         launchedCommands.set(op.seat, launch.command);
         launchedThisRun.add(op.seat);
-        // The rules line rides this launch: its file is written first, so the CLI reads it on its
-        // first turn. A file that cannot be written leaves the seat out before anything runs.
-        const rulesOp = steps
-          .map((step) => step.do)
-          .find((d): d is Extract<Op, { do: 'deliver' }> => d?.do === 'deliver' && d.seat === op.seat);
-        if (here && rulesOp && host.deliverRules && launch.command.includes(rulesOp.line)) {
-          const written = await host.deliverRules(
-            session, here.pane, rulesOp.cli,
-            { text: rulesOp.rules, path: rulesOp.path, line: rulesOp.line, seat: rulesOp.seat, writeOnly: true },
-            rulesOp.seconds,
-          );
-          if (written !== true) {
-            dropped.add(op.seat);
-            final(op.seat, { kind: 'left out', reason: typeof written === 'object' ? refusalReport(written) : 'its rules file was not written; nothing was launched' });
-            break;
-          }
-          rulesAtLaunch.add(op.seat);
-        }
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
           // A server this call started was never attached: it is this run's to stop, so a pane
           // that did not run leaves no endpoint behind.
@@ -1236,11 +1264,20 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'has no pane to read; left at launched' });
           break;
         }
+        // The names the seat's own CLI runs under. A foreground process is read as the CLI only
+        // when its argv0 is one of these: "anything that is not the pane's shell" also names a
+        // wrapper's interpreter, which is not a prompt and not a launch.
+        const processNames = op.cli ? profileFor(op.cli)?.processNames ?? [] : [];
         // What an idle screen means for the seat, wherever it was found: the screen, then the
         // process, then the model comparison. The model comes from that screen read, so the
         // process read sits after it and before the comparison: a model the CLI is not running
         // still leaves a `launched` identity, and the read stays ahead of the process read.
         const idleOnwards = (): void => {
+          if ((host.shellBack?.(session, here.pane) ?? null) === true
+            || !reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames)) {
+            leftOut(op.seat, 'its CLI is not in the foreground; left at launched');
+            return;
+          }
           // What this run leaves watching for a drop is recorded before the screen is read, so
           // a seat whose identity cannot be read still carries the truth beside it.
           if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
@@ -1255,7 +1292,7 @@ export async function executePlan(
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
-            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session ?? launchSessions.get(op.seat);
+            const sessionId = liveSession(op.seat, here.pane, op.cli) ?? launchSessions.get(op.seat);
             host.record(op.seat, {
               stage: 'launched',
               pane: here.pane,
@@ -1353,12 +1390,25 @@ export async function executePlan(
           }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
+          // The pane's shell, read once this poll: the relaunch below types a line, and the ended
+          // read further down reads the same evidence.
+          const back = host.shellBack?.(session, here.pane) ?? null;
           // A resume the CLI refused at runtime ("No conversation found") is launched once more,
-          // fresh, in the same pane: the seat is never left at a bare shell for it.
+          // fresh, in the same pane: the seat is never left at a bare shell for it. The relaunch
+          // types a launch line, so it runs only once the CLI is gone — the same evidence
+          // 10139bc22 uses: the pane is back at its shell, or no foreground process is one the
+          // seat's profile runs as. The names are the profile's own, never "anything that is not
+          // the shell": a wrapper's interpreter is such a process, and it is not the CLI that
+          // printed the error.
           if (kind === 'unknown' && !freshAfterMissing) {
             const ran = launchedCommands.get(op.seat);
             const fresh = ran !== undefined && namedResumeTarget(op.cli ?? '', ran) ? withoutResume(op.cli ?? '', ran) : null;
-            const screen = fresh === null ? null : (host.paneText?.(session, here.pane) ?? null);
+            const shellBackNow = (): boolean => {
+              if (back === true) return true;
+              const front = host.foreground?.(session, here.pane) ?? null;
+              return front !== null && !reportedLiveAgent(front, processNames);
+            };
+            const screen = fresh === null || !shellBackNow() ? null : (host.paneText?.(session, here.pane) ?? null);
             if (fresh !== null && screen !== null && conversationMissingOnScreen(op.cli ?? '', plainPaneText(screen))) {
               freshAfterMissing = true;
               const relaunch = withLaunchSession(op.cli ?? '', fresh);
@@ -1376,7 +1426,6 @@ export async function executePlan(
               }
             }
           }
-          const back = host.shellBack?.(session, here.pane) ?? null;
           const at = host.now();
           if (kind === 'unknown' && back === true) {
             shellBackSince ??= at;
@@ -1397,14 +1446,16 @@ export async function executePlan(
           // at its shell shows no CLI prompt whatever herdr reports, and the ended read below is
           // left to say so. The rules delivery still waits for its own recognised idle screen, so
           // a ready taken on herdr's word never types into a screen this run could not read.
-          // herdr's word is taken only while the CLI is still in front of the pane, and only on a
-          // second reading in a row: a CLI that draws and exits at once (a resume it refused)
-          // left herdr's status at idle while the pane went back to its shell, and the seat was
-          // reported ready on a bare shell.
+          // herdr's word is taken only while a foreground process is one the seat's profile runs
+          // as, and only on a second reading in a row: a CLI that draws and exits at once (a
+          // resume it refused) left herdr's status at idle while the pane went back to its shell,
+          // and the seat was reported ready on a bare shell. The CLI is named, never "anything
+          // that is not the shell": a wrapper that has not exec'd its CLI, or one still starting
+          // on a reused pane whose status is stale, is a foreground process of its own, and the
+          // seat was reported ready over a CLI that had not drawn yet.
           if (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, here.pane))) {
-            const front = host.processInfo?.(session, here.pane);
-            const cliGone = front !== undefined && front !== null && launchedIdentity(front) === null;
-            if (!cliGone) {
+            const cliSeen = reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
+            if (cliSeen) {
               if (herdrIdleBefore) {
                 outcome = 'idle';
                 break;
@@ -1412,7 +1463,14 @@ export async function executePlan(
               herdrIdleBefore = true;
             } else herdrIdleBefore = false;
           } else herdrIdleBefore = false;
-          if (kind === 'idle' || kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
+          // A terminal retains its last frame after the CLI exits. Its idle text is evidence
+          // only while the profile's own process is still in front of the pane.
+          if (kind === 'idle' && back !== true
+            && reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames)) {
+            outcome = 'idle';
+            break;
+          }
+          if (kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
             outcome = kind;
             break;
           }
@@ -1463,7 +1521,7 @@ export async function executePlan(
             final(op.seat, { kind: 'left out', reason: `${reading}; its workspace did not close; left as it is` }, untested());
             break;
           }
-          host.drop(op.seat);
+          if (!dropRecord(op.seat)) break;
           dropped.add(op.seat);
           const closed = `  its workspace was closed without ${outcome === 'trust' ? 'an answer' : 'input'} and the seat left out\n`;
           final(op.seat, { kind: 'left out', reason: reading }, untested() + closed);
@@ -1554,6 +1612,7 @@ export async function executePlan(
         host.record(op.seat, {
           stage: 'named',
           pane: here.pane,
+          ...laterLaunchSession(op.seat, here.pane, op.cli ?? ''),
           ...(here.workspace ? { workspace: here.workspace } : {}),
           ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
         });
@@ -1564,6 +1623,7 @@ export async function executePlan(
             stage: 'ready',
             rules: op.rules,
             pane: here.pane,
+            ...laterLaunchSession(op.seat, here.pane, op.cli ?? ''),
             ...(here.workspace ? { workspace: here.workspace } : {}),
             ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
           });
@@ -1601,11 +1661,14 @@ export async function executePlan(
           const written = await host.deliverRules?.(session, here.pane, op.cli, { ...file, writeOnly: true }, op.seconds);
           if (stopped) break;
           dropped.add(op.seat);
+          // A profile that names no launch prompt can never carry the line, on this launch or on
+          // a restart that builds the same one: the report says so instead of advising a restart.
+          const held = written === true ? '; its rules file is written' : '';
           final(op.seat, {
             kind: 'left out',
-            reason: written === true
-              ? `rules not typed: its rules ride only a launch; its rules file is written: run team restart ${op.seat} to carry them`
-              : `rules not typed: its rules ride only a launch; run team restart ${op.seat} to carry them`,
+            reason: op.launchCanCarryRules === false
+              ? `rules not typed: its CLI takes no initial prompt at launch, so no launch carries them${held}`
+              : `rules not typed: its rules ride only a launch${held}: run team restart ${op.seat} to carry them`,
           });
           break;
         }
@@ -1619,6 +1682,7 @@ export async function executePlan(
           stage: 'ready',
           rules: 'message',
           pane: here.pane,
+          ...laterLaunchSession(op.seat, here.pane, op.cli),
           ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
         });
         finishReady(op.seat);
@@ -1737,8 +1801,7 @@ export async function executePlan(
               held = true;
               finish(op.seat, 'timed out leaving its pane; its workspace did not close');
             } else {
-              host.drop(op.seat);
-              finish(op.seat, 'timed out leaving its pane; its workspace was closed');
+              if (dropRecord(op.seat)) finish(op.seat, 'timed out leaving its pane; its workspace was closed');
             }
           } else {
             held = true;
@@ -1935,7 +1998,7 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its workspace did not close; left as it is' });
           break;
         }
-        host.drop(op.seat);
+        if (!dropRecord(op.seat)) break;
         relaunched.set(op.seat, op.drift || op.reload || verdict === 'same' ? 'drift' : verdict);
         break;
       }
@@ -1956,7 +2019,7 @@ export async function executePlan(
           finish(op.seat, 'its workspace did not close');
           break;
         }
-        host.drop(op.seat);
+        if (!dropRecord(op.seat)) break;
         finish(op.seat, op.said ?? 'stopped');
         break;
       }
@@ -2192,7 +2255,7 @@ export async function executePlan(
           final(seat, { kind: 'left out', reason: 'its workspace did not close; left as it is' });
           continue;
         }
-        host.drop(seat);
+        if (!dropRecord(seat)) continue;
         closed.add(seat);
       } finally {
         if (lock && 'release' in lock) lock.release();

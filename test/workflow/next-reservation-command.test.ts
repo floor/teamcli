@@ -54,7 +54,7 @@ const ONE = '- id: m1\n  title: one\n';
 const TWO = '- id: m1\n  title: one\n- id: m2\n  title: two\n';
 const TIMED = '- id: m1\n  title: one\n  deadline: 2026-12-31T00:00:00Z\n- id: m2\n  title: two\n';
 
-const lead: Caller = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' };
+const lead: Caller = { kind: 'seat', name: 'lead', pane: 'fixture1:pane1', session: 'acme' };
 /** The caller a seat's own pane makes: the pane the fixture's state records for it. */
 function callerOf(seat: string): Extract<Caller, { kind: 'seat' }> {
   const record = readState(join(root, '.agents')).sessions.acme?.seats[seat];
@@ -83,8 +83,8 @@ function ready(tasks = ONE): void {
   writeFileSync(join(root, '.agents', 'tasks.yaml'), tasks);
   updateState(join(root, '.agents'), (state) => {
     const session = (state.sessions.acme ??= emptySession());
-    session.seats.lead = { stage: 'ready', pane: 'w1:p1' };
-    session.seats.worker = { stage: 'ready', pane: 'w2:p1' };
+    session.seats.lead = { stage: 'ready', pane: 'fixture1:pane1' };
+    session.seats.worker = { stage: 'ready', pane: 'fixture2:pane1' };
   });
 }
 
@@ -118,12 +118,12 @@ describe('team next with a reservation store injected', () => {
     const store = new StandInStore();
     const answer = await next(store);
     expect(answer).toEqual({ code: 0, out: `${CTX}m1  one\nteam next: claimed m1\n`, err: '' });
-    expect(leaseOf()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'w1:p1' });
+    expect(leaseOf()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'fixture1:pane1' });
     expect(holdOf(store)).toMatchObject({
       kind: 'next-claim',
-      owner: 'next:lead:w1:p1',
+      owner: 'next:lead:fixture1:pane1',
       seat: 'lead',
-      pane: 'w1:p1',
+      pane: 'fixture1:pane1',
       phase: 'pending',
       expiresAt: new Date(now + LEASE_MS).toISOString(),
     });
@@ -146,7 +146,7 @@ describe('team next with a reservation store injected', () => {
         attempt: 1,
         thread: 'th-1',
         receiver: 'worker',
-        pane: 'w2:p1',
+        pane: 'fixture2:pane1',
       },
     });
     const reserved = structuredClone(holdOf(store, 'm1'));
@@ -221,14 +221,14 @@ describe('team next with a reservation store injected', () => {
     });
     const answer = await next(store);
     expect(answer.out).toBe(`${CTX}m1  one\nteam next: claimed m1\n`);
-    expect(holdOf(store)).toMatchObject({ owner: 'next:lead:w1:p1', kind: 'next-claim' });
+    expect(holdOf(store)).toMatchObject({ owner: 'next:lead:fixture1:pane1', kind: 'next-claim' });
   });
 
   test('release removes the lease and then clears the store claim', async () => {
     ready();
     const store = new StandInStore();
     expect((await next(store)).code).toBe(0);
-    expect(holdOf(store)?.owner).toBe('next:lead:w1:p1');
+    expect(holdOf(store)?.owner).toBe('next:lead:fixture1:pane1');
     const answer = await next(store, ['--release']);
     expect(answer).toEqual({ code: 0, out: `${CTX}team next: released m1\n`, err: '' });
     expect(leaseExists('m1')).toBe(false);
@@ -243,7 +243,7 @@ describe('team next with a reservation store injected', () => {
     const answer = await next(store, [], later);
     expect(answer.out).toBe(`${CTX}m1  one\nteam next: claimed m1\n`);
     expect(Date.parse(String(leaseOf().until))).toBe(later + LEASE_MS);
-    expect(holdOf(store)).toMatchObject({ owner: 'next:lead:w1:p1', expiresAt: new Date(later + LEASE_MS).toISOString() });
+    expect(holdOf(store)).toMatchObject({ owner: 'next:lead:fixture1:pane1', expiresAt: new Date(later + LEASE_MS).toISOString() });
     const renewals = store.calls.filter((call) => call.op === 'renewHold');
     expect(renewals.length).toBe(1);
   });
@@ -271,7 +271,7 @@ describe('team next with a reservation store injected', () => {
     const held: TaskAdapter = { ...fileAdapter, claim: () => ({ kind: 'held' }) };
     expect(await runNext([], io, { home, now: () => now, reservations: holding, registry: { file: held } })).toBe(0);
     expect(io.out).toBe(`${CTX}m1  one\nteam next: claimed m1\n`);
-    expect(holdOf(holding)).toMatchObject({ kind: 'next-claim', owner: 'next:lead:w1:p1' });
+    expect(holdOf(holding)).toMatchObject({ kind: 'next-claim', owner: 'next:lead:fixture1:pane1' });
     expect(leaseExists('m1')).toBe(false);
   });
 });

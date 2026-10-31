@@ -8,7 +8,7 @@ pane. The raw frames stay out of the repository; only these sanitized copies are
 
 Sanitization: the project paths the footers name were replaced by `~/fixture/project` in the
 authorized frames and by `/p/t/b5-muse-capture/ws` in the scratch frame, and the rules line's
-home path and team folder by `/Users/example/.config/team/demo-3f9c2a8e1d7b` (authorized) and
+home path and team folder by `/home/example/.config/team/demo-3f9c2a8e1d7b` (authorized) and
 `/home/owner/.config/team/demo-3f9c2a8e1d7b` (scratch, a synthetic home); every other byte,
 including the prompt glyph `❯`, the `Voice input` box borders, blank rows and spacing, is the
 captures' own.

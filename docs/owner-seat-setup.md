@@ -2,7 +2,7 @@
 
 `team setup` is the one signature. It registers the owner seat, lets the owner choose Touch ID or an iPhone passkey, and writes one signed charter. Routine commands that sit inside that charter run with no further prompt. A run outside it is refused and names `team setup --edit`; TeamCLI does not raise a prompt of its own while a charter is on disk. The helper that holds the Secure Enclave key is still built by the current path (it is not auto-provisioned).
 
-You never open a terminal. Iris (the orchestrator agent) runs every command; your only acts are
+You never open a terminal. The orchestrator runs every command; your only acts are
 native prompts on your own devices: Touch ID on the Mac, or a tap on your iPhone for a passkey.
 That signature from your device is the authority; nothing else (no TTY, no chat click) is.
 
@@ -32,54 +32,54 @@ the signed profile lists, until its expiry.
 
 ## Morning checklist (three Touch IDs, nothing to type)
 
-1. **Iris starts the setup** (`scripts/morning-owner-setup.sh`). It builds the owner-seat helper,
+1. **The orchestrator starts the setup** (`scripts/morning-owner-setup.sh`). It builds the owner-seat helper,
    installs this branch as `~/.local/bin/team-branch` next to the global `team` (the global one is
    left alone), registers your owner seat with a Secure Enclave key, and writes `owner-signers=mac`
-   and `grant-emission=conversational` for the entities `floor` (Atlas's grant, Floor Docs) and `teamcli` (Agamemnon's grant).
+   and `grant-emission=conversational` for the entities `floor` (Reviewer's grant, Floor Docs) and `teamcli` (Coordinator's grant).
    **You approve with Touch ID** once. The prompt reads:
    *"Create the TeamCLI owner seat for floor and set owner-signers=mac, grant-emission=conversational for entities floor, teamcli"*.
-2. **Iris requests the grok-bot grant to Atlas** (send + messages to `orchestrator@floor`, 7 days)
+2. **The orchestrator requests the grok-bot grant to Reviewer** (send + messages to `orchestrator@floor`, 7 days)
    and answers it `always`. **You approve with Touch ID**. The prompt reads:
    *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@floor (entity floor) until …"*.
-3. **Iris requests the grok-bot grant to Agamemnon** (send + messages to `orchestrator@teamcli`)
+3. **The orchestrator requests the grok-bot grant to Coordinator** (send + messages to `orchestrator@teamcli`)
    the same way. **You approve with Touch ID**:
    *"TeamCLI: always for Grant for grok-bot: send + messages to orchestrator@teamcli (entity teamcli) until …"*.
-   Iris runs `--execute` after each answer and the grants are written. With "messages" Iris can
-   read the orchestrators' `team reply` answers. Next week Iris re-runs the script: both standing
+   the orchestrator runs `--execute` after each answer and the grants are written. With "messages" the orchestrator can
+   read the orchestrators' `team reply` answers. Next week the orchestrator re-runs the script: both standing
    rules renew the grants with no prompt.
 
    Why two: a grant binds exactly one entity and one team, so one grant cannot reach both
    orchestrators. Widening the grant format to several targets was rejected: it would make one
    Touch ID authorise sends into two entities, which is harder to read on the prompt.
-4. *(Optional)* **Iris proposes the relaxed security profile** for a week of frictionless
+4. *(Optional)* **The orchestrator proposes the relaxed security profile** for a week of frictionless
    development; **you approve with Touch ID**: *"Set the TeamCLI security profile to relaxed until …"*.
    Then Floor Docs (below) needs no prompt at all.
 
 There is no keychain "Allow" dialog by default: the helper is ad-hoc signed and keeps its key
 through CryptoKit, which needs no entitlement (see [Why no codesigning](#why-no-codesigning)). If
-you ever want the codesigned build, Iris runs the script with `--identity`: you then see one macOS
+you ever want the codesigned build, the orchestrator runs the script with `--identity`: you then see one macOS
 dialog *"codesign wants to sign using key … in your keychain"* and click **Allow**.
 
-If you cancel a prompt nothing is written; Iris simply runs the script again (each step is skipped
-when already done). Before running it, Iris can show you the exact prompts with `--dry-run`.
+If you cancel a prompt nothing is written; the orchestrator simply runs the script again (each step is skipped
+when already done). Before running it, the orchestrator can show you the exact prompts with `--dry-run`.
 
 ## Creating "Floor Docs" (`~/Code/floor/docs`)
 
-1. Iris runs `team init --request` in `~/Code/floor/docs`. The request lands in your owner-seat inbox.
-2. Iris runs `team init --approve-as-owner-seat <id> oui` (or `always`, to cover every sibling
+1. The orchestrator runs `team init --request` in `~/Code/floor/docs`. The request lands in your owner-seat inbox.
+2. The orchestrator runs `team init --approve-as-owner-seat <id> oui` (or `always`, to cover every sibling
    folder of `~/Code/floor` from now on). **You approve with Touch ID**:
    *"TeamCLI: once for Create team "docs" in …/floor/docs …"*.
-   From the phone instead: Iris starts `team owner-seat serve`, opens the link on the Mac, and you
+   From the phone instead: the orchestrator starts `team owner-seat serve`, opens the link on the Mac, and you
    tap **Approve once** or **Always allow** and confirm with your passkey (the browser offers the
    iPhone QR code). **Approve once** is a one-time approval. A migration needs that.
-3. Iris runs `team init --execute <id>`; the team file is written.
+3. The orchestrator runs `team init --execute <id>`; the team file is written.
 
-Under the relaxed profile step 2 disappears: Iris runs `--request` then `--execute`, and the audit
+Under the relaxed profile step 2 disappears: the orchestrator runs `--request` then `--execute`, and the audit
 records `via: security-profile`.
 
 ## A test team, created and started with one answer (no terminal)
 
-What Iris runs, in the new repository (say `~/Code/floor/demo`):
+What the orchestrator runs, in the new repository (say `~/Code/floor/demo`):
 
 1. `team owner-seat serve` (if the page is not already up) and sends you its link.
 2. `team init --request --then-up` — one request for "create the team, then start the team".
@@ -87,7 +87,7 @@ What Iris runs, in the new repository (say `~/Code/floor/demo`):
 
 What you see, and all you do: the owner page shows one card, **Create a team, then Start the team**,
 *"seat:iris asks to create the team, then start the team — team "demo" in
-/Users/…/floor/demo (HEAD …)."*, with **Approve once**, **Always allow** and **Deny**.
+/home/…/floor/demo (HEAD …)."*, with **Approve once**, **Always allow** and **Deny**.
 **Approve once** is a one-time approval. A migration needs that. **Always allow** also permits
 later runs of the same action in the parent folder. You tap **Approve once** and confirm with
 Touch ID on the Mac, or with your iPhone (the browser's QR code for the passkey). The card
@@ -119,7 +119,7 @@ passkey), carries an expiry of 1 to 30 days, and every set, refusal and relaxed 
 as strict. `team status` and `team owner-seat status` print
 `SECURITY PROFILE: RELAXED: … until …` whenever it is active.
 
-The one line Iris runs to switch to relaxed (you approve with Touch ID):
+The one line the orchestrator runs to switch to relaxed (you approve with Touch ID):
 
 ```sh
 team owner-seat profile relaxed --days 7 --reason "beta 0.5 development"
@@ -133,7 +133,7 @@ seat for a Touch ID showing the exact write (`TeamCLI: policy set entity owner-s
 ## The iPhone passkey (optional)
 
 `team owner-seat serve` serves a page on `http://localhost:7391/?t=<token>` (127.0.0.1 only; the
-token is per run). Iris opens it on the Mac. There you can:
+token is per run). The orchestrator opens it on the Mac. There you can:
 
 - **add a passkey**: the browser creates it (iCloud Keychain on the Mac, or the iPhone through
   the QR code); the Mac's Secure Enclave signer confirms it with one Touch ID;

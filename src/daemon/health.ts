@@ -40,6 +40,9 @@ export type DaemonHealth = {
   since: string | null;
   startedBy: string | null;
   version: string | null;
+  /** The commit the running build was packaged from; null in a source checkout or an older
+   *  record. It is the other half of the install identity the daemon records beside `version`. */
+  gitHead: string | null;
   heartbeatAt: string | null;
   features: DaemonFeatures | null;
   stuck: DaemonStuckRequest[];
@@ -91,6 +94,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       since: null,
       startedBy: null,
       version: null,
+      gitHead: null,
       heartbeatAt: null,
       features: null,
       stuck: [],
@@ -110,6 +114,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       since: null,
       startedBy: null,
       version: null,
+      gitHead: null,
       heartbeatAt: null,
       features: null,
       stuck: [],
@@ -131,6 +136,7 @@ export async function daemonHealth(home: string = homedir(), options: DaemonHeal
       since: health.since,
       startedBy: health.startedBy,
       version: health.version,
+      gitHead: typeof health.gitHead === 'string' && health.gitHead !== '' ? health.gitHead : null,
       heartbeatAt: health.heartbeatAt,
       features: health.features,
       stuck: health.stuck,
@@ -277,6 +283,7 @@ function runningFromState(state: DaemonState, socket: string, probe: DaemonProbe
     since: state.since,
     startedBy: state.startedBy,
     version: state.version,
+    gitHead: state.gitHead ?? null,
     heartbeatAt: state.heartbeatAt,
     features: state.features,
     stuck: state.stuck,
@@ -297,6 +304,7 @@ function unknown(socket: string, why: string, now: () => Date): DaemonHealth {
     since: null,
     startedBy: null,
     version: null,
+    gitHead: null,
     heartbeatAt: null,
     features: null,
     stuck: [],

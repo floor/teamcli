@@ -28,7 +28,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function current(session = 'crew'): { pid?: number; heartbeat: string; epoch?: string } | undefined {
+function current(session = 'crew'): { pid?: number; heartbeat: string; epoch?: string; started_at?: string } | undefined {
   return readState(agents).sessions[session]?.watch;
 }
 
@@ -119,9 +119,12 @@ describe('the state record and the heartbeat', () => {
     expect(current()).toEqual({ heartbeat: iso(T0), epoch });
   });
 
-  test('an ordinary epochless pane record still beats', () => {
+  test('an ordinary epochless pane record still beats, and keeps the first start instant', () => {
     seed({ pid: process.pid, heartbeat: iso(T0) });
-    beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep');
-    expect(current()).toEqual({ pid: process.pid, heartbeat: iso(T0 + 5_000) });
+    beatWatch(agents, 'crew', process.pid, iso(T0 + 5_000), 'keep', iso(T0));
+    expect(current()).toEqual({ pid: process.pid, heartbeat: iso(T0 + 5_000), started_at: iso(T0) });
+    // The process that owns the record keeps its first instant; a later beat cannot rewrite it.
+    beatWatch(agents, 'crew', process.pid, iso(T0 + 10_000), 'keep', iso(T0 + 10_000));
+    expect(current()).toEqual({ pid: process.pid, heartbeat: iso(T0 + 10_000), started_at: iso(T0) });
   });
 });

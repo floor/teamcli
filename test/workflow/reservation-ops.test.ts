@@ -38,7 +38,7 @@ function reserved(store: StandInStore, patch: { attempt?: number; runId?: string
     runId: patch.runId ?? 'run-1',
     attempt: patch.attempt ?? 1,
     thread: 'th-1',
-    receiver: { seat: 'work', pane: 'w2:p1' },
+    receiver: { seat: 'work', pane: 'fixture2:pane1' },
     expiresAt: T,
     at: AT,
   });
@@ -51,7 +51,7 @@ function ackInput(patch: Partial<Parameters<typeof acknowledge>[1]> = {}) {
     attempt: 1,
     thread: 'th-1',
     seat: 'work',
-    pane: 'w2:p1',
+    pane: 'fixture2:pane1',
     messageId: 'msg-1',
     at: AT + 1000,
     ...patch,
@@ -82,7 +82,7 @@ describe('reserve: one hold for the item and its receiver', () => {
       attempt: 1,
       thread: 'th-1',
       receiver: 'work',
-      pane: 'w2:p1',
+      pane: 'fixture2:pane1',
     });
     expect(store.transactions).toBe(1);
     expect(holdOf(store)).toEqual(result.hold);
@@ -99,7 +99,7 @@ describe('reserve: one hold for the item and its receiver', () => {
 
     const held = new StandInStore();
     held.seed(ITEM, {
-      hold: { kind: 'next-claim', item: 'k', owner: nextOwner('lead', 'w1:p1'), seat: 'lead', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() },
+      hold: { kind: 'next-claim', item: 'k', owner: nextOwner('lead', 'fixture1:pane1'), seat: 'lead', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() },
     });
     expect(reserved(held)).toMatchObject({ kind: 'refused', reason: 'hold-live' });
 
@@ -117,7 +117,7 @@ describe('reserve: one hold for the item and its receiver', () => {
       kind: 'refused',
       reason: 'item-key',
     });
-    expect(claimNext(store, { item: unkeyable, seat: 'lead', pane: 'w1:p1', now: AT, expiresAt: T })).toEqual({
+    expect(claimNext(store, { item: unkeyable, seat: 'lead', pane: 'fixture1:pane1', now: AT, expiresAt: T })).toEqual({
       kind: 'unrecorded',
       reason: 'item-key',
     });
@@ -134,7 +134,7 @@ describe('acknowledge: bind checks first, one transaction, one outcome', () => {
       [{ attempt: 2 }, 'stale-attempt'],
       [{ thread: 'th-2' }, 'wrong-thread'],
       [{ seat: 'other' }, 'wrong-receiver'],
-      [{ pane: 'w2:p2' }, 'wrong-receiver'],
+      [{ pane: 'fixture2:pane2' }, 'wrong-receiver'],
     ];
     for (const [patch, why] of cases) {
       const answer = acknowledge(store, ackInput(patch));
@@ -150,7 +150,7 @@ describe('acknowledge: bind checks first, one transaction, one outcome', () => {
     const answer = acknowledge(store, ackInput());
     expect(answer.kind).toBe('acknowledged');
     const hold = holdOf(store);
-    expect(hold).toMatchObject({ phase: 'holder', holder: { seat: 'work', pane: 'w2:p1' }, messageId: 'msg-1' });
+    expect(hold).toMatchObject({ phase: 'holder', holder: { seat: 'work', pane: 'fixture2:pane1' }, messageId: 'msg-1' });
     expect(hold?.expiresAt).toBeUndefined();
     // A second reply to the same attempt is refused, and the holder stays.
     expect(acknowledge(store, ackInput())).toMatchObject({ kind: 'ignored', why: 'already-holder' });
@@ -173,7 +173,7 @@ describe('the deadline: exactly one of convert and sweep wins', () => {
     expect(holdOf(store)).toEqual(before);
     const cleared = expire(store, T);
     expect(cleared).toEqual([
-      { kind: 'reservation', item: ITEM, owner: 'run-1/1', run: 'run-1', attempt: 1, thread: 'th-1', seat: 'work', receiver: 'work', pane: 'w2:p1' },
+      { kind: 'reservation', item: ITEM, owner: 'run-1/1', run: 'run-1', attempt: 1, thread: 'th-1', seat: 'work', receiver: 'work', pane: 'fixture2:pane1' },
     ]);
     expect(holdOf(store)).toBeUndefined();
     expect(acknowledge(store, ackInput({ at: T - 1 }))).toEqual({ kind: 'ignored', why: 'no-reservation' });
@@ -199,7 +199,7 @@ describe('a converted holder is excluded for good', () => {
     expect(exclusionOf(store.entry(key), later)).toBe('held');
     expect(excludedItems(store, [ITEM], later)).toEqual(new Set([key]));
     expect(reserved(store)).toMatchObject({ kind: 'refused', reason: 'hold-live' });
-    expect(claimNext(store, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: later, expiresAt: later + 1000 })).toMatchObject({
+    expect(claimNext(store, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', now: later, expiresAt: later + 1000 })).toMatchObject({
       kind: 'refused',
       reason: 'hold-live',
     });
@@ -208,7 +208,7 @@ describe('a converted holder is excluded for good', () => {
       kind: 'refused',
       reason: 'receiver-busy',
     });
-    expect(claimNext(store, { item: OTHER, seat: 'lead', pane: 'w1:p1', now: later, expiresAt: later + 1000 }).kind).toBe('claimed');
+    expect(claimNext(store, { item: OTHER, seat: 'lead', pane: 'fixture1:pane1', now: later, expiresAt: later + 1000 }).kind).toBe('claimed');
   });
 });
 
@@ -219,10 +219,10 @@ describe('expire: deterministic order, holders and live holds untouched', () => 
     const b1 = { ...ITEM, id: 'b1' };
     const c1 = { ...ITEM, id: 'c1' };
     const d1 = { ...ITEM, id: 'd1' };
-    store.seed(b1, { hold: { kind: 'next-claim', item: 'k', owner: nextOwner('lead', 'w1:p1'), seat: 'lead', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() } });
-    store.seed(a1, { hold: { kind: 'next-claim', item: 'k', owner: nextOwner('work', 'w2:p2'), seat: 'work', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() } });
+    store.seed(b1, { hold: { kind: 'next-claim', item: 'k', owner: nextOwner('lead', 'fixture1:pane1'), seat: 'lead', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() } });
+    store.seed(a1, { hold: { kind: 'next-claim', item: 'k', owner: nextOwner('work', 'fixture2:pane2'), seat: 'work', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() } });
     // A holder past every deadline and a live pending hold both stay.
-    store.seed(c1, { hold: { kind: 'reservation', item: 'k', owner: 'run-5/1', seat: 'work', phase: 'holder', at: new Date(AT).toISOString(), holder: { seat: 'work', pane: 'w2:p1' } } });
+    store.seed(c1, { hold: { kind: 'reservation', item: 'k', owner: 'run-5/1', seat: 'work', phase: 'holder', at: new Date(AT).toISOString(), holder: { seat: 'work', pane: 'fixture2:pane1' } } });
     store.seed(d1, { hold: { kind: 'reservation', item: 'k', owner: 'run-6/1', seat: 'lead', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T + 60_000).toISOString() } });
     const cleared = expire(store, T);
     expect(cleared.map((entry) => entry.kind === 'reservation' ? 'reservation' : 'next-claim')).toEqual(['next-claim', 'next-claim']);
@@ -237,16 +237,16 @@ describe('expire: deterministic order, holders and live holds untouched', () => 
 describe('next claims renew and release by their own owner token', () => {
   test('renew moves only the deadline; a foreign owner cannot renew or release', () => {
     const store = new StandInStore();
-    const claimed = claimNext(store, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: AT, expiresAt: T });
+    const claimed = claimNext(store, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', now: AT, expiresAt: T });
     expect(claimed.kind).toBe('claimed');
-    expect(renewNextClaim(store, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: AT + 1000, expiresAt: T + 60_000 })).toBe(true);
+    expect(renewNextClaim(store, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', now: AT + 1000, expiresAt: T + 60_000 })).toBe(true);
     expect(holdOf(store)?.expiresAt).toBe(new Date(T + 60_000).toISOString());
-    expect(renewNextClaim(store, { item: ITEM, seat: 'work', pane: 'w2:p1', now: AT + 1000, expiresAt: T + 120_000 })).toBe(false);
-    expect(releaseNextClaim(store, { item: ITEM, seat: 'work', pane: 'w2:p1', at: AT + 1000 })).toBe(false);
+    expect(renewNextClaim(store, { item: ITEM, seat: 'work', pane: 'fixture2:pane1', now: AT + 1000, expiresAt: T + 120_000 })).toBe(false);
+    expect(releaseNextClaim(store, { item: ITEM, seat: 'work', pane: 'fixture2:pane1', at: AT + 1000 })).toBe(false);
     expect(holdOf(store)).toBeDefined();
-    expect(releaseNextClaim(store, { item: ITEM, seat: 'lead', pane: 'w1:p1', at: AT + 1000 })).toBe(true);
+    expect(releaseNextClaim(store, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', at: AT + 1000 })).toBe(true);
     expect(holdOf(store)).toBeUndefined();
-    expect(releaseNextClaim(store, { item: ITEM, seat: 'lead', pane: 'w1:p1', at: AT + 1000 })).toBe(false);
+    expect(releaseNextClaim(store, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', at: AT + 1000 })).toBe(false);
   });
 
   test('a late release of an earlier attempt cannot touch its successor', () => {
@@ -271,7 +271,7 @@ describe('lock-free reads are advisory only', () => {
     const transactions = store.transactions;
     expect(excludedItems(store, [ITEM], AT)).toEqual(new Set());
     expect(store.transactions).toBe(transactions);
-    expect(claimNext(store, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: AT, expiresAt: T })).toMatchObject({ kind: 'refused', reason: 'hold-live' });
+    expect(claimNext(store, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', now: AT, expiresAt: T })).toMatchObject({ kind: 'refused', reason: 'hold-live' });
     expect(reserved(store)).toMatchObject({ kind: 'refused', reason: 'hold-live' });
     expect(holdOf(store)?.owner).toBe('run-1/1');
   });
@@ -287,7 +287,7 @@ describe('lock-free reads are advisory only', () => {
     terminal.seed(ITEM, { reopened: { by: 'lead', at: new Date(AT + 1).toISOString() } });
     expect(exclusionOf(terminal.entry(key(ITEM)), AT + 2)).toBeNull();
     const pending = new StandInStore();
-    pending.seed(ITEM, { hold: { kind: 'next-claim', item: 'k', owner: nextOwner('lead', 'w1:p1'), seat: 'lead', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() } });
+    pending.seed(ITEM, { hold: { kind: 'next-claim', item: 'k', owner: nextOwner('lead', 'fixture1:pane1'), seat: 'lead', phase: 'pending', at: new Date(AT).toISOString(), expiresAt: new Date(T).toISOString() } });
     expect(exclusionOf(pending.entry(key(ITEM)), T - 1)).toBe('held');
     expect(exclusionOf(pending.entry(key(ITEM)), T)).toBeNull();
   });

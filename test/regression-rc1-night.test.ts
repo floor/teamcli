@@ -202,8 +202,21 @@ describe('a pane the session holds at its cross-session frame is never a deliver
     const host = fake(w, { idle: HELD_DIALOG });
     const io = owner(w.root);
 
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
+    const code = await runSend(['lead', 'hello'], io, host);
+    expect(code).toBe(0);
+    // The drop is what carried it: no pane was typed and no socket was dialed.
+    expect(host.dials()).toBe(0);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    // Neither the sender's output nor the history line calls it delivered: the one line says
+    // what it is — sent, unconfirmed, via the drop file — and there is exactly one of them.
+    expect(io.out).not.toContain('delivered');
+    const read = readHistory('acme', w.root, w.home);
+    if (!read.ok) throw new Error(`the history file is unreadable: ${read.reason}`);
+    expect(read.entries).toHaveLength(1);
+    expect(read.entries[0]?.outcome).toBe('sent (unconfirmed)');
+    expect(read.entries[0]?.via).toBe('drop');
+    expect(lastOutcome(w, 'lead')).not.toBe('delivered');
   });
 
   test('the live capture is the dialog because no composer is under it, and a quote above a box is not', () => {

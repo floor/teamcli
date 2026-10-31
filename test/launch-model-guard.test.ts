@@ -336,16 +336,16 @@ describe('up and add under the entity model rule', () => {
       const session = (state.sessions.acme ??= emptySession());
       session.seats.worker = {
         stage: 'launched',
-        pane: 'w7:p1',
-        workspace: 'w7',
+        pane: 'fixture:worker',
+        workspace: 'fixture-worker',
         launched: { shell: 1, cli: [2] },
       };
     });
-    made.seed('w7:p1', IDLE, false);
+    made.seed('fixture:worker', IDLE, false);
     made.session = 'running';
   }
 
-  const LISTED = () => [{ id: 'w7', label: 'worker' }];
+  const LISTED = () => [{ id: 'fixture-worker', label: 'worker' }];
 
   test('up refuses a recorded pane the host lists when no agent is live in it', async () => {
     // The line runs again in the recorded pane, so it is judged even though no workspace is made
@@ -363,7 +363,7 @@ describe('up and add under the entity model rule', () => {
     const live = await up([], liveWorld, { workspaces: LISTED });
     expect(live.code).toBe(1);
     expect(live.out).toContain(`worker: left out: refused: ${SENTENCE}\n`);
-    expect(liveWorld.runs.filter((run) => run.pane === 'w7:p1')).toEqual([]);
+    expect(liveWorld.runs.filter((run) => run.pane === 'fixture:worker')).toEqual([]);
   });
 
   test('up still runs an allowed line in the same recorded pane', async () => {
@@ -378,7 +378,7 @@ describe('up and add under the entity model rule', () => {
     launcherStopped(liveWorld);
     const live = await up([], liveWorld, { workspaces: LISTED });
     expect(live.code).toBe(0);
-    const runs = liveWorld.runs.filter((run) => run.pane === 'w7:p1');
+    const runs = liveWorld.runs.filter((run) => run.pane === 'fixture:worker');
     expect(runs.length).toBe(1);
     expect(runs[0]?.command).toContain('claude --model claude-opus-5-5');
   });

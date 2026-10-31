@@ -1,7 +1,7 @@
 // Independent CLI acceptance for `team workflow run --dry` and `team workflow replay` at B3's
 // published pin 5283e7ce (branch feat/wf1-cli), authored from the public contract only:
 // wf0-spec-slices-0-1.md §5 (commands, dry-only refusal, script and evidence rules, the journal
-// boundary, replay re-evaluation, invariants), the Zeus ruling of 2026-10-21 line 8 ("Every
+// boundary, replay re-evaluation, invariants), the owner's ruling of 2026-10-21 line 8 ("Every
 // output says \"dry run — no record is written\""), contract/cli.json and
 // contract/exit-codes.json at the pin, and the real `runWorkflow` seam. Every fixture here was
 // authored independently; no builder test or fixture was copied, and no expectation is taken
@@ -542,12 +542,12 @@ describe('team workflow check keeps its published surface', () => {
   });
 });
 
-// The accepted Zeus ruling of 2026-10-21, line 8: "Every output says \"dry run — no record is
+// The accepted owner's ruling of 2026-10-21, line 8: "Every output says \"dry run — no record is
 // written\"". The ruling does not pin where in an output the sentence sits, so these rows assert
 // only that it is present, on every run and replay path that can refuse before a journal exists.
 // At the published pin those helpers call ordinary `refuse`, so if the sentence is absent the
 // rows fail against the accepted contract and the discrepancy is reported to the builder.
-describe('dry notice on every output (Zeus ruling line 8)', () => {
+describe("dry notice on every output (owner's ruling line 8)", () => {
   const preJournal: Array<[string, string[]]> = [
     ['run invocation refusal', ['run']],
     ['run file refusal', ['run', 'definition-green.yaml', '--dry', '--script', 'missing-script.yaml']],

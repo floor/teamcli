@@ -275,8 +275,8 @@ describe('the plan launches grok with its rules on the line', () => {
       .toBe(`AGENT_UNATTENDED=1 grok -r ${id} --always-approve --rules Rules.`);
     expect(commandOf('grok --model grok-4.7', { resume: id }))
       .toBe(`AGENT_UNATTENDED=1 grok --model grok-4.7 -r ${id} --always-approve --rules Rules.`);
-    expect(commandOf('zsh /Users/owner/as-floor.sh grok --model grok-4.7', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${id} --always-approve --rules Rules.`);
+    expect(commandOf('zsh /home/owner/as-floor.sh grok --model grok-4.7', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh grok --model grok-4.7 -r ${id} --always-approve --rules Rules.`);
     expect(commandOf('zsh -lc "grok --model grok-4.7"', { resume: id }))
       .toBe(`AGENT_UNATTENDED=1 zsh -lc "grok --model grok-4.7 -r ${id}" --always-approve --rules Rules.`);
   });

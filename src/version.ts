@@ -1,9 +1,19 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 
-function manifest(): { version: string; description: string; license: string; homepage: string; gitHead?: string } {
+type Manifest = {
+  version: string;
+  description: string;
+  license: string;
+  homepage: string;
+  /** Written into the packaged manifest by `scripts/pack.ts`: the commit the artifact was
+   *  built from. Absent in a source checkout, where the package.json is the repository's own. */
+  gitHead?: string;
+};
+
+function manifest(): Manifest {
   const text = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
-  return JSON.parse(text) as { version: string; description: string; license: string; homepage: string; gitHead?: string };
+  return JSON.parse(text) as Manifest;
 }
 
 // The one place the CLI's version is read. `--version` prints it and `team init` pins the
@@ -17,6 +27,11 @@ export function version(): string {
 // itself, so the places cannot drift apart.
 export function description(): string {
   return manifest().description;
+}
+
+/** The daemon's packaged commit reading, shared with the install and inbox identities. */
+export function gitHead(): string | null {
+  return packagedHead();
 }
 
 export function license(): string {

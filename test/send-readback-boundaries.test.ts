@@ -4,7 +4,7 @@
 // where the status alone says what happened.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -181,6 +181,38 @@ function outcomes(world: ReturnType<typeof setupWorld>): string[] {
   return history.entries.map((entry) => entry.outcome);
 }
 
+/** The bus record a retired read-back edge leaves: one signed drop for `body` at mode 0600 in
+ *  the seat's 0700 folder, the drop-leg marker, and the history line the sender was told about.
+ *  These scenes' subjects were the typed leg's edges; the record is what the send keeps now. */
+function expectKeptInBus(world: ReturnType<typeof setupWorld>, seat: string, body: string): string {
+  const drops = join(world.dir, 'send-drops', 'acme', seat);
+  expect(lstatSync(drops).mode & 0o777).toBe(0o700);
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
+  expect(files).toHaveLength(1);
+  const id = files[0] as string;
+  expect(lstatSync(join(drops, id)).mode & 0o777).toBe(0o600);
+  expect(recordBody(join(drops, id))).toBe(filed(body));
+  expect(JSON.parse(readFileSync(join(drops, `${id}.pending`), 'utf8'))).toMatchObject({
+    id,
+    from: 'owner',
+    to: seat,
+    body: filed(body),
+    leg: 'drop',
+  });
+  const history = readHistory('acme', world.root, world.home);
+  expect(history.ok).toBe(true);
+  if (history.ok) {
+    expect(history.entries).toContainEqual(expect.objectContaining({
+      id,
+      to: seat,
+      body: filed(body),
+      outcome: 'sent (unconfirmed)',
+      via: 'drop',
+    }));
+  }
+  return id;
+}
+
 describe('the composer read-back at its boundaries', () => {
   test('no pane messaging, nothing is typed and the bus inbox keeps it; was: an Enter that is not taken, with the trigger still in the composer, is not-submitted with the box text', async () => {
     const world = setupWorld();
@@ -199,6 +231,7 @@ describe('the composer read-back at its boundaries', () => {
     const retired = await runSend(['lead', 'the pane refused the Enter'], io, host);
     expect(await retired).toBe(0);
     expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'the pane refused the Enter');
   });
 
   test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a box that stops holding the trigger after the first Enter is sent with the trigger note, and gets no second Enter', async () => {
@@ -224,6 +257,7 @@ describe('the composer read-back at its boundaries', () => {
     const retired = await runSend(['lead', 'never submitted'], io, host);
     expect(await retired).toBe(0);
     expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'never submitted');
   });
 
   test('no pane messaging, nothing is typed and the bus inbox keeps it; was: the same box through the daemon: one Enter, and the same sent word', async () => {
@@ -253,6 +287,7 @@ describe('the composer read-back at its boundaries', () => {
     const retired = await runSend(['lead', 'never submitted through the daemon'], io, host);
     expect(await retired).toBe(0);
     expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'never submitted through the daemon');
   });
 
   test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a dialog between typing and the first Enter is never a read-back mismatch', async () => {
@@ -269,6 +304,7 @@ describe('the composer read-back at its boundaries', () => {
     const retired = await runSend(['lead', 'into a dialog'], io, host);
     expect(await retired).toBe(0);
     expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', 'into a dialog');
   });
 
   test('a pane that cannot be read is judged by the status alone, and is sent', async () => {
@@ -301,5 +337,6 @@ describe('the composer at the narrowest box', () => {
     const retired = await runSend(['lead', body], io, host);
     expect(await retired).toBe(0);
     expect(host.typed).toEqual([]);
+    expectKeptInBus(world, 'lead', body);
   });
 });

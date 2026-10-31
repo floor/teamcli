@@ -1,5 +1,5 @@
 // Independent coverage of the packaged-delivery boundary around a finished turn's frame. The
-// retained frame is Atlas's RC2 observation (sanitized fixture; the pane carries no CLI version
+// retained frame is Reviewer's RC2 observation (sanitized fixture; the pane carries no CLI version
 // marker): a connection-lost sentence, a blank margin, the completion row, a right-aligned update
 // notice, the labelled composer rule and an empty prompt. Delivery reads that frame idle and
 // types the rules line once — the one scenario where input is owed.

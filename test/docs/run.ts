@@ -9,6 +9,7 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAck } from '../../src/commands/ack.ts';
 import { runAdd } from '../../src/commands/add.ts';
+import { runAgents } from '../../src/commands/agents.ts';
 import { runAnswer, type AnswerHost } from '../../src/commands/answer.ts';
 import { runArchive } from '../../src/commands/archive.ts';
 import { runAskShow } from '../../src/commands/ask-show.ts';
@@ -311,6 +312,8 @@ async function command(page: Page, line: string, io: Io, answer?: string, waitin
     case 'ack':
       // The page's clock is pinned, so the receipt's `at` is the page's instant.
       return runAck(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
+    case 'agents':
+      return runAgents(rest, io, { home: fixture.home, now: () => new Date(spec.now) });
     case 'add':
       return runAdd(rest, io, world.addSources());
     case 'answer':

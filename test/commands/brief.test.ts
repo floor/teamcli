@@ -25,6 +25,7 @@ import type { Caller } from '../../src/caller.ts';
 import { USAGE, runBrief } from '../../src/commands/brief.ts';
 import { validateTeamFile } from '../../src/file/validate.ts';
 import {
+  GENERAL_BRIEF_FROM,
   GENERAL_BRIEF_SHA256,
   MEMORY_TRANSPORT_UNSUPPORTED,
   currentBriefClaim,
@@ -34,7 +35,8 @@ import {
 } from '../../src/launch/general-brief.ts';
 import type { InboxListener } from '../../src/mcp/inbox.ts';
 import { writePolicySet } from '../../src/policy/sources.ts';
-import { receiptFile } from '../../src/send/record.ts';
+import { markPending } from '../../src/send/pending.ts';
+import { receiptFile, signReceiptPayload, writeReceipt } from '../../src/send/record.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import type { BuildIdentity } from '../../src/version.ts';
 import { deliverBriefs, recordAt, testIo } from '../helpers.ts';
@@ -208,6 +210,38 @@ async function runRollout(
     ...(options.build === undefined ? {} : { build: () => options.build as BuildIdentity }),
   });
   return { code, out: io.out, err: io.err };
+}
+
+/** `prune` is the seat's own verb: the default caller is the lead the fixture records. */
+async function runPrune(
+  argv: string[],
+  options: { caller?: Caller; cwd?: string } = {},
+): Promise<{ code: number; out: string; err: string }> {
+  return runRollout(['prune', ...argv], {
+    ...options,
+    caller: options.caller ?? { kind: 'seat', name: 'lead', pane: PANE.lead as string, session: 'acme' },
+  });
+}
+
+/**
+ * A retry sidecar the way a delivery's walk leaves it: the marker beside the drop, written by the
+ * launch's own record. `ts` orders the rows a run prints (the read is by arrival, oldest first).
+ */
+function sidecar(
+  seat: string,
+  input: { id: string; from?: string; to?: string; leg?: 'mcp-inbox' | 'drop' | 'channel'; ts?: string },
+): string {
+  const folder = dropDir(seat);
+  mkdirSync(folder, { recursive: true });
+  markPending(folder, {
+    id: input.id,
+    from: input.from ?? GENERAL_BRIEF_FROM,
+    to: input.to ?? seat,
+    body: BODY,
+    ts: input.ts ?? NOW_ISO,
+    ...(input.leg === undefined ? {} : { leg: input.leg }),
+  });
+  return join(folder, `${input.id}.pending`);
 }
 
 /** The build the runs compare a listener marker against, unless a test pins another. */
@@ -465,7 +499,7 @@ describe('the invocation and the team file', () => {
     expect({ code: noVerb.code, out: noVerb.out, err: noVerb.err }).toEqual({
       code: 2,
       out: '',
-      err: `team brief: a subcommand is required: rollout\n${USAGE}`,
+      err: `team brief: a subcommand is required: rollout or prune\n${USAGE}`,
     });
 
     const unknown = await runRollout(['deploy']);
@@ -642,6 +676,214 @@ describe('a live listener from another build', () => {
       code: 2,
       out: '',
       err: `team brief: the team file declares no seat "nobody"\n${USAGE}`,
+    });
+  });
+});
+
+describe('the prune', () => {
+  const OLDER = new Date(Date.parse(NOW_ISO) - 60_000).toISOString();
+
+  /**
+   * A settled lead and the markers a launch's walks can leave beside its delivery: one at the
+   * claimed id (the seat read it), one at an earlier delivery's id, and an ordinary send's.
+   */
+  function settled(): { claim: CurrentBriefClaim; readMarker: string; oldMarker: string; ordinary: string } {
+    remember('lead');
+    settle(['lead']);
+    const claim = claimOf('lead');
+    if (claim === null) throw new Error('the fixture delivered no claim');
+    const readMarker = sidecar('lead', { id: claim.id, leg: 'mcp-inbox' });
+    const oldMarker = sidecar('lead', { id: generalBriefId(INC, BODY, 1), ts: OLDER });
+    const ordinary = sidecar('lead', { id: 'ord_0123456789ab', from: 'owner', to: 'lead' });
+    return { claim, readMarker, oldMarker, ordinary };
+  }
+
+  test('the dry run lists what it would retire, by the retry pass\'s own reasons, and writes nothing', async () => {
+    const { claim, readMarker, oldMarker, ordinary } = settled();
+    const before = snapshot();
+
+    const run = await runPrune([]);
+
+    expect({ code: run.code, err: run.err }).toEqual({ code: 1, err: '' });
+    expect(run.out).toBe(
+      `would retire ${oldMarker}: the seat's current claim names a newer delivery\n`
+      + `would retire ${readMarker}: the delivery was read\n`
+      + '2 files to retire\n',
+    );
+    expect(snapshot()).toEqual(before);
+    // The delivery the claim stands on, and another send's marker, are not prune's to touch.
+    expect(existsSync(join(dropDir('lead'), claim.id))).toBe(true);
+    expect(existsSync(ordinary)).toBe(true);
+  });
+
+  test('--apply retires the superseded and the read markers, and nothing else', async () => {
+    const { claim, readMarker, oldMarker, ordinary } = settled();
+
+    const run = await runPrune(['--apply']);
+
+    expect({ code: run.code, err: run.err }).toEqual({ code: 0, err: '' });
+    expect(run.out).toBe(
+      `retired ${oldMarker}: the seat's current claim names a newer delivery\n`
+      + `retired ${readMarker}: the delivery was read\n`
+      + '2 files retired\n',
+    );
+    expect(existsSync(readMarker)).toBe(false);
+    expect(existsSync(oldMarker)).toBe(false);
+    // The delivery's signed record and its read receipt stand; so does the other send's marker.
+    expect(recordAt(join(dropDir('lead'), claim.id)).payload.id).toBe(claim.id);
+    expect(existsSync(receiptFile(dropDir('lead'), claim.id, 'read'))).toBe(true);
+    expect(existsSync(ordinary)).toBe(true);
+
+    const again = await runPrune([]);
+    expect({ code: again.code, out: again.out, err: again.err }).toEqual({ code: 0, out: '0 files to retire\n', err: '' });
+  });
+
+  test('a seat with nothing to retire says so and exits 0, in both directions', async () => {
+    remember('lead');
+    settle(['lead']);
+
+    const dry = await runPrune([]);
+    expect({ code: dry.code, out: dry.out, err: dry.err }).toEqual({ code: 0, out: '0 files to retire\n', err: '' });
+
+    const applied = await runPrune(['--apply']);
+    expect({ code: applied.code, out: applied.out, err: applied.err }).toEqual({ code: 0, out: '0 files retired\n', err: '' });
+  });
+
+  test('an unread current claim is never retired, on a dry run or with --apply', async () => {
+    const claim = seedClaim('lead');
+    const marker = sidecar('lead', { id: claim.id });
+
+    const dry = await runPrune([]);
+    expect({ code: dry.code, out: dry.out, err: dry.err }).toEqual({ code: 0, out: '0 files to retire\n', err: '' });
+    expect(existsSync(marker)).toBe(true);
+
+    const applied = await runPrune(['--apply']);
+    expect({ code: applied.code, out: applied.out, err: applied.err }).toEqual({ code: 0, out: '0 files retired\n', err: '' });
+    expect(existsSync(marker)).toBe(true);
+    expect(claimOf('lead')?.id).toBe(claim.id);
+  });
+
+  test('a receipt from a build that bound no claim proves no read, so the marker stays', async () => {
+    remember('lead');
+    deliverBriefs({ dir, root, session: 'acme', seats: ['lead'], home, at: NOW_ISO, read: false });
+    const claim = claimOf('lead');
+    if (claim === null) throw new Error('the fixture delivered no claim');
+    // An earlier build's read: a signed receipt with no brief binding, which this build refuses
+    // as proof of reading the claim it cannot name.
+    const written = writeReceipt(
+      dropDir('lead'),
+      signReceiptPayload({ kind: 'receipt', status: 'read', id: claim.id, to: 'lead', root, session: 'acme', at: NOW_ISO }, home),
+      home,
+    );
+    expect(written.ok).toBe(true);
+    const marker = sidecar('lead', { id: claim.id });
+
+    const applied = await runPrune(['--apply']);
+
+    expect({ code: applied.code, out: applied.out, err: applied.err }).toEqual({ code: 0, out: '0 files retired\n', err: '' });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test('the owner, a seat the file does not declare and a seat on another pane retire nothing', async () => {
+    remember('lead');
+    settle(['lead']);
+    const marker = sidecar('lead', { id: generalBriefId(INC, BODY, 1) });
+    const before = snapshot();
+
+    const ownerRun = await runPrune([], { caller: { kind: 'owner' } });
+    expect({ code: ownerRun.code, out: ownerRun.out, err: ownerRun.err }).toEqual({
+      code: 1,
+      out: '',
+      err: 'team brief prune: only a seat of this team retires its own launch-brief retry markers; this call is owner\n',
+    });
+
+    const asJson = await runPrune(['--json'], { caller: { kind: 'owner' } });
+    expect({ code: asJson.code, err: asJson.err }).toEqual({ code: 1, err: '' });
+    expect(JSON.parse(asJson.out)).toMatchObject({
+      schema: { name: 'team.error', version: 1 },
+      error: { id: 'brief.prune-refused' },
+    });
+
+    const ghost = await runPrune([], { caller: { kind: 'seat', name: 'ghost', pane: 'fixture-pane-9', session: 'acme' } });
+    expect({ code: ghost.code, out: ghost.out, err: ghost.err }).toEqual({
+      code: 1,
+      out: '',
+      err: 'team brief prune: only a seat of this team retires its own launch-brief retry markers; this call is ghost\n',
+    });
+
+    const moved = await runPrune([], { caller: { kind: 'seat', name: 'lead', pane: 'fixture-pane-8', session: 'acme' } });
+    expect({ code: moved.code, out: moved.out, err: moved.err }).toEqual({
+      code: 1,
+      out: '',
+      err: `team brief prune: the state records pane ${PANE.lead as string} for seat lead in this session, not the pane this call is on: `
+        + 'a lead stops the team and starts it again (`team down`, then `team up`)\n',
+    });
+    expect(snapshot()).toEqual(before);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test('a seat with no readable claim retires nothing rather than guessing', async () => {
+    remember('lead');
+    const marker = sidecar('lead', { id: generalBriefId(INC, BODY, 1) });
+
+    const run = await runPrune(['--apply']);
+
+    expect({ code: run.code, out: run.out, err: run.err }).toEqual({
+      code: 1,
+      out: '',
+      err: "team brief prune: the seat's current brief claim can't be read, so nothing was retired\n",
+    });
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test('a folder that is not a real folder refuses the prune rather than reading through it', async () => {
+    seedClaim('lead');
+    mkdirSync(join(dir, 'send-drops', 'acme'), { recursive: true });
+    writeFileSync(join(dir, 'send-drops', 'acme', 'lead'), 'not a folder\n');
+
+    const run = await runPrune([]);
+
+    expect({ code: run.code, out: run.out, err: run.err }).toEqual({
+      code: 1,
+      out: '',
+      err: 'team brief prune: the drop folder is not a real folder: a link or a file stands in its path\n',
+    });
+  });
+
+  test('--json carries one row per marker with the counts', async () => {
+    const { claim, readMarker, oldMarker } = settled();
+
+    const run = await runPrune(['--json']);
+
+    expect({ code: run.code, err: run.err }).toEqual({ code: 1, err: '' });
+    expect(JSON.parse(run.out)).toEqual({
+      schema: { name: 'team.brief-prune', version: 1 },
+      format: 1,
+      project: 'acme',
+      session: 'acme',
+      seat: 'lead',
+      apply: false,
+      files: [
+        { path: oldMarker, id: generalBriefId(INC, BODY, 1), from: GENERAL_BRIEF_FROM, reason: 'superseded', outcome: 'would-retire', error: null },
+        { path: readMarker, id: claim.id, from: GENERAL_BRIEF_FROM, reason: 'read', outcome: 'would-retire', error: null },
+      ],
+      counts: { files: 2, retired: 0, failed: 0 },
+    });
+  });
+
+  test('prune takes no rollout option and no extra word', async () => {
+    const seat = await runPrune(['--seat', 'lead']);
+    expect({ code: seat.code, out: seat.out, err: seat.err }).toEqual({
+      code: 2,
+      out: '',
+      err: `team brief: unknown option --seat\n${USAGE}`,
+    });
+
+    const extra = await runPrune(['now']);
+    expect({ code: extra.code, out: extra.out, err: extra.err }).toEqual({
+      code: 2,
+      out: '',
+      err: `team brief: unexpected "now"\n${USAGE}`,
     });
   });
 });

@@ -23,8 +23,8 @@ import { CLAUDE_IDLE, testIo } from './helpers.ts';
 const NOW = new Date('2026-10-22T10:00:00Z');
 const FILE = ['--file', '.agents/team.yaml'];
 const OWNER = { kind: 'owner' } as const;
-const PANE = 'w7:p1';
-const WORKSPACE = 'w7';
+const PANE = 'fixture:worker';
+const WORKSPACE = 'fixture-worker';
 
 const SENTENCE =
   'the model "claude-opus-5-5" runs under the lab "anthropic", which the entity model rule in force does not allow on this seat';
@@ -124,8 +124,8 @@ describe('a recorded pane with no live agent under the entity model rule', () =>
       sessionUp: () => w.session === 'running',
       createWorkspace(_session, _cwd, _label) {
         made += 1;
-        panes.set(`w${made}:p1`, CLAUDE_IDLE);
-        return { pane: `w${made}:p1`, workspace: `w${made}` };
+        panes.set(`fixture-pane-${made}`, CLAUDE_IDLE);
+        return { pane: `fixture-pane-${made}`, workspace: `w${made}` };
       },
       paneRun(_session, pane, command) {
         runs.push({ pane, command });

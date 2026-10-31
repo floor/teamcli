@@ -64,7 +64,9 @@ function readLines(text: string): Line[] {
 }
 
 // A comment starts at a `#` that begins the line or follows a space, outside quotes.
-function stripComment(text: string, n: number): string {
+/** The line's text without its comment. Exported for the editors that rewrite a line and keep
+ *  the comment they cut, byte for byte, beside what changed. */
+export function stripComment(text: string, n: number): string {
   let quote = '';
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
