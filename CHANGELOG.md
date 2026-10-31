@@ -271,6 +271,10 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   this run started before it clears the seat's workspace and record. An endpoint the launch
   reused is not its to stop: the launch record is kept, and the run holds with the reason,
   rather than dropping the identity of a live server.
+- **A quiet start reads the inbox instead of skipping it.** The note a quiet start adds to every
+  rules file told the seat not to continue earlier work and not to read drops, so a message
+  queued before it was never read. It now tells the seat to read its inbox, act on what is
+  addressed to it, and leave earlier work alone unless a message asks for it.
 
 ## [0.5.5] - 2026-10-26
 
