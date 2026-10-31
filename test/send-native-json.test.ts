@@ -60,6 +60,8 @@ test('--json --wait on a native seat sends the record and reports send.timeout w
     // The error document carries the resolved walk, as the delivered one does.
     delivery: [
       { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
+      // The declared `typed` word wakes a Codex seat through its runtime queue (codex-daemon on).
+      { leg: 'native', state: 'attempted', reason: 'no trusted runtime session is recorded for this seat (no agent record for this seat)' },
       { leg: 'drop', state: 'attempted' },
     ],
   });

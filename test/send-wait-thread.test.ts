@@ -1,4 +1,4 @@
-import { queuedLine } from '../src/send/no-pane-messaging.ts';
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 // `team send --wait` on the thread: across `drop`, `mcp-inbox` and `typed` legs, and for
 // `human: true` seats. A waited send writes the signed message record via the receiving seat's
 // delivery walk, then awaits the first verified reply record on the thread within the timeout
@@ -177,7 +177,9 @@ describe('team send --wait on the thread across delivery legs', () => {
       clearTimeout(replyTimer);
 
       expect(code).toBe(0);
-      expect(sendIo.err).toBe(leg === 'mcp-inbox' ? '' : queuedLine('worker'));
+      // A declared `typed` word now walks the Codex seat's native runtime queue (no event leg is
+      // typing), so a send it does not take says no event adapter of this seat took it.
+      expect(sendIo.err).toBe(leg === 'mcp-inbox' ? '' : leg === 'typed' ? queuedLine('worker', NO_EVENT_ADAPTER_TOOK_IT) : queuedLine('worker'));
       assertMatchesOutputSchema(sendIo.out, SEND_OUTPUT_SCHEMA);
       const doc = JSON.parse(sendIo.out) as Record<string, unknown>;
       expect(doc).toMatchObject({
