@@ -708,8 +708,9 @@ describe('A9 round 3: a restart names a route the live reading cannot bind', () 
       seat: { name: 'worker', cli: 'codex' },
       state,
     })).toEqual({ kind: 'none', why: 'the record names no agent session' });
-    // The restart still says ready — the seat runs — but must name the route it could not bind.
+    // The restart still says ready — the seat runs — but names the route it could not bind.
     expect(code).toBe(0);
-    expect(io.out).toContain('; pull-only: the record names no agent session');
+    expect(io.err).toBe('');
+    expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new; pull-only: the record names no agent session');
   });
 });
