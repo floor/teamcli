@@ -83,8 +83,10 @@ record's own `from`; a record that does not verify is named `an unverified messa
 its age, its id and its count, never the word beside it — that marker is unsigned and lends no
 sender, owner or seat. The repair is the seat's next turn, or `team drops --read --seat <seat>`
 when the seat's record says no turn-start reader is installed; the watch's unread wake types
-that same read into an idle seat. The general seat brief keeps its own read difference and is
-not counted twice. A person's drop is read by a person and is never asked for a receipt. The
+nothing into an idle seat in this build — its wake attempt is refused before the pane, and the
+reservation it took records the attempt — so a message still unread at twice the window is
+reported to its sender's mailbox and the team's lead instead. The general seat brief keeps its
+own read difference and is not counted twice. A person's drop is read by a person and is never asked for a receipt. The
 check writes nothing here either.
 
 A live seat whose profile promises a push delivery but whose socket a send would skip is named
