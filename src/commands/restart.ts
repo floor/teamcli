@@ -74,6 +74,7 @@ import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
+import { nativePushBindingFor } from '../send/push.ts';
 import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
@@ -1120,16 +1121,21 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       }
     }
     // The state this run wrote is ready; the registry write that binds the seat to it may not
-    // have landed. The record is read back as the native route resolves it, and a seat with
-    // none — or one the checks refuse — is reached by pull alone. The result says so rather
-    // than calling a restart done whose record was never written.
-    const record = recordedSeatRecord({
+    // have landed. The record is read back with the binding the seat's native route needs: a
+    // route addressed by the conversation the CLI holds needs the recorded agent session as well,
+    // so a pane that has not reported one yet is pull-only; where the seat record is enough, a
+    // missing or refused record alone says so. The result names the reason rather than calling a
+    // restart done whose record was never written.
+    const lookedUp = {
       home,
       root,
       herdrSession: session,
       seat: launching,
       state: afterwards,
-    });
+    };
+    const record = nativePushBindingFor(launching.cli) === 'conversation'
+      ? recordedSeatSession(lookedUp)
+      : recordedSeatRecord(lookedUp);
     return {
       kind: 'ready',
       oldPane,

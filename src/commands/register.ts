@@ -45,10 +45,11 @@ import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { readAgents } from '../registry/agents.ts';
-import { recordedSeatRecord } from '../registry/resume.ts';
+import { recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { registerLaunch } from '../registry/sync.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { nativePushBindingFor } from '../send/push.ts';
 import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
@@ -748,16 +749,21 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${seatId} — pane ${pane}`, refreshedAt);
         if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
       }
-      // The record the native route resolves the seat by, read back where it now stands. A write
-      // that failed, or a record the checks refuse, leaves the seat reachable only by pull; the
-      // run's own result says so rather than reporting the refresh as done.
-      const record = recordedSeatRecord({
+      // The record the seat's native route resolves the seat by, read back where it now stands
+      // and with the binding that route needs: a conversation-addressed route also needs the
+      // recorded agent session, while the seat record alone is enough where the route only places
+      // the seat. A write that failed, or a record the checks refuse, leaves the seat reachable
+      // only by pull; the run's own result says so rather than reporting the refresh as done.
+      const lookedUp = {
         home: sources.home,
         root,
         herdrSession: session,
         seat,
         state: readState(dir).sessions[session]?.seats[name],
-      });
+      };
+      const record = nativePushBindingFor(seat.cli) === 'conversation'
+        ? recordedSeatSession(lookedUp)
+        : recordedSeatRecord(lookedUp);
       if (record.kind !== 'bound') pullOnly = record.why;
       // The general seat brief, through the one boundary every attribution path calls. This run
       // attributed no seat — the record was already here — so the boundary writes a fresh

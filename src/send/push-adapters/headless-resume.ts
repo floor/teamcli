@@ -565,6 +565,10 @@ export function headlessResumePushAdapter(
 
   return {
     clis: [cli] as const,
+    // The resume names the conversation to continue (`--resume <agent_session>`), so the route
+    // resolves nothing without the seat's recorded session; the seat record alone places the pane
+    // but cannot address the runtime.
+    binding: 'conversation',
     async push(request: RuntimePushRequest): Promise<RuntimePushOutcome> {
       const precheck = probeHeadlessResumeRoute({
         cli,

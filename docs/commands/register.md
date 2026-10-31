@@ -87,9 +87,11 @@ carries that id under another seat's name refuses the refresh, and the run says 
 is. A seat whose record has left its handle in doubt is rebound by a launch — `team restart`, or
 `team down` then `team up` — which writes the record itself.
 
-When the write leaves no agent record binding the seat, the run does not report the refresh as
-done: the closing line ends `pull-only: <reason>`, and `--json` carries the same text as
-`pull_only`. The seat stands, but native delivery cannot resolve it, and only pull reaches it.
+When the write leaves the seat where its native route cannot address it — no agent record, or,
+for a CLI whose runtime is addressed by the conversation it holds, no recorded conversation yet
+— the run does not report the refresh as done: the closing line ends `pull-only: <reason>`, and
+`--json` carries the same text as `pull_only`. The seat stands, but native delivery cannot
+resolve it, and only pull reaches it.
 
 A team the registry holds no record of — a team started before this version kept registry
 records — is written by the repair too: the team record, the seat's agent record and its roster
@@ -118,7 +120,7 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | the seat was already recorded on that pane | `<seat>: already registered — pane <pane>; the record was refreshed from the file, nothing relaunched` | 0 |
 | the seat was already recorded, and the team registry's roster does not list it | `<seat>: already registered — pane <pane>; the team registry's roster did not list it, and was written` | 0 |
 | the seat was already recorded and the roster does not list it, under `--dry-run` | `<seat>: already registered — pane <pane>; the team registry's roster would be written` | 0 |
-| the refresh left no agent record binding the seat | any `already registered — pane <pane>` line above, ending `; pull-only: <reason>`; the seat stands, and only pull reaches it | 0 |
+| the refresh left the seat where its native route cannot address it — no record, or no recorded conversation for a CLI whose runtime needs one | any `already registered — pane <pane>` line above, ending `; pull-only: <reason>`; the seat stands, and only pull reaches it | 0 |
 | `--pane` named the pane as the seat and wrote the record | `<seat>: registered — pane <pane>; the pane was named <seat>, nothing was launched` — `herdr did not take the name, nothing was launched` when the rename did not land; the record is written either way | 0 |
 | `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched`; with `--pane`, `the pane would be named <seat> and recorded` stands before `, nothing would be launched` | 0 |
 | the run was refused | `team register: <reason>` | 1 |

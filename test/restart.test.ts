@@ -485,6 +485,51 @@ describe('team restart <seat>', () => {
     expect(doc.action_summary).toContain('pull-only: no agent record for this seat');
   });
 
+  // The Codex native route is addressed by the conversation the seat holds (`codex queue
+  // --thread <agent_session>`), so the record alone does not make native delivery possible: a
+  // relaunch whose new pane has not reported its session yet ends ready and says pull-only with
+  // the reader's own reason. The registry writes themselves succeed here — what is missing is the
+  // binding the route resolves.
+  test('a Codex restart whose new pane has not reported its session says pull-only', async () => {
+    function unsettled(): { fixture: Fixture; run: ReturnType<typeof makeHarness>; io: ReturnType<typeof testIo> } {
+      const fixture = makeFixture(CODEX_TEAM_YAML);
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+      });
+      const run = makeHarness(fixture, { foregroundArgv0: 'codex', newPaneScreen: CODEX_NEW_IDLE });
+      // The relaunched pane's own process state, and its agent reports no session — the reading
+      // the live agent list gives before the CLI has said which conversation it is in.
+      run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+      const agents = run.sources.upLaunch.agents;
+      run.sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => (
+        agent.pane.startsWith('pane-new') ? { ...agent, agent: 'codex' } : agent
+      ));
+      run.sources.screenText = (_session, pane) =>
+        pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+      return { fixture, run, io: testIo(fixture.root, { kind: 'owner' }) };
+    }
+
+    const plain = unsettled();
+    expect(await runRestart(['worker'], plain.io, plain.run.sources), plain.io.err).toBe(0);
+    expect(plain.io.err).toBe('');
+    expect(plain.io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new; pull-only: the record names no agent session\n');
+    // The record the launch wrote is there; the conversation its route resolves is not.
+    expect(findAgent(plain.fixture.home, { team: teamIdOf(plain.fixture.root), seat: 'worker' })?.reach.agent_session)
+      .toBeUndefined();
+
+    const json = unsettled();
+    expect(await runRestart(['worker', '--json'], json.io, json.run.sources), json.io.err).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      status: string;
+      action_summary: string;
+      pull_only?: string | null;
+    }>(json.io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.pull_only).toBe('the record names no agent session');
+    expect(doc.action_summary).toContain('pull-only: the record names no agent session');
+  });
+
   test('a dev-mode restart records the mark and the caller it admitted', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {

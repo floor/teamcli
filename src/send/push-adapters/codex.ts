@@ -194,6 +194,10 @@ export function codexPushAdapter(options: CodexPushAdapterOptions = {}): Runtime
 
   return {
     clis: ['codex'] as const,
+    // The queue is addressed by the thread the runtime already holds: `codex queue --thread
+    // <agent_session>` resolves nothing without the seat's recorded conversation, so that is the
+    // binding a launch reads back before it can call native delivery possible at all.
+    binding: 'conversation',
     async push(request: RuntimePushRequest): Promise<RuntimePushOutcome> {
       if (options.codexDaemon !== undefined) {
         const daemonPolicy = typeof options.codexDaemon === 'function'

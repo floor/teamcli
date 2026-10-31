@@ -71,7 +71,7 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the seat was restarted | the three pre-close facts, `<seat>: stopped`, the launch record, `<seat>: unsent text pasted back` when the box held unsent text, and `team restart: restarted <seat>; pane <old-pane> -> <new-pane>` | 0 |
-| the seat was restarted, and the launch left no agent record binding it | the same lines, with the closing one ending `; pull-only: <reason>` — the seat stands, native delivery cannot resolve it, and only pull reaches it | 0 |
+| the seat was restarted, and its native route cannot address it | the same lines, with the closing one ending `; pull-only: <reason>` — no agent record binds the seat, or, for a CLI whose runtime is addressed by the conversation it holds, the record carries no conversation yet; the seat stands, and only pull reaches it | 0 |
 | `--dry-run` succeeded | the stop line and the launch plan | 0 |
 | the run was refused, or the seat was left behind | `team restart: <reason>` | 1 |
 | the invocation or the team file can't be read | `team restart: <problem>` and the usage | 2 |
@@ -79,7 +79,8 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 `--json` prints one `team.restart` document instead: `project`, `session`, `seat`, the new `pane`,
 the working lines (the pre-close facts and the stop's own lines) as collapsed `notes`, and the
 closing line as `action_summary`; `dry_run` is `false` and `status` is `ready`, and `pull_only`
-carries the reason when the launch left no agent record binding the seat. With `--dry-run` it
+carries the reason when the seat's native route cannot address it — no agent record binding it,
+or no recorded conversation for a CLI whose runtime is addressed by one. With `--dry-run` it
 prints the plan as `plan` — the stop step first, then one step per launch plan line, `prefix` `+`,
 `!` or `skip` — with `dry_run` `true` and `status` `dry-run`. A refusal under `--json` prints the
 `team.error` document on stdout — its `id` is the contract row for that refusal (`restart.unknown`,
