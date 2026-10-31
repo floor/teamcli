@@ -8,7 +8,7 @@
 // The property each scene asserts is the log's at-most-once rule stated in the source: an event
 // that may already be in the log must not be appended a second time on retry, and the log must stay
 // a parseable sequence a restarted daemon can load. No assertion here is weaker than that.
-import { afterEach, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, expect, mock, test } from 'bun:test';
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync,
   writeFileSync,
@@ -52,6 +52,9 @@ mock.module('node:fs/promises', () => ({
     return handle;
   }) as unknown as typeof real.open,
 }));
+// Bun's module mocks are process-wide, and every test file of a run shares one process: put the
+// captured real open back when this file ends, so a later file's opens are the plain module's.
+afterAll(() => { mock.module('node:fs/promises', () => ({ ...real, open: realOpen })); });
 
 const { presenceId, readPresenceLogLine } = await import('../src/daemon/presence/contract.ts');
 const { createPresenceIngester } = await import('../src/daemon/presence/ingest.ts');
