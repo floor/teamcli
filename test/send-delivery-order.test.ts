@@ -398,6 +398,25 @@ describe('the walk records the channel and the legs it skipped', () => {
     ]);
   });
 
+  test('no pane messaging: a codex seat whose declared order is [typed] is woken through its runtime queue', async () => {
+    const w = world();
+    const host = walker(w, { team: ['typed'] });
+    const io = owner(w.root);
+
+    expect(await runSend(['native', 'hello'], io, host)).toBe(0);
+
+    // The declared typed word asked for a wake. With typing retired, the seat's own runtime queue
+    // stands where it stood while its codex-daemon policy is on: the walk tries native before the
+    // bus inbox, and nothing is typed.
+    const entry = lastEntry(w.root, w.home);
+    expect(entry.failed).toEqual([
+      `typed: ${NO_PANE_MESSAGING}`,
+      'native: no trusted runtime session is recorded for this seat (no agent record for this seat)',
+    ]);
+    expect(entry.via).toBe('drop');
+    expect(host.typed).toEqual([]);
+  });
+
   test('a word adding a leg other than native is set aside and the walk in force stands', async () => {
     const w = world();
     const host = walker(w, { team: ['native', 'mcp-inbox', 'typed'], seat: ['typed', 'telepathy' as DeliveryLeg] });

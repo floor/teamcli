@@ -1117,6 +1117,20 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     if (socketNow && !declaredWithWake.includes('socket')) wake.push('socket');
     declaredWithWake.splice(at, 0, ...wake);
   }
+  // The same for a Codex seat: its wake is its own runtime's queue while its `codex-daemon`
+  // policy is on, read the same fail-closed way the implied default reads it.
+  if (declaredOrder && to.cli === 'codex' && !human0(overrides, declared) && declaredWithWake.includes('typed')
+    && !declaredWithWake.includes('native')
+    && codexDaemonForSeat({
+      home: host.home,
+      root: to.root,
+      ...(receiving.ok ? { team: receiving.team } : {}),
+      seat: to.seat,
+      session: to.session,
+      now: host.now(),
+    }) === 'on') {
+    declaredWithWake.splice(declaredWithWake.indexOf('typed'), 0, 'native');
+  }
   const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
