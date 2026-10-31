@@ -16,7 +16,7 @@ export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
 // (test/general-door.test.ts holds this list to the command table).
 export const GENERAL_OPS = [
   'config', 'restart', 'up', 'down', 'abandon', 'send', 'messages', 'reply', 'init',
-  'ack', 'add', 'answer', 'approvals', 'archive', 'ask-show', 'batch', 'brief', 'broker', 'bus', 'check', 'client',
+  'ack', 'add', 'agents', 'answer', 'approvals', 'archive', 'ask-show', 'batch', 'brief', 'broker', 'bus', 'check', 'client',
   'commits', 'daemon', 'delegate', 'development-mode', 'doctor', 'drops', 'feed', 'forget', 'grant', 'hold', 'import',
   'issues', 'list', 'lock', 'mcp', 'migrate', 'next', 'owner-seat', 'pause', 'plan', 'policy', 'pr', 'proc', 'projects',
   'queue', 'raise', 'register', 'release', 'reload', 'remove', 'rename', 'resume', 'revoke', 'route', 'seat', 'seats',
