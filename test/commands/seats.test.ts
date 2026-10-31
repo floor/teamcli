@@ -251,7 +251,10 @@ describe('team seats', () => {
     live!.screens['pane-4'] = `⏺ Bash(ls -la)\n${claudeIdle}`;
     const io = testIo(dir, { kind: 'owner' });
     expect(await runSeats(['--file', file], io, statusSources)).toBe(0);
-    expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash (declared, unread)  -       idle                                  idle     cli     -            pane-4');
+    // The screen is live but names no reading the wrapper's CLI can give (its status line prints
+    // Claude's families whatever the launcher selected): the launcher's declaration stands, and
+    // the row is no longer marked unread.
+    expect(io.out).toContain('deepseek-acme-2          -         seat_444444444444  implementer          claude-code  DeepSeek V4.1 Flash                     -       idle                                  idle     cli     -            pane-4');
   });
 
   test('--all includes stopped seats with retained id and last_active', async () => {

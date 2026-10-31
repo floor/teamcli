@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { auditClientRefusal, authorizeClientRun, clientFormProblem, verifyClientForm, type ClientRun } from '../client/client-form.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
-import { stripSgr } from '../ansi.ts';
 import { budgetsInForceOf, ceilingsOf, notInForce } from '../approve/approval.ts';
 import { readArgs } from '../args.ts';
 import { seatBudget } from '../budgets/gate.ts';
@@ -81,7 +80,7 @@ import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from 
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
-import { modelDiffers, seatModel } from '../status/statusline.ts';
+import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
@@ -1179,17 +1178,6 @@ function launchModelId(launch: string): string | null {
   return match?.[1] ?? null;
 }
 
-/** The id on the launch wrapper's banner line, `<id> · API Usage Billing`, where the pane shows
- *  one. This is the reading for a CLI the profile cannot show a model for. */
-export function bannerModel(screen: string | undefined): string | null {
-  if (screen === undefined) return null;
-  for (const line of stripSgr(screen).split('\n')) {
-    const match = /([A-Za-z0-9][A-Za-z0-9._-]*)\s*·\s*API Usage Billing/.exec(line);
-    if (match) return match[1] ?? null;
-  }
-  return null;
-}
-
 /**
  * What the new pane says the conversation is, compared with the declaration it was launched
  * from. The profile's own model reading comes first (`modelDiffers`); a model it cannot show is
@@ -1198,7 +1186,9 @@ export function bannerModel(screen: string | undefined): string | null {
  * `unread`, and `unread` never claims a match.
  */
 export function readBackOf(seat: Seat, screen: string | undefined): ReadBack {
-  const shown = seatModel(seat, screen);
+  // A wrapper's declaration is not a reading: the read-back asks what the new pane says, and
+  // the banner below is the only thing a window into this CLI can add.
+  const shown = wrapperSeat(seat) ? null : seatModel(seat, screen);
   if (shown !== null) {
     const want = `${seat.model} ${seat.version}`;
     const got = `${shown.model} ${shown.version}`;

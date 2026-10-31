@@ -14,7 +14,7 @@ import { pluralCount, type DifferenceWho } from '../output/text.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
-import { launchModelWhenUnread, modelDiffers, runningModel, seatModel } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, runningModel, seatModel, signedSeatModel, wrapperSeat } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -700,7 +700,7 @@ function notLaunched(
   verdict: 'gone' | 'replaced',
   screen: string | undefined,
 ): { row: Row; difference: Difference; note?: string } {
-  const running = seatModel(seat, screen);
+  const running = paneSeatModel(seat, screen);
   return {
     row: {
       name: seat.name,
@@ -732,8 +732,15 @@ function notLaunched(
  *  seat's declared display marked `(declared, unread)`. Never a difference — this is not a
  *  comparison. */
 function unverifiedModel(seat: Seat, screen: string | undefined): string {
-  const running = seatModel(seat, screen);
+  const running = paneSeatModel(seat, screen);
   return running ? `${running.model} ${running.version}` : `${seat.display} (declared, unread)`;
+}
+
+/** The screen's model where the pane is not proven to be the seat: a wrapper's declaration is
+ *  never shown as what such a pane runs, and the CLI's own default family is never read for the
+ *  seat's other maker's model. */
+function paneSeatModel(seat: Seat, screen: string | undefined) {
+  return wrapperSeat(seat) ? null : seatModel(seat, screen);
 }
 
 function modelOf(
@@ -748,7 +755,11 @@ function modelOf(
   registered: boolean,
 ): string {
   const screen = live.screens[agent.pane];
-  const running = registered ? runningModel(seat.cli, screen ?? '') : seatModel(seat, screen);
+  // A registered seat carries its record's signing as its model and version here, so the
+  // comparison is like for like: a wrapper's signed declaration against its banner, a bare
+  // Claude Code launch against the Claude family its screen names. An unregistered seat has
+  // only the file's declaration, so the display read stands.
+  const running = registered ? signedSeatModel(seat, screen) : seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.

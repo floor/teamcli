@@ -592,6 +592,9 @@ function placeholderVersionFindings(team: TeamFile, dir: string, session: string
     if (screen === undefined) continue;
     const running = seatModel(seat, screen);
     if (!running) continue;
+    // A read that only repeats the declaration names no version to write: a provider wrapper's
+    // pane without its banner id reads the launcher's declaration, and "write 0" is not advice.
+    if (running.model === seat.model && running.version === seat.version) continue;
     if (running.model === seat.model) {
       findings.push({
         level: 'note',

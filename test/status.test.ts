@@ -119,7 +119,7 @@ function approveOnDisk() {
 }
 
 describe('team status', () => {
-  test('a registry DeepSeek baseline reads the Claude Code status line and reports drift', () => {
+  test('a registry DeepSeek baseline is never read as the Claude CLI\'s default model', () => {
     const parsed = validateTeamFile(example);
     if (!parsed.ok) throw new Error('the example fixture does not validate');
     const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
@@ -134,9 +134,14 @@ describe('team status', () => {
       false,
       new Map([['deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1' }]]),
     );
-    expect(result.differences.some((difference) => difference.what.includes(
-      'deepseek-acme: running Claude Opus 5.5, registry says deepseek flash v4.1',
-    ))).toBe(true);
+    // The wrapper's pane prints Claude Code's own default family whatever the launcher selected:
+    // that reading is not the seat's model, so it is never a drift against the signed record —
+    // the record's own declaration is, like for like.
+    expect(result.differences.some((difference) => difference.what.includes("deepseek-acme: running Claude Opus 5.5"))).toBe(false);
+    const row = result.rows.find((candidate) => candidate.name === 'deepseek-acme');
+    // The row keeps the registry's own label for the signed declaration.
+    expect(row?.model).toBe('deepseek flash v4.1');
+    expect(result.notes.some((note) => note.startsWith('deepseek-acme:'))).toBe(false);
   });
 
   test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
@@ -368,12 +373,33 @@ describe('team status', () => {
   });
 
   // Claude Code's line names Claude's families only: the DeepSeek seat's own status line says
-  // nothing to compare, so it is unread rather than wrong.
-  test('a seat that runs another maker\'s model through Claude Code is unread, never a mismatch', async () => {
+  // nothing to compare, so it is never wrong — the launcher's declaration is the reading the
+  // row shows, without the unread suffix a version the caller does not know would keep.
+  test('a seat that runs another maker\'s model through Claude Code shows its declaration, never a mismatch', async () => {
     live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
     const { code, out } = await status();
-    expect(out).toContain('note: deepseek-acme: its screen shows no model; the declared DeepSeek V4.1 Flash stands, and the screen reading is unread');
+    expect(out).toMatch(/deepseek-acme\s+done\s+DeepSeek V4\.1 Flash\s+w3:p1/);
     expect(out).not.toContain('deepseek-acme runs');
+    expect(out).not.toContain('note: deepseek-acme:');
+    expect(code).toBe(0);
+  });
+
+  // The launcher's own script is the wrapper: Claude Code's status line prints its default
+  // family whatever GLM the launcher selected, and the column shows the declared model instead.
+  test('a claude-glm.sh launcher reads its declared model, never the Claude CLI default', async () => {
+    writeFileSync(file, example.replace(
+      '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+      '    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: claude-glm.sh',
+    ));
+    approveOnDisk();
+    live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    const { code, out } = await status();
+    // Both count instances carry the wrapper; the one with a screen shows the declaration, and
+    // the one with no screen keeps the unread suffix the caller's missing version earns it.
+    expect(out).toMatch(/deepseek-acme\s+done\s+GLM 5\.3\s+w3:p1/);
+    expect(out).toMatch(/deepseek-acme-2\s+idle \(screen not recognised\)\s+GLM 5\.3 \(declared, unread\)\s+w4:p1/);
+    expect(out).not.toMatch(/deepseek-acme\s+done\s+Claude/);
+    expect(out).not.toContain('note: deepseek-acme:');
     expect(code).toBe(0);
   });
 
