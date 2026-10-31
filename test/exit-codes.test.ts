@@ -6708,6 +6708,13 @@ if (wanted !== null) {
     `exit-codes: selected ${String(runnable)} of ${String(scenes.size)} scenes; analyzer probes skipped (the checks against this repo still run)`,
   );
 }
+// Each scene row builds its own checkout before the scene runs: a repo layout spawns git init,
+// add and commit, and two scenes spawn a child bun. That work is tens of milliseconds on an
+// idle machine, but a loaded runner can hold a row past Bun's 5s default, and the lane's
+// full-file runs at load lost rows to it. The whole-tree rows above carry this file's 30s
+// margin for the same class of wait; the scene rows get it too, so load only makes a row
+// later, never wrong.
+const SCENE_ROW_TIMEOUT_MS = 30_000;
 for (const row of contract.rows) {
   if (defensive.has(row.id)) continue;
   if (skips(row.id)) continue;
@@ -6721,7 +6728,7 @@ for (const row of contract.rows) {
     } finally {
       rmSync(place.base, { recursive: true, force: true });
     }
-  });
+  }, SCENE_ROW_TIMEOUT_MS);
 }
 
 // A refusal whose return sits above the dry-run return is one the dry run reaches. One
