@@ -1,8 +1,9 @@
-// A record path addresses the record's own keys. The three names every object inherits are
-// refused where a path would address them as object keys, before the command reaches the owner
-// door, and the writer itself never walks one, so such a path changes no shared object and writes
-// no record. Under a list the same segment is an item selector, not a key: a seat named
-// `constructor` or `prototype` (the schema allows both) is addressed by its name, as any other.
+// A record path addresses the record's own keys. A segment spelled like one every object
+// inherits is refused only where the map does not own it, before the command reaches the owner
+// door; the writer itself never walks a name the record does not own, so such a path changes no
+// shared object and writes no record. The rule is ownership, not spelling: an owned account key
+// named `constructor` or `prototype` (the schema allows both), and a list item named so, are
+// addressed as any other key or item.
 //
 // Every scene keeps its team, registry and owner seat under its own temp home; the two object
 // scenes read and write only objects they made. Nothing here reads a real team file, grant or
@@ -13,7 +14,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runConfig } from '../src/commands/config.ts';
-import { parsePath, withValue } from '../src/config/team-record.ts';
+import { getAt, parsePath, withValue } from '../src/config/team-record.ts';
 import { parseYaml, toValue } from '../src/yaml.ts';
 import { seatOwner } from './helpers/owner-seat.ts';
 import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
@@ -28,6 +29,16 @@ operator: lead
 session: acme
 workspace:
   mode: shared
+budgets:
+  accounts:
+    constructor:
+      kind: subscription
+      reserve: 20%
+      sources: [status_line]
+    prototype:
+      kind: subscription
+      reserve: 20%
+      sources: [status_line]
 seats:
   - role: coordinator
     name: lead
@@ -118,6 +129,50 @@ describe('a list item named after an inherited property', () => {
   });
 });
 
+describe('an owned map key named after an inherited property', () => {
+  test('reads, writes and removes the account it names', async () => {
+    const at = place();
+    await underRegistry(async () => {
+      const sources = { home: at.home, env: { ...process.env, TEAM_CONFIG_SOURCE: 'registry' }, now: () => NOW, ownerSeatStore: at.store, present: true };
+      const get = testIo(at.root, { kind: 'owner' });
+      expect(await runConfig(['get', 'budgets.accounts.constructor.reserve'], get, sources), get.err).toBe(0);
+      expect(get.out.trim()).toBe('20%');
+      const set = testIo(at.root, { kind: 'owner' });
+      expect(await runConfig(['set', 'budgets.accounts.constructor.reserve', '10%', '--request'], set, sources), set.err).toBe(0);
+      const unset = testIo(at.root, { kind: 'owner' });
+      expect(await runConfig(['unset', 'budgets.accounts.prototype.sources', '--request'], unset, sources), unset.err).toBe(0);
+      const record = toValue(parseYaml(storedTeam(at.root, at.home)!.text));
+      expect(getAt(record, ['budgets', 'accounts', 'constructor', 'reserve'])).toEqual({ found: true, value: '10%' });
+      expect(getAt(record, ['budgets', 'accounts', 'prototype', 'sources'])).toEqual({ found: false });
+      expect(at.store.prompts.length).toBe(2);
+    });
+  });
+});
+
+describe('a reserved name the record does not own', () => {
+  test('is refused for every verb, before the door, with no prompt and no write', async () => {
+    const at = place();
+    await underRegistry(async () => {
+      const sources = { home: at.home, env: { ...process.env, TEAM_CONFIG_SOURCE: 'registry' }, now: () => NOW, ownerSeatStore: at.store, present: true };
+      const before = storedTeam(at.root, at.home)!.text;
+      const prompts = at.store.prompts.length;
+      let runs = 0;
+      for (const key of ['__proto__', 'constructor', 'prototype']) {
+        for (const raw of [key, `${key}.marker`, `seats.worker.${key}.marker`]) {
+          for (const argv of [['get', raw], ['set', raw, 'x'], ['unset', raw], ['set', raw, 'x', '--request'], ['unset', raw, '--request']]) {
+            const io = testIo(at.root, { kind: 'owner-no-tty' });
+            expect(await runConfig(argv, io, sources), `${argv.join(' ')}: ${io.err}`).toBe(2);
+            runs += 1;
+          }
+        }
+      }
+      expect(runs).toBe(45);
+      expect(at.store.prompts.length).toBe(prompts);
+      expect(storedTeam(at.root, at.home)!.text).toBe(before);
+    });
+  });
+});
+
 describe('a hand-built path through an inherited name', () => {
   test('writes nothing shared', () => {
     const record = toValue(parseYaml(TEAM));
@@ -140,6 +195,14 @@ describe('a hand-built path through an inherited name', () => {
     } finally {
       delete (Object.prototype as { guardMarker?: string }).guardMarker;
     }
+  });
+
+  test('walks an owned key whatever its spelling', () => {
+    const record = toValue(parseYaml(TEAM));
+    const changed = withValue(record, ['budgets', 'accounts', 'constructor', 'reserve'], '10%');
+    expect(changed.ok).toBe(true);
+    if (!changed.ok) return;
+    expect(getAt(changed.root, ['budgets', 'accounts', 'constructor', 'reserve'])).toEqual({ found: true, value: '10%' });
   });
 });
 
