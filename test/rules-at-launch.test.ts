@@ -84,11 +84,11 @@ describe('executing a launch that carries the rules line', () => {
     expect(events).toContain('stage:ready');
   });
 
-  test('a launch without the line is not taken as delivered: the deliver step asks, and is refused', async () => {
+  test('a launch without the line is not taken as delivered, and its rules are never typed: the file is written, the seat left out', async () => {
     const { events, done } = run('codex');
     await done;
-    expect(events).not.toContain('write');
-    expect(events).toContain('deliver');
+    expect(events).toContain('write');
+    expect(events).not.toContain('deliver');
     expect(events).not.toContain('stage:ready');
     expect(events).not.toContain('typed');
   });

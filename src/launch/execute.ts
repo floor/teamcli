@@ -1582,7 +1582,10 @@ export async function executePlan(
         // Rules that rode the launch line are delivered: the CLI took them as its initial prompt.
         // A seat this run did not launch is never typed into to give it its rules (no pane
         // messaging): its rules file is written, and the rules reach it with its next launch.
-        if (here && !launchedThisRun.has(op.seat)) {
+        // Absolute: rules are never typed into any pane. Only a launch line that carried them
+        // delivers them; any other seat, launched by this run or not, gets its file written and
+        // is left out until a launch carries them.
+        if (here && !rulesAtLaunch.has(op.seat)) {
           const written = await host.deliverRules?.(session, here.pane, op.cli, { ...file, writeOnly: true }, op.seconds);
           if (stopped) break;
           dropped.add(op.seat);
@@ -1594,24 +1597,8 @@ export async function executePlan(
           });
           break;
         }
-        const delivered = here && rulesAtLaunch.has(op.seat)
-          ? true
-          : here ? await host.deliverRules?.(session, here.pane, op.cli, file, op.seconds) : false;
         if (stopped) break;
-        if (delivered === 'no-agent') {
-          dropped.add(op.seat);
-          final(op.seat, { kind: 'left out', reason: 'no live agent in its pane; its rules were not delivered' });
-          break;
-        }
-        if (typeof delivered === 'object') {
-          dropped.add(op.seat);
-          if (delivered.row !== null) {
-            hold(op.seat, `${op.seat}: first row of its box that is not the rules line: ${plainPaneText(delivered.row)}\n`);
-          }
-          final(op.seat, { kind: 'left out', reason: refusalReport(delivered) });
-          break;
-        }
-        if (!here || !delivered) {
+        if (!here) {
           dropped.add(op.seat);
           final(op.seat, { kind: 'left out', reason: 'its rules were not delivered; left at named' });
           break;

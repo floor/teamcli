@@ -356,8 +356,12 @@ describe('a three-seat launch', () => {
         do: { do: 'idle', seat: name, label: name, cli, seconds, command: cli, pane: `${name}-pane`, repairLine: `\`team remove ${name} --keep\` then \`team add ${name}\`` },
       },
     ];
+    // alpha's launch carries its rules line: rules are never typed into a pane.
+    const alpha = seat('alpha', 'claude', 5);
+    const launchStep = alpha[1]!.do as { command: string };
+    launchStep.command = "claude 'Read /x/rules/alpha.md (sha256 000000000000): your standing rules.'";
     return [
-      ...seat('alpha', 'claude', 5),
+      ...alpha,
       {
         kind: 'run',
         argv: [],

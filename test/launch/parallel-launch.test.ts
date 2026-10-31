@@ -22,7 +22,8 @@ function seatSteps(name: string, cli: 'claude-code' | 'codex', seconds = 90): St
     {
       kind: 'run',
       argv: [],
-      do: { do: 'launch', seat: name, label: name, command: cli },
+      // The rules line rides the launch (rules are never typed into a pane).
+      do: { do: 'launch', seat: name, label: name, command: rules === 'message' ? `${cli} 'Read /x/rules/${name}.md'` : cli },
     },
     {
       kind: 'wait',
@@ -544,8 +545,9 @@ describe('parallel launch execution', () => {
       createWorkspace: (_session, _cwd, label) => ({ pane: `${label}-pane`, workspace: `${label}-ws` }),
       paneRun: () => true,
       typeLine: () => true,
-      deliverRules: async () => {
-        delivered.push('seat-1');
+      // The launch writes the rules file first (writeOnly); only a delivery after it counts.
+      deliverRules: async (_session, _pane, _cli, file) => {
+        if (file.writeOnly !== true) delivered.push('seat-1');
         return true;
       },
       renameAgent: (_session, _pane, name) => {
