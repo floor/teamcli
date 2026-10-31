@@ -12,6 +12,7 @@ import { verifiedOf } from '../src/approve/approval.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import { runSend } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
+import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { registerAgent } from '../src/registry/agents.ts';
@@ -19,6 +20,8 @@ import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { approvalStanding, type Standing } from '../src/store/store.ts';
+import type { Machine } from '../src/watch/machine.ts';
+import { newMemory, pass } from '../src/watch/pass.ts';
 import { recordBody, testIo, type TestIo } from './helpers.ts';
 import { dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
@@ -333,6 +336,35 @@ describe('team send behind a provider wrapper', () => {
     expect(io.err).not.toContain('model drift');
     expectDrop(made);
   });
+
+  // A banner is read word by word, order included: the same words in another order name another
+  // version, and a wrapper that moved from 5.3 to 3.5 is a drift like any other. Sorting the
+  // declaration's words would let every reordering through.
+  test('a banner id that writes the GLM version in another order is still held', async () => {
+    const made = world(['typed']);
+    cleanup = made.cleanup;
+    registerLead(made, { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' });
+    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6') + banner('glm-3.5'));
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('model drift: GLM 5 5.3 vs');
+    expect(pane.enters).toBe(0);
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+  });
+
+  test('a banner id that writes the DeepSeek version in another order is still held', async () => {
+    const made = world(['typed']);
+    cleanup = made.cleanup;
+    registerLead(made, { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' });
+    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6') + banner('deepseek-v1.4-flash'));
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs');
+    expect(pane.enters).toBe(0);
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+  });
 });
 
 // `team check` reads a running pane against the record that signs it. The wrapper evidence is the
@@ -412,5 +444,86 @@ describe('team check behind a provider wrapper', () => {
     // The record ran the CLI itself, so the Claude family the pane prints contradicts the
     // foreign model the record signs, whatever line the file carries now.
     expect(out).toContain('signs as DeepSeek V4.1 Flash, runs Claude Opus 4.6');
+  });
+});
+
+// The watch reads the same evidence as `team check`: the record's own cli and launch are what
+// the running process was started from, and its model-drift check compares the pane with the
+// registry's signing. A banner that writes the version words in another order names another
+// version there too.
+describe('team watch behind a provider wrapper', () => {
+  const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+
+  function teamOf(fileText: string): TeamFile {
+    const checked = validateTeamFile(fileText);
+    if (!checked.ok) throw new Error(`the wrapper fixture does not validate: ${JSON.stringify(checked.errors)}`);
+    return checked.team;
+  }
+
+  /** One pass with the glm seat ready, the screen the scene hands in, and the registry's signing
+   *  for that seat; the file line may differ from the launch the record was made from. */
+  function reportsOf(options: { fileLaunch?: string; signed: { model: string; version: string; launch: string }; screen: string }): string[] {
+    const fileText =
+      options.fileLaunch === undefined ? TEAM : TEAM.replace('    launch: claude-glm.sh', `    launch: ${options.fileLaunch}`);
+    const team = teamOf(fileText);
+    const state = emptySession();
+    state.seats['glm-seat'] = { stage: 'ready', pane: GLM_PANE, workspace: 'fixture-ws-glm' };
+    const live = liveWith({
+      [LEAD_PANE]: claudeScreen('Opus 5.5'),
+      [GLM_PANE]: options.screen,
+      [DS_PANE]: claudeScreen('Opus 5.5'),
+    });
+    const signing = new Map([['glm-seat', { ...options.signed, cli: 'claude-code' }]]);
+    return pass({ team, watch: team.watch, state, live, machine: fine, now: 0, memory: newMemory(), signing }).reports.map(
+      (report) => report.text,
+    );
+  }
+
+  /** The model-drift report for the glm seat, when the pass makes one. */
+  const modelReports = (reports: string[]): string[] =>
+    reports.filter((text) => text.startsWith('glm-seat runs ') && text.includes('signs with the wrong model'));
+
+  test('the watch reports a banner id that writes the GLM version in another order', () => {
+    const reports = reportsOf({
+      signed: { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' },
+      screen: claudeScreen('Opus 4.6') + banner('glm-3.5'),
+    });
+    expect(modelReports(reports).some((text) => text.includes('the registry says GLM 5 5.3:'))).toBe(true);
+  });
+
+  test('the watch reports a banner id that writes the DeepSeek version in another order', () => {
+    const reports = reportsOf({
+      signed: { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' },
+      screen: claudeScreen('Opus 4.6') + banner('deepseek-v1.4-flash'),
+    });
+    expect(modelReports(reports).some((text) => text.includes('the registry says DeepSeek Flash V4.1:'))).toBe(true);
+  });
+
+  test('the watch reports nothing for a banner id naming the signed model', () => {
+    const reports = reportsOf({
+      signed: { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' },
+      screen: claudeScreen('Opus 4.6') + banner('glm-5.3'),
+    });
+    expect(modelReports(reports)).toEqual([]);
+  });
+
+  // The record's launch is the provenance: a file line saying the CLI itself does not turn a
+  // recorded wrapper's screen into a drift, and a recorded bare launch is compared even when
+  // the file names a wrapper.
+  test('the watch takes a recorded wrapper launch over a file line naming the CLI', () => {
+    const reports = reportsOf({
+      fileLaunch: 'claude',
+      signed: { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' },
+      screen: claudeScreen('Opus 4.6'),
+    });
+    expect(modelReports(reports)).toEqual([]);
+  });
+
+  test('the watch compares a recorded bare launch even when the file names a wrapper', () => {
+    const reports = reportsOf({
+      signed: { model: 'GLM 5', version: '5.3', launch: 'claude' },
+      screen: claudeScreen('Opus 4.6'),
+    });
+    expect(modelReports(reports).some((text) => text.includes('runs Claude Opus 4.6') && text.includes('the registry says GLM 5 5.3:'))).toBe(true);
   });
 });
