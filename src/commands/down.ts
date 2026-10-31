@@ -1225,8 +1225,10 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     extra,
     watchPid,
     // The bus `team up` started goes with the team, as the watch does; one the owner runs in a
-    // terminal of their own is not in the state and is left running.
-    busWorkspace: refusals.length === 0 ? null : state?.bus?.workspace ?? null,
+    // terminal of their own is not in the state and is left running. The plan carries this close
+    // whether or not this run may take it: a dry run prints the plan and a refused run returns
+    // before the executor, so neither closes anything.
+    busWorkspace: state?.bus?.workspace ?? null,
     // A delegated run stops the whole team: no seat is kept back, the orchestrator and the
     // operator included. The delegate sits outside the session, so it never stops itself.
     keep: !branchRun && clientDown === null && caller.kind === 'seat' ? [acting.orchestrator, acting.operator] : [],

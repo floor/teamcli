@@ -17,6 +17,9 @@ that pid; a watch recorded in a pane is not signalled here, its pane being how i
 a record that belongs to the session's own host process is never signalled. A seat whose launch
 started a managed Codex endpoint is stopped through the endpoint's recorded process, with the same
 proof `team remove` uses, before its state record goes; a seat that started none is not mentioned.
+The event bus `team up` started is closed with the team: the workspace its record names is shut
+after the seats and before the session, and its state record is cleared when that close succeeds. A bus the
+owner runs in a terminal of their own is not in the state and is left running.
 `--dry-run` prints the plan and runs nothing.
 
 ## Synopsis

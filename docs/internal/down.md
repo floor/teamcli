@@ -13,7 +13,13 @@ the state records that pane and that workspace for one seat, and left running wh
 accounts for it. A pane with no name is closed on that same record. The watch is stopped by its
 pid only when the state records that pid and no pane: a watch recorded in a pane is not signalled
 here — its pane is how it is verified, and `up` stops one it can prove — and a record fenced by the
-session's epoch names the session host's own process, which is never signalled. A seat is only
+session's epoch names the session host's own process, which is never signalled. The event bus
+`team up` started goes with the team: the workspace its record names is closed after the seats
+and the watch and before the session, and the bus record is cleared once that close succeeds
+(`bus: stopped`); a close that does not succeed prints `bus: its workspace did not close` and
+keeps the record. A bus the owner runs in a terminal of their own is not in the state and is left
+running. The plan carries that close, so a dry run shows it; a dry run and a refused run return
+before the executor and close nothing. A seat is only
 asked when it is
 free — idle, with an empty input box — so a working, blocked or half-typed seat is left running
 and named. A pane whose CLI has exited — its own shell back in front of it, and no CLI process in
@@ -31,9 +37,10 @@ force still names the seats it named when it was approved, with those seats' CLI
 
 Reads the team file, this machine's approval store (the copy in force is the stop list), the
 session's state (`.agents/team.state.json`: the seats it drops after they stop, the watch's pid,
-and each seat's managed endpoint), and herdr:
+each seat's managed endpoint, and the bus's pane and workspace), and herdr:
 whether the session is running, its agents, each pane's screen and status, and each pane's
-foreground processes. Writes `.agents/team.state.json` (the seats it stopped are dropped),
+foreground processes. Writes `.agents/team.state.json` (the seats it stopped are dropped, and a
+bus workspace it closed has its record cleared),
 `.agents/team.log`, and, through herdr: the exit in each pane, the workspaces it closes, the
 session it stops and the stopped session it clears — its own, just stopped. A seat whose state
 records a managed endpoint for the presence binding it holds now is stopped through it before its
