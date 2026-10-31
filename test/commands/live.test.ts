@@ -5127,6 +5127,20 @@ describe('team up, delegated', () => {
     },
   ] as const;
 
+  // The port's reviewed delivery warning: a lead or reviewer the launch cannot wake while it is
+  // idle is said once, before the plan's own lines. It is an advisory, not a refusal, so the
+  // refusal lines these delegated scenes compare are read without it; the warning itself is
+  // pinned in the scenes that own it.
+  const DELIVERY_WARNINGS = [
+    'claude-coordinator-acme is a lead seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it',
+    'grok-acme is a reviewer seat and grok cannot be woken while it is idle; time-bound work is never dispatched to it',
+  ];
+  const refusalsOf = (err: string): string[] => err
+    .split('\n')
+    .filter((line) => line.startsWith('team up: '))
+    .map((line) => line.slice('team up: '.length))
+    .filter((line) => !DELIVERY_WARNINGS.includes(line));
+
   test('a pane the grant names dry-runs up', async () => {
     delegateFile();
     await approve();
@@ -5177,7 +5191,7 @@ describe('team up, delegated', () => {
         delegateGate: gateReading(state.running),
         machine: () => fine,
       }, made));
-      const said = io.err.split('\n').filter((line) => line.startsWith('team up: ')).map((line) => line.slice('team up: '.length));
+      const said = refusalsOf(io.err);
       expect(said).toEqual([...state.real]);
       if (state.real.length === 0) {
         expect(code).toBe(0);
@@ -5229,7 +5243,7 @@ describe('team up, delegated', () => {
         delegateGate: gateReading(state.running),
         machine: () => fine,
       }, dryMade));
-      const said = realIo.err.split('\n').filter((line) => line.startsWith('team up: ')).map((line) => line.slice('team up: '.length));
+      const said = refusalsOf(realIo.err);
       const would = dryIo.out
         .split('\n')
         .filter((line) => line.startsWith('! up would refuse: '))

@@ -1978,7 +1978,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // for a seat it keeps, from the records the last launch left; and with neither, from the
   // declared line. Nothing is recorded for a launch this run has not made, so that projection
   // claims no socket. A person's pane is left out: a person is not woken by an adapter, and that
-  // is expected.
+  // is expected. The warning is said only for the run every gate admits: a refused run is told its
+  // refusal and nothing else, so the class is not even read, and the real run says it once past
+  // the launch, run-lock, client, lobby and clear gates — a run that stops at any of them launches
+  // nothing and hears only why it stopped.
   type LaunchOp = Extract<Op, { do: 'launch' }>;
   let launchOps: Map<string, LaunchOp> | null = null;
   const launchOpOf = (name: string): LaunchOp | undefined => {
@@ -2023,13 +2026,17 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     });
     return { cli: read.evidence.cli, cls: read.class };
   };
-  const deliveryWarnings = team.seats
-    .filter((seat) => isLeadSeat(team, seat.name) || seat.role === 'reviewer')
-    .filter((seat) => seat.human !== true)
-    .map((seat) => ({ seat, ...deliveryClassOf(seat) }))
-    .filter(({ cls }) => !wakeableWhileIdle(cls))
-    .map(({ seat, cli }) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
-  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval]), ...deliveryWarnings];
+  // Read where it is said, never for a run the top gate already refuses: the real run calls this
+  // after its last pre-launch gate, and the dry run only while it would go ahead.
+  const deliveryWarnings = (): string[] => refusals.length > 0
+    ? []
+    : team.seats
+        .filter((seat) => isLeadSeat(team, seat.name) || seat.role === 'reviewer')
+        .filter((seat) => seat.human !== true)
+        .map((seat) => ({ seat, ...deliveryClassOf(seat) }))
+        .filter(({ cls }) => !wakeableWhileIdle(cls))
+        .map(({ seat, cli }) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
+  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval])];
   // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
   if (!dry) {
@@ -2042,7 +2049,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   if (dry) {
     stampLobbyTrust(false);
     if (!json) {
-      for (const line of warnings) out.stdout(`! ${plainText(line)}\n`);
+      for (const line of [...warnings, ...deliveryWarnings()]) out.stdout(`! ${plainText(line)}\n`);
       // The same cause can reach the list twice — the gate and `doctor` both read the
       // approval — so a refusal is said once. A refusal leaves through the real run's
       // return below, so the status and the exit id are that refusal's; the words stay these.
@@ -2093,6 +2100,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // plan line, each with the prefix the terminal draws (`+`, `!`, `skip`).
       const plan: PlanStep[] = [
         ...warnings.map((line) => ({ step: 'warning' as const, detail: line, prefix: '!' as const })),
+        ...deliveryWarnings().map((line) => ({ step: 'warning' as const, detail: line, prefix: '!' as const })),
         ...planStepsOf(buildPlan()),
       ];
       writeJson(io, 'team.up', {
@@ -2213,6 +2221,9 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     // record cannot be written is left out of the launch.
     stampLobbyTrust(true);
     stampGrantedTrust();
+    // The last gate above may still have returned; from here the run delivers and launches, so the
+    // delivery warning is said now, before the briefs it is about and before the first line runs.
+    for (const line of deliveryWarnings()) stderrLine(`team up: ${plainText(line)}\n`);
     // The daemon's hosted watch owns this route: every legacy `Watch · <team>` workspace with
     // no live process is closed before this run plans anything, so activation leaves no second
     // watch's pane behind. A workspace a process still holds is left for the hand-over.

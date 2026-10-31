@@ -5,11 +5,14 @@
 // only: a throwing host seam for the gate, and the default watch source, which must refuse
 // before any transport.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { realWatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, type SessionState } from '../src/state.ts';
 import { dispatchIdleWork, forgetIdleEpisodes } from '../src/watch/dispatch.ts';
 
@@ -91,6 +94,33 @@ function seedState(): SessionState {
   return readState(join(root, '.agents')).sessions.crew ?? emptySession();
 }
 
+/** The launch record a push seat leaves: generated settings that accept cross-session frames and
+ *  the registry address a send dials. A dispatch reads a seat with neither as pull-on-turn. */
+function launchedPushSeat(seat: string): void {
+  const settings = cliHookSettingsPath(join(root, '.agents'), 'crew', seat);
+  if (settings === null) throw new Error(`${seat}: no settings path for the fixture`);
+  mkdirSync(dirname(settings), { recursive: true });
+  writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+  const past = new Date(Date.now() - 60_000);
+  utimesSync(settings, past, past);
+  const socket = join(base, 'sockets', `${seat}.sock`);
+  mkdirSync(dirname(socket), { recursive: true });
+  writeFileSync(socket, '');
+  registerAgent(home, {
+    name: seat,
+    signing: { model: 'Test', version: '1', role: 'worker' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(root), seat, session: 'crew', pane: `fixture:${seat}`, address: socket },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+}
+
 beforeEach(() => {
   forgetIdleEpisodes();
   base = realpathSync(mkdtempSync(join(tmpdir(), 'watch-dispatch-gates-')));
@@ -113,6 +143,7 @@ describe('the dispatch gates', () => {
       join(root, '.agents', 'queue.yaml'),
       '- id: t1\n  title: "First"\n  assignee: worker-1\n- id: t2\n  title: "Second"\n  assignee: worker-1\n',
     );
+    launchedPushSeat('worker-1');
     const calls: string[] = [];
     const result = await dispatchIdleWork({
       root,
