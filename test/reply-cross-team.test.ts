@@ -222,6 +222,33 @@ describe('a cross-team reply', () => {
     expect(record.payload).toMatchObject({ to: 'orchestrator', to_id: again.id, session: 'web' });
   });
 
+  test("follows the sender's live session when its file moved on", async () => {
+    sentAcross(SENT_ONE, 'the question');
+    // The sender's team file moves its session without a registry refresh. The sender's own
+    // `team messages` reads the live file, so its session is where the reply has to land: a write
+    // under the registry's old session would be a reply its reader never sees, reported as if it
+    // had been read.
+    writeFileSync(join(world.roots.web as string, '.agents', 'team.yaml'), teamText({ ...(TEAMS.web as TeamSpec), session: 'web-next' }));
+    const result = await answer(SENT_ONE, 'the answer', REPLY_ONE);
+
+    expect(result.code).toBe(0);
+    expect(result.out).toContain('orchestrator: delivered (drop)');
+    const atLive = join(recordDir(world.roots.web as string, 'web-next', 'orchestrator'), REPLY_ONE);
+    expect(existsSync(atLive)).toBe(true);
+    expect(existsSync(join(recordDir(world.roots.web as string, 'web', 'orchestrator'), REPLY_ONE))).toBe(false);
+    expect(recordAt(atLive).payload).toMatchObject({
+      to: 'orchestrator',
+      to_id: world.webAgent,
+      root: world.roots.web as string,
+      session: 'web-next',
+    });
+
+    // The sender's reader, reading its live file, has the answer.
+    const read = await readAtWeb();
+    expect(read.code).toBe(0);
+    expect(read.out).toContain('the answer');
+  });
+
   test('reports delivered only when the record is in the sender\'s reader folder', async () => {
     sentAcross(SENT_ONE, 'the question');
     const result = await answer(SENT_ONE, 'the answer', REPLY_ONE);

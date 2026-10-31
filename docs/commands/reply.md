@@ -19,10 +19,12 @@ thread, not the invitation: it admits a reply on any open thread, and a thread i
 is closed or the clock or the cap ends it.
 
 The folder is the one the answered seat's own reader reads. A record from a seat of another team
-is answered into that team's transport tree, bound to that team's root and session — the same
-place a send to that seat writes, and the place its `team messages` and inbox server scan. A seat
-name alone cannot say which team that is, because two teams may name a seat alike; the registry
-id the answered record carries places it. A record whose sender the registry cannot place — no id
+is answered into that team's transport tree, bound to the root and session that team's live file
+names — the same place a send to that seat writes, and the place its `team messages` and inbox
+server scan. The live file, not the registry's snapshot of it, decides the session: a team that
+moved to another session is answered in the new one. A seat name alone cannot say which team that
+is, because two teams may name a seat alike; the registry id the answered record carries places
+it. A record whose sender the registry cannot place — no id
 on the record, an id the registry does not hold, a retired agent, or an agent that no longer holds
 the seat the record names — is refused, and nothing is written.
 
@@ -112,7 +114,8 @@ terminal is refused. The caller must be the record's addressee — the record's 
 the record sits in its own folder — and the reply reaches the seat the record's `from` names, in
 the team the record's registry id places it: a sender whose own file no longer declares the seat
 is not reached by a reply. Across teams the reply is written into the sender's own tree, under
-that team's root and session, and that team's live file is read before anything is written. The
+the root and session its live file names, and that team's live file is read before anything is
+written. The
 owner answers a seat's
 record through this same path. A record the owner sent is answered at its entity's
 `owner-reply-to` endpoint — the `seat@team` address an owner-origin message names — and the

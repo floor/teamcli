@@ -811,8 +811,13 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
           raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
           return refused(io, json, `${targetSeat}: it is not a declared seat of the sender's team; that file's seats are ${seatList(loaded.team)}; nothing was written`);
         }
+        // The sender's own reader scans the session the live file names, not the one the
+        // registry snapshot happened to hold when the agent was registered: a file that moved
+        // its session sends the reply to the new one. The root is the live read's own, the same
+        // one that reader resolves from its folder, so an answer reported delivered is bound to
+        // exactly the tree and session `team messages` there reads.
         senderFile = loaded.team;
-        seatSender = { team: senderTeam, agent };
+        seatSender = { team: { ...senderTeam, root: loaded.root, session: loaded.team.session }, agent };
       } else if (!team.seats.some((seat) => seat.name === targetSeat)) {
         raiseSecurityRefusal(team, root, host.home, dir, placed, 'admission', targetSeat, host.now());
         return refused(io, json, `${targetSeat}: it is not a declared seat; the file's seats are ${seatList(team)}; nothing was written`);
