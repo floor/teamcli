@@ -104,6 +104,16 @@ not a message) are unchanged.
   keep one seat on one item at a time. A pending hold has a release deadline, the built-in
   `work-item` definition ships with the workflow, and `team next` takes the run store's hold
   before its local lease.
+- **The machine daemon records the packaged commit as its install identity.** Beside the version
+  it runs, the daemon records the commit its build was packaged from, and `team daemon status
+  --json` exposes it as `gitHead`. The pair tells an install that changed either the version or
+  the commit from one that changed neither; a source checkout and an older state record report
+  no commit.
+- **`team status` names when the hosted watch started and which build is cycling.** A route the
+  machine daemon hosts reads `watch: running in the daemon since <start>, version <version>`,
+  the start the watch record holds and the version the daemon reports, `unknown` when it
+  reports none. The line no longer carries a relative last-cycle time; a failed last pass is
+  still the check's line.
 
 ### Changed
 
