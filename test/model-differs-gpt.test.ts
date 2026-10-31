@@ -24,9 +24,9 @@ const equivalent: Array<[string, Running, Running]> = [
   ['GPT variant crosses the field boundary', pair('GPT', '6.1 Sol'), pair('GPT Sol', '6.1')],
   ['DeepSeek variant and version prefix', pair('DeepSeek', 'V4.1 Flash'), pair('DeepSeek Flash', '4.1')],
   ['GLM variant crosses the field boundary', pair('GLM', '5.3 Air'), pair('GLM Air', '5.3')],
-  ['A4 remains a name word across fields', pair('Atlas', '4 A4'), pair('Atlas A4', '4')],
-  ['B2 remains a name word across fields', pair('Atlas', '2 B2'), pair('Atlas B2', '2')],
-  ['2B capacity remains a name word across fields', pair('Atlas', '2.5 2B'), pair('Atlas 2B', '2.5')],
+  ['A4 remains a name word across fields', pair('Example', '4 A4'), pair('Example A4', '4')],
+  ['B2 remains a name word across fields', pair('Example', '2 B2'), pair('Example B2', '2')],
+  ['2B capacity remains a name word across fields', pair('Example', '2.5 2B'), pair('Example 2B', '2.5')],
   ['separators and capitalization do not hide a split', pair('deepseek-flash', '4.1'), pair('DeepSeek', 'Flash V4.1')],
 ];
 
@@ -40,15 +40,15 @@ describe('new equivalences: each scene fails on the pre-fix reader', () => {
 });
 
 const differences: Array<[string, Running, Running]> = [
-  ['another family', pair('Gemini Argon', '4'), pair('Atlas Argon', '4')],
+  ['another family', pair('Gemini Argon', '4'), pair('Example Argon', '4')],
   ['another variant', pair('Gemini Argon', '4'), pair('Gemini Flash', '4')],
   ['another version', pair('Gemini Argon', '4'), pair('Gemini Argon', '5')],
   ['version digits retain their order', pair('GLM', '3.5'), pair('GLM', '5.3')],
-  ['2B capacity cannot disappear', pair('Atlas 2B', '2.5'), pair('Atlas', '2.5')],
-  ['2B capacity cannot become 3B', pair('Atlas 2B', '2.5'), pair('Atlas 3B', '2.5')],
-  ['A4 cannot disappear into numeric version 4', pair('Atlas A4', '4'), pair('Atlas', '4')],
-  ['B2 cannot disappear into numeric version 2', pair('Atlas B2', '2'), pair('Atlas', '2')],
-  ['a letter-bearing identity cannot change its letter', pair('Atlas A4', '4'), pair('Atlas B4', '4')],
+  ['2B capacity cannot disappear', pair('Example 2B', '2.5'), pair('Example', '2.5')],
+  ['2B capacity cannot become 3B', pair('Example 2B', '2.5'), pair('Example 3B', '2.5')],
+  ['A4 cannot disappear into numeric version 4', pair('Example A4', '4'), pair('Example', '4')],
+  ['B2 cannot disappear into numeric version 2', pair('Example B2', '2'), pair('Example', '2')],
+  ['a letter-bearing identity cannot change its letter', pair('Example A4', '4'), pair('Example B4', '4')],
   ['no-digit version cannot borrow the model field number', pair('Gemini 4', 'Argon'), pair('Gemini Argon', '4')],
   ['missing numeric version cannot borrow the other side', pair('Gemini Argon', ''), pair('Gemini Argon', '4')],
 ];
