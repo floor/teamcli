@@ -48,6 +48,16 @@ const TEAM_NO_TEMPORARY = HEAD + `limits:
 const TEAM_EXPLICIT_SEATS = HEAD + `limits:
   seats: 2
 ` + SEATS;
+// A pre-default approval: the session was written explicitly; the live record takes the default.
+const MOVED = `format: 1
+project: acme
+entity: acme
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+` + SEATS;
+const MOVED_APPROVED = MOVED.replace('entity: acme\n', 'entity: acme\nsession: acme\n');
 
 const made: string[] = [];
 afterEach(() => {
@@ -56,19 +66,23 @@ afterEach(() => {
 });
 
 type Place = { home: string; root: string };
-function place(text: string): Place {
+/** A registry-backed team whose stored approval may name an earlier record than the live one. */
+function placeApproved(approved: string, current: string): Place {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-approval-stale-report-')));
   made.push(base);
   const home = join(base, 'home');
   const root = join(base, 'acme');
   mkdirSync(home, { recursive: true });
   mkdirSync(join(root, '.agents'), { recursive: true });
-  writeFileSync(join(root, '.agents', 'team.yaml'), text);
+  writeFileSync(join(root, '.agents', 'team.yaml'), current);
   intoRegistry(root, home);
-  const checked = validateTeamFile(text);
+  const checked = validateTeamFile(approved);
   if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
-  writeApproval(storePath('acme', root, home), { approval: approvalOf(checked.team, root, NOW), file: text }, checked.team.seats, home, NOW);
+  writeApproval(storePath('acme', root, home), { approval: approvalOf(checked.team, root, NOW), file: approved }, checked.team.seats, home, NOW);
   return { home, root };
+}
+function place(text: string): Place {
+  return placeApproved(text, text);
 }
 
 async function config(at: Place, argv: string[]) {
@@ -153,4 +167,27 @@ test('the gate list is unchanged: no option, no report lines', async () => {
     'the default seat ceiling follows the roster (3 seats)',
   ]);
   expect(approvalStanding(at.root, at.home).kind).toBe('verified');
+});
+
+// The removed `team approve` cannot be run, so the config report never sends the owner to it,
+// while the option that works stays. Both surfaces the report writes are checked.
+test('a session-default move drops the removed re-approval and keeps the viable option', async () => {
+  const at = placeApproved(MOVED_APPROVED, MOVED);
+  const human = await config(at, ['set', 'watch.interval', '20s']);
+  expect(human.code, human.err).toBe(0);
+  expect(human.out).toContain('`session` changed: "acme" -> "acme-acme", the new default session (<entity>-<project>)');
+  expect(human.out).toContain('set `session: acme` to keep the old one');
+  expect(human.out).not.toContain('approve the file again');
+  expect(human.out).toContain('this version has no command to refresh that snapshot');
+});
+
+test('the JSON report carries the same session line without the removed re-approval', async () => {
+  const at = placeApproved(MOVED_APPROVED, MOVED);
+  const json = await config(at, ['set', 'watch.interval', '20s', '--json']);
+  expect(json.code, json.err).toBe(0);
+  const report = JSON.parse(json.out) as { approval_differences: string[] };
+  const session = report.approval_differences.filter((line) => line.startsWith('`session` changed'));
+  expect(session).toHaveLength(1);
+  expect(session[0]).toContain('set `session: acme` to keep the old one');
+  expect(session[0]).not.toContain('approve the file again');
 });

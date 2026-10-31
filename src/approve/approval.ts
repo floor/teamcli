@@ -15,7 +15,7 @@ import {
 } from '../store/store.ts';
 import { applyTempo, type Tempo } from '../file/sections/tempo.ts';
 import { parseYaml } from '../yaml.ts';
-import { compare, describe, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigests, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
+import { compare, describe, describeWithoutApproval, fingerprints, legacyLabelDigests, legacySeatDigests, legacyWatchDigests, OWNER_SECTIONS, type Fingerprints } from './fingerprint.ts';
 
 /** The launch ceilings declared in the file. An approval also stores a snapshot of them. */
 export function ceilingsOf(team: TeamFile): Ceilings {
@@ -284,7 +284,9 @@ export function approvalDifferencesOf(
   const approved = approvedFingerprints(standing.record);
   const current = fingerprints(team);
   const found = compare(approved, current, team);
-  const lines = found.map(describe);
+  // The config report is this build's only report surface with no re-approval step to offer:
+  // its session-default line keeps the difference and the option, never the removed command.
+  const lines = found.map(report === undefined ? describe : describeWithoutApproval);
   if (report === undefined || found.length === 0) return lines;
   for (const name of Object.keys(approved.seats).sort()) {
     if (!Object.hasOwn(current.seats, name)) lines.push(describe({ kind: 'seat-missing', name }));
