@@ -700,6 +700,7 @@ the same session twice:
 
 ```console
 $ team up ; echo "exit $?"
+team up: claude-keeper is a lead seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it
 claude-keeper: ready
   already ready; left as it is
 claude-beacon: ready
