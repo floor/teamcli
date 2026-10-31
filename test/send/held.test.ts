@@ -184,7 +184,7 @@ describe('team send: the plain send is the typed trigger again', () => {
     expect(code).toBe(0);
     expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
     expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
+      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n',
     );
     expect(host.frames).toEqual([]);
     expect(host.socketsTried).toEqual([]);

@@ -618,7 +618,7 @@ describe('runSend and sendDirect integration for Gemini and Cursor headless-resu
     expect(code).toBe(0);
     expect(io.err).toBe('');
     expect(io.out).toBe(
-      `team acme, session "${SESSION}"\n${scene.seat}: sent (unconfirmed) (headless-resume, 0 ms)\n`,
+      `team acme, session "${SESSION}"\n${scene.seat}: sent (unconfirmed) (headless-resume, 0 ms); queued; ${scene.seat} reads it at its next turn (pull-only)\n`,
     );
     expect(calls).toEqual([
       {
@@ -722,7 +722,7 @@ describe('runSend and sendDirect integration for Gemini and Cursor headless-resu
     expect(code).toBe(0);
     expect(spawns).toBe(0);
     expect(io.out).toBe(
-      `team acme, session "${SESSION}"\n${scene.seat}: sent (unconfirmed) (drop, 0 ms)\n`,
+      `team acme, session "${SESSION}"\n${scene.seat}: sent (unconfirmed) (drop, 0 ms); queued; ${scene.seat} reads it at its next turn (pull-only)\n`,
     );
     const history = readHistory('acme', scene.root, scene.home);
     expect(history.ok).toBe(true);

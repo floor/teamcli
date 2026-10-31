@@ -229,7 +229,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     expect(await code).toBe(0);
     expect(err()).toContain('native: queued, no event adapter');
     expect(out()).toBe(
-      'team other, session "else"\nnative: sent (unconfirmed) (drop, 0 ms)\n',
+      'team other, session "else"\nnative: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)\n',
     );
     const drops = join(otherDir, 'send-drops', 'else', 'native');
     const names = readdirSync(drops).filter(
