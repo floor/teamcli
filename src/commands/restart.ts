@@ -1,4 +1,3 @@
-import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -573,9 +572,9 @@ export type PerformInput = {
   continuity?: string;
   /** Registry recipe bound to the resume id. */
   registryLaunch?: string;
-  /** The handover the new conversation reads first: the seat is asked to write this path before
-   *  the stop, and the wait is bounded. */
-  handover?: { path: string; waitMs: number };
+  /** The handover path the new conversation reads first. Only a file already written there is
+   *  used: nothing is typed into the old conversation to ask for one. */
+  handover?: { path: string };
   /** Writes the team file's new declaration, after the old pane is closed and before the hooks
    *  and the launch — the launch reads the file's own words. A failure is a truthful abort: the
    *  sequence ends before the hooks, the brief and the launch, and the caller reports it as a
@@ -605,8 +604,8 @@ export type PerformResult =
       oldPane: string;
       pane: string;
       readBack: ReadBack;
-      /** The handover file the launch was actually given. Absent when the bounded wait ended
-       *  without one, so a caller never reports a handover that was only asked for. */
+      /** The handover file the launch was actually given. Absent when no file was there to read,
+       *  so a caller never reports a handover the launch did not get. */
       handover?: string;
     };
 
@@ -862,17 +861,14 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         noteIo.stdout(`${unreadAdvice(name, rechecked.unrecognised)}\n`);
       }
 
-      // The handover is asked at the boundary, as the last step of the old conversation's task,
-      // and before the stop. The request starts a turn; the pane is read again before the stop,
-      // so what the stop acts on is the screen after that turn, never the one it was asked at.
+      // The handover is read at the boundary, before the stop: the new conversation is given the
+      // file a previous attempt already wrote. Nothing is typed into the old conversation to ask
+      // for one. The pane is read again after this, so the stop acts on the screen it is about
+      // to close, never the one the preflight read.
       if (input.handover !== undefined) {
-        handoverPath = await askForHandover({
-          session,
+        handoverPath = askForHandover({
           name,
-          pane: rechecked.agent.pane,
           path: input.handover.path,
-          waitMs: input.handover.waitMs,
-          sources,
           log: (said) => logLine(dir, input.command, who, said, sources.now()),
         });
         const fresh = sources.agents(session);
@@ -1124,16 +1120,6 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
   }
 }
 
-/** How often the handover wait looks for the file. The wait is bounded by the caller; this is
- *  the poll inside it. */
-const HANDOVER_POLL_MS = 2_000;
-
-/** The line typed into the old conversation to ask for its handover. One line: it is typed into
- *  an empty input box and sent with Enter. */
-export function handoverRequest(path: string): string {
-  return `Before this conversation ends, write a handover for your successor to ${path}: what you were doing, what is done, what is left, and anything the next conversation must not redo. Write the file as the last thing you do.`;
-}
-
 function fileHasText(path: string): boolean {
   try {
     return statSync(path).size > 0;
@@ -1143,68 +1129,17 @@ function fileHasText(path: string): boolean {
 }
 
 /**
- * Asks the old conversation for its handover and waits, bounded, for the file. A file a previous
- * attempt already wrote is used without asking again. A request that cannot be typed is said and
- * the launch goes on; one that is chosen but not answered before the wait is the caller's to log.
+ * The handover the new conversation is given: the file a previous attempt already wrote at the
+ * recorded path. The old conversation is never asked to write one — a request is a message, and
+ * nothing is typed into a pane — so without a file already there the launch goes on without one.
  */
-async function askForHandover(input: {
-  session: string;
-  name: string;
-  pane: string;
-  path: string;
-  waitMs: number;
-  sources: RestartSources;
-  log(said: string): void;
-}): Promise<string | undefined> {
+function askForHandover(input: { name: string; path: string; log(said: string): void }): string | undefined {
   if (fileHasText(input.path)) {
     input.log(`${input.name}: using the handover already at ${input.path}`);
     return input.path;
   }
-  try {
-    mkdirSync(dirname(input.path), { recursive: true, mode: 0o700 });
-  } catch {
-    input.log(`${input.name}: the handover folder could not be made; the launch goes on`);
-    return undefined;
-  }
-  // No pane messaging: the handover request is never typed (src/send/no-pane-messaging.ts).
-  const typed = refuseTyping() && (input.sources.upLaunch.typeText?.(input.session, input.pane, handoverRequest(input.path)) ?? false);
-  const entered = typed && (input.sources.upLaunch.pressEnter?.(input.session, input.pane) ?? false);
-  if (!entered) {
-    input.log(`${input.name}: the handover request was not typed; the launch goes on`);
-    return undefined;
-  }
-  const started = input.sources.now().getTime();
-  // The file landing is not the end of the turn: the conversation may still be finishing its
-  // final response, and the stop's recheck would refuse the seat as mid-turn. The wait is the
-  // bound: it goes on until the seat is no longer working. A file written by a turn that ran
-  // past the wait is still used — the launch reads it, and the recheck decides the stop.
-  for (;;) {
-    if (fileHasText(input.path)) {
-      if (!workingNow(input.sources, input.session, input.pane)) {
-        input.log(`${input.name}: the old conversation wrote the handover at ${input.path}`);
-        return input.path;
-      }
-    }
-    if (input.sources.now().getTime() - started >= input.waitMs) {
-      if (fileHasText(input.path)) {
-        input.log(
-          `${input.name}: the old conversation wrote the handover at ${input.path} and its turn is still running; the launch goes on`,
-        );
-        return input.path;
-      }
-      input.log(`${input.name}: no handover was written before the wait ended; the launch goes on`);
-      return undefined;
-    }
-    await input.sources.upLaunch.sleep(HANDOVER_POLL_MS);
-  }
-}
-
-/** Whether herdr still reports the pane mid-turn. An unreadable herdr is not called working: the
- *  stop's own recheck reads the same source and decides. */
-function workingNow(sources: RestartSources, session: string, pane: string): boolean {
-  const agents = sources.agents(session);
-  const agent = agents?.find((candidate) => candidate.pane === pane);
-  return agent?.status === 'working';
+  input.log(`${input.name}: the handover request was not typed; the launch goes on`);
+  return undefined;
 }
 
 /** The words a model id is compared by: lowercased, split where a CLI or a file may spell the
