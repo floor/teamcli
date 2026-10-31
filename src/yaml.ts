@@ -111,12 +111,21 @@ function parseMap(state: State, indent: number): YamlNode {
     if (isItem(line.text)) throw new YamlError(line.n, 'a list item where a key was expected');
     const split = splitKey(line.text, line.n);
     if (!split) throw new YamlError(line.n, `expected "key: value", found "${clip(line.text)}"`);
+    refuseKeyName(split.key, line.n);
     if (seen.has(split.key)) throw new YamlError(line.n, `duplicate key "${split.key}"`);
     seen.add(split.key);
     state.at++;
     entries.push({ key: split.key, line: line.n, value: valueAfterKey(state, indent, split.rest, line.n) });
   }
   return { kind: 'map', line: start.n, entries };
+}
+
+/** A map key becomes a property of the object the reader builds, so the one name that would set
+ *  that object's prototype instead of adding a key is refused here: a text could otherwise write
+ *  a value that every later read through the map sees but no entry lists. The other two names
+ *  every object inherits (`constructor`, `prototype`) make ordinary own properties, so they stay. */
+function refuseKeyName(key: string, n: number): void {
+  if (key === '__proto__') throw new YamlError(n, 'a map key may not be "__proto__"');
 }
 
 function valueAfterKey(state: State, indent: number, rest: string, n: number): YamlNode {
@@ -284,6 +293,7 @@ function readFlow(text: string, at: number, n: number): { node: YamlNode; end: n
       i = skipSpaces(text, key.end);
       if (text[i] !== ':') throw new YamlError(n, 'expected "key: value" inside "{ }"');
       const name = key.node.quoted ? String(key.node.value) : key.node.raw;
+      refuseKeyName(name, n);
       if (seen.has(name)) throw new YamlError(n, `duplicate key "${name}"`);
       seen.add(name);
       i = skipSpaces(text, i + 1);
