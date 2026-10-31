@@ -1,7 +1,8 @@
 // A record path addresses the record's own keys. The three names every object inherits are
-// refused as path segments before the command reaches the owner door, and the writer itself
-// never walks an inherited key, so a path through one changes no shared object and writes no
-// record.
+// refused where a path would address them as object keys, before the command reaches the owner
+// door, and the writer itself never walks one, so such a path changes no shared object and writes
+// no record. Under a list the same segment is an item selector, not a key: a seat named
+// `constructor` or `prototype` (the schema allows both) is addressed by its name, as any other.
 //
 // Every scene keeps its team, registry and owner seat under its own temp home; the two object
 // scenes read and write only objects they made. Nothing here reads a real team file, grant or
@@ -43,6 +44,20 @@ seats:
     model: Claude Opus
     version: "5.5"
     launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: constructor
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+  - role: implementer
+    name: prototype
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
 `;
 
 type Place = { base: string; home: string; root: string; store: ReturnType<typeof seatOwner> };
@@ -66,10 +81,16 @@ function place(): Place {
 }
 
 describe('the path grammar', () => {
-  test('refuses a segment that names an inherited property', () => {
-    for (const raw of ['__proto__.x', 'seats.worker.__proto__.x', 'seats.worker.constructor', 'constructor.prototype.x', 'prototype', 'seats.worker.prototype']) {
-      expect(parsePath(raw)).toBe(`"${raw}" is not a path: __proto__, constructor and prototype cannot be addressed`);
-    }
+  test('keeps an inherited name as a segment', () => {
+    // Where the segment is a key is decided against the record, not by the spelling: under a
+    // list these same segments name items the schema allows.
+    expect(parsePath('seats.constructor.model')).toEqual(['seats', 'constructor', 'model']);
+    expect(parsePath('seats.prototype.label')).toEqual(['seats', 'prototype', 'label']);
+    expect(parsePath('seats.worker.__proto__.x')).toEqual(['seats', 'worker', '__proto__', 'x']);
+  });
+
+  test('refuses a malformed path', () => {
+    for (const raw of ['', '.x', 'x.', 'x..y']) expect(typeof parsePath(raw)).toBe('string');
   });
 
   test('still reads an ordinary dotted path', () => {
@@ -78,11 +99,31 @@ describe('the path grammar', () => {
   });
 });
 
+describe('a list item named after an inherited property', () => {
+  test('is addressed by its name, and by its index', async () => {
+    const at = place();
+    await underRegistry(async () => {
+      const sources = { home: at.home, env: { ...process.env, TEAM_CONFIG_SOURCE: 'registry' }, now: () => NOW, ownerSeatStore: at.store, present: true };
+      const byName = testIo(at.root, { kind: 'owner' });
+      expect(await runConfig(['set', 'seats.constructor.model', 'Claude Sonnet', '--request'], byName, sources), byName.err).toBe(0);
+      expect(storedTeam(at.root, at.home)!.text).toContain('model: Claude Sonnet');
+      const byIndex = testIo(at.root, { kind: 'owner' });
+      expect(await runConfig(['set', 'seats.2.model', 'Claude Haiku', '--request'], byIndex, sources), byIndex.err).toBe(0);
+      const text = storedTeam(at.root, at.home)!.text;
+      expect(text).toContain('model: Claude Haiku');
+      expect(text).not.toContain('model: Claude Sonnet');
+      expect(text).toContain('name: prototype');
+      expect(at.store.prompts.length).toBe(2);
+    });
+  });
+});
+
 describe('a hand-built path through an inherited name', () => {
   test('writes nothing shared', () => {
     const record = toValue(parseYaml(TEAM));
     try {
-      withValue(record, ['seats', 'worker', '__proto__', 'guardProbe'], 'x');
+      const written = withValue(record, ['seats', 'worker', '__proto__', 'guardProbe'], 'x');
+      expect(written.ok).toBe(false);
       expect(Object.prototype.hasOwnProperty.call(Object.prototype, 'guardProbe')).toBe(false);
       expect(({} as { guardProbe?: string }).guardProbe).toBeUndefined();
     } finally {
@@ -93,7 +134,8 @@ describe('a hand-built path through an inherited name', () => {
   test('removes nothing shared', () => {
     Object.defineProperty(Object.prototype, 'guardMarker', { value: 'kept', configurable: true, writable: true, enumerable: false });
     try {
-      withValue(toValue(parseYaml(TEAM)), ['seats', 'worker', '__proto__', 'guardMarker'], undefined);
+      const changed = withValue(toValue(parseYaml(TEAM)), ['seats', 'worker', '__proto__', 'guardMarker'], undefined);
+      expect(changed.ok).toBe(false);
       expect(({} as { guardMarker?: string }).guardMarker).toBe('kept');
     } finally {
       delete (Object.prototype as { guardMarker?: string }).guardMarker;

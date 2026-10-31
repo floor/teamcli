@@ -25,7 +25,7 @@ import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
-import { editedRecordText, getAt, parsePath, parseValue, shownValue, withValue } from './team-record.ts';
+import { editedRecordText, getAt, parsePath, parseValue, reservedKeyIn, shownValue, withValue } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
 
 function realRoot(cwd: string): string {
@@ -125,6 +125,27 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     else io.stdout(shownValue(got.value));
     // exit: config.value
     return 0;
+  }
+  if (verb === 'set' || verb === 'unset') {
+    // A reserved name is refused only where the path would address it as an object key: a list
+    // selects an item by name or index, so a seat or rule named so is an ordinary selector. The
+    // record is parsed here, before the owner door, so a refused path spends no prompt. A record
+    // that does not parse is reported by the write path after admission, as before.
+    let record: YamlValue | null = null;
+    try {
+      record = toValue(parseYaml(text));
+    } catch {}
+    const reserved = record === null ? null : reservedKeyIn(record, path, verb === 'set' ? parseValue(rawValue as string) : undefined);
+    if (reserved !== null) {
+      refuse(io, json, 'config', {
+        id: 'config.usage',
+        message: `${rawPath}: "${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`,
+        repair: null,
+        usage,
+      });
+      // exit: config.usage
+      return 2;
+    }
   }
   // A write. A verified charter that covers this folder admits it with no prompt. Outside that
   // charter the run is refused, and the owner re-signs only with `team setup --edit`. With no

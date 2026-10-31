@@ -17,16 +17,15 @@ import { parseYaml, stripComment, toValue, type YamlEntry, type YamlNode, type Y
 
 export type RecordPath = string[];
 
-/** Names every object inherits from its prototype chain. A path addresses the record's own keys,
- *  so these three are never segments: a walk through one would reach a shared object, not the
- *  record. */
+/** Names every object inherits from its prototype chain. At a map a path segment is a key, and a
+ *  record never holds these three as its own, so a walk through one would reach a shared object.
+ *  Under a list the same segment selects an item by its name, which the schema allows — a seat
+ *  may be named `constructor`, and a path that names it is an ordinary item selector. */
 const RESERVED_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export function parsePath(raw: string): RecordPath | string {
   if (raw === '' || raw.startsWith('.') || raw.endsWith('.') || raw.includes('..')) return `"${raw}" is not a path: write dotted keys, like watch.unread_after or seats.lead.model`;
-  const segments = raw.split('.');
-  if (segments.some((segment) => RESERVED_SEGMENTS.has(segment))) return `"${raw}" is not a path: __proto__, constructor and prototype cannot be addressed`;
-  return segments;
+  return raw.split('.');
 }
 
 type Container = { [key: string]: YamlValue } | YamlValue[];
@@ -44,6 +43,37 @@ function indexIn(list: YamlValue[], segment: string): number {
     return at < list.length ? at : -1;
   }
   return -1;
+}
+
+/** The reserved name `path` would address as an object key, or null. The walk follows
+ *  `withValue`'s: under a list a segment selects an item by name or index, never a key; at a map
+ *  a reserved name is a key the record does not hold, and a walk through it would reach a shared
+ *  object. A missing section is made only for a set, so an unset stops there and the segments
+ *  after it are never addressed. */
+export function reservedKeyIn(root: YamlValue, path: RecordPath, value: YamlValue | undefined): string | null {
+  if (path.length === 0 || !isMap(root)) return null;
+  let at: YamlValue = root;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const segment = path[i] as string;
+    if (Array.isArray(at)) {
+      const n = indexIn(at, segment);
+      if (n < 0) return null;
+      at = at[n] as YamlValue;
+      continue;
+    }
+    if (!isMap(at)) return null;
+    if (RESERVED_SEGMENTS.has(segment)) return segment;
+    const own = Object.prototype.hasOwnProperty.call(at, segment) ? at[segment] : undefined;
+    if (own === undefined) {
+      if (value === undefined) return null;
+      at = {};
+      continue;
+    }
+    at = own as YamlValue;
+  }
+  const last = path[path.length - 1] as string;
+  if (!isMap(at)) return null;
+  return RESERVED_SEGMENTS.has(last) ? last : null;
 }
 
 export function getAt(root: YamlValue, path: RecordPath): { found: true; value: YamlValue } | { found: false } {
@@ -65,6 +95,8 @@ export function getAt(root: YamlValue, path: RecordPath): { found: true; value: 
 /** Sets (or, with `value` undefined, removes) the value at `path` in a copy of `root`. Missing
  *  maps on the way are made; a list item must exist. Returns a reason when the path cannot be. */
 export function withValue(root: YamlValue, path: RecordPath, value: YamlValue | undefined): { ok: true; root: YamlValue; changed: boolean } | { ok: false; why: string } {
+  const reserved = reservedKeyIn(root, path, value);
+  if (reserved !== null) return { ok: false, why: `"${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key` };
   const copy = structuredClone(root) as YamlValue;
   if (!isMap(copy)) return { ok: false, why: 'the record is not a map' };
   let at: Container = copy;
