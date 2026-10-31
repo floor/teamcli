@@ -551,8 +551,16 @@ describe('a screen the profile cannot read', () => {
     const { host, out, slept } = world('idle', null);
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).toBe('alpha: ready\n');
-    // The first poll is enough: the status, not a second screen, is the last word.
-    expect(slept).toEqual([]);
+    // herdr's word is taken on a second reading in a row, with the CLI still in front: one poll.
+    expect(slept).toEqual([0]);
+  });
+
+  test('herdr reports idle but only the shell is in front of the pane: the CLI exited, the seat is not ready', async () => {
+    const { host, out } = world('idle', null);
+    host.processInfo = () => ({ shell: 100, foreground: [100] });
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).not.toContain('alpha: ready');
+    expect(out.join('')).toContain('alpha: left out');
   });
 
   test('herdr reports the seat done: the launch is ready there too', async () => {

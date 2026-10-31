@@ -1315,6 +1315,7 @@ export async function executePlan(
         const startedAt = host.now();
         let deadline = startedAt + op.seconds * 1000;
         let freshAfterMissing = false;
+        let herdrIdleBefore = false;
         const pollMs = IDLE_POLL_MS;
         let outcome: 'idle' | 'permission' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' = 'timeout';
         let last: ScreenKind = 'unknown';
@@ -1396,10 +1397,21 @@ export async function executePlan(
           // at its shell shows no CLI prompt whatever herdr reports, and the ended read below is
           // left to say so. The rules delivery still waits for its own recognised idle screen, so
           // a ready taken on herdr's word never types into a screen this run could not read.
+          // herdr's word is taken only while the CLI is still in front of the pane, and only on a
+          // second reading in a row: a CLI that draws and exits at once (a resume it refused)
+          // left herdr's status at idle while the pane went back to its shell, and the seat was
+          // reported ready on a bare shell.
           if (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, here.pane))) {
-            outcome = 'idle';
-            break;
-          }
+            const front = host.processInfo?.(session, here.pane);
+            const cliGone = front !== undefined && front !== null && launchedIdentity(front) === null;
+            if (!cliGone) {
+              if (herdrIdleBefore) {
+                outcome = 'idle';
+                break;
+              }
+              herdrIdleBefore = true;
+            } else herdrIdleBefore = false;
+          } else herdrIdleBefore = false;
           if (kind === 'idle' || kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
             outcome = kind;
             break;
