@@ -3672,13 +3672,16 @@ function startEvent(id: string, seat: string, ts: string): Record<string, unknow
   };
 }
 
-async function sessionsRun(place: Place, argv: string[] = []): Promise<Ran> {
-  const io = testIo(place.root);
+// The client-key guard judges the caller, so a scene that reads a client's own grant pins the
+// owner: the scene reads the same run from a seat (under herdr) and from CI, never as whatever
+// the suite itself happens to run as.
+async function sessionsRun(place: Place, argv: string[] = [], caller?: Caller): Promise<Ran> {
+  const io = testIo(place.root, caller);
   return { code: await runSessions(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
 }
 
 scene('sessions.none', async (place) => show(await sessionsRun(place), '0 sessions'));
-scene('sessions.client-refused', async (place) => show(await sessionsRun(place, ['--client', 'missing-grant.json', '--key', 'missing.key']), 'no client grant can verify'));
+scene('sessions.client-refused', async (place) => show(await sessionsRun(place, ['--client', 'missing-grant.json', '--key', 'missing.key'], owner), 'no client grant can verify'));
 scene('sessions.shown', async (place) => {
   const file = sessionsRegistry(place);
   mkdirSync(dirname(file), { recursive: true });
@@ -4988,7 +4991,7 @@ scene('messages.client-shown', async (place) => {
     plantClientRoot(place, world, CLIENT_ROOT);
     plantClientReply(place, world, CLIENT_ROOT, CLIENT_REPLY);
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], owner),
       'shown',
     );
   } finally {
@@ -5001,7 +5004,7 @@ scene('messages.client-none', async (place) => {
   try {
     messageKeyOf(world.home);
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath]),
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', world.keyPath], owner),
       'nothing is waiting',
     );
   } finally {
@@ -5011,10 +5014,11 @@ scene('messages.client-none', async (place) => {
 
 scene('messages.client-key', async (place) => {
   const world = clientWorld(place, { inbox: true });
+  const key = join(world.base, 'missing.key');
   try {
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
-      'team messages:',
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', key], owner),
+      `team messages: the key file "${key}" cannot be read`,
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });
@@ -5035,14 +5039,14 @@ scene('messages.client-pane', async (place) => {
 
 scene('messages.client-refused', async (place) => {
   return show(
-    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')]),
-    'team messages: refused:',
+    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')], owner),
+    'the owner signing key is absent or unreadable: no client grant can verify',
   );
 });
 
 scene('messages.client-usage', async (place) => {
   return show(
-    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0']),
+    await readClient(place, place.home, ['--client', 'grant.json', '--key', 'client.key', '--limit', '0'], owner),
     '--limit is a page bound',
   );
 });
