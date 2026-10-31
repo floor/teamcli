@@ -125,43 +125,119 @@ export function bannerModel(screen: string | undefined): string | null {
   return null;
 }
 
-/** A provider id or a declaration as the comparison's words: lowercased, split where the id uses
- *  its own separators, and a leading `v` before a digit dropped — `v4` and `4` are the same
- *  version word, so `deepseek-v4.1-flash` and DeepSeek Flash V4.1 spell the same model. */
-function idWords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word !== '')
-    .map((word) => word.replace(/^v(?=[0-9])/, ''));
+/** An id or a declaration as its tokens: lowercased, split where the id uses its own separators,
+ *  each letter and digit run staying inside the token it was written in. `2b` is one token — a
+ *  model's capacity is its identity — while `K2.5` and `K 2.5` are the same words. */
+function idTokens(text: string): string[] {
+  return text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+}
+
+/** A token as the comparison's words: its letter and digit runs, a leading `v` before a digit
+ *  dropped — `v4` and `4` are the same version word, so `deepseek-v4.1-flash` and DeepSeek Flash
+ *  V4.1 spell the same model. */
+function tokenWords(token: string): string[] {
+  const runs = token.match(/[a-z]+|[0-9]+/g) ?? [];
+  return runs.filter((run, index) => !(run === 'v' && /^[0-9]/.test(runs[index + 1] ?? '')));
+}
+
+/** A version as the comparison's words, in the order the declaration writes them. */
+function versionWords(version: string): string[] {
+  return idTokens(version).flatMap((token) => tokenWords(token));
+}
+
+/** The declaration's model as its name tokens: a run of its tokens that only writes the version
+ *  is taken out, because the version is compared as the version wherever the declaration wrote
+ *  it. A model may write the whole version (`GLM 5.3` for version 5.3, `Kimi K2.5` for 2.5), or
+ *  only its opening words (`GLM 5` for version 5.3). A token with words of its own — the `2B` of
+ *  a model whose version is 2.5 shares a digit with it but no word — spells no part of the
+ *  version and stays. */
+function nameTokens(model: string, version: string[]): string[] {
+  const tokens = idTokens(model);
+  const found = findVersion(tokens, version);
+  if (found !== null) return [...tokens.slice(0, found.at), ...tokens.slice(found.at + found.span)];
+  for (let at = 0; at < tokens.length; at += 1) {
+    for (let count = version.length - 1; count >= 1; count -= 1) {
+      const span = versionSpan(tokens, at, version.slice(0, count));
+      if (span !== null) return [...tokens.slice(0, at), ...tokens.slice(at + span)];
+    }
+  }
+  return tokens;
+}
+
+function sortedTokens(tokens: string[]): string {
+  return [...tokens].sort().join(' ');
+}
+
+/** The tokens an id spends writing a version from `at`, with `lead` words of its first token
+ *  skipped, or null when the tokens there name other words. Each token must spend only version
+ *  words, in order, and at least one; one token (`5.3`, `v4.1`) or several (`5-3`) alike. */
+function versionSpanAt(tokens: string[], at: number, version: string[], lead: number): number | null {
+  let index = 0;
+  let used = 0;
+  while (index < version.length) {
+    const words = tokenWords(tokens[at + used] ?? '');
+    if (words.length === 0) return null;
+    const skip = used === 0 ? lead : 0;
+    const take = words.length - skip;
+    if (take < 1 || index + take > version.length) return null;
+    for (let step = 0; step < take; step += 1) {
+      if (words[skip + step] !== version[index + step]) return null;
+    }
+    index += take;
+    used += 1;
+  }
+  return used;
+}
+
+/** The tokens an id spends writing a version from `at`, or null when the tokens there name other
+ *  words. The run's first token may lead with the version's family letter, written against its
+ *  number (`k2.5` for 2.5, `k2` then `5` across a separator); it is tried as a version word too,
+ *  since a version may itself begin with a letter (`K25` is `k 25`). */
+function versionSpan(tokens: string[], at: number, version: string[]): number | null {
+  const first = tokenWords(tokens[at] ?? '');
+  const leads = first.length > 1 && /^[a-z]$/.test(first[0] ?? '') && /^[0-9]/.test(first[1] ?? '') ? [1, 0] : [0];
+  for (const lead of leads) {
+    const span = versionSpanAt(tokens, at, version, lead);
+    if (span !== null) return span;
+  }
+  return null;
+}
+
+/** Where the id writes the declaration's version, as the tokens it spends. */
+function findVersion(tokens: string[], version: string[]): { at: number; span: number } | null {
+  if (version.length === 0) return null;
+  for (let at = 0; at < tokens.length; at += 1) {
+    const span = versionSpan(tokens, at, version);
+    if (span !== null) return { at, span };
+  }
+  return null;
 }
 
 /** Whether the banner id names the declared model. A provider writes the same model its own way —
  *  `glm-5.3` for GLM 5 5.3 (the version's number written inside the model name too),
  *  `deepseek-v4.1-flash` for DeepSeek Flash V4.1 (a variant word after the version), `kimi-k2.5`
- *  for Kimi K2.5 (an alphanumeric version family) — so the id's name and variant words are
- *  compared as a set, the declaration's version words taken out of its model's, while its version
- *  words are compared as the order they are written in: `glm-3.5` names 3.5, not 5.3. An id with
- *  no version part names the family alone (`deepseek-flash`), and is compared with the model's
- *  words. */
+ *  for Kimi K2.5 (an alphanumeric version family) — so the declaration's model and version are
+ *  read as one string, a token that only repeats the version counted once: `Kimi K2.5` with
+ *  version `2.5` is the same words as `Kimi` with version `K2.5`. The id's name and variant
+ *  tokens are compared as a set, the declaration's version taken out of its model's, while its
+ *  version words are compared as the order they are written in: `glm-3.5` names 3.5, not 5.3.
+ *  An id with no version part names the family alone (`deepseek-flash`), and is compared with
+ *  the model's tokens. */
 function bannerNames(id: string, declared: Running): boolean {
-  const shown = idWords(id);
-  const version = idWords(declared.version);
-  const name = idWords(declared.model).filter((word) => !version.includes(word));
-  const sorted = (list: string[]): string => [...list].sort().join(' ');
+  const tokens = idTokens(id);
+  const version = versionWords(declared.version);
+  const name = nameTokens(declared.model, version);
   // The declaration's version, held as one unbroken run in its own order — wherever in the id the
   // provider wrote it. A run out of order (`glm-3.5` for 5.3) names another version.
-  const at = version.length === 0
-    ? -1
-    : shown.findIndex((_word, index) => version.every((word, offset) => shown[index + offset] === word));
-  if (at === -1) {
+  const found = findVersion(tokens, version);
+  if (found === null) {
     // An id naming no version at all names the family alone; one naming a version that is not the
     // declaration's names another model.
-    if (shown.some((word) => /[0-9]/.test(word))) return false;
-    return sorted(shown) === sorted(name);
+    if (tokens.some((token) => /[0-9]/.test(token))) return false;
+    return sortedTokens(tokens) === sortedTokens(name);
   }
-  const rest = [...shown.slice(0, at), ...shown.slice(at + version.length)];
-  return sorted(rest) === sorted(name);
+  const rest = [...tokens.slice(0, found.at), ...tokens.slice(found.at + found.span)];
+  return sortedTokens(rest) === sortedTokens(name);
 }
 
 /** The wrapper's banner id as the file's two fields, for the column and drift line of an id that

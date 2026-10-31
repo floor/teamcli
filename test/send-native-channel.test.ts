@@ -287,6 +287,113 @@ test('a wrapper banner holding the signed version in another order is held', asy
   }
 });
 
+// A declaration may spell the family inside its model name as well as in its version — `Kimi
+// K2.5` with version `2.5`, `GLM 5.3` with version `5.3` — and the provider writes the model and
+// its version as one string: the same words, a version word repeated in the model counted once, so
+// the id names the declaration and the leg walks. (At the merged head `k2` was one word, which no
+// `kimi-k2.5` id carried, so this declaration held its own banner as a drift.)
+test('a declaration that spells the family inside its model matches the banner', async () => {
+  const cases = [
+    { signing: { model: 'Kimi K2.5', version: '2.5' }, launch: 'claude-kimi.sh', banner: 'kimi-k2.5' },
+    { signing: { model: 'GLM 5.3', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-5.3' },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, one.launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.err).not.toContain('model drift');
+    const drops = dropDir(made.dir, 'lead');
+    expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    made.cleanup();
+  }
+});
+
+// The same declaration still holds another version: spelling the family in the model name does
+// not turn the version into a bag of words. The pair is the scene — `kimi-k2.5` names the
+// declaration and `kimi-k2.6` is another version — so at the merged head, where this declaration
+// drifted on every id, the matching half is red and the scene with it.
+test('a declaration that spells the family inside its model holds another version', async () => {
+  const cases = [
+    { banner: 'kimi-k2.5', held: false },
+    { banner: 'kimi-k2.6', held: true },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, { model: 'Kimi K2.5', version: '2.5' }, 'claude-kimi.sh');
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    if (one.held) {
+      expect(io.err).toContain('model drift: Kimi K2.5 2.5 vs');
+      expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    } else {
+      expect(io.err).not.toContain('model drift');
+      const drops = dropDir(made.dir, 'lead');
+      expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    }
+    made.cleanup();
+  }
+});
+
+// A version's words are a run across the id's tokens, never a licence to delete a number written
+// inside a model's own word: `2B` is one token of the model's identity, and a version `2.5` shares
+// only a `2` with it. `glm-2b-2.5` names the signed GLM 2B; `glm-b-2.5` is a GLM without its
+// capacity — another model. (At the round-1 head the word filter deleted the `2` of `2B` because
+// the version held a `2`, so the wrong banner walked and the send dropped.)
+test('a number inside a model word is model identity, never part of the version', async () => {
+  const cases = [
+    { signing: { model: 'GLM 2B', version: '2.5' }, banner: 'glm-2b-2.5', held: false },
+    { signing: { model: 'GLM 2B', version: '2.5' }, banner: 'glm-b-2.5', held: true },
+    { signing: { model: 'GLM 2B', version: '3.5' }, banner: 'glm-2b-3.5', held: false },
+    { signing: { model: 'GLM 2B', version: '3.5' }, banner: 'glm-b-3.5', held: true },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, 'claude-glm.sh');
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    if (one.held) {
+      expect(io.err).toContain('model drift: GLM 2B');
+      expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    } else {
+      expect(io.err).not.toContain('model drift');
+      const drops = dropDir(made.dir, 'lead');
+      expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    }
+    made.cleanup();
+  }
+});
+
+// The words of a version stay inside their token: `K2.5` is the words `k 2 5`, `K25` is `k 25`,
+// so an id spelling the other one names another version — held in both directions.
+test('a version the id spells with a different run is another version', async () => {
+  const cases = [
+    { signing: { model: 'Kimi', version: 'K2.5' }, banner: 'kimi-k25' },
+    { signing: { model: 'Kimi', version: 'K25' }, banner: 'kimi-k2.5' },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, 'claude-kimi.sh');
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('model drift: Kimi');
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    made.cleanup();
+  }
+});
+
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
