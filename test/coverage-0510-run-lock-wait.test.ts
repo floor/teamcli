@@ -50,7 +50,13 @@ describe('the run lock a second mutating run meets', () => {
     });
     expect(sleeps).toBe(1);
     expect('held' in waiting).toBe(false);
-    if (!('held' in waiting)) waiting.release();
+    if ('held' in waiting) throw new Error(`the wait did not take the freed lock: ${String(waiting.held)}`);
+    // The returned lock is really held: a contender is refused while it stands.
+    const blocked = acquireRunLock(dir, session);
+    expect('held' in blocked).toBe(true);
+    if ('held' in blocked) expect(blocked.held).toBe(process.pid);
+    waiting.release();
+    // Released for real: the next acquisition is not refused.
     const again = acquireRunLock(dir, session);
     expect('held' in again).toBe(false);
     if (!('held' in again)) again.release();
@@ -59,16 +65,17 @@ describe('the run lock a second mutating run meets', () => {
   test('a holder that keeps the lock is refused once the wait is spent', async () => {
     const held = acquireRunLock(dir, session);
     if ('held' in held) throw new Error(`the fixture could not take the lock: ${String(held.held)}`);
-    let sleeps = 0;
+    const budget: number[] = [];
     try {
       const attempt = await acquireRunLockWithin(dir, session, {
         waitMs: 25,
         pollMs: 10,
-        sleep: async () => {
-          sleeps += 1;
+        sleep: async (ms) => {
+          budget.push(ms);
         },
       });
-      expect(sleeps).toBeGreaterThan(0);
+      // The whole wait is spent in poll steps, the last one only what remains: never past waitMs.
+      expect(budget).toEqual([10, 10, 5]);
       expect('held' in attempt).toBe(true);
       if ('held' in attempt) expect(attempt.held).toBe(process.pid);
     } finally {
