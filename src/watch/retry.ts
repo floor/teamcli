@@ -412,7 +412,7 @@ async function redeliverChannel(scene: RetryScene, seat: Seat, pane: string, dro
       scene.say(`${drop.to}: a channel send from ${drop.from} was redelivered on the socket`, false);
       return;
     }
-    scene.say(`${drop.to}: a channel send from ${drop.from} was not confirmed; the socket was not taken (${socket.reason}), typing the trigger`, false);
+    scene.say(`${drop.to}: a channel send from ${drop.from} was not confirmed; the socket was not taken (${socket.reason}); the message waits in the bus inbox`, false);
   }
   await retryOne(scene, seat, pane, dropDir, marked);
 }

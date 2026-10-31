@@ -13,7 +13,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, typeText, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, reportDisplayAgent, sendKey as herdrSendKey, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
