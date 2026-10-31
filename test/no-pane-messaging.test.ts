@@ -1,8 +1,8 @@
 // The owner's absolute rule (2026-10-31): no message, wake, reminder, nudge or rules line is ever
 // typed into a seat's pane. This file holds the messaging paths to it.
 import { expect, test } from 'bun:test';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, join, relative } from 'node:path';
 import { deliverRules } from '../src/launch/deliver.ts';
 import { deliverTrigger } from '../src/send/deliver.ts';
 import { submitTrigger } from '../src/send/native.ts';
@@ -23,6 +23,36 @@ test('no messaging module types into a pane with herdr directly', () => {
     const text = readFileSync(path, 'utf8');
     if (/['"]send-(text|keys)['"]/.test(text)) offenders.push(`${relative(root, path)}: herdr send-text/send-keys`);
     if (/from ['"]\.\.\/herdr\.ts['"]/.test(text) && /\b(typeText|pressEnter|sendKey)\b[^:]*,?[^}]*\}\s*from ['"]\.\.\/herdr\.ts/.test(text)) offenders.push(`${relative(root, path)}: imports a herdr pane writer`);
+  }
+  expect(offenders).toEqual([]);
+});
+
+// The acts a command may use a pane's keyboard for, each said in its own words. Answering a
+// dialog, sending a CLI its exit keys, and launching one are not messaging; nothing else is.
+const PANE_ACTS: ReadonlyArray<readonly [file: string, act: string]> = [
+  ['answer.ts', 'answers a permission or trust dialog'],
+  ['down.ts', 'sends a CLI its exit keys'],
+  ['remove.ts', 'sends a CLI its exit keys'],
+  ['up.ts', 'launches a CLI'],
+  ['add.ts', 'launches a CLI'],
+  ['reload.ts', 'launches a CLI'],
+  ['restart.ts', 'launches a CLI'],
+];
+
+test('a command outside the pane acts imports no herdr pane writer and names no herdr key command', () => {
+  for (const [file, act] of PANE_ACTS) {
+    // An allow-list entry that names no file would silently cover nothing.
+    expect(existsSync(join(root, 'src', 'commands', file)), `${file} (${act})`).toBe(true);
+  }
+  const allowed = new Set(PANE_ACTS.map(([file]) => file));
+  const offenders: string[] = [];
+  for (const path of files(join(root, 'src', 'commands'))) {
+    if (allowed.has(basename(path))) continue;
+    const text = readFileSync(path, 'utf8');
+    if (/['"]send-(text|keys)['"]/.test(text)) offenders.push(`${relative(root, path)}: herdr send-text/send-keys`);
+    if (/from ['"]\.\.\/herdr\.ts['"]/.test(text) && /\b(typeText|pressEnter)\b[^}]*\}\s*from ['"]\.\.\/herdr\.ts/.test(text)) {
+      offenders.push(`${relative(root, path)}: imports a herdr pane writer`);
+    }
   }
   expect(offenders).toEqual([]);
 });
