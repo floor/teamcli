@@ -16,11 +16,13 @@ prints no body and writes nothing. The older `.agents/messages` store keeps its 
 and its original print-then-write order.
 
 `team send` writes the record: one signed message per send, into the recipient's folder
-`<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The typed
-leg types the wake line that names the record, the drop leg leaves the record for its seat, and
-the mcp-inbox leg puts the same record in the seat's inbox. The watch rings
-`Team: run team drops --read --seat <seat> --session <session>` — the waiting seat's own read —
-when a record is already there, and never writes one. A message a
+`<root>/.agents/send-drops/<session>/<seat>/<id>`, before the leg that carries it runs. The
+record reaches the seat by one of its own event adapters — the channel push, the socket frame or
+its runtime's queue — by the drop leg, which leaves the record for its seat, or by the mcp-inbox
+leg, which puts the same record in the seat's inbox. No leg types into a seat. The watch types
+nothing for a record that is already there: this build reaches no seat by typing, so the record
+waits for the seat's turn-start read or a reader running `team messages`, and the watch never
+writes one. A message a
 previous build left in `.agents/messages/<seat>/` is read the same way. The owner's mailbox is
 `.agents/messages/owner/`: the Runtime writes one signed record there for each event it delivers
 to the owner, its `from` is `runtime`, and the run lists it and writes its receipt like any other
