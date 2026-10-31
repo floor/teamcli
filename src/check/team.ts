@@ -421,6 +421,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     sources.home,
     sources.sockets ?? defaultSocketsDirs(),
     sources.now(),
+    continuityIds,
   );
   comparison.differences = orderAndAnnotateDifferences([
     // A seat the check names itself in its own stuck-prompt line is not named again in
@@ -1537,9 +1538,14 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
  * The reading is the send's, never a second one: the gate is `socketIneligibleReason` and the
  * address choice is `socketAddressOf`, both behind `socketLegOf` (the same reading `team status`
  * prints), and the walk is the send's own chain — a declared order that names neither `socket`
- * nor the `typed` wake word chose its routes, and the check calls no choice a skip. A seat that
- * opts out in the team file (`inbound` other than accept), a human's pane, and a seat whose
- * launch already wakes it another way keep no promise the socket would keep: none is named.
+ * nor the `typed` wake word chose its routes, and the check calls no choice a skip. Only a pane
+ * that still holds the seat is read (`paneShowsSeat`, the gate `compare()` applies): a CLI that
+ * ended in a retained pane is named once by the comparison and gains no line here. A seat that
+ * opts out in the team file (`inbound` other than accept), a human's pane, a seat its launch
+ * already wakes through the push channel, and a seat whose class is between-turns keep no
+ * promise the socket would keep: none is named. A push class the socket itself supplied is
+ * never an exemption — the class reader does not see the held-frame guard, so the socket gate
+ * below decides, not the class it made.
  *
  * Three reasons are the team's to fix and each is a difference, like an unread drop — one line
  * per seat, the repair named, exit 1:
@@ -1548,8 +1554,8 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
  *   - the seat's box held a frame its declaration has not been re-confirmed since: a restart
  *     re-confirms it;
  *   - the socket predates the settings that declare accept: a restart writes one that does not.
- * A seat with no socket at all is its class's ordinary state, not a broken promise: it is a
- * note naming its class, so it does not change the exit.
+ * A socket that is nowhere is its class's ordinary state, not a broken promise: absence wins
+ * over any gate, and the seat gets a note naming its class, so the exit does not change.
  */
 function socketSkippedDeliveries(
   team: TeamFile,
@@ -1561,6 +1567,7 @@ function socketSkippedDeliveries(
   home: string | undefined,
   sockets: string | readonly string[],
   now: Date,
+  continuityIds?: ReadonlyMap<string, string | null>,
 ): { differences: Difference[]; notes: string[] } {
   const differences: Difference[] = [];
   const notes: string[] = [];
@@ -1580,6 +1587,10 @@ function socketSkippedDeliveries(
     if (recorded?.stage !== 'ready') continue;
     const listed = live.agents.find((candidate) => candidate.name === seat.name);
     if (listed === undefined || listed.pane !== recorded.pane) continue;
+    // Only a pane that still holds the seat is read, the gate the comparison and the
+    // held-prompt reading both apply: a CLI that ended in a retained pane is named once, in the
+    // comparison's own line, and a process team did not launch is not read for a skipped socket.
+    if (!paneShowsSeat(recorded, listed, live, continuitySessionOf(continuityIds, seat.name, recorded.agent_session))) continue;
     let record: Agent | null;
     try {
       record = agentOf(seat.name);
@@ -1598,8 +1609,11 @@ function socketSkippedDeliveries(
     if (seat.inbound !== undefined && seat.inbound !== 'accept') continue;
     const overrides = resolveSeatOverrides({ home, root, seat: seat.name });
     if (!overrides.ok || overrides.overrides.human === true) continue;
-    // A seat its launch already wakes through another adapter keeps the promise without a socket.
-    if (delivery.class === 'push' || delivery.class === 'between-turns') continue;
+    // A seat its launch already wakes through the push channel keeps the promise without a
+    // socket. A push class the socket itself supplied is not an exemption: the class reader does
+    // not see the held-frame guard, so the socket gate below decides.
+    if (delivery.class === 'between-turns') continue;
+    if (delivery.class === 'push' && delivery.evidence.channel === true) continue;
     let order: readonly DeliveryLeg[];
     let declaredOrder: boolean;
     try {
@@ -1630,6 +1644,15 @@ function socketSkippedDeliveries(
       session,
       sockets,
     });
+    // A socket that is nowhere is the ordinary state of the seat's class, whatever its gate
+    // would say: absence wins, and the note names the class without changing the exit.
+    if (leg.address === null || leg.address.kind !== 'path') {
+      const waits = delivery.class === 'pull-on-turn'
+        ? 'it reads them at its next turn'
+        : 'nothing wakes it while idle';
+      notes.push(`${seat.name}: no cross-session socket is live, so sends go to its drop folder; its delivery class is ${delivery.class}, and ${waits}`);
+      continue;
+    }
     if (leg.gate !== null) {
       if (!socketEligible(seat.inbound, leg.declaration)) {
         // The one refusal a team-file word fixes: the launch's effective settings declare
@@ -1652,24 +1675,15 @@ function socketSkippedDeliveries(
       }
       continue;
     }
-    if (leg.address !== null && leg.address.kind === 'path') {
-      // Eligible, and the address a send would dial, but the running session predates the
-      // settings that declare it accepts: a frame sent there would be held.
-      if (!leg.live) {
-        differences.push({
-          what: `${seat.name}: sends go to its drop folder, not its socket: the socket predates the settings that declare it accepts`,
-          repair: `team restart ${seat.name}`,
-          needs: 'approve',
-        });
-      }
-      continue;
+    // Eligible, and the address a send would dial, but the running session predates the settings
+    // that declare it accepts: a frame sent there would be held.
+    if (!leg.live) {
+      differences.push({
+        what: `${seat.name}: sends go to its drop folder, not its socket: the socket predates the settings that declare it accepts`,
+        repair: `team restart ${seat.name}`,
+        needs: 'approve',
+      });
     }
-    // No address a send would dial: the seat's class is already what its sends get, and the note
-    // says what happens to them next.
-    const waits = delivery.class === 'pull-on-turn'
-      ? 'it reads them at its next turn'
-      : 'nothing wakes it while idle';
-    notes.push(`${seat.name}: no cross-session socket is live, so sends go to its drop folder; its delivery class is ${delivery.class}, and ${waits}`);
   }
   return { differences, notes };
 }

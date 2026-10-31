@@ -15,7 +15,7 @@ import { noteTeam, setRoster, teamIdOf } from '../src/registry/teams.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, notesOtherThanSocket, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-17T11:00:00Z');
 
@@ -138,7 +138,7 @@ describe("a file whose entity no longer derives the registry's lobby", () => {
     const { root, home } = place(teamYaml('acme'));
     record(root, home, 'Acme');
     const { code, out } = check(root, home);
-    expect(out).not.toContain('note:');
+    expect(notesOtherThanSocket(out)).toEqual([]);
     expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
@@ -146,7 +146,7 @@ describe("a file whose entity no longer derives the registry's lobby", () => {
   test('a team the registry holds no record of draws no note: nothing has derived a lobby yet', () => {
     const { root, home } = place(teamYaml('fleet'));
     const { code, out } = check(root, home);
-    expect(out).not.toContain('note:');
+    expect(notesOtherThanSocket(out)).toEqual([]);
     expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
@@ -156,7 +156,7 @@ describe("a file whose entity no longer derives the registry's lobby", () => {
     // The registry is keyed by the root; this record belongs to the team running session beta.
     record(root, home, 'Zeta', 'beta');
     const { code, out } = check(root, home);
-    expect(out).not.toContain('note:');
+    expect(notesOtherThanSocket(out)).toEqual([]);
     expect(out).toContain('no differences');
     expect(code).toBe(0);
   });

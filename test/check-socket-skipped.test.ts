@@ -4,8 +4,9 @@
 // reading is the send's own gate and address choice, and the walk is the send's own order: a
 // declared order that names neither the socket nor the `typed` wake word chose its routes and is
 // no finding. The reasons a team-file word or a restart fixes are differences (exit 1, one line
-// per seat, the repair named); a seat with no socket at all is a note naming its delivery class,
-// because that is the class's ordinary state, not a broken promise.
+// per seat, the repair named). A socket that is nowhere is a note naming its delivery class in
+// every shape — absence wins over any gate — and a pane that no longer holds the seat is not
+// read at all: the comparison's own line already says the CLI ended.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -17,6 +18,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { setHerdrRun } from '../src/herdr.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
@@ -201,6 +203,24 @@ function writeSocket(w: World, seat: Ready, at: Date = new Date()): string {
   return path;
 }
 
+/** The registry record a plain-name send resolves, carrying the recorded socket address: the
+ *  delivery class reads this address, so a held seat still classed push is this shape. */
+function register(w: World, seat: Ready, address: string): void {
+  registerAgent(w.home, {
+    name: seat.name,
+    signing: { model: 'Claude Opus', version: '5.5', role: 'orchestrator' },
+    lab: 'test',
+    cli: seat.cli ?? 'claude-code',
+    launcher: null,
+    launch: seat.launch,
+    reach: { team: teamIdOf(w.root), seat: seat.name, session: 'acme', pane: seat.pane, address },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+}
+
 /** The scene's check, with the fixture's sockets folder named so no read touches this machine's. */
 function check(w: World, live: Live): { code: number; out: string } {
   const io = testIo(w.root, { kind: 'owner' });
@@ -224,6 +244,7 @@ describe('team check names a live seat whose socket a send would skip', () => {
     const line = wrapperLine(w, 'wrapped');
     setLaunch(w, 'wrapped', line);
     const seat = { name: 'wrapped', pane: PANE_ONE, launch: line, pid: SESSION_PID };
+    writeSocket(w, seat);
     ready(w, [seat]);
     const { code, out } = check(w, liveOn([seat]));
     expect(out).toContain(
@@ -231,6 +252,20 @@ describe('team check names a live seat whose socket a send would skip', () => {
     );
     expect(out).toContain('  repair: team config set seats.wrapped.inbound accept');
     expect(code).toBe(1);
+  });
+
+  test('the same missing word with no socket anywhere: absence wins, and the note keeps the exit', () => {
+    const w = world([{ name: 'wrapped', role: 'orchestrator', launch: 'claude', leads: true }]);
+    const line = wrapperLine(w, 'wrapped');
+    setLaunch(w, 'wrapped', line);
+    const seat = { name: 'wrapped', pane: PANE_ONE, launch: line, pid: SESSION_PID };
+    ready(w, [seat]);
+    const { code, out } = check(w, liveOn([seat]));
+    // The wrapper's own `--settings` suppresses this build's hook, so the class is `none`; the
+    // note names it and the exit does not move.
+    expect(out).toContain(`note: wrapped: ${NO_SOCKET}, so sends go to its drop folder; its delivery class is none, and nothing wakes it while idle`);
+    expect(out).not.toContain(NOT_SOCKET);
+    expect(code).toBe(0);
   });
 
   test('the team-file word plus a live socket: nothing is named', () => {
@@ -267,6 +302,22 @@ describe('team check names a live seat whose socket a send would skip', () => {
     const { code, out } = check(w, liveOn([seat]));
     expect(out).toContain(`difference: held: ${NOT_SOCKET}: its last socket frame was held at its box`);
     expect(out).toContain('  repair: team restart held');
+    expect(code).toBe(1);
+  });
+
+  test('a registered seat whose held box still supplies its push class: the socket gate decides, not the class', () => {
+    const w = world([{ name: 'heldreg', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'heldreg', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'heldreg');
+    // The registry names a recorded socket, so the class reader sees push even though the box
+    // would hold the frame. The finding must come from the send's gate, not the class.
+    register(w, seat, writeSocket(w, seat));
+    const declaration = declaredInboundOf({ dir: w.dir, root: w.root, session: 'acme', seat: 'heldreg', launch: seat.launch });
+    recordHeldSocket(heldSocketPath(w.dir, 'acme', 'heldreg'), declaration, NOW);
+    ready(w, [seat]);
+    const { code, out } = check(w, liveOn([seat]));
+    expect(out).toContain(`difference: heldreg: ${NOT_SOCKET}: its last socket frame was held at its box`);
+    expect(out).toContain('  repair: team restart heldreg');
     expect(code).toBe(1);
   });
 
@@ -315,6 +366,28 @@ describe('team check names a live seat whose socket a send would skip', () => {
     expect(out).not.toContain(NOT_SOCKET);
     expect(out).not.toContain(NO_SOCKET);
     expect(code).toBe(0);
+  });
+
+  test('a CLI that ended in a retained pane: the comparison names it once, and no socket line is added', () => {
+    const w = world([{ name: 'ended', role: 'orchestrator', launch: 'claude', leads: true }]);
+    const line = wrapperLine(w, 'ended');
+    setLaunch(w, 'ended', line);
+    const seat = { name: 'ended', pane: PANE_ONE, launch: line, pid: SESSION_PID };
+    ready(w, [seat]);
+    // The launch recorded its process identity, and the reading finds only the pane's own shell:
+    // the CLI ended, and the comparison's "its pane runs no CLI" line is the one that names it.
+    updateState(w.dir, (state) => {
+      state.sessions.acme!.seats.ended!.launched = { shell: SHELL_PID, cli: [SESSION_PID] };
+    });
+    const live = liveOn([seat]);
+    const { code, out } = check(w, {
+      ...live,
+      processes: { [PANE_ONE]: { shell: SHELL_PID, foreground: [SHELL_PID] } },
+    });
+    expect(out).toContain('difference: ended: its pane runs no CLI (the CLI ended or the session was restored)');
+    expect(out).not.toContain(NOT_SOCKET);
+    expect(out).not.toContain(NO_SOCKET);
+    expect(code).toBe(1);
   });
 
   test('a seat that is not running is not named', () => {

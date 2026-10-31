@@ -254,6 +254,15 @@ export function testIo(cwd: string, caller?: Caller): TestIo {
   return io;
 }
 
+/** The notes in a check's output other than the one a live seat with no socket anywhere draws:
+ *  that seat is named once, by its delivery class, on every pass. A scene whose subject is a
+ *  different note reads this list rather than the whole output. */
+export function notesOtherThanSocket(out: string): string[] {
+  return out
+    .split('\n')
+    .filter((line) => line.startsWith('note: ') && !line.includes('no cross-session socket is live'));
+}
+
 /** The live read a fake herdr host answers with: every running registry record placed in the
  *  session, its seat as herdr names it, its recorded pane, and the CLI herdr would report there —
  *  the profile's first process name (`claude` for `claude-code`), with a version prefix's `*`

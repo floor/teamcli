@@ -93,17 +93,20 @@ address choice, the same reading `team status` prints, over the same store. A se
 only while its delivery order leaves the socket room — an order that names it, the default that
 puts it first for an accepting receiver, or the `typed` wake word whose event adapters stand in
 for it; a declared order that names neither chose its routes, and the check never calls a
-choice a skip. A team file that opts out (`inbound` hold or refuse), a person's pane, and a seat
-whose delivery class is already push or between-turns are no finding. The line is
+choice a skip. Only a pane that still holds the seat is read: the same process-identity and
+continuity gate the status comparison applies, so a CLI that ended in a retained pane keeps its
+one existing line and gains none here. A team file that opts out (`inbound` hold or refuse), a
+person's pane, a seat its launch already wakes through the push channel, and a seat whose
+delivery class is between-turns are no finding. The line is
 `<seat>: sends go to its drop folder, not its socket: <why>`, one per seat, and it is a
 difference like an unread drop: exit 1. Three reasons are the team's to fix, each with the act
 that fixes it: the launch's own settings declare accept while the team file's word is what is
 missing, repaired by `team config set seats.<seat>.inbound accept`; a frame the seat's box held,
 repaired by `team restart <seat>`, which re-confirms the declaration; and a socket older than
 the settings that declare it accepts, repaired by the same restart, which writes one that does
-not predate them. A seat with no socket at all is the ordinary state of its delivery class, not
-a broken promise: it is a note naming the class and what happens to its sends next, and it does
-not change the exit.
+not predate them. A socket that is nowhere is the ordinary state of its delivery class, whatever
+the gate would say — absence wins — and is not a broken promise: it is a note naming the class
+and what happens to its sends next, and it does not change the exit.
 
 A seat held at a prompt is named on the same pass: one line per held seat, read from the pane the
 state records for it through the watch's own screen reader. A pane that no longer holds the
