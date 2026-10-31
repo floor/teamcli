@@ -193,7 +193,7 @@ function toolList(serving: Serving): unknown[] {
   const tools: unknown[] = [
     {
       name: 'inbox_check',
-      description: "List the messages waiting in this seat's inbox. Call it at the start of every turn.",
+      description: "List the messages waiting in this seat's inbox. Call it at the start and the end of every turn.",
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     },
     {
