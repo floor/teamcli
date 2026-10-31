@@ -23,7 +23,7 @@ import { gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T11:30:00Z');
 const owner = { kind: 'owner' } as const;
-const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } as const;
+const leadSeat = { kind: 'seat', name: 'lead', pane: 'fixture-pane-1', session: 'acme' } as const;
 const FILE = ['--file', '.agents/team.yaml'];
 const BINDING = 'prs_ab12cd34ef56';
 const OTHER = 'prs_ffffffffffff';
@@ -122,12 +122,12 @@ function seedWatch(at: Place, watch: Record<string, unknown>): void {
 function seedBus(at: Place, workspace: string): void {
   updateState(at.dir, (state) => {
     const session = (state.sessions.acme ??= emptySession());
-    session.bus = { pane: 'w2:p1', workspace, started: '2026-10-15T11:00:00Z' } as never;
+    session.bus = { pane: 'fixture-pane-2', workspace, started: '2026-10-15T11:00:00Z' } as never;
   });
 }
 
 const agent = (cli = 'claude'): HerdrAgent => ({
-  name: 'worker', agent: cli, pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null,
+  name: 'worker', agent: cli, pane: 'fixture-pane-1', workspace: 'w1', status: 'idle', cwd: null,
 });
 
 function launchOf(over: Partial<DownLaunch> = {}): DownLaunch {
@@ -217,7 +217,7 @@ async function down(at: Place, sources: DownSources, caller = owner, extra: stri
 describe('down and a seat that records a managed endpoint', () => {
   test('the endpoint for the current binding is stopped before the seat record goes', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
     const kills: number[] = [];
     const run = await down(at, sourcesOf(at, stops, kills, {}, () => ({ stopped: true })));
@@ -229,7 +229,7 @@ describe('down and a seat that records a managed endpoint', () => {
 
   test('a proof that refuses leaves the process alone and says why', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
     const kills: number[] = [];
     const run = await down(at, sourcesOf(at, stops, kills, {}, () => ({
@@ -244,7 +244,7 @@ describe('down and a seat that records a managed endpoint', () => {
 
   test('a seat that records no endpoint is closed and never mentioned', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1', presence_binding: BINDING });
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
     const kills: number[] = [];
     // The real stop's refusal for a seat with no current-binding record: asking it at all would
@@ -262,7 +262,7 @@ describe('down and a seat that records a managed endpoint', () => {
   test('an endpoint recorded for another binding is not this seat\'s and is not stopped', async () => {
     const at = place();
     seedSeat(at, {
-      stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING,
+      stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1', presence_binding: BINDING,
       codex_endpoint: { ...ENDPOINT, binding: OTHER, url: `unix:///tmp/acme/run/acme/worker/${OTHER}.sock` },
     });
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
@@ -357,7 +357,7 @@ describe('down and a watch whose pid is only in the state', () => {
   });
 
   test('a record with a pane belongs to up and is not signalled here', async () => {
-    const run = await watchRun({ watch: { pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED, pane: 'w9:p1', workspace: 'w9' } });
+    const run = await watchRun({ watch: { pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED, pane: 'fixture-pane-9', workspace: 'w9' } });
     expect(run.kills).toEqual([]);
     expect(run.out).not.toContain('watch: the stop signal was sent');
   });
@@ -432,7 +432,7 @@ describe('removing a seat whose endpoint record is present but unproven', () => 
     const at = place();
     const record = endpointRecord(at);
     delete record.pid;
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', presence_binding: BINDING, codex_endpoint: record });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', presence_binding: BINDING, codex_endpoint: record });
     const run = await remove(at, ['worker']);
     expect(run.code).toBe(1);
     expect(run.terminations).toEqual([]);
@@ -444,7 +444,7 @@ describe('removing a seat whose endpoint record is present but unproven', () => 
 
   test('a full record whose socket file is gone is stopped by pid, not read as already stopped', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', presence_binding: BINDING, codex_endpoint: endpointRecord(at) });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', presence_binding: BINDING, codex_endpoint: endpointRecord(at) });
     const run = await remove(at, ['worker'], {}, { socket: false });
     expect(run.code).toBe(0);
     expect(run.terminations).toEqual([4242]);
@@ -456,7 +456,7 @@ describe('removing a seat whose endpoint record is present but unproven', () => 
 describe('down and the event bus in the state', () => {
   test('a real stop closes the recorded workspace and clears the record', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1' });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1' });
     seedBus(at, 'w7');
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
     const kills: number[] = [];
@@ -474,7 +474,7 @@ describe('down and the event bus in the state', () => {
 
   test('a dry run prints the close and performs none of it', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1' });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1' });
     seedBus(at, 'w7');
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
     const kills: number[] = [];
@@ -493,7 +493,7 @@ describe('down and the event bus in the state', () => {
 
   test('a refused run closes nothing and keeps the record', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1' });
+    seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1' });
     seedBus(at, 'w7');
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
     const kills: number[] = [];
@@ -684,14 +684,14 @@ describe('the launch after a failed binding mint', () => {
       let hookReads = 0;
       let signals = 0;
       const answer = await launchCodexEndpoint({
-        dir, session: SESSION, seat: SEAT, pane: 'w9:p1',
+        dir, session: SESSION, seat: SEAT, pane: 'fixture-pane-9',
         deps: {
           alive: () => true,
           commandOf: () => `codex app-server --listen ${prior.url as string}`,
           startOf: () => T0_MS + 500,
           isSocket: () => true,
           isPlainDir: () => true,
-          herdrEnv: () => { hookReads++; return { HERDR_PANE_ID: 'w9:p1' }; },
+          herdrEnv: () => { hookReads++; return { HERDR_PANE_ID: 'fixture-pane-9' }; },
           spawn: () => { spawned++; return { pid: 9_002 }; },
           terminate: () => { signals++; },
         },
