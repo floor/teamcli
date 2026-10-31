@@ -107,7 +107,7 @@ the route and writes nothing. `fault-watch --json` prints the `team.daemon-fault
 
 Under the machine folder `~/.config/team`: the daemon's state record
 `daemon.state.json` (pid, uid, start time, launcher, version and packaged commit, heartbeat,
-hosted features and stuck requests), the Unix socket `daemon.sock` (mode 0600 in a 0700 folder),
+hosted features and stuck requests), the local socket `daemon.sock` (mode 0600 in a 0700 folder),
 the one log `daemon.log`, and the single-instance lock `daemon.lock`. `install` and `uninstall` write and
 remove the user service unit the platform adapter owns; no command prints that path as prose
 except under `--json`. Each hosted checkout's team file is read to find its send and bus
