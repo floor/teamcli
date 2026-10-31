@@ -1116,7 +1116,12 @@ describe('up over the v0.2.1 state', () => {
         `${SEAT}: ready\n`,
     );
     expect(io.err).toBe(
-      '  already ready; left as it is; its process was never recorded: ' +
+      // The effective delivery class of the port (B5b) reads these two claude-code leads from the
+      // 0.2.1 state as pull-on-turn — no standing address this run could dial — so the reviewed
+      // warning is said before the plan's own lines. The plan below still starts nothing.
+      `team up: ${COORDINATOR} is a lead seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it\n` +
+        `team up: ${OPERATOR} is a lead seat and claude-code cannot be woken while it is idle; time-bound work is never dispatched to it\n` +
+        '  already ready; left as it is; its process was never recorded: ' +
         `run team register ${COORDINATOR} to record it, nothing relaunched\n` +
         '  already ready; left as it is; its process was never recorded: ' +
         `run team register ${OPERATOR} to record it, nothing relaunched\n` +
