@@ -472,6 +472,55 @@
     },
     {
       "code": 0,
+      "command": "agents",
+      "id": "agents.plan",
+      "meaning": "the dry run found no record to retire",
+      "trigger": "team agents prune"
+    },
+    {
+      "code": 0,
+      "command": "agents",
+      "id": "agents.retired",
+      "meaning": "every listed record that needed retiring was retired",
+      "trigger": "team agents prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.incomplete",
+      "meaning": "--apply left a record unretired because it could not be written",
+      "trigger": "team agents prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.owner",
+      "meaning": "--apply was aimed by a caller who is not the owner",
+      "trigger": "team agents prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.registry",
+      "meaning": "the team registry cannot be read",
+      "trigger": "team agents prune"
+    },
+    {
+      "code": 1,
+      "command": "agents",
+      "id": "agents.stale",
+      "meaning": "the dry run found records to retire",
+      "trigger": "team agents prune"
+    },
+    {
+      "code": 2,
+      "command": "agents",
+      "id": "agents.invocation",
+      "meaning": "the invocation cannot be read",
+      "trigger": "team agents prune --nope"
+    },
+    {
+      "code": 0,
       "command": "answer",
       "id": "answer.ready",
       "meaning": "the trust dialog was answered and the seat is ready",

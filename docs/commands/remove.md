@@ -5,7 +5,9 @@ closes its workspace, and edits the file so the seat is not started again. `--ke
 in the file as `stopped: true`; a seat that is busy — working, blocked at a prompt, at its own exit
 question, on a screen the profile does not recognise, or holding unsent text — is left as it is,
 unless its owner abandons it. A seat the file marks `human: true` leaves the file without its pane
-being touched: nothing is typed into it; left running.
+being touched: nothing is typed into it; left running. A removed seat's agent record stays in the
+machine's agent registry, retired rather than deleted: the record and its signed settings remain
+readable, and `team agents prune` lists it as already retired. `--keep` stops the record instead.
 
 ## Synopsis
 
