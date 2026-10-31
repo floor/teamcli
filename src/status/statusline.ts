@@ -12,40 +12,43 @@ import { screenData, statusRow } from '../watch/screen.ts';
 
 export type Running = { model: string; version: string };
 
-function words(text: string): string[] {
-  return text.toLowerCase().split(/\s+/).filter((word) => word !== '');
-}
-
-/** The words of a model name, lowercased and in one set: the order a CLI or a file writes the
- *  name in is display, not identity — agy's footer reads `Gemini 4 Argon`, the profile splits it
- *  into model `Gemini Argon`, version `4`, and a file may write either. The side's own version
- *  words are taken out first, because where the version is spelled inside the model name it is
- *  compared as the version, not as a name word. */
-function modelWords(model: string, version: string): Set<string> {
-  const name = new Set(words(model));
-  for (const word of words(version)) name.delete(word);
-  return name;
-}
-
-/** The version as the comparison reads it: trimmed, case-insensitive. */
-function versionOf(version: string): string {
-  return version.trim().toLowerCase();
+/** One side of the comparison as one reading: its model and its version field read together.
+ *  The version is the field's digit-bearing tokens, as their words in the order written; the
+ *  rest of the field, and the model, are the name. A model word the version field carries (`4
+ *  Argon`) is still a name word, and a version the model spells once is taken out of the name. */
+function sideReading(model: string, version: string): { name: string; version: string[] } {
+  const field = idTokens(version);
+  const versionWordsOfSide = field.filter((token) => /[0-9]/.test(token)).flatMap(tokenWords);
+  const named = [...idTokens(model), ...field.filter((token) => !/[0-9]/.test(token))].join(' ');
+  let tokens = nameTokens(named, versionWordsOfSide);
+  const name: string[] = [];
+  // A version word repeated in the model name counts once: every run it writes is taken out.
+  for (let found = findVersion(tokens, versionWordsOfSide); found !== null; found = findVersion(tokens, versionWordsOfSide)) {
+    name.push(...tokens.slice(0, found.at));
+    tokens = tokens.slice(found.at + found.span);
+  }
+  name.push(...tokens);
+  return { name: sortedTokens([...new Set(name)]), version: versionWordsOfSide };
 }
 
 /**
- * The screen names a model, and it is not the file's: its words as a set, plus its version — the
- * same name in another order is not a difference, and neither is the version spelled inside one
- * side's model name, but another word or another version is. Unread is never a difference.
+ * The screen names a model, and it is not the file's: each side's model and version are compared
+ * as one reading — the name as words in one set, since the order a CLI or a file writes the name
+ * in is display, and the version as the order its words are written in. The same name in another
+ * order is not a difference, nor is the version spelled inside the model name, nor a model word
+ * the version field carries (`Gemini` with version `4 Argon` is `Gemini Argon` version `4`);
+ * another word, another version, or the version's words out of order is a difference, and a digit
+ * belonging to a model word (`2B`) stays the model's identity. Unread is never a difference.
  */
 export function modelDiffers(
   running: Running | null,
   declared: { model: string; version: string },
 ): running is Running {
   if (running === null) return false;
-  if (versionOf(running.version) !== versionOf(declared.version)) return true;
-  const shown = modelWords(running.model, running.version);
-  const file = modelWords(declared.model, declared.version);
-  return shown.size !== file.size || [...shown].some((word) => !file.has(word));
+  const shown = sideReading(running.model, running.version);
+  const file = sideReading(declared.model, declared.version);
+  if (shown.name !== file.name) return true;
+  return shown.version.length !== file.version.length || shown.version.some((word, at) => word !== file.version[at]);
 }
 
 export function runningModel(cli: string, screen: string): Running | null {
