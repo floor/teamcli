@@ -71,10 +71,10 @@ function team() {
 
 function live() {
   const agents = [
-    { name: 'worker-1', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null },
-    { name: 'worker-2', agent: 'claude', pane: 'w2:p1', workspace: 'w2', status: 'idle', cwd: null },
+    { name: 'worker-1', agent: 'claude', pane: 'fixture:worker-1', workspace: 'fixture-worker-1', status: 'idle', cwd: null },
+    { name: 'worker-2', agent: 'claude', pane: 'fixture:worker-2', workspace: 'fixture-worker-2', status: 'idle', cwd: null },
   ];
-  const screens: Record<string, string> = { 'w1:p1': idleScreen, 'w2:p1': idleScreen };
+  const screens: Record<string, string> = { 'fixture:worker-1': idleScreen, 'fixture:worker-2': idleScreen };
   return { running: true, agents, workspaces: agents.map((one) => ({ id: one.workspace, label: one.name })), screens };
 }
 
@@ -152,11 +152,11 @@ describe('the dispatch gates', () => {
       ok: false,
       refused: 'this watch holds no verified watch authority, so the work wake is held and nothing was typed',
     } as const;
-    expect(await gate(null, host)({ seat: 'worker-1', pane: 'w1:p1', cli: 'claude-code', body: 'x' })).toEqual(refusal);
+    expect(await gate(null, host)({ seat: 'worker-1', pane: 'fixture:worker-1', cli: 'claude-code', body: 'x' })).toEqual(refusal);
     expect(touched).toEqual([]);
     // The default watch source is wired to that gate, not to a sender: its own route refuses
     // with the same words and walks nothing.
-    const request = { seat: 'worker-1', pane: 'w1:p1', cli: 'claude-code', body: 'x' };
+    const request = { seat: 'worker-1', pane: 'fixture:worker-1', cli: 'claude-code', body: 'x' };
     expect(await realWatchSources.pushWork?.(request)).toEqual(refusal);
   });
 });
