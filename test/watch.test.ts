@@ -1220,7 +1220,9 @@ describe('team watch', () => {
       wait: async () => { beat ??= readState(join(dir, '.agents')).sessions['acme-web']?.watch; return false; },
     }));
     expect(code).toBe(0);
-    expect(beat).toEqual({ pid: 4242, heartbeat: '2026-10-03T14:00:00.000Z' });
+    // The record names the instant the watch process captured when it reached its loop: `down`
+    // proves a pane-less watch by it before it signals.
+    expect(beat).toEqual({ pid: 4242, heartbeat: '2026-10-03T14:00:00.000Z', started_at: '2026-10-03T14:00:00.000Z' });
     expect(typed).toEqual([`w3:p1 ${RING_TEXT}`, 'w3:p1 <enter>']);
     expect(typed[0]).not.toContain('asked a question');
     expect(notified[0]).toBe('deepseek-acme-2 asked a question: the operator\'s to act on');
@@ -1259,7 +1261,7 @@ describe('team watch', () => {
     expect(await runWatch(['--file', file], io, sources(1, {
       wait: async () => { beat ??= readState(join(dir, '.agents')).sessions['acme-web']?.watch; return false; },
     }))).toBe(0);
-    expect(beat).toEqual({ pid: 4242, heartbeat: '2026-10-03T14:00:00.000Z' });
+    expect(beat).toEqual({ pid: 4242, heartbeat: '2026-10-03T14:00:00.000Z', started_at: '2026-10-03T14:00:00.000Z' });
     expect(notified[0]).toBe('deepseek-acme-2 asked a question: the operator\'s to act on');
   });
 

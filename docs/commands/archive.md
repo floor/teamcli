@@ -122,7 +122,6 @@ would archive to ~/.config/team/archive/beacon-<hash>-20261004T090000Z:
   send-drops (1 file)
 dry run: nothing was archived
 would stop the team:
-watch: its pid is only in the state; left running
 + herdr --session beacon pane run w1:p1 /exit
   wait until claude-keeper's pane is back at its shell (30 s at most); on a time-out it is left as it is
 + herdr --session beacon workspace close w1
@@ -143,7 +142,6 @@ archived ~/.config/team/archive/beacon-<hash>-20261004T090000Z:
   team.yaml
   team.state.json
   send-drops (1 file)
-watch: its pid is only in the state; left running
 claude-keeper: stopped
 claude-beacon: stopped
 session beacon: stopped and cleared

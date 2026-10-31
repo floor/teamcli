@@ -175,7 +175,7 @@ describe("the owner's bare run hands the watch to its workspace", () => {
     place();
     const creates: string[] = [];
     // The record is read while the watch stands, before the stop clears it.
-    let held: { pid?: number; heartbeat: string; pane?: string } | undefined;
+    let held: { pid?: number; heartbeat: string; pane?: string; started_at?: string } | undefined;
     const io = testIo(root, { kind: 'owner' });
     const code = await runWatch([...FILE, '--no-nudge'], io, watchSources({
       ...handingOver(),
@@ -201,7 +201,7 @@ describe("the owner's bare run hands the watch to its workspace", () => {
   test('started inside its own pane, it just runs and records the pane it found itself in', async () => {
     place();
     const creates: string[] = [];
-    let held: { pid?: number; heartbeat: string; pane?: string; workspace?: string } | undefined;
+    let held: { pid?: number; heartbeat: string; pane?: string; workspace?: string; started_at?: string } | undefined;
     // The pane runs `up`'s own command, which carries no `--file`: a pane is not an owner.
     const io = testIo(root, { kind: 'pane', pane: 'w9:p1' });
     const code = await runWatch(['--session', SESSION], io, watchSources({
@@ -220,7 +220,7 @@ describe("the owner's bare run hands the watch to its workspace", () => {
     expect(creates).toEqual([]);
     expect(io.err).toBe('');
     expect(io.out).toContain(`watching the session "${SESSION}"`);
-    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9' });
+    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9', started_at: NOW.toISOString() });
   });
 
   test('the record `up` leaves admits its own pane, and no other', async () => {
@@ -229,7 +229,7 @@ describe("the owner's bare run hands the watch to its workspace", () => {
     // pane's first pass has not written a pid yet.
     record({ pane: 'w8:p1', workspace: 'w8', heartbeat: NOW.toISOString() });
     const here = testIo(root, { kind: 'pane', pane: 'w8:p1' });
-    let held: { pid?: number; heartbeat: string; pane?: string; workspace?: string } | undefined;
+    let held: { pid?: number; heartbeat: string; pane?: string; workspace?: string; started_at?: string } | undefined;
     const code = await runWatch(['--session', SESSION], here, watchSources({
       ownPane: () => ({ pane: 'w8:p1', workspace: 'w8' }),
       wait: async () => {
@@ -240,7 +240,7 @@ describe("the owner's bare run hands the watch to its workspace", () => {
     expect(code, here.out + here.err).toBe(0);
     expect(here.out).toContain(`watching the session "${SESSION}"`);
     // The command the pane was given is the watch: its first pass owns the record.
-    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w8:p1', workspace: 'w8' });
+    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w8:p1', workspace: 'w8', started_at: NOW.toISOString() });
 
     // The pane that stopped kept no record; a second call from anywhere else is refused.
     record({ pane: 'w8:p1', workspace: 'w8', heartbeat: NOW.toISOString() });
@@ -390,7 +390,7 @@ describe('the hand-over edges', () => {
     expect(io.out).toContain(`watching the session "${SESSION}"`);
     // The first pass records its pid and keeps the pane and workspace the hand-over recorded.
     expect(during).toEqual({
-      pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9',
+      pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9', started_at: NOW.toISOString(),
     });
   });
 
