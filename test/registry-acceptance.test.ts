@@ -287,7 +287,7 @@ function boxCli(swallow: number, after: 'empty' | 'suggestion' = 'empty'): BoxCl
 }
 
 describe('an agy seat sends to the main coordinator', () => {
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: the drop record carries its agent id, and its headline the readable name, before the body', async () => {
+  test('the drop record carries its agent id and its headline the readable name before the body, and the pane is never typed; was: the drop record carries its agent id, and its headline the readable name, before the body', async () => {
     const world = sendWorld({
       floor: {
         project: 'floor',
@@ -319,8 +319,25 @@ describe('an agy seat sends to the main coordinator', () => {
     });
     const caller: Caller = { kind: 'seat', name: 'agy-seat', pane: 'pane-agy', session: 's' };
 
-    const retired = await runSend(['main-coordinator@floor', BODY], testIo(root, caller), host);
-    expect(await retired).toBe(0);
+    const code = await runSend(['main-coordinator@floor', BODY], testIo(root, caller), host);
+    expect(code).toBe(0);
+    // Nothing was typed into the coordinator's pane: the drop file is the whole of the delivery.
+    expect(host.typedInto('pane-coordinator')).toEqual([]);
+    const drop = soleDrop(root, 's', 'main-coordinator');
+    expect(AGENT_ID.test(agy.id)).toBe(true);
+    // The registry id rides the signed payload's `from_id`; the headline a person reads names
+    // the seat, and opens the body.
+    expect(drop.text).toContain(agy.id);
+    expect(drop.text).toContain(BODY);
+    expect(drop.text.indexOf('from agy-seat — admitted by:')).toBeGreaterThanOrEqual(0);
+    expect(drop.text.indexOf('from agy-seat — admitted by:')).toBeLessThan(drop.text.indexOf(BODY));
+    const admitted = admitSend(agy, coordinator, readTeams(world.home));
+    if (!admitted.ok) throw new Error(`the agy seat's send is not admitted: ${admitted.why}`);
+    expect(drop.text).toContain(admitted.rule);
+    const header = senderHeader(agy, admitted.rule);
+    expect(header).toContain(agy.reach.seat);
+    expect(header).not.toContain(agy.id);
+    expect(header).toContain(admitted.rule);
   });
 });
 
