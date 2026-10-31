@@ -2277,6 +2277,8 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         if (!typeablePath(file.path)) {
           return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
         }
+        // A launch that carries the rules line asks for the file only (src/launch/execute.ts).
+        if (file.writeOnly === true) return true;
         // The delivery reports why it stopped through this box; the caller turns the stopped
         // reading into the report, and a plain refusal stays `false`.
         const stopped: { why: Refusal | null } = { why: null };

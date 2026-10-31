@@ -18,7 +18,8 @@ tested:
 unattended:
   - --approval-mode
   - yolo
-rules: first-message
+rules:
+  launch_prompt: -i
 # `gemini --help` (0.64.0) offers no non-interactive auth check command.
 login:
   hint: gemini

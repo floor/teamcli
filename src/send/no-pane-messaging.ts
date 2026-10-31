@@ -9,9 +9,19 @@
 
 export const NO_PANE_MESSAGING = 'typing into a seat\'s pane is never a delivery: messages go through the bus and an event adapter';
 export const QUEUED_NO_EVENT_ADAPTER = 'queued, no event adapter';
+/** Why a walk that had event legs still ended in the bus inbox. */
+export const NO_EVENT_ADAPTER_TOOK_IT = 'no event adapter of this seat took it';
 
-/** The delivery legs that type into a pane. They are never walked. */
-export const TYPING_LEGS = ['typed', 'native'] as const;
+/** The line `team send` writes to stderr when the drop leg — the bus inbox, never a wake — takes
+ *  a send. */
+export function queuedLine(seat: string, why: string = NO_PANE_MESSAGING): string {
+  return `team send: ${seat}: ${QUEUED_NO_EVENT_ADAPTER} (${why}); the message waits in its bus inbox\n`;
+}
+
+/** The delivery legs that type into a pane. They are never walked. The `native` leg is not one:
+ *  it hands a pointer to a Codex seat's own runtime queue (or a Claude sender's SendMessage),
+ *  an event adapter with nothing typed; the pane-typing trigger in src/send/native.ts refuses. */
+export const TYPING_LEGS = ['typed'] as const;
 
 export function isTypingLeg(leg: string): boolean {
   return (TYPING_LEGS as readonly string[]).includes(leg);

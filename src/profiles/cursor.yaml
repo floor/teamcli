@@ -16,7 +16,8 @@ unattended:
   - --force
   - --sandbox
   - disabled
-rules: first-message
+rules:
+  launch_prompt: positional
 login:
   check:
     - status

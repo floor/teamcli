@@ -36,10 +36,9 @@ test('the send and watch bind no pane writer: their typeText and pressEnter refu
   }
 });
 
-test('the typed and native legs are typing legs, never walked', () => {
+test('the typed leg is a typing leg, never walked; the native leg is a runtime queue, and the native pane trigger refuses (below)', () => {
   expect(isTypingLeg('typed')).toBe(true);
-  expect(isTypingLeg('native')).toBe(true);
-  for (const leg of ['mcp-inbox', 'channel', 'socket', 'drop', 'headless-resume']) expect(isTypingLeg(leg)).toBe(false);
+  for (const leg of ['native', 'mcp-inbox', 'channel', 'socket', 'drop', 'headless-resume']) expect(isTypingLeg(leg)).toBe(false);
 });
 
 const touched: string[] = [];

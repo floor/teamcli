@@ -103,7 +103,7 @@ describe('checkLogin with fake command results', () => {
       tested: { from: '1.0', to: '1.0' },
       unattended: [],
       rulesOption: null,
-      rulesMode: 'message',
+      rulesMode: 'message', rulesPrompt: null,
       standingRules: [],
       herdrStatus: 'reliable',
       loginCheck: null,

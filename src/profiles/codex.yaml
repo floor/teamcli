@@ -14,7 +14,8 @@ unattended:
   - -s
   - danger-full-access
   - --no-alt-screen
-rules: first-message
+rules:
+  launch_prompt: positional
 login:
   check:
     - login

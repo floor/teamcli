@@ -17,7 +17,7 @@ import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeT
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
-import { IDLE_POLL_MS, type Step, type UpSeat } from './plan.ts';
+import { IDLE_POLL_MS, type Op, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
@@ -110,7 +110,7 @@ export type Host = {
     session: string,
     pane: string,
     cli: string,
-    file: { text: string; path: string; line: string; seat: string },
+    file: { text: string; path: string; line: string; seat: string; writeOnly?: boolean },
     seconds: number,
   ): Promise<boolean | 'no-agent' | Refusal>;
   renameAgent(session: string, pane: string, name: string): boolean;
@@ -461,6 +461,9 @@ export async function executePlan(
   const closing = options?.isClosing ?? (() => false);
   const places = new Map<string, Place>();
   const dropped = new Set<string>();
+  // Seats whose launch line carried their rules line as the CLI's initial prompt: their rules
+  // file was written before the launch, and nothing is ever typed (0.5.9).
+  const rulesAtLaunch = new Set<string>();
   const logged = new Set<string>();
   let serverFailed = false;
   let watchFailed = false;
@@ -1138,6 +1141,24 @@ export async function executePlan(
         // The session id is minted here, not in the plan: the plan's command stays the
         // deterministic line a dry run prints, and each launch gets its own id.
         const launch = withLaunchSession(op.cli ?? '', command);
+        // The rules line rides this launch: its file is written first, so the CLI reads it on its
+        // first turn. A file that cannot be written leaves the seat out before anything runs.
+        const rulesOp = steps
+          .map((step) => step.do)
+          .find((d): d is Extract<Op, { do: 'deliver' }> => d?.do === 'deliver' && d.seat === op.seat);
+        if (here && rulesOp && host.deliverRules && launch.command.includes(rulesOp.line)) {
+          const written = await host.deliverRules(
+            session, here.pane, rulesOp.cli,
+            { text: rulesOp.rules, path: rulesOp.path, line: rulesOp.line, seat: rulesOp.seat, writeOnly: true },
+            rulesOp.seconds,
+          );
+          if (written !== true) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: typeof written === 'object' ? refusalReport(written) : 'its rules file was not written; nothing was launched' });
+            break;
+          }
+          rulesAtLaunch.add(op.seat);
+        }
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
           // A server this call started was never attached: it is this run's to stop, so a pane
           // that did not run leaves no endpoint behind.
@@ -1511,7 +1532,10 @@ export async function executePlan(
         if (op.notice) hold(op.seat, `${op.seat}: ${op.notice}\n`);
         const here = place(op.seat, op.pane);
         const file = { text: op.rules, path: op.path, line: op.line, seat: op.seat };
-        const delivered = here ? await host.deliverRules?.(session, here.pane, op.cli, file, op.seconds) : false;
+        // Rules that rode the launch line are delivered: the CLI took them as its initial prompt.
+        const delivered = here && rulesAtLaunch.has(op.seat)
+          ? true
+          : here ? await host.deliverRules?.(session, here.pane, op.cli, file, op.seconds) : false;
         if (stopped) break;
         if (delivered === 'no-agent') {
           dropped.add(op.seat);

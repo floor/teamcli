@@ -715,7 +715,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           current: string,
           pane: string,
           cli: string,
-          file: { text: string; path: string; line: string; seat: string },
+          file: { text: string; path: string; line: string; seat: string; writeOnly?: boolean },
           seconds: number,
         ) => {
           const devProject = standing.kind !== 'verified' || owner ? team.project : undefined;
@@ -724,6 +724,8 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
           if (!typeablePath(file.path)) {
             return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
           }
+          // A launch that carries the rules line asks for the file only (src/launch/execute.ts).
+          if (file.writeOnly === true) return true;
           const stopped: { why: Refusal | null } = { why: null };
           const delivered = await deliverRules(cli, file.line, seconds, {
             screen: () => launch.paneText(current, pane) ?? undefined,

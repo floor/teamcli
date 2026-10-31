@@ -1525,6 +1525,8 @@ function hostOf(input: {
       if (!typeablePath(file.path)) {
         return { stop: 'path', typed: false, sent: false, kind: 'unknown' as const, row: null };
       }
+      // A launch that carries the rules line asks for the file only (src/launch/execute.ts).
+      if (file.writeOnly === true) return true;
       const stopped: { why: Refusal | null } = { why: null };
       const delivered = await deliverRules(cli, file.line, seconds, {
         screen: () => launch.paneText(session, pane) ?? undefined,

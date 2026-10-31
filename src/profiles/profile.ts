@@ -62,6 +62,11 @@ export interface Profile {
    *  brief, like the Jules TUI's — has nowhere to keep a first-message line, so its profile
    *  says `prepend`. */
   rulesMode: 'option' | 'message' | 'prepend';
+  /** For a first-message seat: how its launch line carries the one line that points at its rules
+   *  file, so the line is never typed into its pane (0.5.9, src/send/no-pane-messaging.ts).
+   *  `''` is the CLI's positional initial prompt; any other value is the option that precedes
+   *  it (`-i`). Null: the CLI takes no initial prompt at launch, and its rules are not delivered. */
+  rulesPrompt: string | null;
   /** Rules the profile carries for every seat of this CLI, over the team file's: a safety line
    *  the CLI itself makes necessary. They ride with the file's rules in every delivery. Empty
    *  when the CLI needs none. */
@@ -224,6 +229,7 @@ export function launchCommand(
   place?: InboxPlace,
   displayName?: string,
   runtimePolicies?: { codexDaemon?: 'on' | 'off' },
+  rulesLine?: string,
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
   const options = profile.unattended.filter((option) => !words.has(option));
@@ -246,6 +252,12 @@ export function launchCommand(
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
     && !/(^|\s)--settings(=|\s|$)/.test(launch)) {
     options.push('--settings', cliHook);
+  }
+  // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
+  // is never typed into the pane.
+  if (rulesLine !== undefined && profile.rulesMode === 'message' && profile.rulesPrompt !== null) {
+    if (profile.rulesPrompt !== '') options.push(profile.rulesPrompt);
+    options.push(rulesLine);
   }
   return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
 }
@@ -1079,6 +1091,7 @@ function launchOf(root: YamlNode): Shipped {
       unattended: stringsOrEmpty(required(entries, 'unattended', root.line).value, 'unattended'),
       rulesOption: rules.option,
       rulesMode: rules.mode,
+      rulesPrompt: rules.prompt,
       standingRules: standingRulesEntry ? strings(standingRulesEntry.value, 'standing_rules') : [],
       herdrStatus: herdrStatusEntry ? herdrStatusOf(herdrStatusEntry) : 'reliable',
       loginCheck: login.check,
@@ -1348,12 +1361,18 @@ function template(text: string, line: number): void {
   if (rest.includes('{') || rest.includes('}')) fail(line, 'a template is "{n}" or "{n:title}"');
 }
 
-function rulesOf(node: YamlNode): { mode: 'option' | 'message' | 'prepend'; option: string | null } {
-  if (node.kind === 'scalar' && node.value === 'first-message') return { mode: 'message', option: null };
-  if (node.kind === 'scalar' && node.value === 'prepend') return { mode: 'prepend', option: null };
+function rulesOf(node: YamlNode): { mode: 'option' | 'message' | 'prepend'; option: string | null; prompt: string | null } {
+  if (node.kind === 'scalar' && node.value === 'first-message') return { mode: 'message', option: null, prompt: null };
+  if (node.kind === 'scalar' && node.value === 'prepend') return { mode: 'prepend', option: null, prompt: null };
   const entries = mapping(node, 'rules');
-  only(entries, ['option']);
-  return { mode: 'option', option: text(required(entries, 'option', node.line), 'option') };
+  only(entries, ['option', 'launch_prompt']);
+  const prompt = optional(entries, 'launch_prompt');
+  if (prompt !== undefined) {
+    if (optional(entries, 'option') !== undefined) fail(prompt.line, '"option" and "launch_prompt" are one or the other, not both');
+    const word = text(prompt, 'launch_prompt');
+    return { mode: 'message', option: null, prompt: word === 'positional' ? '' : word };
+  }
+  return { mode: 'option', option: text(required(entries, 'option', node.line), 'option'), prompt: null };
 }
 
 /** The value of `compose_module`: a module shipped beside the profiles whose `compose` export

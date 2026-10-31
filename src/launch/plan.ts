@@ -785,7 +785,8 @@ export function upPlan(input: UpInput): Step[] {
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon });
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon },
+      profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather

@@ -1,4 +1,4 @@
-import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
+import { isTypingLeg, NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, queuedLine, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -1263,7 +1263,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   };
   if (!human) {
     for (const leg of typingSetAside) failures.push(`${leg}: ${NO_PANE_MESSAGING}`);
-    if (noEventAdapter && !dry) io.stderr(`team send: ${to.seat}: ${QUEUED_NO_EVENT_ADAPTER} (${NO_PANE_MESSAGING}); the message waits in its bus inbox\n`);
   }
   if (human) {
     for (const leg of order) {
@@ -1718,6 +1717,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     // file can wait where a keystroke cannot be taken back.
     if (leg === 'drop') {
       markLeg('drop', 'attempted');
+      // The drop leg is the bus inbox, never a wake: when it takes the send no event adapter
+      // did, and the sender is told so (src/send/no-pane-messaging.ts).
+      if (!human && !dry) {
+        io.stderr(queuedLine(to.seat, noEventAdapter ? NO_PANE_MESSAGING : NO_EVENT_ADAPTER_TOOK_IT));
+      }
       await ensureEpisode();
       return deliverDropped(io, to.dir, to.root, who, from, to.project, to.session, to.seat, dropDir, record, host, report, startedAt, failures, to.sentAs, human, wait, timeoutS, callerRoot, note);
     }
@@ -3534,7 +3538,9 @@ export async function walkBriefDelivery(input: {
   // A human's pane never takes typing, whatever its order says: its walk is the drop leg alone,
   // and the legs this ruling kept out are named first, exactly as a send's walk records them.
   const human = read.overrides.human ?? (declared?.human === true);
-  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order;
+  // The bus inbox closes every walk: with no typed leg, the drop is where an unreached seat's
+  // message waits (src/send/no-pane-messaging.ts).
+  const walk: readonly DeliveryLeg[] = human ? ['drop'] : order.includes('drop') ? order : [...order, 'drop'];
   const report: Report = {
     json: false,
     seat: seatName,
@@ -3569,6 +3575,12 @@ export async function walkBriefDelivery(input: {
       continue;
     }
     if (leg === 'typed') {
+      // No pane messaging (src/send/no-pane-messaging.ts): the leg is recorded, and the walk goes
+      // on to the bus inbox.
+      if (NO_PANE_MESSAGING.length > 0) {
+        failures.push(`typed: ${NO_PANE_MESSAGING}`);
+        continue;
+      }
       const compose = profileFor(input.cli)?.compose ?? null;
       const trigger = readTriggerLine(seatName, input.session);
       if (trigger === null && compose === null) {
@@ -3826,7 +3838,9 @@ async function deliverClientRecord(
     }
     // The typed leg: the drop is on disk, and the pane receives the one trigger that makes the
     // seat read it — the same receipt-writing read its own turn-start hook runs.
-    const typedWhy = canType ? null : 'the send host cannot read a pane, so no trigger was typed';
+    // No pane messaging (src/send/no-pane-messaging.ts): the client drop already waits in the
+    // seat's bus inbox, and nothing is typed to point at it.
+    const typedWhy = NO_PANE_MESSAGING.length > 0 ? NO_PANE_MESSAGING : canType ? null : 'the send host cannot read a pane, so no trigger was typed';
     if (typedWhy !== null) {
       failures.push(`typed: ${typedWhy}`);
       markLeg('typed', 'skipped', typedWhy);

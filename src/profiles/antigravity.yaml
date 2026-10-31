@@ -19,7 +19,8 @@ tested:
   to: '1.4.2'
 unattended:
   - --dangerously-skip-permissions
-rules: first-message
+rules:
+  launch_prompt: --prompt-interactive
 login:
   check:
     - models
