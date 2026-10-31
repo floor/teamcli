@@ -402,7 +402,7 @@ describe('A9 independent: a launch binds a record left on another incarnation', 
     const fixture = makeFixture();
     // A pane already holding the worker ready: the refresh branch, not a launch.
     const agent: HerdrAgent = {
-      name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'ws-1', status: 'idle', cwd: null, session: 'claude-session-1',
+      name: 'worker', agent: 'claude', pane: 'fixture-pane-1', workspace: 'ws-1', status: 'idle', cwd: null, session: 'claude-session-1',
     };
     const sources: RegisterSources = {
       home: fixture.home,
