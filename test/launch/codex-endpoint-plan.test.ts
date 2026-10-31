@@ -76,6 +76,19 @@ describe('the managed Codex endpoint intent', () => {
     expect(launch.do).not.toHaveProperty('codexEndpoint');
   });
 
+  test('a shell running a pass-through script before codex is still a Codex launch, and is marked', () => {
+    // `zsh ~/tools/as-floor.sh codex resume …` execs codex with the remaining words, so the
+    // `--remote` the launch appends reaches codex and the seat's thread loads on its endpoint.
+    const launch = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh codex resume 01a1 -m gpt' })));
+    expect(launch.do).toHaveProperty('codexEndpoint');
+    // A script that names --remote itself is still left alone.
+    const own = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh codex --remote unix:///tmp/own.sock' })));
+    expect(own.do).not.toHaveProperty('codexEndpoint');
+    // A script naming another program is not a Codex launch.
+    const other = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh ./tools/codex-wrapper' })));
+    expect(other.do).not.toHaveProperty('codexEndpoint');
+  });
+
   test('a non-Codex seat is never marked, whatever the policy value', () => {
     const plan = upPlan({
       ...input(),

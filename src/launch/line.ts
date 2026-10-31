@@ -29,6 +29,19 @@ export function launchBinary(launch: string): string | null {
   );
 }
 
+/** The CLI binary a launch line ends up running. A line that runs a wrapper script with a shell
+ *  (`zsh ~/tools/as-floor.sh codex resume …`) passes its remaining words to the command the
+ *  script execs, so the CLI is the first word after the script. A wrapper that names no further
+ *  word is its own program, and the script is returned. */
+export function launchedCliBinary(launch: string): string | null {
+  const words = launch.trim().split(/\s+/).filter((word) => word !== '' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+  let at = 0;
+  while (at + 2 < words.length && /^(?:\S*\/)?(?:zsh|bash|sh)$/.test(words[at]!) && /\.(?:z|ba)?sh$/.test(words[at + 1]!)) {
+    at += 2;
+  }
+  return words[at] ?? null;
+}
+
 /** Whether the launch line starts something other than the CLI's own binary, or the file
  *  says the launcher chooses the model. A restored process is then the CLI without that program. */
 export function usesLauncher(seat: Pick<Seat, 'cli' | 'launch' | 'modelFrom'>): boolean {

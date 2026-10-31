@@ -7,7 +7,7 @@ import { launchCommand, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import type { LaunchedIdentity } from './identity.ts';
 import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
-import { launchBinary } from './line.ts';
+import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
 
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
@@ -794,7 +794,7 @@ export function upPlan(input: UpInput): Step[] {
     const managedCodex = profile.cli === 'codex'
       && codexDaemon === 'on'
       && input.stateDir !== undefined
-      && launchBinary(seat.launch) === profile.binary
+      && launchedCliBinary(seat.launch) === profile.binary
       && !/(^|\s)--remote(=|\s|$)/.test(command)
       && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
