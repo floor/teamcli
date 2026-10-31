@@ -27,7 +27,7 @@ import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { declaredDeliveryClass } from '../launch/delivery-class.ts';
+import { effectiveDeliveryClass, seatDeliveryClass, wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import {
   agentList,
   agentStatus,
@@ -70,7 +70,7 @@ import { launchLineFinding } from '../launch/line.ts';
 import { launchRefusal, readEntityModelRule, type EntityModelRule } from '../launch/model-guard.ts';
 import { charterGate } from '../charter/check.ts';
 import { charterFolderPretrust, grantedFolderPretrust, lobbyPretrustLine, projectRootPretrust } from '../launch/pretrust.ts';
-import { formatPlan, launchWillRun, upPlan, type UpSeat } from '../launch/plan.ts';
+import { formatPlan, launchWillRun, upPlan, type Op, type UpSeat } from '../launch/plan.ts';
 import { runPause, type PauseHost, type PauseInput } from '../launch/pause.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { unreadIdle } from '../launch/unread.ts';
@@ -1971,13 +1971,64 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // returned: the refusal's words, the live file that counted, the fold. It printed where the
   // gate is used, so it is one more warning line beside the caller's, never wrapped again.
   const gateApproval = gates?.approval ?? null;
-  // A lead or reviewer is asked to answer between its turns; a seat whose CLI's profile says
-  // nothing can wake it while it is idle is never given time-bound work. The file's own word is
-  // all there is to read here: this run is launching the seat, and nothing is installed yet.
+  // A lead or reviewer is asked to answer between its turns; a seat whose effective class cannot
+  // wake it while it is idle — pull-on-turn, or nothing at all — is never given time-bound work.
+  // The class is read the way a send reads it: for a seat this run starts, from the plan's own
+  // launch step (the line it runs, the watcher it installs, and the managed endpoint it starts);
+  // for a seat it keeps, from the records the last launch left; and with neither, from the
+  // declared line. Nothing is recorded for a launch this run has not made, so that projection
+  // claims no socket. A person's pane is left out: a person is not woken by an adapter, and that
+  // is expected.
+  type LaunchOp = Extract<Op, { do: 'launch' }>;
+  let launchOps: Map<string, LaunchOp> | null = null;
+  const launchOpOf = (name: string): LaunchOp | undefined => {
+    if (launchOps === null) {
+      launchOps = new Map();
+      for (const step of buildPlan()) {
+        if (step.do === undefined || step.do.do !== 'launch') continue;
+        launchOps.set(step.do.seat, step.do);
+      }
+    }
+    return launchOps.get(name);
+  };
+  const deliveryClassOf = (seat: Seat): { cli: string; cls: DeliveryClass } => {
+    const op = launchOpOf(seat.name);
+    if (op !== undefined) {
+      const read = seatDeliveryClass({
+        dir, root, session, seat: seat.name, home: sources.home,
+        declared: {
+          cli: op.cli ?? seat.cli, launch: op.command,
+          ...(seat.inbound === undefined ? {} : { inbound: seat.inbound }),
+        },
+      });
+      return {
+        cli: read.evidence.cli,
+        cls: effectiveDeliveryClass({
+          declared: read.evidence.declared,
+          watcher: op.watcher ?? read.evidence.watcher,
+          channel: read.evidence.channel,
+          socket: false,
+          endpoint: op.codexEndpoint !== undefined,
+        }),
+      };
+    }
+    const state = recorded?.seats[seat.name];
+    const read = seatDeliveryClass({
+      dir, root, session, seat: seat.name, home: sources.home,
+      declared: {
+        cli: seat.cli, launch: seat.launch,
+        ...(seat.inbound === undefined ? {} : { inbound: seat.inbound }),
+      },
+      ...(state === undefined ? {} : { state }),
+    });
+    return { cli: read.evidence.cli, cls: read.class };
+  };
   const deliveryWarnings = team.seats
     .filter((seat) => isLeadSeat(team, seat.name) || seat.role === 'reviewer')
-    .filter((seat) => declaredDeliveryClass(seat.cli) === 'none')
-    .map((seat) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${seat.cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
+    .filter((seat) => seat.human !== true)
+    .map((seat) => ({ seat, ...deliveryClassOf(seat) }))
+    .filter(({ cls }) => !wakeableWhileIdle(cls))
+    .map(({ seat, cli }) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
   const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval]), ...deliveryWarnings];
   // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
