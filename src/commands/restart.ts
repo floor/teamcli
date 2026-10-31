@@ -752,6 +752,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
+      // The home lets the plan read the seat's codex-daemon policy, as `team up` does.
+      home,
     });
     // The stop comes before the launch the plan prints; a seat that is not running is a skip.
     const stopPlan: PlanStep[] = inspected.agent
@@ -1046,6 +1048,9 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
+      // The home lets the plan read the seat's codex-daemon policy, so a restarted Codex seat is
+      // attached to its managed endpoint exactly as `team up` attaches it.
+      home,
       ...(sources.upLaunch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     });
     // The old pane is closed: whatever its last turn wrote says nothing about the seat this

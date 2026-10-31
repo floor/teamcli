@@ -1280,6 +1280,33 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).not.toContain('--resume');
   });
 
+  test('a restarted Codex seat behind a pass-through wrapper is attached to its managed endpoint', async () => {
+    // The plan reads the seat's codex-daemon policy from the home, as `team up` does: a restart
+    // that did not pass it left the seat on its own in-process thread, out of the native queue's
+    // reach, so no event wake could arrive.
+    const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol';
+    const { fixture, run } = seeded({
+      registry: 'ses_codex',
+      declaredCli: 'codex',
+      workerSession: 'ses_codex',
+      launched: true,
+      yaml: CODEX_TEAM_YAML.replace('    launch: codex -m gpt-6.1-sol', `    launch: ${launch}`),
+      launch,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    run.sources.upLaunch.codexEndpoint = {
+      managed: async () => ({ kind: 'up', url: 'unix:///tmp/worker.sock', started: true }),
+      stop: () => ({ stopped: true }),
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(0);
+    expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${launch} resume ses_codex`);
+    expect(run.did.runs.join('\n')).toContain('--remote unix:///tmp/worker.sock');
+  });
+
   test('a recorded launcher that selects another conversation is refused before the stop', async () => {
     // The registry binds ses_codex, and the recorded launcher itself names ses_other. Running
     // that line would resume a conversation nothing proved and destroy this one: the stop is
