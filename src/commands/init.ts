@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { declaredRoots } from '../entities.ts';
 import { readArgs } from '../args.ts';
 import { admitGeneral } from '../client/general-grant.ts';
+import { clientPaneGuard } from '../client/pane-guard.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
 import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
@@ -325,13 +326,19 @@ export async function runInit(
   // grant must verify back to the owner key, be unexpired, match the key, and cover the entity.
   if (actionOutcome === null && args.values.general !== undefined) {
     const root = findRoot(io.cwd);
-    const admitted = args.values.key === undefined
-      ? { ok: false as const, why: '--general needs --key <client.key>' }
-      : args.values.execute !== undefined || args.flags.has('request') || args.flags.has('restore') || fromArchive !== undefined
-        ? { ok: false as const, why: '--general is its own door: it takes no --execute, --request, --restore or --from-archive' }
-        : root === null
-          ? { ok: false as const, why: 'not inside a git repository' }
-          : admitGeneral(actionHome, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key), 'init', declaredEntity(actionHome, root), now);
+    // The pane guard, judged before the grant or the key is opened (see ../client/pane-guard.ts):
+    // a caller inside a team pane never acts under a client key. It is a machine guard: no
+    // dev-mode setting lifts it (OD-20261019-49).
+    const pane = clientPaneGuard(io);
+    const admitted = !pane.ok
+      ? { ok: false as const, why: pane.why }
+      : args.values.key === undefined
+        ? { ok: false as const, why: '--general needs --key <client.key>' }
+        : args.values.execute !== undefined || args.flags.has('request') || args.flags.has('restore') || fromArchive !== undefined
+          ? { ok: false as const, why: '--general is its own door: it takes no --execute, --request, --restore or --from-archive' }
+          : root === null
+            ? { ok: false as const, why: 'not inside a git repository' }
+            : admitGeneral(actionHome, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key), 'init', declaredEntity(actionHome, root), now);
     if (!admitted.ok) {
       refuse(io, json, 'init', { id: 'init.general-refused', message: admitted.why, repair: null });
       // exit: init.general-refused

@@ -120,7 +120,13 @@ function runGeneralGrant(argv: string[], args: Args, io: Io, home: string): numb
   if (held) {
     if (args.values.via === undefined || args.values.key === undefined) return bad('--via and --key go together');
     if (args.flags.has('request') || args.values.approval !== undefined) return bad('--via issues from a held grant; it takes no owner-seat flags');
-    out = issueHeldGeneralGrant(home, resolve(io.cwd, args.values.via), resolve(io.cwd, args.values.key), input, now);
+    // The pane guard, judged before the parent grant or the holder's key is opened (see
+    // ../client/pane-guard.ts): a caller inside a team pane never issues from a client key. It is a
+    // machine guard: no dev-mode setting lifts it (OD-20261019-49).
+    const pane = clientPaneGuard(io);
+    out = pane.ok
+      ? issueHeldGeneralGrant(home, resolve(io.cwd, args.values.via), resolve(io.cwd, args.values.key), input, now)
+      : { ok: false, why: pane.why };
   } else {
     if (!args.flags.has('request') && args.values.approval === undefined) return bad('the owner issues through the owner seat (--request), or a holder issues with --via and --key');
     const step = ownerSeatStep('client', 'team-general-grant', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: false, json }, io, { home });

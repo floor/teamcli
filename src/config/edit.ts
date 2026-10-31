@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { ownerSeatStep } from '../client/owner-action-step.ts';
 import { admitGeneral } from '../client/general-grant.ts';
+import { clientPaneGuard } from '../client/pane-guard.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
@@ -148,12 +149,18 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // A general grant: the owner signed it once for this principal across these entities, so a set
   // or unset under it applies directly, with no per-action request.
   if (args.values.general !== undefined && !seatApproved) {
+    // The pane guard, judged before the grant or the key is opened (see ../client/pane-guard.ts):
+    // a caller inside a team pane never acts under a client key. It is a machine guard: no
+    // dev-mode setting lifts it (OD-20261019-49).
+    const pane = clientPaneGuard(io);
     let entity: string | null = null;
     try {
       const loaded = readTeamConfig(root, { home });
       if (loaded.ok) entity = loaded.team.entity;
     } catch {}
-    const admitted = admitGeneral(home, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key as string), 'config', entity, sources.now?.() ?? new Date());
+    const admitted = !pane.ok
+      ? { ok: false as const, why: pane.why }
+      : admitGeneral(home, resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key as string), 'config', entity, sources.now?.() ?? new Date());
     if (!admitted.ok) {
       refuse(io, json, 'config', { id: 'config.general-refused', message: admitted.why, repair: null });
       // exit: config.general-refused

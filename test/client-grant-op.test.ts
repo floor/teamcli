@@ -5,7 +5,7 @@
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import type { Caller } from '../src/caller.ts';
@@ -110,19 +110,26 @@ function world(label: string) {
 
 type World = ReturnType<typeof world>;
 
-function capture(w: World, caller?: Caller): { io: Io; out: () => string; err: () => string } {
+function capture(w: World, caller?: Caller, env: Record<string, string> = {}): { io: Io; out: () => string; err: () => string } {
   let out = '';
   let err = '';
   const io: Io = {
     stdout: (text) => { out += text; },
     stderr: (text) => { err += text; },
     cwd: w.root,
-    env: {},
+    env,
     stdinIsTTY: false,
     ...(caller === undefined ? {} : { caller }),
   };
   return { io, out: () => out, err: () => err };
 }
+
+/** The client's own shell, outside every pane: a request test pins this instead of walking the test
+ *  runner, which sits in a pane when the suite runs from one. */
+const outside: Caller = { kind: 'unplaced', reason: "its parent processes can't be read to the top" };
+
+/** A seat in its team pane. */
+const inPane: Caller = { kind: 'seat', name: 'builder-5', pane: 'pane1' };
 
 const FLOOR: ClientGrantScope = { entities: ['floor'], projects: [], teams: [] };
 
@@ -167,7 +174,7 @@ describe('issuing a master grant (owner only)', () => {
     const owner = capture(w, { kind: 'owner' } as Caller);
     expect(await runGrant(['--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--grant-entity', 'floor'], owner.io, { home: w.home })).toBe(2);
     const m = w.master(FLOOR);
-    const req = capture(w);
+    const req = capture(w, outside);
     expect(await runGrant([...request(w, m.path), '--allow-grant'], req.io, { home: w.home })).toBe(2);
     expect(req.err()).toContain('never carries grant');
   });
@@ -219,7 +226,7 @@ describe('a sub-grant requested under a master grant', () => {
   test('in scope: written with no owner terminal, names its master, audited, and usable with team send', async () => {
     const w = world('ok');
     const m = w.master(FLOOR);
-    const io = capture(w);
+    const io = capture(w, outside);
     expect(await runGrant(request(w, m.path), io.io, { home: w.home })).toBe(0);
     expect(io.out()).toContain(`issued by master grant: ${m.grant.grantId}`);
     const path = /grant file: (.*)/.exec(io.out())![1]!;
@@ -242,11 +249,29 @@ describe('a sub-grant requested under a master grant', () => {
     expect(send.ok).toBe(true);
   });
 
+  test('a seat inside a pane is refused, writing nothing, with dev mode on or off; the client shell still issues', async () => {
+    const w = world('pane');
+    const m = w.master(FLOOR);
+    const grants = join(w.home, '.config', 'team', 'grants');
+    const before = readdirSync(grants).sort();
+    for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }] as Record<string, string>[]) {
+      const io = capture(w, inPane, env);
+      expect(await runGrant(request(w, m.path), io.io, { home: w.home })).toBe(1);
+      expect(io.err()).toContain('a client key is not used from inside a team pane');
+      expect(readdirSync(grants).sort()).toEqual(before);
+    }
+    expect(existsSync(clientGrantAuditFolder(w.home))).toBe(false);
+    // The control: the client's own shell, outside every pane, still issues.
+    const shell = capture(w, outside);
+    expect(await runGrant(request(w, m.path), shell.io, { home: w.home })).toBe(0);
+    expect(readdirSync(grants).sort()).not.toEqual(before);
+  });
+
   test('out of scope, and an empty scope, grant nothing', async () => {
     const w = world('scope');
     for (const scope of [{ entities: ['labs'], projects: [], teams: [] }, { entities: [], projects: [], teams: ['teamcli'] }, { entities: [], projects: [], teams: [] }]) {
       const m = w.master(scope);
-      const io = capture(w);
+      const io = capture(w, outside);
       expect(await runGrant(request(w, m.path), io.io, { home: w.home })).toBe(1);
       expect(io.err()).toContain('outside the master grant');
     }
@@ -259,7 +284,7 @@ describe('a sub-grant requested under a master grant', () => {
   test('no chaining: a sub-grant is never a master, and no grant carries both', async () => {
     const w = world('chain');
     const m = w.master(FLOOR);
-    const io = capture(w);
+    const io = capture(w, outside);
     expect(await runGrant(request(w, m.path, ['--client', 'grok-bot', '--public-key', w.grok.pubPath]), io.io, { home: w.home })).toBe(0);
     const subPath = /grant file: (.*)/.exec(io.out())![1]!;
     const again = verifyClientGrantIssue(issueInput(w, subPath));
@@ -304,13 +329,13 @@ describe('a sub-grant requested under a master grant', () => {
   test('a revoked master refuses new requests and stops the sub-grants it issued', async () => {
     const w = world('revoked');
     const m = w.master(FLOOR);
-    const io = capture(w);
+    const io = capture(w, outside);
     expect(await runGrant(request(w, m.path), io.io, { home: w.home })).toBe(0);
     const subPath = /grant file: (.*)/.exec(io.out())![1]!;
     const sub = readClientGrantFile(w.home, subPath);
     if (!sub.ok) throw new Error(sub.why);
     expect(appendClientRevocation(w.home, m.grant.grantId, { key: w.ownerKey }).ok).toBe(true);
-    const after = capture(w);
+    const after = capture(w, outside);
     expect(await runGrant(request(w, m.path), after.io, { home: w.home })).toBe(1);
     expect(after.err()).toContain('revoked');
     const send = verifyClientRequest({

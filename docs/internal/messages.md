@@ -231,11 +231,15 @@ never printed.
 
 ### The client pane guard
 
-A client key is the client's, never a seat's. `team send --client`, `team messages --client` and
-`team client keygen` place their caller with the same parent-process walk the owner gates use (never an environment
-variable) and refuse a caller that runs inside a team pane — a seat, an agentless team pane, or a
-process either started — before the grant or the key is opened: exit 1, `send.client-pane`,
-`messages.client-pane` or `client.keygen.pane`. Every grant-verified client form (`team up
+A client key is the client's, never a seat's. `team send --client`, `team messages --client`,
+`team client keygen`, `team grant --client-request`, `team client general-grant --via --key` and
+every `--general <grant.json> --key <client.key>` form (the general door on every command, and the
+own doors of `up`, `init` and `config`) place their caller with the same parent-process walk the
+owner gates use (never an environment variable) and refuse a caller that runs inside a team pane —
+a seat, an agentless team pane, or a process either started — before the grant or the key is
+opened: exit 1, `send.client-pane`, `messages.client-pane`, `client.keygen.pane`, `grant.refused`,
+`client.general-grant.failed`, `team.general-refused`, or the command's own `*.general-refused`
+row. Every grant-verified client form (`team up
 --client`, `team down --client`, `team status --client` and the bundle ops such as `pause`,
 `resume`, `hold`, `add`, `remove`, `seat`, `seats`, `reload`, `restart` and `sessions`) runs the
 same guard inside `verifyClientUp`, so it is refused with that command's own client refusal

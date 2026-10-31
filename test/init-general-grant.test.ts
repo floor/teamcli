@@ -56,6 +56,18 @@ test('a detached run with no grant is refused init.detached', async () => {
   expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(false);
 });
 
+test('a seat in a pane is refused before the grant is opened, dev mode on or off, and writes nothing', async () => {
+  const g = grant(['floor'], ['*']);
+  for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }]) {
+    const io = testIo(project, { kind: 'seat', name: 'builder-5', pane: 'pane1' });
+    io.env = env;
+    const code = await runInit(['--general', g.path, '--key', g.key], io, home, undefined, { ...noLogin, registryHome: home });
+    expect(code).toBe(1);
+    expect(io.err).toContain('a client key is not used from inside a team pane');
+  }
+  expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(false);
+});
+
 test('a general grant covering init on this entity admits the create with no owner terminal', async () => {
   const g = grant(['floor'], ['*']);
   const r = await run(['--general', g.path, '--key', g.key]);

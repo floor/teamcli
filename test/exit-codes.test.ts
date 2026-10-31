@@ -6680,7 +6680,9 @@ scene('up.approval-requested', async (place) => {
 });
 scene('up.general-refused', async (place) => {
   approve(place, TEAM);
-  return show(await up(place, ['--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], other, upSources(place)), 'cannot be read as a general grant');
+  // The client's shell outside every pane: the general door is a client-key form, so a seat in a
+  // pane meets the pane guard first and this row tests the grant read that follows it.
+  return show(await up(place, ['--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], detachedCaller, upSources(place)), 'cannot be read as a general grant');
 });
 scene('up.approval-refused', async (place) => {
   approve(place, TEAM);

@@ -1,9 +1,11 @@
 // The client pane guard on every grant-verified client form: `team up --client`, `team down
 // --client`, `team status --client` and the bundle ops all pass through `verifyClientUp`, which
-// places the caller before the grant or the key is read and refuses one inside a team pane. The
-// guard is a machine guard: dev mode, the owner's switch, never lifts it (OD-20261019-49); an
-// external client outside the terminal host is never refused. Every seat, file, pane and home
-// below is synthetic.
+// places the caller before the grant or the key is read and refuses one inside a team pane; the
+// grant-issuing paths (a `--client-request` sub-grant, a holder's `general-grant --via --key`) and
+// every `--general <grant.json> --key <client.key>` door place the caller the same way. The guard
+// is a machine guard: dev mode, the owner's switch, never lifts it (OD-20261019-49); an external
+// client outside the terminal host is never refused. Every seat, file, pane and home below is
+// synthetic.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,7 +14,9 @@ import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { clientPaneGuard } from '../src/client/pane-guard.ts';
 import { enterClientForm } from '../src/client/client-form.ts';
+import { generalDoor } from '../src/client/general-door.ts';
 import { verifyClientUp } from '../src/client/up-grant.ts';
+import { runClient } from '../src/commands/client.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-20T09:00:00Z');
@@ -131,4 +135,46 @@ test('the bundle ops entrance refuses a seat the same way', () => {
     );
     expect(entered.ok ? '' : entered.why).toContain(REFUSAL);
   }
+});
+
+const OUTSIDE: Caller = { kind: 'unplaced', reason: "its parent processes can't be read to the top" };
+
+test('the general door refuses a seat before the grant is opened, dev mode on or off', () => {
+  const { root, home } = repo();
+  const argv = ['--general', 'missing-grant.json', '--key', 'missing.key'];
+  for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }]) {
+    const io = testIo(root, HELPER);
+    io.env = { HOME: home, ...env };
+    const door = generalDoor('status', argv, io, NOW);
+    expect(door.kind).toBe('refused');
+    if (door.kind === 'refused') expect(door.why).toContain(REFUSAL);
+  }
+  // The control: the client's own shell reaches the grant read, not the guard.
+  const outside = testIo(root, OUTSIDE);
+  outside.env = { HOME: home };
+  const door = generalDoor('status', argv, outside, NOW);
+  expect(door.kind).toBe('refused');
+  if (door.kind === 'refused') {
+    expect(door.why).toContain('cannot be read as a general grant');
+    expect(door.why).not.toContain(REFUSAL);
+  }
+});
+
+test("a holder's general-grant issue refuses a seat before the held grant is opened", () => {
+  const { root, home } = repo();
+  const pub = join(root, 'client.pub');
+  writeFileSync(pub, JSON.stringify({ public_key: 'ed25519:abc' }));
+  const argv = ['general-grant', '--to', 'worker', '--public-key', pub, '--via', 'missing-grant.json', '--key', 'missing.key'];
+  for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }]) {
+    const io = testIo(root, HELPER);
+    io.env = { HOME: home, ...env };
+    expect(runClient(argv, io, home)).toBe(1);
+    expect(io.err).toContain(REFUSAL);
+  }
+  // The control: the client's own shell reaches the held grant read, not the guard.
+  const outside = testIo(root, OUTSIDE);
+  outside.env = { HOME: home };
+  expect(runClient(argv, outside, home)).toBe(1);
+  expect(outside.err).toContain('cannot be read as a general grant');
+  expect(outside.err).not.toContain(REFUSAL);
 });
