@@ -392,6 +392,25 @@ describe('the daemon fallback sweep', () => {
     expect(mailboxCount(world)).toBe(1);
   });
 
+  test('an episode with nothing to do is passed over without taking its key lock', () => {
+    // Every heartbeat runs this pass on the daemon's event loop. A settled or not-yet-due episode
+    // is read and skipped; it is never locked, so a held lock does not even defer it, and the
+    // health probe is not starved by hundreds of settled markers.
+    const world = makeWorld();
+    const first = noteTransport(world.ctx, fact(world));
+    if (!first.ok) throw new Error(first.reason);
+    const early = new Date(Date.parse(first.dueAt!) - 1_000).toISOString();
+    const lockDir = episodeLockDir(world);
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, LOCK_FILE), `${String(process.pid)}\n`);
+    const pass = sweepAt(world, early);
+    expect(pass.report!.deferred).toHaveLength(0);
+    expect(pass.report!.escalated).toHaveLength(0);
+    expect(pass.report!.scanned).toBe(1);
+    expect(readMarker(world).escalatedAt).toBeUndefined();
+    unlinkSync(join(lockDir, LOCK_FILE));
+  });
+
   test('a lock held by another process defers the escalation without stalling the heartbeat', async () => {
     const world = makeWorld();
     const failedAt = new Date(Date.now() - 301_000).toISOString();

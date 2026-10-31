@@ -578,6 +578,14 @@ export function escalateDue(
       continue;
     }
     const { recipient, messageId } = found.marker;
+    // A marker with nothing to do is passed over before its key lock is taken. Every heartbeat
+    // runs this pass on the daemon's one event loop, and a checkout keeps hundreds of settled
+    // episodes; locking and re-reading each one starved the health probe and the hosted
+    // endpoints. The read is unlocked, so a marker that changes after it waits one tick.
+    if (settledAt(found.marker, at)) {
+      report.scanned += 1;
+      continue;
+    }
     let step: EscalationStep;
     try {
       step = withKeyLock(ctx, recipient, messageId, () => escalateOne(ctx, recipient, messageId, at, atIso), lockWaitMs);
@@ -597,6 +605,17 @@ export function escalateDue(
     else if (step.kind === 'escalated') report.escalated.push(step.entry);
   }
   return report;
+}
+
+/** True when the locked step would find nothing to do: no pending intent, and either a delivery,
+ *  a walk still trying, an escalation already decided, or a due instant still ahead. */
+function settledAt(marker: FallbackMarker, at: Date): boolean {
+  if (marker.outbox !== undefined) return false;
+  if (marker.status === 'delivered' || marker.status === 'trying') return true;
+  if (marker.escalatedAt !== undefined) return true;
+  if (marker.dueAt === undefined) return false;
+  const due = Date.parse(marker.dueAt);
+  return Number.isFinite(due) && due > at.getTime();
 }
 
 type EscalationStep =
