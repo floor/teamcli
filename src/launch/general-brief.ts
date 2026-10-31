@@ -393,6 +393,9 @@ export function deliverBriefForAttribution(input: {
   state: SessionState;
   attributed: readonly string[];
   broadcast?: boolean;
+  /** Deliver to the attributed seats alone: a single-seat restart never drops the brief to the
+   *  rest of the team, whatever claims they hold. */
+  onlyAttributed?: boolean;
   handover?: string;
 }): BriefDeliveryReport {
   const attributed = new Set(input.attributed);
@@ -403,7 +406,7 @@ export function deliverBriefForAttribution(input: {
     (seat) => currentBriefClaim(input.state.briefs?.[seat.name])?.sha256 !== GENERAL_BRIEF_SHA256,
   );
   const names: string[] = [...attributed];
-  if (input.broadcast === true || behind) {
+  if (input.onlyAttributed !== true && (input.broadcast === true || behind)) {
     for (const seat of liveOrHuman) if (!attributed.has(seat.name)) names.push(seat.name);
   }
   const at = input.now.toISOString();

@@ -180,6 +180,18 @@ describe('the embedded general brief', () => {
 });
 
 describe('the delivery', () => {
+  test('a single-seat restart delivers to that seat alone, even with another seat behind', () => {
+    const report = deliverBriefForAttribution({
+      dir, root, session: 'acme', home, now: NOW, team,
+      state: readState(dir).sessions.acme ?? emptySession(),
+      attributed: ['lead'],
+      onlyAttributed: true,
+    });
+    // The same run without the restriction would also reach desk (behind this build's brief).
+    expect(report.deliveries.map((delivery) => delivery.seat)).toEqual(['lead']);
+    expect(claimOf('desk')).toBeNull();
+  });
+
   test('writes a signed drop for a CLI seat, records the claim, and the read leaves a bound receipt', async () => {
     const report = deliver({ seats: ['lead'] });
     const claim = claimOf('lead');
@@ -699,4 +711,11 @@ describe('team check', () => {
     expect(said).toContain('difference: lead: the general seat brief has been delivered and not read\n');
     expect(code).toBe(1);
   });
+});
+
+test('team restart briefs only the seat it restarts', () => {
+  const source = readFileSync(new URL('../src/commands/restart.ts', import.meta.url), 'utf8');
+  const call = source.slice(source.indexOf('deliverBriefForAttribution('), source.indexOf('deliverBriefForAttribution(') + 600);
+  expect(call).toContain('onlyAttributed: true');
+  expect(call).not.toContain('broadcast: true');
 });

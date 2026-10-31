@@ -1006,7 +1006,8 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       team,
       state: readState(dir).sessions[session] ?? emptySession(),
       attributed: [planSeat.name],
-      broadcast: true,
+      // A single-seat restart briefs that seat alone, never the whole team.
+      onlyAttributed: true,
       ...(handoverSentence === undefined ? {} : { handover: handoverSentence }),
     });
     await walkBriefDeliveries(briefs, { dir, home });
