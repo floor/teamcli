@@ -24,7 +24,8 @@ import type { Seat, TeamFile } from '../file/types.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { isBareShellPane } from '../send/daemon.ts';
-import { claimBindingIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, inboxLive, receiptHeld } from '../mcp/inbox.ts';
+import { claimBindingIn, currentClaimIn, INBOX_FALLBACK_MS, INBOX_FALLBACK_REASON, inboxLive, receiptHeld } from '../mcp/inbox.ts';
+import { briefBindingOf, GENERAL_BRIEF_FROM } from '../launch/general-brief.ts';
 import {
   channelLaunchEnabled,
   CHANNEL_CONFIRM_MS,
@@ -475,12 +476,43 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     const dropDir = join(scene.dir, 'send-drops', scene.session, seat.name);
     const drops = readPending(dropDir);
     if (drops.length === 0) continue;
+    // A launch-brief sidecar whose delivery the seat's claim has moved past is retired here:
+    // nothing can ever be typed for it (the record is an earlier delivery's, and the seat's own
+    // reader refuses it as superseded), so a retry would only name a delivery the seat no longer
+    // holds. One line each, as every retirement logs; no pane is needed. A sidecar of the
+    // seat's current claim is retired when a signed read receipt binds that claim — the marker
+    // legs are promoted above, and a typed marker has no leg for that pass to see. An unread
+    // one is left alone. A claim this build cannot read proves nothing and retires nothing.
+    const claim = drops.some((drop) => drop.from === GENERAL_BRIEF_FROM)
+      ? currentClaimIn(scene.root, scene.session, seat.name)
+      : null;
+    const read = claim !== null && scene.home !== undefined
+      && receiptHeld(
+        dropDir,
+        claim.id,
+        { to: seat.name, root: scene.root, session: scene.session },
+        scene.home,
+        briefBindingOf(claim),
+      );
+    const pending = drops.filter((drop) => {
+      if (claim === null || drop.from !== GENERAL_BRIEF_FROM) return true;
+      if (drop.id === claim.id) {
+        if (!read) return true;
+        clearPending(dropDir, drop.id);
+        scene.say(`${seat.name}: a dropped send from ${drop.from} was read in its drop folder`, false);
+        return false;
+      }
+      clearPending(dropDir, drop.id);
+      scene.say(`${seat.name}: a dropped send from ${drop.from} was superseded by the seat's newer brief delivery`, false);
+      return false;
+    });
+    if (pending.length === 0) continue;
     // A pane the file marks as a human's is never typed into: a retry is typing, so a marker
     // left for such a seat is given up on where it stands, with the reason, and the message
     // waits in its drop file for a person to read. A drop-leg marker is not a retry at all —
     // a person reading the drop writes no receipt — so it is only forgotten.
     if (seat.human === true) {
-      for (const drop of drops) {
+      for (const drop of pending) {
         if (drop.leg === 'drop') clearPending(dropDir, drop.id);
         else giveUp(scene, dropDir, drop, 'the pane is a human\'s, and nothing is typed into it');
       }
@@ -496,7 +528,7 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     // file's path and the word that no watcher read it.
     const now = scene.now.getTime();
     const live: PendingDrop[] = [];
-    for (const drop of drops) {
+    for (const drop of pending) {
       if (now - Date.parse(drop.ts) <= PENDING_MAX_AGE_MS) {
         live.push(drop);
         continue;
