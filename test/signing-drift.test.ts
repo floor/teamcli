@@ -201,12 +201,30 @@ describe('the signing drift', () => {
     expect(out).not.toContain('signs as');
   });
 
-  test('a foreign-vendor model in Claude Code is compared with the registry signing', () => {
+  test('a provider wrapper\'s Claude Code screen is never a drift against the registry signing', () => {
     record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, 'w3:p1', {
       cli: 'claude-code',
       lab: 'deepseek',
     });
-    // The team file names the foreign model, but Claude Code's footer still names the running model.
+    // The seat runs another maker's model through its launcher, and Claude Code's footer prints
+    // its own default family whatever the launcher selected: that family is not the seat's model,
+    // so it is never a difference. The signing and the screen's own id compare here instead.
+    const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    const { out } = check(live);
+    expect(out).not.toContain('signs as');
+  });
+
+  test('a bare Claude Code launch of a foreign model is compared with the registry signing', () => {
+    record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, 'w3:p1', {
+      cli: 'claude-code',
+      lab: 'deepseek',
+    });
+    // No launcher: the CLI cannot run the signed model, and the family on its screen is the
+    // contradiction the record needs — still compared, like the bare launch it is.
+    writeFileSync(
+      join(root, '.agents/team.yaml'),
+      example.replace('launch: team-deepseek', 'launch: claude'),
+    );
     const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
     const { out } = check(live);
     expect(out).toContain('difference: deepseek-acme: signs as DeepSeek V4.1 Flash, runs Claude Opus 5.5');
