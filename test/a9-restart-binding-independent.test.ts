@@ -16,7 +16,7 @@
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -46,6 +46,12 @@ const FOREIGN = OTHER;
 // The bound the fix declares: 15 seconds in 200 ms poll steps. Written out rather than imported,
 // so this file runs unchanged at the parent the fix is measured against.
 const WAIT_STEPS = 15_000 / 200;
+// Codex's own screens, captured from codex 0.161.0 — this repo's fixtures, read here so the
+// relaunched pane draws a prompt the readiness reader accepts, and the old pane draws what the
+// stop's exit text leaves.
+const CODEX_OLD_IDLE = readFileSync(new URL('./fixtures/codex/0.161.0/idle.txt', import.meta.url), 'utf8');
+const CODEX_EXIT_TYPED = readFileSync(new URL('./fixtures/codex/0.161.0/exit-typed.txt', import.meta.url), 'utf8');
+const CODEX_NEW_IDLE = CODEX_OLD_IDLE.replace('gpt-5.6-terra', 'gpt-6.1-sol').replace('GPT-5.6-Terra', 'GPT-6.1-Sol');
 
 const made: string[] = [];
 afterEach(() => {
@@ -96,7 +102,31 @@ seats:
 `;
 }
 
-function makeFixture(): Fixture {
+/** The same team with a Codex worker: its native route resumes by the record's agent session. */
+function codexTeamYaml(fixture: Fixture): string {
+  return teamYaml(fixture).replace(
+    `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`,
+    `  - role: implementer
+    name: worker
+    label: worker
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    launch: codex -m gpt-6.1-sol
+`,
+  );
+}
+
+function makeFixture(yamlOf: (fixture: Fixture) => string = teamYaml): Fixture {
   const base = realpathSync(mkdtempSync('/private/tmp/team-a9t2-'));
   made.push(base);
   const home = join(base, 'home');
@@ -110,7 +140,7 @@ function makeFixture(): Fixture {
     stdio: 'ignore',
   });
   const fixture = { base, root, home, dir: join(root, '.agents') };
-  writeFileSync(join(fixture.dir, 'team.yaml'), teamYaml(fixture));
+  writeFileSync(join(fixture.dir, 'team.yaml'), yamlOf(fixture));
   return fixture;
 }
 
@@ -129,8 +159,15 @@ function readyWorker(fixture: Fixture): void {
 type Did = { typed: string[]; pasted: string[]; closed: string[]; created: number; runs: string[] };
 
 /** A fake herdr/launch world for one restart: the same seams the command reads, nothing real. */
-function fakeRestart(fixture: Fixture): { sources: RestartSources; did: Did } {
+function fakeRestart(
+  fixture: Fixture,
+  opts: { cli?: 'claude-code' | 'codex'; liveReportsSession?: boolean } = {},
+): { sources: RestartSources; did: Did } {
   const did: Did = { typed: [], pasted: [], closed: [], created: 0, runs: [] };
+  const codex = (opts.cli ?? 'claude-code') === 'codex';
+  const argv0 = codex ? 'codex' : 'claude';
+  // A live CLI that has not reported its conversation yet: herdr lists the agent, no session id.
+  const liveSession = opts.liveReportsSession === false ? undefined : 'ses_relaunch';
   let workerAlive = true;
   let boxedText = claudeBox('');
   // The one exit text the stop types leaves the old pane back at its shell.
@@ -146,9 +183,16 @@ function fakeRestart(fixture: Fixture): { sources: RestartSources; did: Did } {
     }
     for (const [pane, slot] of newPanes) {
       if (slot.agent) {
-        // The relaunched pane reports the conversation it actually started, as herdr does live.
+        // The relaunched pane reports the conversation it actually started, as herdr does live —
+        // unless this scene's CLI has not reported one yet.
         list.push({
-          name: slot.name, agent: 'claude-code', pane, workspace: slot.workspace, status: 'idle', cwd: fixture.root, session: 'ses_relaunch',
+          name: slot.name,
+          agent: codex ? 'codex' : 'claude-code',
+          pane,
+          workspace: slot.workspace,
+          status: 'idle',
+          cwd: fixture.root,
+          ...(liveSession === undefined ? {} : { session: liveSession }),
         });
       }
     }
@@ -187,7 +231,7 @@ function fakeRestart(fixture: Fixture): { sources: RestartSources; did: Did } {
       did.created += 1;
       const pane = did.created === 1 ? 'pane-new' : `pane-new-${did.created}`;
       const workspace = did.created === 1 ? 'ws-new' : `ws-new-${did.created}`;
-      newPanes.set(pane, { text: CLAUDE_IDLE, agent: false, name: null, workspace });
+      newPanes.set(pane, { text: codex ? CODEX_NEW_IDLE : CLAUDE_IDLE, agent: false, name: null, workspace });
       return { pane, workspace };
     },
     paneRun(_session, pane, command) {
@@ -204,21 +248,26 @@ function fakeRestart(fixture: Fixture): { sources: RestartSources; did: Did } {
     closeWorkspace: downLaunch.closeWorkspace,
     agentPanes: () => agents().map((agent) => agent.pane),
     agents: () => agents(),
-    paneText: (_session, pane) => newPanes.get(pane)?.text ?? CLAUDE_IDLE,
+    paneText: (_session, pane) => newPanes.get(pane)?.text ?? (codex ? CODEX_NEW_IDLE : CLAUDE_IDLE),
     typeText(_session, pane, text) {
       did.pasted.push(text);
       const slot = newPanes.get(pane);
       const pasted = /^\x1b\[200~([\s\S]*)\x1b\[201~$/.exec(text);
-      if (slot && pasted) slot.text = claudeBox(pasted[1] ?? '');
+      if (slot && pasted) {
+        // Codex's composer takes the first line behind its prompt; Claude draws its own box.
+        slot.text = codex
+          ? CODEX_NEW_IDLE.replace('› Ask Codex to do anything', `› ${pasted[1] ?? ''}`)
+          : claudeBox(pasted[1] ?? '');
+      }
       return true;
     },
     pressEnter(_session, pane) {
       const slot = newPanes.get(pane);
-      if (slot) slot.text = CLAUDE_IDLE;
+      if (slot) slot.text = codex ? CODEX_NEW_IDLE : CLAUDE_IDLE;
       return true;
     },
     agentStatus: () => 'idle',
-    foreground: () => ['claude'],
+    foreground: () => [argv0],
     // A pane whose shell and CLI process can be read: the launch records the seat's identity and
     // the conversation herdr reports for it, as a live launch does.
     processInfo: () => ({ shell: 300, foreground: [301] }),
@@ -244,9 +293,11 @@ function fakeRestart(fixture: Fixture): { sources: RestartSources; did: Did } {
     workspaces: () => agents().map((agent) => ({ id: agent.workspace })),
     alive: () => true,
     screen: () => ({ kind: 'idle' }),
-    screenText: () => boxedText,
+    screenText: (_session, pane) => (codex
+      ? (pane === 'pane-old' ? (did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE)
+      : boxedText),
     status: () => 'idle',
-    foreground: (_session, pane) => (pane === 'pane-old' && shelled ? ['zsh'] : ['claude']),
+    foreground: (_session, pane) => (pane === 'pane-old' && shelled ? ['zsh'] : [argv0]),
     now: () => NOW,
     sleep: async () => {},
     launch: downLaunch,
@@ -633,5 +684,32 @@ describe('A9 round 2: a restart reports a route it could not bind', () => {
     expect(code).toBe(0);
     expect(io.err).toBe('');
     expect(io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new; pull-only: no agent record for this seat');
+  });
+});
+
+describe('A9 round 3: a restart names a route the live reading cannot bind', () => {
+  test('a Codex seat whose pane has not reported its session yet is not a plain ready', async () => {
+    const fixture = makeFixture(codexTeamYaml);
+    readyWorker(fixture);
+    const { sources } = fakeRestart(fixture, { cli: 'codex', liveReportsSession: false });
+    const io = testIo(fixture.root, OWNER);
+
+    const code = await runRestart(['worker'], io, sources);
+
+    const state = readState(fixture.dir).sessions.acme?.seats.worker;
+    // The seat record was written and the state stands ready; what the live reading has not
+    // reported is the conversation id Codex native delivery resumes by, so the route a send
+    // decides on is refused for exactly that reason.
+    expect(state?.stage).toBe('ready');
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state,
+    })).toEqual({ kind: 'none', why: 'the record names no agent session' });
+    // The restart still says ready — the seat runs — but must name the route it could not bind.
+    expect(code).toBe(0);
+    expect(io.out).toContain('; pull-only: the record names no agent session');
   });
 });
