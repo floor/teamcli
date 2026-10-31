@@ -120,6 +120,35 @@ test('a registered recipient with model drift is held before any send leg writes
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
 });
 
+test('a registered recipient behind a provider wrapper is not held for the family its screen shows', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const leadId = teamIdOf(made.root);
+  registerAgent(made.home, {
+    name: 'lead',
+    // The launcher selects GLM; Claude Code's status footer still prints its own default family.
+    // That family is never the seat's model, so it is not a drift: the send walks its leg.
+    signing: { model: 'GLM 5', version: '5.3', role: 'coordinator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-glm.sh',
+    reach: { team: leadId, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    mcp: [], skills: [], lifecycle: 'running', by: 'up',
+  });
+  const pane = scripted(['idle', 'working'], `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`);
+  const host = fake(made, { native: pane });
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(io.err).not.toContain('model drift');
+  const drops = dropDir(made.dir, 'lead');
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
+  expect(files.length).toBe(1);
+  expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
+  expect(host.frames).toEqual([]);
+});
+
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;

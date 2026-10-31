@@ -73,7 +73,7 @@ import { projectIdOfTeam } from '../dev_mode.ts';
 import { deliveryTimeoutInForce } from '../policy/delivery.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { buildIdentity, type BuildIdentity } from '../version.ts';
-import { modelDiffers, runningModel } from '../status/statusline.ts';
+import { modelDiffers, signedSeatModel } from '../status/statusline.ts';
 
 export const USAGE = `Usage: team send <seat> <message> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
        team send <seat> --file <path> [--subject <text>] [--wait] [--timeout <s>] [--json] [--dry-run]
@@ -974,7 +974,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     const live = findAgent(host, to.session, to.seat);
     if (live.ok) {
       const screen = host.native.paneText?.(to.session, live.pane) ?? null;
-      const running = screen === null ? null : runningModel(registeredTarget.cli, screen);
+      // The target's own model, read as its launch makes it readable: for a provider wrapper the
+      // screen shows the wrapper CLI's default family whatever the launcher selected, so the
+      // reading is the record's signed declaration — the same like-for-like the drift test needs.
+      const running = screen === null ? null : signedSeatModel({
+        cli: registeredTarget.cli,
+        model: registeredTarget.signing.model,
+        version: registeredTarget.signing.version,
+        launch: registeredTarget.launch,
+      }, screen);
       if (modelDiffers(running, registeredTarget.signing)) {
         const declaredModel = `${registeredTarget.signing.model} ${registeredTarget.signing.version}`;
         const runningLabel = `${running.model} ${running.version}`;
