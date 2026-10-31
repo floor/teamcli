@@ -93,11 +93,12 @@ not a message) are unchanged.
 - **The managed Codex endpoint.** A Codex seat's launch starts a managed app-server endpoint
   under the seat's presence binding and attaches the TUI to it by remote. The seat's native
   turns, inbox server, permissions and tool calls then run under that endpoint. A seat launched
-  through a shell script is seen through to the CLI it runs; a restarted seat reattaches to the
-  endpoint; the endpoint accepts the app-server's linked socket. A Codex seat's tools and MCP
-  servers under its managed endpoint are placed as that seat under the full ownership proof:
-  the listen URL of its current binding, the recorded pid and a start inside the record's
-  window, and, for a session, the terminal it records.
+  through a shell script is seen through to the CLI it runs; a restarted seat starts a
+  replacement endpoint and attaches with its recorded conversation; the endpoint accepts the
+  app-server's linked socket. A Codex seat's tools and MCP servers under its managed endpoint
+  are placed as that seat under the full ownership proof: the listen URL of its current
+  binding, the recorded pid and a start inside the record's window, and, for a session, the
+  terminal it records.
 - **The workflow's live run store.** A run lives in a durable store: an item index that decides
   exclusion, a versioned, append-only journal that folds the run's state, and reservations that
   keep one seat on one item at a time. A pending hold has a release deadline, the built-in
