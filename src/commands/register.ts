@@ -42,7 +42,7 @@ import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
-import { shellQuote } from '../profiles/profile.ts';
+import { shellQuote, type Profile } from '../profiles/profile.ts';
 import { registerLaunch } from '../registry/sync.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
@@ -112,6 +112,15 @@ const realSources: RegisterSources = {
 
 export const register: Command = (argv, io) => runRegister(argv, io, realSources);
 export default register;
+
+/** What register says after writing a waiting seat's rules file. A launch that can carry the
+ *  line names the restart that carries it; a CLI whose launch line takes no rules prompt says
+ *  plainly that no launch can. */
+export function rulesWrittenLine(name: string, profile: Pick<Profile, 'rulesPrompt'>): string {
+  return profile.rulesPrompt !== null
+    ? `its rules file is written; nothing is typed: its rules ride its next launch (run team restart ${name} to carry them)`
+    : "its rules file is written; this CLI's launch line carries no rules line, so no launch can carry them";
+}
 
 function usage(out: Io, json: boolean, message: string): number {
   refuse(out, json, 'register', { id: 'register.usage', message, repair: null, usage: USAGE });
@@ -822,9 +831,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // the seat reads it with the next launch that carries the line. A CLI whose launch line
       // takes no rules prompt has no such launch, and the run says that rather than naming a
       // restart that would change nothing.
-      const said = profile.rulesPrompt !== null
-        ? `its rules file is written; nothing is typed: its rules ride its next launch (run team restart ${name} to carry them)`
-        : "its rules file is written; this CLI's launch line carries no rules line, so no launch can carry them";
+      const said = rulesWrittenLine(name, profile);
       out.stdout(`${plainLine(name)}: ${said}\n`);
       logLine(dir, 'register', callerLabel(walked), `${name}: ${said}`, now);
       finishedRules = 'undelivered';

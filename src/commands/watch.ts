@@ -13,7 +13,7 @@ import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, reportDisplayAgent, sendKey as herdrSendKey, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
+import { agentStatus, PANE_WINDOW, paneForeground, paneProcesses, paneRead, paneRun, reportDisplayAgent, workspaceClose, workspaceCreate, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { readBacklogDepth, readQueueDepths } from '../queues.ts';
@@ -268,7 +268,7 @@ export const realWatchSources: WatchSources = {
   // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
   typeText: refuseTyping,
   pressEnter: refuseTyping,
-  sendKey: (pane, key, session) => herdrSendKey(pane, key, session),
+  sendKey: refuseTyping,
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   notify,
   now: () => new Date(),

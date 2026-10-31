@@ -3,7 +3,7 @@
 // (Policies rules 10 and 11).
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { type Caller } from '../src/caller.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -925,18 +925,38 @@ describe('team swap now and --run', () => {
     }
   });
 
-  test('no pane messaging, no handover is typed into the old conversation; was: the handover wait runs until the conversation\'s turn ends, not just until its file lands', async () => {
+  test('no pane messaging, a handover a previous attempt wrote is the one the launch reads', async () => {
     place();
     setRule('*=!anthropic');
-    const retired = await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
-    expect((await retired).code).toBe(0);
+    await swap(['queue', 'lead', '--to', 'codex:gpt luna']);
+    const named = queue().lead!.handover!;
+    // The file a previous attempt's conversation wrote: nothing is typed to ask for another.
+    mkdirSync(dirname(named), { recursive: true });
+    writeFileSync(named, '# handover\n\nwhat is left\n');
+    const world = fakeHerdr({ newScreen: CODEX_LUNA_IDLE, doctorVersion: '0.161.0' });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain(`lead: using the handover already at ${named}`);
+    expect(log).toContain(`handover passed from ${named}`);
+    expect(world.did.typed.join('\n')).not.toContain('write a handover');
+    expect(queue()).toEqual({});
   });
 
-  test('no pane messaging, no handover is typed into the old conversation; was: a handover that was never written is not reported as passed', async () => {
+  test('no pane messaging, a handover nothing wrote is not asked for; the launch goes on without one', async () => {
     place();
     setRule('*=!anthropic');
-    const retired = await swap(['queue', 'lead', '--to', 'codex:gpt sol']);
-    expect((await retired).code).toBe(0);
+    await swap(['queue', 'lead', '--to', 'codex:gpt luna']);
+    const named = queue().lead!.handover!;
+    const world = fakeHerdr({ newScreen: CODEX_LUNA_IDLE, doctorVersion: '0.161.0' });
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code, `${ran.err}${ran.out}`).toBe(0);
+    const log = readFileSync(join(root, '.agents', 'team.log'), 'utf8');
+    expect(log).toContain('lead: the handover request was not typed; the launch goes on');
+    expect(log).not.toContain(`lead: using the handover already at ${named}`);
+    expect(log).toContain('fresh conversation; no handover was written');
+    expect(world.did.typed.join('\n')).not.toContain('write a handover');
+    expect(queue()).toEqual({});
   });
 
   test('cancel removes the record and refused a second cancel', async () => {
