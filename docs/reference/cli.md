@@ -443,9 +443,9 @@ Hidden: no
 Usage:
 
     team client keygen --out <dir> [--json]
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --request [--json]
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --approval <id> [--json]
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --request [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --approval <id> [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
 
 ### Who may run it
 
@@ -468,9 +468,9 @@ Hidden: no
 
 Usage:
 
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --request [--json]
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --approval <id> [--json]
-    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --request [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --approval <id> [--json]
+    team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
 
 #### Who may run it
 
@@ -1338,6 +1338,7 @@ Usage:
     team init [--restore] [--from-archive <folder>] [--json]
     team init --request [--then-up] [--json]
     team init --execute <request-id> [--json]
+    team init --general <grant.json> --key <client.key> [--json]
     team init --approve-as-owner-seat <request-id> <oui|always|non> [--signer <name>] [--assertion <file>] [--json]
     team init --approvals [--json]
     team init --revoke-approval <rule-id> [--json]
@@ -1346,7 +1347,7 @@ Usage:
 
 ### Who may run it
 
-`owner-only` — writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`
+`owner-only` — writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it for an entity the grant covers (`team init --general <grant> --key <client.key>`)
 
 ### Flags
 
@@ -1359,8 +1360,10 @@ Usage:
 | `--assertion` | yes | no | no |
 | `--execute` | yes | no | no |
 | `--from-archive` | yes | no | no |
+| `--general` | yes | no | no |
 | `--help` | no | no | no |
 | `--json` | no | no | no |
+| `--key` | yes | no | no |
 | `--request` | no | no | no |
 | `--restore` | no | no | no |
 | `--revoke-approval` | yes | no | no |

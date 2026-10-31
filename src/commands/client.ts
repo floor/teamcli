@@ -11,17 +11,18 @@ import { plainText } from '../launch/plain.ts';
 import { writeJson, writeJsonError } from '../output/index.ts';
 
 export const USAGE = `Usage: team client keygen --out <dir> [--json]
-       team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --request [--json]
-       team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --approval <id> [--json]
-       team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
+       team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --request [--json]
+       team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --approval <id> [--json]
+       team client general-grant --to <client-id> --public-key <client.pub> [--entities <a,b|*>] [--ops <list|all|*>] [--may-issue] [--days <n>] --via <grant.json> --key <client.key> [--json]
 
 keygen writes an Ed25519 client key pair into <dir> (created when absent, mode 700): client.key
 holds the private half 0600 and client.pub holds the public half and the key id. The directory
 must sit under ~/.config/team-client, outside every project, lobby and the OS temp folder.
 key isolation: enforced against team panes (key file still readable by same-user processes).
 
-general-grant issues a general grant: every entity (or the listed ones) and the listed ops
-(config, restart, up, down, abandon, send, messages, reply), applied with no per-action request.
+general-grant issues a general grant: every entity (or the listed ones) and every op (or the listed
+ones: config, restart, up, down, abandon, send, messages, reply, init), applied with no per-action
+request. Without --ops the grant carries the wildcard \`*\`: every op, including ops later releases add.
 The owner issues one through the owner seat (--request, Touch ID); a holder whose grant may issue
 gives another principal a grant within its own (--via, --key): never to itself, never wider.
 

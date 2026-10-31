@@ -10,8 +10,15 @@ import { keyOf, keyState, signDomain, verifyDomain, type Json } from '../store/k
 import { CLIENT_PUBLIC_KEY_PATTERN, publicKeyObject, readClientPrivateKey } from './records.ts';
 
 export const GENERAL_GRANT_DOMAIN = 'team-general-grant-v1';
-export const GENERAL_OPS = ['config', 'restart', 'up', 'down', 'abandon', 'send', 'messages', 'reply'] as const;
+export const GENERAL_OPS = ['config', 'restart', 'up', 'down', 'abandon', 'send', 'messages', 'reply', 'init'] as const;
 export type GeneralOp = (typeof GENERAL_OPS)[number];
+/** Every op, now and later: signed as the literal `*`, so one owner signature covers ops added after it. */
+export const ALL_OPS = '*' as const;
+export type GrantOp = GeneralOp | typeof ALL_OPS;
+/** Whether a signed op list covers `op`. */
+export function opsCover(ops: readonly string[], op: GeneralOp): boolean {
+  return ops.includes(ALL_OPS) || ops.includes(op);
+}
 export const GENERAL_GRANT_ID = /^gg_[0-9a-f]{24}$/;
 const MAX_CHAIN = 4;
 
@@ -21,7 +28,8 @@ export type GeneralGrant = {
   public_key: string;
   /** `['*']` for every entity, or the listed entity slugs. */
   entities: string[];
-  ops: GeneralOp[];
+  /** The listed ops, or `['*']` for every op, including ops added in later releases. */
+  ops: GrantOp[];
   /** Whether the holder may issue a narrower grant to another principal. */
   may_issue: boolean;
   /** The grant this one was issued under, or null when the owner signed it. */
@@ -49,11 +57,13 @@ export function parseEntities(raw: string | undefined): string[] | string {
   for (const e of list) if (!/^[a-z0-9][a-z0-9._-]*$/.test(e)) return `"${e}" is not an entity slug`;
   return [...new Set(list)];
 }
-export function parseOps(raw: string | undefined): GeneralOp[] | string {
-  if (raw === undefined || raw.trim() === 'all') return [...GENERAL_OPS];
+/** Absent, `all` or `*` is every op (the wildcard); a list names ops of GENERAL_OPS only. */
+export function parseOps(raw: string | undefined): GrantOp[] | string {
+  if (raw === undefined || raw.trim() === 'all' || raw.trim() === ALL_OPS) return [ALL_OPS];
   const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (list.length === 0) return '--ops names no op';
   for (const o of list) if (!(GENERAL_OPS as readonly string[]).includes(o)) return `"${o}" is not a general-grant op (${GENERAL_OPS.join(', ')})`;
-  return [...new Set(list)] as GeneralOp[];
+  return [...new Set(list)] as GrantOp[];
 }
 
 /** Whether `child` stays within `parent`: entities, ops, expiry, issuing. */
@@ -62,7 +72,10 @@ export function withinScope(child: Pick<GeneralGrant, 'entities' | 'ops' | 'expi
     if (child.entities.includes('*')) return 'the child names every entity; the parent does not cover every entity';
     for (const e of child.entities) if (!parent.entities.includes(e)) return `entity "${e}" is outside the parent grant`;
   }
-  for (const o of child.ops) if (!parent.ops.includes(o)) return `op "${o}" is outside the parent grant`;
+  if (!parent.ops.includes(ALL_OPS)) {
+    if (child.ops.includes(ALL_OPS)) return 'the child names every op; the parent does not cover every op';
+    for (const o of child.ops) if (!parent.ops.includes(o)) return `op "${o}" is outside the parent grant`;
+  }
   if (Date.parse(child.expires) > Date.parse(parent.expires)) return 'the child would outlive the parent grant';
   if (child.may_issue && !parent.may_issue) return 'the parent grant may not issue grants that issue';
   return null;
@@ -80,7 +93,7 @@ function publish(home: string, g: GeneralGrant, signature: string): R<{ path: st
   }
 }
 
-export type IssueInput = { clientId: string; publicKey: string; entities: string[]; ops: GeneralOp[]; mayIssue: boolean; expires: Date };
+export type IssueInput = { clientId: string; publicKey: string; entities: string[]; ops: GrantOp[]; mayIssue: boolean; expires: Date };
 
 function fresh(input: IssueInput, parent: string | null, now: Date): GeneralGrant | string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(input.clientId)) return `"${input.clientId}" is not a client id`;
@@ -171,7 +184,7 @@ export function admitGeneral(home: string, grantPath: string, keyPath: string, o
   const held = readClientPrivateKey(home, keyPath);
   if (!held.ok) return held;
   if (held.publicKey !== read.grant.public_key) return { ok: false, why: `the key does not match general grant ${read.grant.grant_id}` };
-  if (!read.grant.ops.includes(op)) return { ok: false, why: `general grant ${read.grant.grant_id} does not cover ${op}` };
+  if (!opsCover(read.grant.ops, op)) return { ok: false, why: `general grant ${read.grant.grant_id} does not cover ${op}` };
   if (!read.grant.entities.includes('*')) {
     if (entity === null) return { ok: false, why: 'this team belongs to no entity; the grant covers listed entities only' };
     if (!read.grant.entities.includes(entity)) return { ok: false, why: `general grant ${read.grant.grant_id} does not cover entity "${entity}"` };

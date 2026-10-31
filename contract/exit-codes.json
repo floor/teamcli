@@ -2272,6 +2272,13 @@
     {
       "code": 1,
       "command": "init",
+      "id": "init.general-refused",
+      "meaning": "the general grant does not admit this create; nothing was written",
+      "trigger": "team init --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "init",
       "id": "init.git-silent",
       "meaning": "git doesn't answer for this folder",
       "trigger": "team init"

@@ -1794,6 +1794,7 @@ async function initial(
 
 scene('init.invocation', async (place) => show(await initial(place, ['extra']), 'unexpected'));
 scene('init.not-owner', async (place) => show(await initial(place, [], other), 'only the owner'));
+scene('init.general-refused', async (place) => show(await initial(place, ['--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], detachedCaller), 'cannot be read as a general grant'));
 scene('init.not-a-repo', async (place) => show(await initial(place, []), 'not inside a git repository'), false);
 scene('init.tracked', async (place) => {
   write(place, TEAM);
