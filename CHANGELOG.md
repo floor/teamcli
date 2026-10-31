@@ -148,9 +148,11 @@ unchanged.
 - **A Codex seat's managed endpoint keeps its inbox server and its permissions.** A TUI attached
   by remote loads the app-server's `-c` pairs, so the seat keeps its team inbox server, and the
   endpoint carries its approval policy and sandbox mode. Measured on codex-cli 0.161.0: a
-  resume line that carries permission overrides starts a fresh thread when attached — its
-  `resume <id>` words go and its overrides stay — while a resume line without them keeps its
-  thread, and the launch says which.
+  resume line's permission overrides are carried by the endpoint, so an attached resume keeps
+  its recorded thread, and a fresh line is unchanged.
+- **A restarted Codex seat on its managed endpoint resumes the recorded conversation.** The
+  seat's permissions are carried by the endpoint, so the restart keeps the thread instead of
+  starting a fresh one.
 - **A list inside a seat no longer ends the seat** when the team file is read.
 - **The registry's session is kept when the config omits it**, and wording names the registry
   config when no team file is read.
