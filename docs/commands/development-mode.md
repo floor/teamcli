@@ -11,7 +11,7 @@ declaration governs, can lift; `off` beats them; and of the three machine modes,
 
 | Mode | What it does |
 | --- | --- |
-| `local-fast` | lifts the caller gates of nine operations, the team file's approval precondition, named owner-only gates for a placed orchestrator, and the designated installer's |
+| `local-fast` | lifts the caller gates of nine operations, the team file's approval precondition, named owner-only gates for a placed orchestrator, the designated installer's approval, and one untested Antigravity release in `team reload` |
 | `pr-per-change` | keeps the process half and lifts no gate at all |
 | `off` | lifts nothing, and beats every legacy source |
 
@@ -39,7 +39,7 @@ switch is the repair.
 
 ## What dev mode lifts
 
-With dev mode on, four kinds of gate move, and nothing else.
+With dev mode on, five lifts follow.
 
 **The caller gates of nine operations.** The caller gate of `up`, `down`, `remove` of an ordinary
 seat, `register`, `add`, `restart`, `init`, `reload` and `rename` folds. The run prints
@@ -82,6 +82,14 @@ the level appended as above, and the log records the seat as admitted as `instal
 approval of the designation moves: the declared seat, its recorded pane and the exact
 `installer:` name stay checks.
 
+**One untested release in `team reload`.** Before it closes anything, `team reload` reads the
+CLI's printed version against its profile's tested range and refuses `reload.untested` outside
+it. With dev mode on, one release is admitted: Antigravity's `agy` `1.4.3`, the release after the
+profile's tested `1.2.16` to `1.4.2`, closes and relaunches anyway, with `team reload: warning:
+<the reading>; dev mode continues` on stderr and the level appended as above. The profile's
+tested range never widens; every other CLI and version, and every run with dev mode off, keeps
+the refusal.
+
 Each admitted run prints the same warning, and the log names the role it proved.
 
 ## What it never lifts
@@ -102,8 +110,8 @@ Each admitted run prints the same warning, and the log names the role it proved.
   seat's behalf anyway.
 - **The switch itself.** `set` stays the owner's, or the matching owner-authorization token's; no
   mode turns dev mode on or off by itself.
-- **Every gate not listed above.** The list is the whole of the widening: a gate that does not
-  ask the admission keeps its refusal.
+- **Every gate this page does not list.** A gate the page leaves out keeps its refusal: what this
+  page lists is the whole of the widening it records.
 
 ## Synopsis
 
