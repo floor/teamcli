@@ -148,6 +148,15 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   through its event adapter`, `woken through its runtime queue`, `queued; <seat> reads it at
   its next turn (pull-only)`, or `queued; <seat> has no way to be woken while idle`. A
   delivered line carries none: the delivery itself is the answer.
+- **`team check` names a Claude Code seat whose sends skip its socket.** A live seat whose
+  profile promises a push delivery but whose send would take the drop folder instead — its
+  launch declares inbound accept but the team file lacks the required consent, its box held the
+  last frame, or its socket is older than the declaration that accepts it — is one difference,
+  with the command that repairs it: `team config set seats.<seat>.inbound accept` for the
+  missing consent, `team restart <seat>` for the other two. A seat with no socket at all gets one
+  note naming its delivery class, and the exit does not change; a declared delivery order that
+  names neither the socket nor the `typed` wake word is a choice, not a finding, and neither is an
+  explicit opt-out.
 
 ### Changed
 
