@@ -16,7 +16,14 @@ import type { PaneProcesses } from '../src/herdr.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { CLAUDE_IDLE, testIo } from './helpers.ts';
 
-const EXAMPLE = readFileSync(join(import.meta.dir, 'fixtures/example.yaml'), 'utf8').replace('parked: true', 'stopped: true');
+// The synthetic roster names the model shown by the shared idle capture for every fake CLI.
+const EXAMPLE = readFileSync(join(import.meta.dir, 'fixtures/example.yaml'), 'utf8')
+  .replace('parked: true', 'stopped: true')
+  .replace('vendor: deepseek', 'vendor: anthropic')
+  .replace('model: DeepSeek Flash', 'model: Claude Opus')
+  .replace('version: "V4.1"', 'version: "5.5"')
+  .replace('display: DeepSeek V4.1 Flash', 'display: Claude Opus 5.5')
+  .replace('launch: team-deepseek', 'launch: claude --model claude-opus-5-5');
 const FILE = ['--file', '.agents/team.yaml'];
 const NOW = new Date('2026-10-03T14:02:00Z');
 const SESSION = 'acme-web';
@@ -98,11 +105,11 @@ function world(): World {
     sessionUp: () => state.session === 'running',
     createWorkspace(_session, _cwd, label) {
       n += 1;
-      const pane = `w${String(n)}:p1`;
-      panes.set(pane, { text: CLAUDE_IDLE, agent: false, workspace: `w${String(n)}` });
-      spaces.set(`w${String(n)}`, label);
+      const pane = `fixture${String(n)}:p1`;
+      panes.set(pane, { text: CLAUDE_IDLE, agent: false, workspace: `fixture${String(n)}` });
+      spaces.set(`fixture${String(n)}`, label);
       state.creates.push(label);
-      return { pane, workspace: `w${String(n)}` };
+      return { pane, workspace: `fixture${String(n)}` };
     },
     paneRun(_session, pane) {
       const known = panes.get(pane);
@@ -157,9 +164,9 @@ function sources(extra: Partial<UpSources>, made: World): UpSources {
 const statePath = () => join(root, '.agents/team.state.json');
 
 const alive = () => [
-  agent('claude-coordinator-acme', 'w1:p1'),
-  agent('deepseek-acme', 'w2:p1'),
-  agent('deepseek-acme-2', 'w3:p1'),
+  agent('claude-coordinator-acme', 'fixture1:p1'),
+  agent('deepseek-acme', 'fixture2:p1'),
+  agent('deepseek-acme-2', 'fixture3:p1'),
 ];
 
 /** An approved first run, which plans and starts the pane watch in its own workspace. */
