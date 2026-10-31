@@ -4,10 +4,12 @@
 // its banner — is the seat's model. A bare Claude Code launch keeps the screen reading, where the
 // Claude family is the contradiction the declared model needs. Every pane here is synthetic.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
+import { runTeamCheck } from '../src/check/team.ts';
 import { runSend } from '../src/commands/send.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -16,7 +18,7 @@ import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import type { Standing } from '../src/store/store.ts';
+import { approvalStanding, type Standing } from '../src/store/store.ts';
 import { recordBody, testIo, type TestIo } from './helpers.ts';
 import { dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
@@ -288,5 +290,127 @@ describe('team send behind a provider wrapper', () => {
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
     expect(io.err).not.toContain('model drift');
     expectDrop(made);
+  });
+
+  // The CLI itself reached by a path, through env, or quoted is still the CLI: there is no
+  // provider wrapper in the line, so the family its screen prints is the contradiction the
+  // signed model needs.
+  test('a CLI launched by a path, through env, or quoted is not a wrapper', async () => {
+    for (const launch of ['env claude', '/opt/fixture/bin/claude', '"claude"']) {
+      const made = world(['typed']);
+      registerLead(made, { model: 'DeepSeek Flash', version: 'V4.1', launch });
+      const { host } = sendHost(made, claudeScreen('Opus 4.6'));
+      const io = owner(made.root);
+
+      expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+      expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs Claude Opus 4.6');
+      made.cleanup();
+    }
+  });
+
+  // The id on the banner names the signed model even where the declaration keeps the family's
+  // number in the model name, and even with a suffix word after the version.
+  test('a banner id whose family number is in the model name matches its declaration', async () => {
+    const made = world(['typed']);
+    cleanup = made.cleanup;
+    registerLead(made, { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' });
+    const { host } = sendHost(made, claudeScreen('Opus 4.6') + banner('glm-5.3'));
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.err).not.toContain('model drift');
+    expectDrop(made);
+  });
+
+  test('a banner id with a suffix after the version names the declared model', async () => {
+    const made = world(['typed']);
+    cleanup = made.cleanup;
+    registerLead(made, { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' });
+    const { host } = sendHost(made, claudeScreen('Opus 4.6') + banner('deepseek-v4.1-flash'));
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.err).not.toContain('model drift');
+    expectDrop(made);
+  });
+});
+
+// `team check` reads a running pane against the record that signs it. The wrapper evidence is the
+// launch the record was made from, not the line the team file happens to carry now: the recorded
+// launch is what the running process was started with.
+describe('team check behind a provider wrapper', () => {
+  let base: string;
+  let root: string;
+  let home: string;
+  let live: Live;
+
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'team-wrapper-check-')));
+    root = join(base, 'glow');
+    home = join(base, 'home');
+    mkdirSync(join(root, '.agents'), { recursive: true });
+    mkdirSync(home);
+    execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+    writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
+    updateState(join(root, '.agents'), (state) => {
+      state.sessions.glow = {
+        ...emptySession(),
+        watch: { pid: 1, heartbeat: '2026-10-31T08:59:00Z' },
+        seats: { 'ds-seat': { stage: 'ready', pane: DS_PANE, workspace: 'fixture-ws-ds' } },
+      };
+    });
+    live = liveWith({
+      [LEAD_PANE]: claudeScreen('Opus 5.5'),
+      [GLM_PANE]: claudeScreen('Opus 5.5'),
+      [DS_PANE]: claudeScreen('Opus 4.6'),
+    });
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  /** The record the launch would have written: the signed model, and the launch line it ran. */
+  function recordDs(launch: string): void {
+    registerAgent(home, {
+      name: 'ds-seat',
+      signing: { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' },
+      lab: 'deepseek',
+      cli: 'claude-code',
+      launcher: null,
+      launch,
+      reach: { team: teamIdOf(root), seat: 'ds-seat', session: 'glow', pane: DS_PANE, address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'the test',
+    });
+  }
+
+  /** The check over one team file. */
+  function checkOn(fileText: string) {
+    writeFileSync(join(root, '.agents', 'team.yaml'), fileText);
+    const io = testIo(root, { kind: 'owner' });
+    const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+      live: () => live,
+      branch: () => 'main',
+      standing: (at) => approvalStanding(at, home),
+      now: () => STATUS_NOW,
+      home,
+    });
+    return { code, out: io.out, err: io.err };
+  }
+
+  test('the recorded wrapper launch speaks for the pane, not the file line', async () => {
+    recordDs('claude-deepseek.sh');
+    const { out } = checkOn(TEAM.replace('    launch: claude-deepseek.sh', '    launch: claude'));
+    // The record ran a provider wrapper; the family on the pane is the CLI's own default, never
+    // a drift from the signed declaration.
+    expect(out).not.toContain('signs as');
+  });
+
+  test('a recorded bare launch is compared even when the file names a wrapper', async () => {
+    recordDs('claude');
+    const { out } = checkOn(TEAM);
+    // The record ran the CLI itself, so the Claude family the pane prints contradicts the
+    // foreign model the record signs, whatever line the file carries now.
+    expect(out).toContain('signs as DeepSeek V4.1 Flash, runs Claude Opus 4.6');
   });
 });
