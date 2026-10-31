@@ -3,11 +3,12 @@
 // repair is an outcome this build can actually reach. Display only: the gate's own list is
 // unchanged. Every scene keeps its registry under its own temp home; the real one is never read.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalDifferences, approvalOf } from '../src/approve/approval.ts';
 import { runConfig } from '../src/commands/config.ts';
+import { runMigrate } from '../src/commands/migrate.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { approvalStanding, storePath, writeApproval } from '../src/store/store.ts';
 import { testIo } from './helpers.ts';
@@ -58,6 +59,8 @@ workspace:
   mode: shared
 ` + SEATS;
 const MOVED_APPROVED = MOVED.replace('entity: acme\n', 'entity: acme\nsession: acme\n');
+// The same team, one owner section further on than the copy the approval holds.
+const MOVED_FURTHER = MOVED.replace('seats:\n', 'limits:\n  temporary: 1\nseats:\n');
 
 const made: string[] = [];
 afterEach(() => {
@@ -83,6 +86,39 @@ function placeApproved(approved: string, current: string): Place {
 }
 function place(text: string): Place {
   return placeApproved(text, text);
+}
+/** A team file on disk and no registry record yet: `team migrate` writes the registry itself. */
+function migratePlace(approved: string, current: string = approved): Place {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-approval-stale-report-')));
+  made.push(base);
+  const home = join(base, 'home');
+  const root = join(base, 'acme');
+  mkdirSync(home, { recursive: true });
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  writeFileSync(join(root, '.agents', 'team.yaml'), current);
+  const checked = validateTeamFile(approved);
+  if (!checked.ok) throw new Error(JSON.stringify(checked.errors));
+  writeApproval(storePath('acme', root, home), { approval: approvalOf(checked.team, root, NOW), file: approved }, checked.team.seats, home, NOW);
+  return { home, root };
+}
+/** The next `now()` call tampers with the stored signature: a bad signature over an unchanged copy. */
+function tamperAfterReading(at: Place): () => Date {
+  let tampered = false;
+  return () => {
+    if (!tampered) {
+      tampered = true;
+      const file = join(storePath('acme', at.root, at.home), 'approval.json');
+      const record = JSON.parse(readFileSync(file, 'utf8')) as { signature?: string };
+      record.signature = '00';
+      writeFileSync(file, JSON.stringify(record));
+    }
+    return NOW;
+  };
+}
+async function migrate(at: Place, argv: string[], now: () => Date) {
+  const io = testIo(at.root, { kind: 'owner' });
+  const code = await runMigrate(argv, io, { home: at.home, now });
+  return { code, out: io.out, err: io.err };
 }
 
 async function config(at: Place, argv: string[]) {
@@ -190,4 +226,40 @@ test('the JSON report carries the same session line without the removed re-appro
   expect(session).toHaveLength(1);
   expect(session[0]).toContain('set `session: acme` to keep the old one');
   expect(session[0]).not.toContain('approve the file again');
+});
+
+// After a migration the approval may stop verifying because its signature was disturbed, with
+// the team record untouched. The line names the signature; it does not call the record older.
+test('a signature that does not verify is named as that, not as an older record', async () => {
+  const at = migratePlace(MOVED);
+  const ran = await migrate(at, ['--keep-file'], tamperAfterReading(at));
+  expect(ran.code, ran.err).toBe(0);
+  expect(ran.out).toContain('migration completed; the team record is unchanged, and the stored approval no longer verifies (the record does not carry a valid signature');
+  expect(ran.out).toContain('this version has no command to refresh that snapshot');
+  expect(ran.out).not.toContain('describes an earlier team record');
+});
+
+// When the record really moved on from the approved copy, the line says so — beside the reason
+// the approval no longer verifies, never instead of it.
+test('a record that really differs is called an earlier record', async () => {
+  const at = migratePlace(MOVED, MOVED_FURTHER);
+  const ran = await migrate(at, ['--keep-file'], tamperAfterReading(at));
+  expect(ran.code, ran.err).toBe(0);
+  expect(ran.out).toContain('migration completed; the stored approval describes an earlier team record and no longer verifies');
+  expect(ran.out).toContain('this version has no command to refresh that snapshot');
+});
+
+// The second migrate finds the registry already holds the team: nothing was applied, and the
+// line does not say a change was.
+test('an unchanged migrate does not claim a change was applied', async () => {
+  const at = migratePlace(MOVED);
+  const first = await migrate(at, ['--keep-file'], () => NOW);
+  expect(first.code, first.err).toBe(0);
+  unlinkSync(join(at.root, '.agents', 'team.yaml'));
+  const again = await migrate(at, ['--keep-file'], tamperAfterReading(at));
+  expect(again.code, again.err).toBe(0);
+  expect(again.out).toContain('the registry already holds this team; nothing to import');
+  expect(again.out).toContain('migration completed; the team record is unchanged, and the stored approval no longer verifies');
+  expect(again.out).not.toContain('the change was applied');
+  expect(again.out).not.toContain('describes an earlier team record');
 });

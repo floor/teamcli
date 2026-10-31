@@ -92,9 +92,10 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   // record, signed once at setup, never a copy of the live file.
   { literal: /^(?:approval-mode|approval-modes|--approval-mode needs --scope <folder>)$/, why: "init's approval-mode flags and their invocation refusal" },
   { literal: /^team init: approval mode(?:s$| for team-create is )/, why: "init's owner-signed approval mode for team-create, not an approval copy" },
-  // `team migrate` reports the approval's standing across the move: the signed record's standing,
-  // never a copy of the live file.
-  { literal: /^the approval (?:is still in force: it is signed over the canonical record|no longer verifies \(\$\{after\}\); the change was applied, and the stored team approval still describes an earlier record; this version has no command to refresh that snapshot)\\n$/, why: "migrate's line on the approval standing across the move" },
+  // `team migrate` reports the approval's standing across the move: the signed record's standing
+  // beside what the registry's record still proves, never a copy of the live file.
+  { literal: /^the approval is still in force: it is signed over the canonical record\\n$/, why: "migrate's line when the approval keeps verifying across the move" },
+  { literal: /^migration completed; (?:the team record is unchanged, and the stored approval \$\{state\}|the stored approval describes an earlier team record and \$\{state\}|the stored approval \$\{state\}); \$\{repair\}\\n$/, why: "migrate's line on an approval that stopped verifying across the move" },
 ];
 
 function sources(dir: string): string[] {
