@@ -18,9 +18,9 @@ Every row was measured on this machine on 2026-10-18 with the binary's own `--ve
 | gemini | 0.64.0 | `gemini mcp add -s project team-inbox ...` | `.gemini/settings.json` | `-s, --scope <user\|project> (default: "project")` |
 | cursor | 2026.10.16-e3cb207 | team merges the entry into `.cursor/mcp.json`; the launch line adds `--approve-mcps` | `.cursor/mcp.json` | `mcp login <identifier>` names ".cursor/mcp.json"; `--approve-mcps` "Automatically approve all MCP servers" |
 | grok | 1.0.60 | `grok mcp add -s project team-inbox ...` | `.grok/config.toml` | `-s, --scope <user\|project>`; "project (./.grok/config.toml)" |
-| antigravity/agy | 1.4.2 | none — drop and typed legs | nothing | `agy mcp add` has no scope flag and no per-run config route |
-| muse | 1.4.10 | none — drop and typed legs | nothing | `muse init` scaffolds `AGENTS.md`; no workspace settings route in `--help` |
-| jules | no MCP in `--help` | none — drop and typed legs | nothing | none |
+| antigravity/agy | 1.4.2 | none — the drop leg | nothing | `agy mcp add` has no scope flag and no per-run config route |
+| muse | 1.4.10 | none — the drop leg | nothing | `muse init` scaffolds `AGENTS.md`; no workspace settings route in `--help` |
+| jules | no MCP in `--help` | none — the drop leg | nothing | none |
 
 A route the launch line carries writes no file. A route that is a file is written in the seat's
 own folder, before the launch command runs, so the client starts with the server in place. The
@@ -51,7 +51,7 @@ ignore is refused, and nothing is written — including a file force-added to th
 `.gitignore` names its directory, which `git check-ignore` reports as not ignored. A repository
 with no work tree is refused the same way.
 
-A refused registration leaves the seat on its drop and typed legs and the seat's line carries the
+A refused registration leaves the seat on its drop leg and the seat's line carries the
 reason, prefixed `the team inbox was not registered: ` — for example `its project does not ignore
 .cursor/mcp.json`, `` `gemini mcp add` exited 1 ``, or `.gemini/settings.json was not written`.
 The seat still launches.
@@ -64,24 +64,31 @@ Every wait on the leg is bounded.
 | --- | --- | --- |
 | listen-or-skip | the `.inbox-listener` marker names a live pid | no live server is a definite failure; the walk moves on and records `mcp-inbox: no live inbox listener` |
 | `INBOX_GRACE_MS` | 2000 ms | how long `team send` waits for a receipt after writing the drop |
-| `INBOX_FALLBACK_MS` | 10 minutes | how long the watch leaves an unread inbox drop to the seat's own client before typing the drop's trigger |
-| `PENDING_MAX_TRIES` | 3 | typed retries once the fall-through starts |
+| `INBOX_FALLBACK_MS` | 10 minutes | how long the watch leaves an unread inbox drop to the seat's own client before its first fall-back pass; the retry types nothing, and the marker runs to `PENDING_MAX_AGE_MS` |
+| `PENDING_MAX_TRIES` | 3 | typed retries once the fall-through starts — never spent in a build that types nothing into a seat |
 | `PENDING_MAX_AGE_MS` | 30 minutes | the marker's whole life, from the send |
 | `CHANNEL_TICK_MS` | 250 ms | how often a serving inbox looks for a record it has not pushed yet |
 | `CHANNEL_PUSH_GRACE_MS` | 2000 ms | how long `team send` waits for the server's push marker after writing the record |
 | `CHANNEL_CONFIRM_MS` | 3 minutes | how long a push waits for its signed read receipt before the one redelivery |
 
-A send with no receipt in the grace prints `sent (unconfirmed)`, keeps the drop and the marker,
-and ends the walk there: the message is safe, and the seat's client may still read it. The watch
-promotes a receipt to one `delivered (read)` history line and clears the marker, typing nothing.
-After `INBOX_FALLBACK_MS` with no receipt the watch's retry pass types the drop's existing
-trigger, records `mcp-inbox: no receipt within 10m` in the history line's `failed`, and the typed
-leg's own verification decides the outcome. The same folder serves the `drop` leg, whose marker
+A send with no receipt in the grace prints `sent (unconfirmed)` with the receiving seat's
+delivery class appended — `queued; <seat> reads it at its next turn (pull-only)`, `queued;
+<seat> has no way to be woken while idle`, `woken through its event adapter` or `woken through
+its runtime queue` — keeps the drop and the marker, and ends the walk there: the message is
+safe, and the seat's client may still read it. The watch promotes a receipt to one `delivered
+(read)` history line and clears the marker, typing nothing. Past `INBOX_FALLBACK_MS` the watch's
+retry pass looks at the marker again, but the retry types nothing in this build
+(`src/send/no-pane-messaging.ts`): it can promote a receipt that has arrived and deliver nothing
+else. A marker addressed to a human seat is given up on the next pass with `the pane is a
+human's, and nothing is typed into it`; one on a seat back at its shell with `the seat is back at
+its shell; nothing was typed`; otherwise the marker runs to `PENDING_MAX_AGE_MS`, where it is
+given up as `the retry window passed`. A receipt that arrives before that bound is still
+`delivered (read)`, and one the retry itself promotes carries `mcp-inbox: no receipt within 10m`
+as the history line's `failed` note. The same folder serves the `drop` leg, whose marker
 says `leg: drop`: nothing ever types it — the seat's turn-start `team drops --read` writes the
 same receipt — and past `PENDING_MAX_AGE_MS` with no receipt the watch gives up on the marker
-with the drop file's path. The retry obeys the existing pane rules: a dialog, a
-draft that is not the trigger, an unreadable status or a human's own pane is never typed into,
-and a drop that runs out of bounds is reported with its path rather than lost.
+with `no receipt within 30m` and the drop file's path. Nothing is typed into a pane on any of
+these paths, and a drop that runs out of bounds is reported with its path rather than lost.
 
 `team feed` shows one row per message: a later line for the same id — receipt, fall-back or taken
 report — replaces the earlier outcome, and a `--follow` pass prints the update when it arrives.
@@ -129,11 +136,13 @@ marker; the marker present ends the walk as `sent (channel)` with the pending ma
 <n> ms` in the history line's `failed`, and continues the walk to the next leg — the inbox server
 still reads the record it holds. The watch promotes a signed receipt to one `delivered (read)`
 line and types nothing; no receipt after `CHANNEL_CONFIRM_MS` is the one case it redelivers. It
-redelivers exactly once, through the next leg — a socket frame when the seat's socket is eligible,
-else the typed trigger — and stamps the marker and the history line with `redelivered: channel
+redelivers exactly once, through the next leg — a socket frame when the seat's socket is
+eligible; a socket the gate refuses goes to the ordinary retry, which asks for the trigger and
+types nothing in this build, so the message waits in the inbox and the marker is given up at
+`PENDING_MAX_AGE_MS` — and stamps the marker and the history line with `redelivered: channel
 unconfirmed` before the attempt, so no later pass selects it again. A receipt that arrives after
 the redelivery settles the message as `delivered (read)`; an acknowledged record is never touched
-again, and no seat whose receipt exists is typed into.
+again, and no seat whose receipt exists is woken again.
 
 The evidence rule above still holds: the push marker is not a read, and only the signed receipt at
 `<id>.read.json` makes a channel delivery `delivered (read)`.
@@ -164,7 +173,7 @@ build protects the seat itself by holding the push name whenever its walk wakes 
 
 A sender that falls back from a stale channel listener has a second hazard: the old server still
 watches the folder and would push the record after the sender's own wake. Before it writes the
-record, when its walk holds a leg that wakes the seat (socket, native or typed), the sender
+record, when its walk holds a leg that wakes the seat (socket or native), the sender
 writes a marker at the push marker's own name, `<id>.channel-push.json` — `{v, kind:
 "channel-held", id, at, reason}`. Every marker-aware serving server treats a marker for the id
 as a push already made and skips it; a build older than the marker rule cannot honor it, which is
@@ -172,8 +181,9 @@ the case the reload rule above exists for. The marker is not a push: the sender'
 only the server's `channel-push` marker as delivery, and a wait that finds the held marker alone
 has delivered nothing.
 
-The watch's retry reserves the same name before its first wake leg — the socket frame or the
-typed trigger — and again before its typed line. It does not ask whether the listener is stale:
+The watch's retry reserves the same name before its wake attempt — the socket frame — and
+`retryOne` reserves again before the trigger it asks for, which this build refuses. It does not
+ask whether the listener is stale:
 an install, or a listener, can change between any check and the wake, so the name is held before
 the wake rather than after a verdict that could be stale by the time the wake lands. The one
 listener fact it reads is whether a channel-declaring server is running at all: a seat whose
@@ -192,8 +202,8 @@ stays in the inbox and `inbox_check`/`inbox_read` still serve it, so holding the
 withholds the message.
 
 The hold is permanent for the id, and nothing removes it. If the wake it precedes is never taken
-— the typed line is not submitted and the retry gives up after `PENDING_MAX_TRIES`, a socket frame
-is refused and the pane never frees, or the pass cannot type at all — the name stays held, and no
+— the retry types nothing in this build, a socket frame is refused and the pane never frees, or
+the pass cannot wake at all — the name stays held, and no
 marker-aware server pushes this record afterwards, including a tick a still-running server has yet
 to make. Delivery then falls to the seat's own read: its turn-start drop read, `team messages`, or
 `inbox_check`/`inbox_read`. That is the price of holding before the wake; removing the marker
