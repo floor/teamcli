@@ -20,7 +20,7 @@ import { testIo } from '../helpers.ts';
 const NOW = new Date('2026-10-31T09:00:00.000Z');
 const owner: Caller = { kind: 'owner' };
 const detached: Caller = { kind: 'owner-no-tty' };
-const seatCaller: Caller = { kind: 'seat', name: 'worker', pane: 'w1:p1', session: 'acme' };
+const seatCaller: Caller = { kind: 'seat', name: 'worker', pane: 'pane-worker', session: 'acme' };
 
 const TEAM = `format: 1
 project: acme
@@ -95,7 +95,7 @@ function record(home: string, team: string, seat: string, lifecycle: AgentLifecy
     cli: 'claude-code',
     launcher: null,
     launch: 'claude --model claude-opus-5-5',
-    reach: { team, seat, session: 'acme', pane: `w1:${seat}`, address: null },
+    reach: { team, seat, session: 'acme', pane: `pane-${seat}`, address: null },
     mcp: [],
     skills: [],
     lifecycle,
