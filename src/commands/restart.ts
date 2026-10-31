@@ -77,7 +77,7 @@ import { dropMessage } from '../send/native.ts';
 import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
-import { recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
+import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -511,6 +511,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         team.project,
         session,
         notes,
+        performed.pullOnly,
       );
     default: {
       // Every result the launch sequence returns is handled above. This arm is the contract the
@@ -608,6 +609,9 @@ export type PerformResult =
       /** The handover file the launch was actually given. Absent when the bounded wait ended
        *  without one, so a caller never reports a handover that was only asked for. */
       handover?: string;
+      /** Why the registry holds no record binding this seat, when it does not: the seat runs,
+       *  but native delivery cannot resolve it and only pull reaches it. */
+      pullOnly?: string;
     };
 
 export async function performRestart(input: PerformInput): Promise<PerformResult> {
@@ -1115,12 +1119,24 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         logLine(dir, input.command, who, said, sources.now());
       }
     }
+    // The state this run wrote is ready; the registry write that binds the seat to it may not
+    // have landed. The record is read back as the native route resolves it, and a seat with
+    // none — or one the checks refuse — is reached by pull alone. The result says so rather
+    // than calling a restart done whose record was never written.
+    const record = recordedSeatRecord({
+      home,
+      root,
+      herdrSession: session,
+      seat: launching,
+      state: afterwards,
+    });
     return {
       kind: 'ready',
       oldPane,
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
+      ...(record.kind === 'bound' ? {} : { pullOnly: record.why }),
     };
   } finally {
     runLock.release();
@@ -2050,9 +2066,10 @@ function readyExit(
   project: string,
   session: string,
   notes: readonly string[],
+  pullOnly?: string,
 ): number {
   logLine(dir, 'restart', who, `restarted ${name}; pane ${fromPane} -> ${toPane}`, now);
-  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}`;
+  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}${pullOnly === undefined ? '' : `; pull-only: ${plainLine(pullOnly)}`}`;
   if (json) {
     writeJson(out, 'team.restart', {
       format: 1 as const,
@@ -2064,6 +2081,7 @@ function readyExit(
       seat: name,
       pane: toPane,
       notes,
+      ...(pullOnly === undefined ? {} : { pull_only: pullOnly }),
     });
   } else {
     out.stdout(`${summary}\n`);

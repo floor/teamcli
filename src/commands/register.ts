@@ -45,6 +45,7 @@ import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
 import { readAgents } from '../registry/agents.ts';
+import { recordedSeatRecord } from '../registry/resume.ts';
 import { registerLaunch } from '../registry/sync.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -685,6 +686,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     const unlisted = roster.kind !== 'listed' || !roster.roster.some((line) => line.seat === name);
     let refreshed = false;
     let wroteRoster = false;
+    // Why the registry holds no record binding this seat, when it does not: the seat stands, but
+    // native delivery cannot resolve it and only pull reaches it.
+    let pullOnly: string | null = null;
     if (!dry) {
       const refreshedAt = sources.now();
       // The launch's own record, completed where this version reads a gap a launch that predates
@@ -744,6 +748,17 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${seatId} — pane ${pane}`, refreshedAt);
         if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
       }
+      // The record the native route resolves the seat by, read back where it now stands. A write
+      // that failed, or a record the checks refuse, leaves the seat reachable only by pull; the
+      // run's own result says so rather than reporting the refresh as done.
+      const record = recordedSeatRecord({
+        home: sources.home,
+        root,
+        herdrSession: session,
+        seat,
+        state: readState(dir).sessions[session]?.seats[name],
+      });
+      if (record.kind !== 'bound') pullOnly = record.why;
       // The general seat brief, through the one boundary every attribution path calls. This run
       // attributed no seat — the record was already here — so the boundary writes a fresh
       // lifetime for nobody; it delivers where a live seat's claim is missing or another build's,
@@ -779,13 +794,14 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       }
     }
     const ended = `already registered — pane ${plainLine(pane)}`;
+    const pull = pullOnly === null ? '' : `; pull-only: ${plainLine(pullOnly)}`;
     const line = wroteRoster
-      ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written`
+      ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written${pull}`
       : unlisted && dry
-        ? `${plainLine(name)}: ${ended}; the team registry's roster would be written`
+        ? `${plainLine(name)}: ${ended}; the team registry's roster would be written${pull}`
         : dry || refreshed
-          ? `${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched`
-          : `${plainLine(name)}: ${ended}; nothing was written`;
+          ? `${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched${pull}`
+          : `${plainLine(name)}: ${ended}; nothing was written${pull}`;
     if (json) {
       if (dry) {
         // A dry run's document is its plan whatever the real run would find, the already path
@@ -816,6 +832,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           seat: name,
           pane,
           notes: jsonNotes,
+          ...(pullOnly === null ? {} : { pull_only: pullOnly }),
         });
       }
     } else {

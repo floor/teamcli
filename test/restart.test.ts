@@ -450,6 +450,41 @@ describe('team restart <seat>', () => {
     expect(log).toContain('restart [owner] restarted worker; pane pane-old -> pane-new\n');
   });
 
+  // The launch wrote the state and the registry write that binds the seat to it failed. The seat
+  // is ready but reachable only by pull, and the result says so instead of reporting a restart
+  // whose native delivery was never written.
+  test('a ready restart says pull-only when the final binding could not be written', async () => {
+    function blocked(): { fixture: Fixture; io: ReturnType<typeof testIo> } {
+      const fixture = makeFixture();
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old', id: 'seat_0123456789ab' };
+      });
+      // The registry folder this run would write the agent record into is a file.
+      mkdirSync(join(fixture.home, '.config', 'team'), { recursive: true });
+      writeFileSync(join(fixture.home, '.config', 'team', 'agents'), 'synthetic blocked registry');
+      return { fixture, io: testIo(fixture.root, { kind: 'owner' }) };
+    }
+
+    const plain = blocked();
+    expect(await runRestart(['worker'], plain.io, makeHarness(plain.fixture).sources)).toBe(0);
+    expect(plain.io.err).toBe('');
+    expect(plain.io.out).toContain('team restart: restarted worker; pane pane-old -> pane-new; pull-only: no agent record for this seat\n');
+
+    const json = blocked();
+    expect(await runRestart(['worker', '--json'], json.io, makeHarness(json.fixture).sources)).toBe(0);
+    const doc = assertMatchesOutputSchema<{
+      schema: { name: string; version: number };
+      status: string;
+      action_summary: string;
+      seat: string;
+      pull_only?: string | null;
+    }>(json.io.out, RESTART_OUTPUT_SCHEMA);
+    expect(doc.status).toBe('ready');
+    expect(doc.pull_only).toBe('no agent record for this seat');
+    expect(doc.action_summary).toContain('pull-only: no agent record for this seat');
+  });
+
   test('a dev-mode restart records the mark and the caller it admitted', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {

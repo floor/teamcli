@@ -118,6 +118,10 @@
       "items": {
         "type": "string"
       }
+    },
+    "pull_only": {
+      "type": "string",
+      "minLength": 1
     }
   }
 }

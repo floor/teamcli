@@ -7,7 +7,7 @@
 // pinned caller: no live session is read.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
@@ -260,6 +260,31 @@ describe('registering a seat the pane already holds ready', () => {
   // The refresh stands the seat on the id it read, and the native route binds the agent on it. A
   // registry that cannot be written leaves the seat reachable only by pull: the run says so
   // instead of reporting the refresh as done.
+  test('says pull-only when the refresh cannot bind the native record', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const healthy = await register(w, ['lead']);
+    expect(healthy.code).toBe(0);
+    expect(healthy.out).toContain(`lead: already registered — pane ${PANE}; the record was refreshed from the file, nothing relaunched\n`);
+    expect(healthy.out).not.toContain('pull-only');
+
+    // The registry folder becomes a file this run cannot write through.
+    const agents = join(w.home, '.config', 'team', 'agents');
+    renameSync(agents, `${agents}-saved`);
+    writeFileSync(agents, 'synthetic blocked registry');
+
+    const run = await register(w, ['lead']);
+    expect(run.code).toBe(0);
+    expect(run.err).toBe('');
+    expect(run.out).toContain(`lead: already registered — pane ${PANE}; nothing was written; pull-only: no agent record for this seat\n`);
+
+    const io = testIo(w.root, OWNER);
+    expect(await runRegister(['lead', '--json'], io, sources(w))).toBe(0);
+    const doc = JSON.parse(io.out) as { status: string; pull_only?: string | null };
+    expect(doc.status).toBe('already');
+    expect(doc.pull_only).toBe('no agent record for this seat');
+  });
+
   test('writes the project pointers a file gained after the launch', async () => {
     const w = world();
     expect((await register(w, ['lead'])).code).toBe(0);
