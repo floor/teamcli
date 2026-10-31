@@ -7,67 +7,301 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.9] - 2026-10-31
+## [0.5.10] - 2026-10-31
 
-### Changed (breaking)
+0.5.10 is one release for everything since 0.5.5. The work prepared as 0.5.6 through 0.5.9 is
+folded in here: the owner seat and grants, the registry, quiet starts, the general grant on
+every command, the end of typed messaging, and the managed Codex endpoint.
 
-- **No pane messaging.** No message, wake, reminder, watch nudge, rules line or restart handover
-  is ever typed into a seat's pane or prompt (`src/send/no-pane-messaging.ts`). The `typed` and
-  `native` delivery legs are never walked; the chokepoints that typed (`deliverTrigger`,
-  `submitTrigger`, `deliverCompose`, `deliverRules`, the watch's nudge writer, the send
-  endpoint's and `team send`'s pane bindings, the restart handover) refuse before touching the
-  pane. Delivery goes through the bus and a vendor's event adapter (Claude development channel,
-  MCP inbox, socket, a CLI's runtime queue); a seat with none keeps the message in its bus inbox
-  (the drop file) and the sender is told `queued, no event adapter`. Starting a CLI in a pane, its
-  exit keys and `team answer` (a permission dialog, not a message) are unchanged.
+### Breaking change
 
-### Fixed
+**Nothing is ever typed into a seat.** No message, wake, reminder, watch nudge, rules line or
+restart handover is sent by typing into a seat's terminal or prompt. Every message ends in the
+seat's bus inbox and reaches the seat by the route its own launch installed: an event adapter
+that wakes it — the development channel its launch loads, or a socket its launch accepts whose
+recorded address still stands — a Codex runtime queue under the managed endpoint that holds
+the message between turns, or an inbox the seat reads when it next takes a turn. The sender is
+told which, in plain words: woken through its event adapter, woken through its runtime queue,
+queued and read at its next turn (pull-only), or queued with no way to be woken while it is
+idle. A send that ends without a delivery never answers a bare "unconfirmed"; the bus-inbox
+drop's own line still says `queued, no event adapter` when it takes the send. Starting a CLI in
+a terminal, its exit keys and `team answer` (a permission dialog, not a message) are unchanged.
 
-- **The machine daemon under launchd finds herdr.** The unit carries the installing shell's PATH;
-  without it every session read failed and every hosted send answered "the session could not be
-  read".
-- **A slow heartbeat probe no longer kills the hosted send endpoint.** Three 2 s misses in a row
-  mark it failed, and an answer restores it; one 400 ms miss used to mark it failed for good.
-- **Seats may send while the daemon is up.** The send endpoint refused every sender but the owner
-  and the orchestrator; it now refuses only a sender that is no seat of the team, and the CLI's
-  admission decides the rest.
+### Upgrade notes
 
-## [0.5.8-hotfix.1] - 2026-10-30
-
-The 0.5.8.1 fix (published under the SemVer name 0.5.8-hotfix.1, the line's hotfix form).
-
-### Fixed
-
-- **`team daemon install --general <grant.json> --key <client.key>` installs a unit that starts.**
-  Under the system service manager the run's parent processes cannot be read, so it was
-  `unplaced` and refused at every start ("only the owner or the system service manager runs the
-  machine daemon"). An install admitted by the general door now writes the grant and key paths
-  it was verified with into the unit's run command; each service start passes the same door,
-  which verifies the grant again (op `daemon`) and refuses, exit 1, once it is expired, revoked
-  by a missing file, another key, or no longer covers `daemon`. Only the paths the door verified
-  for that install are recorded; a plain install writes no grant, as before.
-
-## [0.5.8] - 2026-10-30
-
-0.5.8 makes the general grant reach every command. Through 0.5.7 only `config`, `up` and `init`
-read `--general`; `send`, `messages`, `reply`, `restart`, `down`/`--abandon`, `status` and the
-rest refused a no-terminal run even under a wildcard grant.
+- **A pull-only seat reads its own inbox.** Nothing is typed into its terminal. The launch's
+  turn-start reader serves the waiting records on the seat's own turn, each with its signed
+  read receipt; `team messages` serves them to a reader in the checkout. An ordinary MCP inbox
+  is pull-only too: it serves `inbox_check` and `inbox_read`, and pushes nothing. A seat whose
+  launch gives it a push adapter — the development channel, a socket its launch accepts, or a
+  Codex runtime queue while the codex-daemon policy is on — is woken through it instead.
+- **Rules ride the launch line.** A first-message CLI's profile names how its launch line takes
+  an initial prompt; the rules file is written before the command runs, and the line pointing
+  at it goes last on the launch line. A seat whose launch did not carry its rules is not typed
+  to: it gets its rules file and is left out. Where the profile has an initial-prompt form,
+  `team restart <seat>` carries them; where it has none, no launch ever carries them, and the
+  report says so instead of advising a restart.
+- **A declared `typed` delivery order names the seat's own adapters.** For a Claude seat it
+  means its live channel and then the socket its launch accepts; for a Codex seat, its runtime
+  queue while the codex-daemon policy is on. It no longer names a typed message.
+- No team migration is needed: a 0.5.5 team keeps working, and approvals made on 0.5.5 stay in
+  force. Grants signed before this release keep the ops they list; only a grant whose ops are
+  `*` covers ops added later. The client bundle formerly named `developer` is the `default`
+  bundle (`developer` remains its alias), and it may run `team down --abandon`.
 
 ### Added
 
-- **The general door.** Every command but `team client general-grant` takes
-  `--general <grant.json> --key <client.key>`. The dispatcher verifies it once
-  (`src/client/general-door.ts`, `admitGeneral`) for the command's own op and the entity of the
-  team in the folder, takes the two options off the line, and runs the command as the owner: no
-  detached or terminal refusal, the caller is the owner (for `reply`, in place of the walked
-  caller). A command added later is covered with no wiring of its own. `up`, `init` and `config`
-  keep their own admission. The grant-issuing command refuses `--general` (a holder issues with
-  `--via`).
-- Every command name is a general-grant op (`status` among them); the wildcard `*` covers them
-  all, and later ones.
-- Exit ids `team.general-usage` (2: `--general` without `--key`, or on the grant-issuing command)
-  and `team.general-refused` (1: expired, another key, an op or entity the grant does not cover).
-  The command contract lists `--general` and `--key` on every command and subcommand.
+- **The owner seat.** The owner approves several actions as one request with no owner terminal:
+  import, add, up, migrate, send, down and bus, each shown to Touch ID and applied in one run.
+  `team config set|unset --request` lets the owner seat approve a team-record change.
+  `team grant --request` reports whether the owner was notified, presents a Touch ID card,
+  prints a one-request link to the owner page, and the owner page lists pending grants. Owner
+  prompts and owner-page strings come from one English message catalog, with a short French
+  owner-seat prompt available.
+- **General grants.** One owner signature covers every entity or a listed set. The `team up
+  --general` form admits a launch with no request. `team init --general` creates a team for an
+  entity whose declared roots hold the folder: the grant must verify to the owner key, be
+  unexpired, match the key and cover the entity; it is never self-issued and never wider than
+  its parent. A refusal exits `init.general-refused`. A grant's ops may be the wildcard `*`,
+  signed like any list, and `team client general-grant` defaults to `--ops '*'`.
+- **The general door.** Every command but `team client general-grant` takes `--general
+  <grant.json>` and `--key <client.key>`. The dispatcher verifies it once for the command's own
+  op and the entity of the team in the folder, takes the two options off the line, and runs the
+  command as the owner: no detached or terminal refusal, with the owner as the caller (for
+  `reply`, in place of the walked caller). A command added later is covered with no wiring of
+  its own; `up`, `init` and `config` keep their own admission, and the grant-issuing command
+  refuses `--general` (a holder issues with `--via`). Every command name is a general-grant op,
+  and the wildcard covers them all and later ones. Exit ids `team.general-usage` (2: `--general`
+  without `--key`, or on the grant-issuing command) and `team.general-refused` (1: expired,
+  another key, an op or entity the grant does not cover); the command contract lists `--general`
+  and `--key` on every command and subcommand.
+- **A team charter and the registry record.** Team setup takes one owner signature as its
+  charter, and the team definition is read from the registry record.
+- **Event delivery.** A send reaches a seat through its own push adapter: the Claude
+  development channel its launch loads, which pushes each new record as one notification and
+  is redelivered once by the watch when no signed read receipt arrives; or a socket the launch
+  accepts. An ordinary MCP inbox pushes nothing: the seat reads it when its model calls the
+  tool. `team up` starts the bus in its own workspace, `team down` closes it, and a dropped
+  follower is redialed with a doubling wait. `team messages --client --follow` prints each
+  reply on a client thread as it lands.
+- **`team down --abandon`** answers known prompts and saves unsent text before stopping a seat.
+- **Conversation record and resume.** Launches record the conversation id they carry, and
+  `team config set` syncs the agent launch. A Grok seat resumes with `grok -r <id>` and an
+  Antigravity seat with `agy --conversation=<id>`. After `team down`, `team up` resumes the
+  conversation the registry records when no seat state record exists, exactly when the registry
+  and the retained handle agree.
+- **Quiet start.** `team up --no-launch` gives seats their rules only, with no general seat
+  brief; the stop instruction travels in the rules file, a busy seat is waited out, and the
+  start is quiet.
+- **The managed Codex endpoint.** A Codex seat's launch starts a managed app-server endpoint
+  under the seat's presence binding and attaches the TUI to it by remote. The seat's native
+  turns, inbox server, permissions and tool calls then run under that endpoint. A seat launched
+  through a shell script is seen through to the CLI it runs; a restarted seat starts a
+  replacement endpoint and attaches with its recorded conversation; the endpoint accepts the
+  app-server's linked socket. A Codex seat's tools and MCP servers under its managed endpoint
+  are placed as that seat under the full ownership proof: the listen URL of its current
+  binding, the recorded pid and a start inside the record's window, and, for a session, the
+  terminal it records.
+- **The workflow's live run store.** A run lives in a durable store: an item index that decides
+  exclusion, a versioned, append-only journal that folds the run's state, and reservations that
+  keep one seat on one item at a time. A pending hold has a release deadline, the built-in
+  `work-item` definition ships with the workflow, and `team next` takes the run store's hold
+  before its local lease.
+- **The machine daemon records the packaged commit as its install identity.** Beside the version
+  it runs, the daemon records the commit its build was packaged from, and `team daemon status
+  --json` exposes it as `gitHead`. The pair tells an install that changed either the version or
+  the commit from one that changed neither; a source checkout and an older state record report
+  no commit.
+- **`team status` names when the hosted watch started and which build is cycling.** A route the
+  machine daemon hosts reads `watch: running in the daemon since <start>, version <version>`,
+  the start the watch record holds and the version the daemon reports, `unknown` when it
+  reports none. The line no longer carries a relative last-cycle time; a failed last pass is
+  still the check's line.
+- **`team agents prune` retires agent records no roster names.** It lists one row for each
+  record this machine holds that no registered team's roster names: the agent, the seat and
+  team it reaches, its lifecycle, why no roster names it, and what a run would do. `--apply`
+  retires the orphaned and superseded records and leaves three kinds alone: a seat the team's
+  configuration still declares, a record whose team the registry no longer holds, and a record
+  whose team's configuration cannot be read. Retiring is a recorded state, never a delete: the
+  record keeps every field, its signed settings among them, and the lookups that place a live
+  seat skip it. `--apply` is the owner's, from a terminal rather than a seat's pane, and a
+  scoped grant reaches only its own entities.
+- **`team brief prune` retires a seat's own launch-brief retry sidecars.** A held launch
+  delivery leaves a try marker behind; prune lists and, with `--apply`, removes the ones whose
+  retry can no longer be right: a marker whose delivery the seat's current claim superseded,
+  and one a signed receipt bound to that claim says the seat read. The current claim's unread
+  marker is exactly what a retry still owes and is never touched, and neither is any other
+  file in the folder. The dry run is the default, one row per file; `--apply` verifies each
+  removal and reports one that failed. Only the seat itself, on the terminal its state records,
+  prunes its own folder; a claim it cannot read, or one that changes while the run reads,
+  retires nothing.
+- **A seat's delivery class is read from its launch, not from its CLI's declaration.** Each
+  shipped CLI profile declares one of `push`, `between-turns`, `pull-on-turn` or `none` — the
+  loader requires the word and refuses one outside the set — and the launch refines it from
+  what it left behind: the development channel on the launch line, a cross-session socket the
+  send itself admits (its declaration, the team file's own `inbound` word, and an address the
+  seat's record names that still stands and is live), the managed endpoint bound to the seat's
+  current presence binding, and the recorded watcher. A declared `push` seat whose launch turned
+  nothing on falls to its watcher; a person's seat is `none`. A send that ends without a
+  delivery appends the class to its `sent (unconfirmed)`, `sent (channel)` and `queued
+  (receiver busy)` lines, and to `action_summary` in `--json`, in plain words: `woken through
+  its event adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next
+  turn (pull-only)`, or `queued; <seat> has no way to be woken while idle`. A delivered line
+  carries none: the delivery itself is the answer.
+
+### Changed
+
+- **The typed delivery leg is retired; the native leg is a runtime queue.** The native leg
+  hands a pointer to a Codex seat's own runtime queue, or a Claude sender's message, and types
+  nothing. The generated settings carry the team file's inbound accept when the launch scripts
+  declare no word of their own.
+- **`team config set` writes a value with its unit as plain text.**
+- **The watch pushes idle work only to a seat's own records**, and holds direct work when it
+  holds no verified watch authority.
+- **A hosted watch's `team up` closes the legacy watch workspaces it replaced.** Only when the
+  machine daemon's hosted watch owns the route, `up` closes each leftover workspace labelled as
+  the team's watch whose terminals are readable and hold nothing but their own shell, and says
+  how many on stderr and in the log. A terminal a process still holds, or one that cannot be
+  read, is left alone; with no hosted watch owning the route nothing is closed, and a dry run
+  only says what it would close.
+- **`team remove` retires the removed seat's agent record.** The record is kept, never deleted:
+  it is marked retired, its terminal is cleared, and its roster line goes, while its signed
+  settings stay readable. `--keep`, which only stops the seat, keeps the record and its roster
+  line for the seat to run again as the same agent.
+- **`team config set` and `unset` keep the record's comments.** Only the changed key's lines
+  are rewritten: an unset that empties a list leaves `[]` rather than regenerating the record, a
+  comment beside or inside a removed value stays where its line was, and a set that replaces a
+  whole section keeps the comments written inside it. A change the editor cannot address that
+  way rewrites the record whole, and the command says so on stderr, with `comments_kept: false`
+  in `--json`.
+- **Time-bound work is never handed to a seat that cannot be woken while it is idle.** `team
+  next`, in the command and in the daemon, and the workflow's reservation take leave a record
+  carrying a deadline out of the candidates they offer such a seat, while ordinary work stays
+  on offer. The watch's dispatch spends no idle attempt on it: the push would be a wake that
+  never lands and the episode's one attempt would be gone with it, and an episode whose wake
+  already went is still settled. `team plan` marks such a record `(its seat cannot be woken
+  while idle)` after its title, and `team up` warns that `<seat> is a lead seat and <cli>
+  cannot be woken while it is idle; time-bound work is never dispatched to it` (a reviewer
+  seat says so as a reviewer; a person's seat is left out).
+- **A pull-only seat checks its inbox at the start and the end of every turn.** The standing
+  rule and the `inbox_check` tool description name both ends, with an `inbox_read` for each
+  message the check lists, so a message that arrived while the seat was working is acted on in
+  the same turn instead of waiting for the next one. Only a profile with a measured inbox route
+  adds the rule; every other seat's rules stay as they were.
+
+### Fixed
+
+- **The machine daemon under the system's service manager finds the terminal host.** The unit
+  carries the installing shell's PATH; without it every session read failed and every hosted
+  send answered "the session could not be read".
+- **A slow heartbeat probe no longer kills the hosted send endpoint.** Three 2 s misses in a
+  row mark it failed, and an answer restores it; one 400 ms miss used to mark it failed for
+  good.
+- **Seats may send while the daemon is up.** The send endpoint refused every sender but the
+  owner and the orchestrator; it now refuses only a sender that is no seat of the team, and the
+  CLI's admission decides the rest.
+- **`team daemon install --general <grant.json> --key <client.key>` installs a unit that
+  starts.** Under the service manager the run's parent processes cannot be read, so it was
+  `unplaced` and refused at every start. An install admitted by the general door writes the
+  grant and key paths it was verified with into the unit's run command; each service start
+  passes the same door, which verifies the grant again (op `daemon`) and refuses, exit 1, once
+  it is expired, revoked by a missing file, another key, or no longer covers `daemon`. Only the
+  paths the door verified for that install are recorded; a plain install writes no grant, as
+  before.
+- **The daemon's fallback sweep passes over settled episodes without locking them.** A marker
+  with no pending intent that is delivered, still trying, already escalated or not yet due is
+  counted and skipped before its lock, so a large delivered backlog no longer stalls the
+  heartbeat.
+- **Rules ride the launch line; nothing is typed.** `team up` writes the rules file before the
+  command and puts the line that points at it last on the launch line. A seat this run did not
+  launch gets the file and is left out: where its profile has an initial-prompt form, a
+  restart carries the rules, and where it has none, no launch carries them and the report says
+  so. A single-seat restart drops the launch brief to that seat alone, and a registration
+  briefs only the registered seat.
+- **A resume line the CLI cannot find is launched fresh.** Before the launch runs, the
+  conversation is checked on disk and a missing one is launched fresh with a note. If the CLI
+  still refuses the resume at runtime, the idle wait reads that refusal and relaunches fresh
+  once in the same terminal.
+- A launch record can no longer re-run a disallowed launch line.
+- **The terminal host's idle never makes a seat ready once its CLI has exited.** Its word
+  counts only while a CLI is in front of the terminal and on a second reading in a row; a
+  terminal back at its shell waits into the ended reading, the missing-conversation fallback or
+  the timeout.
+- **A Codex seat's managed endpoint keeps its inbox server and its permissions.** A TUI attached
+  by remote loads the app-server's `-c` pairs, so the seat keeps its team inbox server, and the
+  endpoint carries its approval policy and sandbox mode. Measured on codex-cli 0.161.0: a
+  resume line's permission overrides are carried by the endpoint, so an attached resume keeps
+  its recorded thread, and a fresh line is unchanged.
+- **A restarted Codex seat on its managed endpoint resumes the recorded conversation.** The
+  seat's permissions are carried by the endpoint, so the restart keeps the thread instead of
+  starting a fresh one.
+- **A list inside a seat no longer ends the seat** when the team file is read.
+- **The registry's session is kept when the config omits it**, and wording names the registry
+  config when no team file is read.
+- **A receipt publisher's temp file is ignored during a read race**, and an unwritten bus
+  section leaves the canonical record unchanged.
+- **Several watch and MCP channel-push races are closed**, including push name reservation and
+  a stale inbox server reload.
+- **`team mcp serve` finds its team without a `--file`.** A server started without one takes its
+  team from the registry record that holds its seat, narrowed by `--session`, and never reads the
+  folder it starts in as the team. When more than one registered team holds the seat it refuses,
+  naming the teams it found; a seat no registered team holds is refused with the `--file` it
+  needs.
+- **The Codex daemon dialog closes on `team down`**, and a detached agent is named by `caller`.
+- **Team-made state folders are created 0700.** The log, the state lock, the restart handover
+  and the launch's own files create their folders with mode 0700, so a project store they
+  first make is accepted by the rules file written before launch. A folder that already exists
+  keeps the mode it has.
+- **A client drop no event adapter took is recorded as the drop leg**, sent unconfirmed, and
+  the log says `queued, no event adapter` rather than `unreachable`.
+- **A bundle-grant send walks the same delivery legs as any other send**, and a walk that fails
+  logs the reason and prints one warning on stderr.
+- **A launch line that sets its own permission flags keeps them.** An option written on the
+  line keeps its value, and the profile's default for that option is not appended as stray
+  words: the whole default, its value included, is suppressed, and an option's short, long and
+  `=` spellings all count as the same option. A quoted config or prompt word is not read as a
+  flag, and neither is a word after `--`.
+- **A managed Codex endpoint stop proves the process, not its socket file.** A missing socket
+  file is no evidence the server is gone: a live pid that its command line and start instant
+  prove to be this record's server is stopped by pid, and the socket file is removed only when
+  it is that socket. A live pid that cannot be proved is never signalled. A record that is
+  present but unreadable reads as unproven, not absent: the stop says why it cannot act, and a
+  removal that needs it is refused while the seat and its record stay.
+- **A failed launch stops the managed Codex endpoint it started.** Cleanup stops the endpoint
+  this run started before it clears the seat's workspace and record. An endpoint the launch
+  reused is not its to stop: the launch record is kept, and the run holds with the reason,
+  rather than dropping the identity of a live server.
+- **A quiet start reads the inbox instead of skipping it.** The note a quiet start adds to every
+  rules file told the seat not to continue earlier work and not to read drops, so a message
+  queued before it was never read. It now tells the seat to read its inbox, act on what is
+  addressed to it, and leave earlier work alone unless a message asks for it.
+- **A recorded socket is a route only while it is there and dialable.** A seat's delivery class
+  reads a socket from what a send itself admits — the effective settings' accept, the team
+  file's own `inbound` word, and an address the seat's record names that still exists and does
+  not predate the declaration that accepts it — never from a declaration alone, so dispatch no
+  longer spends work on a route the send would refuse. A recorded address whose file is gone is
+  never dialed: the send says it is gone, under the class the seat has without that socket, and
+  leaves the message where that turn reads it. A fallback that ends in the bus inbox never
+  claims a wake the attempt just disproved.
+- **A restart waits for the session lock instead of refusing at once.** `team restart` takes the
+  session's mutator lock before its first effect — the stop — standing aside up to fifteen
+  seconds for the run already holding it, so a restart that arrives while the watch is restoring
+  is no longer turned away at the first reading. When the wait is spent it refuses with the
+  holder's pid named and nothing stopped, rather than leaving a seat half-stopped.
+- **A restart or a refresh binds a seat's record only on proven continuity.** A restart's
+  relaunch binds the record to the seat state it just wrote. A refresh rewrites an existing
+  handle only when the pane's live processes are the ones the record's launch started — the
+  recorded shell with a recorded CLI pid in front; a pane holding another process is refused
+  (`register.replaced`), and an id another live seat's record of the team carries is refused
+  (`register.handle-held`). Both refusals name what they found and leave the record unchanged,
+  and a record that predates the process identity is not rebound at all: the refresh fills only
+  a handle it never had.
+- **A restart or a refresh whose binding was not written says `pull-only` and why.** After the
+  launch, the record is read back as the seat's native route resolves it — a route addressed by
+  the conversation also needs the recorded agent session. A record that is missing, refused or
+  not yet carrying that session leaves the seat reachable by pull alone: the closing line ends
+  `; pull-only: <reason>` and `--json` carries `pull_only`, rather than reporting a restart done
+  whose record was never written.
 
 ## [0.5.5] - 2026-10-26
 
@@ -250,7 +484,7 @@ whose running model has drifted is held rather than delivered.
   declares: the owner any agent; an orchestrator another orchestrator of its own team or
   entity; a team's orchestrator or operator any seat of its own team; two operator seats each
   other; any declared seat another declared seat of its own team; an assistant its entity's
-  main coordinator; any seat its own team's orchestrator; and what an owner-signed grant names.
+  coordinator; any seat its own team's orchestrator; and what an owner-signed grant names.
   Arbitrary cross-team and off-roster pairs are refused by
   default, and a refusal for an unregistered sender names that sender, so a cross-team denial
   says which side lacks a registry record.
@@ -932,12 +1166,12 @@ commands read them.
   and the path it took; the refusal for a seat no record covers names the command that writes
   one (`team up`, `team register <seat>`).
   A seat its file marks `assistant: true` — one per file, never a seat with `count` — is its
-  entity's assistant, and the routing admits it to the entity's main coordinator: the first mark
+  entity's assistant, and the routing admits it to the entity's coordinator: the first mark
   found walking the entity's teams in chain order, the entity's own team first and then its other
   teams by team id, never a role's name. Send is denied by default: the owner may send to any
   agent; an orchestrator to an orchestrator of its own team or of a team in its entity, never
   across entities; a team's orchestrator or operator to any seat of its own team; an assistant
-  to its entity's main coordinator; any seat to its own team's orchestrator; and an owner-signed
+  to its entity's coordinator; any seat to its own team's orchestrator; and an owner-signed
   `send` grant to what it names.
 
 - **The send grammar: `@<nickname>`, `<seat>@<team>`, `lead@<team>`.** One grammar answers
