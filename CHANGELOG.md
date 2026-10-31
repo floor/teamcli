@@ -301,6 +301,31 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   not yet carrying that session leaves the seat reachable by pull alone: the closing line ends
   `; pull-only: <reason>` and `--json` carries `pull_only`, rather than reporting a restart done
   whose record was never written.
+- **A Claude seat launched through a provider wrapper reads its declared model.** Its model is
+  the launcher's declaration, checked against the provider id its start banner prints — the
+  declaration's model and version read as one string, so a version its model name repeats is
+  counted once, a digit belonging to another model word (a capacity such as 2B) stays part of the
+  model, and the version keeps its written order — never the Claude CLI's own default family:
+  `team status` labels the seat with the model it runs, and a send is not held for a false drift.
+  A wrapper is identified by the seat's recorded launch, or by its explicit launcher-model
+  declaration (`model_from: launcher`), never guessed: a launch line the reader cannot follow
+  reads unread only where that declaration is absent, and the signed record's bare `claude` launch
+  — with a path, an environment prefix or quotes — stays plain Claude and overrides the
+  declaration. `team check`, the watch and `team up` read a live seat's model from its recorded
+  launch, not the team file's current line.
+- **`team status` reads the send's own socket eligibility.** The REACH column walks the send's
+  own socket rule — the same gate and the same address choice — so a row says `socket` only while
+  the shared checks admit that route: the launch's inbound declaration, the team file's word, a
+  held frame, the socket's age, and the selected address (the recorded address first, the pane's
+  own socket otherwise). A temporary seat gets its REACH from its record. The send's configured
+  delivery order and its other checks still decide which leg carries a message. The agreement
+  holds for the same registry and the same moment; it says nothing about a socket that goes away
+  later.
+- **`team config set`, `unset` and `team add` file an owner request from a team root that is not
+  a git repository.** They resolve the team's root the way `team config get` does — a checkout's
+  root, or the plain folder itself, whose registry record holds the team — so the request and
+  its approval work in the team's own folder. The approval rules are unchanged: no team change is
+  applied before the owner's verified signature authorizes the exact requested words.
 
 ## [0.5.5] - 2026-10-26
 
