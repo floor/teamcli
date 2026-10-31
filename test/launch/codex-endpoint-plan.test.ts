@@ -5,6 +5,10 @@
 // not on, a line that already names its own `--remote` or `--no-daemon`, and a launcher whose
 // own binary is not the Codex CLI (its endpoint is not ours to bind or to speak for).
 import { describe, expect, test } from 'bun:test';
+import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readTeamConfig } from '../../src/file/team-config.ts';
 import { upPlan, type UpInput, type UpSeat } from '../../src/launch/plan.ts';
 
 const REPAIR = '`team remove coder --keep` then `team add coder`';
@@ -87,6 +91,23 @@ describe('the managed Codex endpoint intent', () => {
     // A script naming another program is not a Codex launch.
     const other = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh ./tools/codex-wrapper' })));
     expect(other.do).not.toHaveProperty('codexEndpoint');
+  });
+
+  test('a team read from the registry resolves the policy from the team, not a file it has no file at', () => {
+    // A registry team has no team.yaml under its checkout. Resolving the seat's codex-daemon
+    // policy through that path read as unresolved (off), so no endpoint was ever planned for it.
+    const base = mkdtempSync(join(tmpdir(), 'codex-plan-'));
+    const root = join(base, 'acme');
+    const home = join(base, 'home');
+    mkdirSync(root, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    copyFileSync(new URL('../fixtures/example.yaml', import.meta.url), join(root, 'team.yaml'));
+    const loaded = readTeamConfig(root, { home, file: join(root, 'team.yaml') });
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+    const over = { root, home, teamFile: join(root, '.agents', 'team.yaml') };
+    const seatOver = { name: 'codex-acme', codexDaemon: undefined };
+    expect(launchOp(upPlan(input(over, seatOver))).do).not.toHaveProperty('codexEndpoint');
+    expect(launchOp(upPlan(input({ ...over, team: loaded.team }, seatOver))).do).toHaveProperty('codexEndpoint');
   });
 
   test('a non-Codex seat is never marked, whatever the policy value', () => {

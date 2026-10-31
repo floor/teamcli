@@ -662,6 +662,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
       ...(home === undefined ? {} : { home }),
+      team,
       ...(sources.launch.codexEndpoint === undefined ? {} : { stateDir: dir }),
     });
     // The drifted seat is closed: whatever its last turn wrote says nothing about the seat this

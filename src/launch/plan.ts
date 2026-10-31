@@ -9,6 +9,7 @@ import type { FinalRecord } from './progress.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 import { launchedCliBinary } from './line.ts';
 import type { WaitingRecord } from '../state.ts';
+import type { TeamFile } from '../file/types.ts';
 
 /** The pace the idle wait polls a pane at — and the one a pause re-reads an opened pane at, and
  *  reads a trust prompt's terminal with, when `team answer` may be racing it. */
@@ -426,6 +427,10 @@ export interface UpInput {
    * path is guessed in the state's place. Present on every real launch.
    */
   stateDir?: string;
+  /** The team the run already read. The seat policies are resolved from it, so a team whose
+   *  record lives in the registry is not looked up again through a file path it has no file at
+   *  (which reads as unresolved, and a managed Codex endpoint would then never be planned). */
+  team?: TeamFile;
 }
 
 /** The variables a herdr server starts with: nothing else reaches a seat's pane. */
@@ -765,7 +770,9 @@ export function upPlan(input: UpInput): Step[] {
       codexDaemon = codexDaemonForSeat({
         home: input.home,
         root: input.root,
-        ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
+        ...(input.team !== undefined
+          ? { team: input.team }
+          : input.teamFile === undefined ? {} : { teamFile: input.teamFile }),
         seat: seat.name,
         session,
       });

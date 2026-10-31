@@ -1858,6 +1858,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     cliHooks,
     ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),
     home: sources.home,
+    team,
     // A launch surface with no endpoint seam plans none: the marker is what makes the launch
     // start one, and a scene's fake launch must never reach a real process.
     ...(sources.launch?.codexEndpoint === undefined ? {} : { stateDir: dir }),
