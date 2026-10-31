@@ -563,6 +563,43 @@ describe('a screen the profile cannot read', () => {
     expect(out.join('')).toContain('alpha: left out');
   });
 
+  test('with no process information, herdr idle is taken only on a second reading in a row', async () => {
+    // The host cannot say what is in front of the pane. One idle reading, then a working one,
+    // then idle twice: the first idle is not enough — the rule is two readings in a row, and the
+    // working reading between resets the count.
+    const { host, out, slept } = world(null, null);
+    const statuses: (string | null)[] = ['idle', 'working', 'idle', 'idle'];
+    let poll = 0;
+    host.agentStatus = () => statuses[Math.min(poll++, statuses.length - 1)] ?? null;
+    await executePlan(steps(3), 'acme', host);
+    expect(out.join('')).toBe('alpha: ready\n');
+    expect(slept).toEqual([0, 1000, 2000]);
+  });
+
+  test('one herdr idle reading, then a working one, does not make the seat ready', async () => {
+    const { host, out, slept } = world(null, null);
+    const statuses: (string | null)[] = ['idle', 'working'];
+    let poll = 0;
+    host.agentStatus = () => statuses[Math.min(poll++, statuses.length - 1)] ?? null;
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: left out: timeout\n');
+    expect(slept).toEqual([0]);
+  });
+
+  test('a launch wrapper in front of the pane: herdr idle is still taken', async () => {
+    // Measured on herdr 0.7.1 in a scratch pane: `pane run 'zsh wrapper-exec.sh'` listed the
+    // pane's shell (shell_pid) and, once the wrapper ran, its interpreter and the child it runs
+    // the CLI in as the foreground processes — the wrapper's shell is not the pane's shell. An
+    // identity is therefore recorded, the gate reads "a CLI in front", and herdr's word is taken
+    // on the second reading exactly as without a wrapper: the wait does not fall back to the
+    // screen.
+    const { host, out, slept } = world('idle', null);
+    host.processInfo = () => ({ shell: 100, foreground: [1082, 1081] });
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: ready\n');
+    expect(slept).toEqual([0]);
+  });
+
   test('herdr reports the seat done: the launch is ready there too', async () => {
     const { host, out } = world('done', null);
     await executePlan(steps(1), 'acme', host);
