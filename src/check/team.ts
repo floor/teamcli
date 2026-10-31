@@ -20,6 +20,7 @@ import { watchInForceWithPace, watchPaceNotes, watchPaceOf } from '../watch/rhyt
 import { callerLabel, fileOwnerRefusal, isOwner, sessionOwnerRefusal, walkCaller } from '../caller.ts';
 import { KEY_ISOLATION_LINE } from '../client/records.ts';
 import { blindDifferences } from '../commands/seats.ts';
+import { resolveSeatOverrides } from '../config/apply.ts';
 import { approvalAndOverrideRows, emptyOverrides, protectedCheckouts, realSources, rulesFileDifferences } from '../commands/status.ts';
 import type { DelegateSources } from '../delegate.ts';
 import { devModeActive, devModeOwnerLift } from '../dev_mode.ts';
@@ -41,6 +42,7 @@ import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { GENERAL_BRIEF_SHA256, briefBindingOf, currentBriefClaim, generalBriefRecord } from '../launch/general-brief.ts';
+import { seatDeliveryClass } from '../launch/delivery-class.ts';
 import { logLine } from '../log.ts';
 import { resolveLobby } from '../lobby/gate.ts';
 import { listUnread } from '../mcp/inbox.ts';
@@ -73,15 +75,19 @@ import {
   type PolicyLoadRefusal,
 } from '../policy/index.ts';
 import { mayReadTeam } from '../read-gate.ts';
-import { findAgent, updateAgent } from '../registry/agents.ts';
+import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
 import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
+import { defaultSocketsDirs } from '../send/address.ts';
+import { deliveryChainOf } from '../send/delivery.ts';
+import { socketEligible } from '../send/inbound.ts';
+import { SOCKET_SEND } from '../send/uds.ts';
 import { DELIVERY_ORDER, orderDeclarationsOf, type DeliveryLeg } from '../settings/inherit.ts';
-import { resolveOrderSetting } from '../settings/resolve.ts';
+import { deliveryOrder, resolveOrderSetting } from '../settings/resolve.ts';
 import { emptySession, liveHold, pidAlive, readState, seatOfFile, updateState, type SeatState, type SessionState, type State } from '../state.ts';
-import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, type Live } from '../status/compare.ts';
+import { compare, orderAndAnnotateDifferences, paneShowsSeat, seatRecordsOf, socketLegOf, type Difference, type Live } from '../status/compare.ts';
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
 import { heldAt } from '../launch/rules-file.ts';
@@ -124,6 +130,9 @@ export type CheckSources = {
   /** Whether a recorded watch's process is alive. Absent: the real process reading; a scene
    *  stands in for it so a live, dead or stale pane watch can be pinned. */
   alive?(pid: number): boolean;
+  /** The folders the seats' session sockets are read in, in the order discovery walks them; the
+   *  default folders when absent. A scene hands in its own so no read touches this machine's. */
+  sockets?: string | readonly string[];
   /** The machine daemon's reading, already probed by the command wrapper before this
    *  synchronous report runs. Absent in a test that does not stand one in. */
   daemon?: DaemonHealth;
@@ -402,6 +411,17 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const provenance = devModeDifferences(team, root, sources.home, quiet);
   const attention = attentionDifferences(team, state, live, sources.now(), continuityIds);
   const briefs = generalBriefDifferences(team, state, root, sources.home, session);
+  const socketSkipped = socketSkippedDeliveries(
+    team,
+    state,
+    live,
+    root,
+    dir,
+    session,
+    sources.home,
+    sources.sockets ?? defaultSocketsDirs(),
+    sources.now(),
+  );
   comparison.differences = orderAndAnnotateDifferences([
     // A seat the check names itself in its own stuck-prompt line is not named again in
     // `compare()`'s plain words: one line per held seat, the richer one.
@@ -417,6 +437,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // A team file left beside a registry team that says something else: never silent.
     ...leftoverDifferences(current.leftover),
     ...deliveryOrderDifferences(team, root, sources.home),
+    ...socketSkipped.differences,
     ...policyChecked.differences,
     ...modelRule.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
@@ -506,6 +527,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...lobbyNotes(team, root, sources.home, session),
     ...policyChecked.notes,
     ...modelRule.notes,
+    ...socketSkipped.notes,
     ...unknownStatusNotes(team, state, live),
     ...record.notes,
     ...provenance.notes,
@@ -1506,6 +1528,150 @@ function deliveryOrderDifferences(team: TeamFile, root: string, home: string | u
     }
   }
   return out;
+}
+
+/**
+ * Every live Claude seat whose profile promises a push delivery but whose socket leg a send
+ * would skip, one line per seat in the send's own words, with the act that fixes it.
+ *
+ * The reading is the send's, never a second one: the gate is `socketIneligibleReason` and the
+ * address choice is `socketAddressOf`, both behind `socketLegOf` (the same reading `team status`
+ * prints), and the walk is the send's own chain — a declared order that names neither `socket`
+ * nor the `typed` wake word chose its routes, and the check calls no choice a skip. A seat that
+ * opts out in the team file (`inbound` other than accept), a human's pane, and a seat whose
+ * launch already wakes it another way keep no promise the socket would keep: none is named.
+ *
+ * Three reasons are the team's to fix and each is a difference, like an unread drop — one line
+ * per seat, the repair named, exit 1:
+ *   - the team file neither accepts the frame nor was the declaration generated by this build's
+ *     launch: one team-config word admits the route;
+ *   - the seat's box held a frame its declaration has not been re-confirmed since: a restart
+ *     re-confirms it;
+ *   - the socket predates the settings that declare accept: a restart writes one that does not.
+ * A seat with no socket at all is its class's ordinary state, not a broken promise: it is a
+ * note naming its class, so it does not change the exit.
+ */
+function socketSkippedDeliveries(
+  team: TeamFile,
+  state: SessionState,
+  live: Live,
+  root: string,
+  dir: string,
+  session: string,
+  home: string | undefined,
+  sockets: string | readonly string[],
+  now: Date,
+): { differences: Difference[]; notes: string[] } {
+  const differences: Difference[] = [];
+  const notes: string[] = [];
+  // A build without the socket leg would name every seat, and no one could fix it from a file.
+  if (!SOCKET_SEND || home === undefined) return { differences, notes };
+  let agentOf: (seat: string) => Agent | null;
+  try {
+    agentOf = seatRecordsOf(home, root, team);
+  } catch {
+    // The registry that cannot be read is named by `registryDifferences` once; a reading that
+    // leans on it names nothing more.
+    return { differences, notes };
+  }
+  for (const seat of team.seats) {
+    if (seat.human === true) continue;
+    const recorded = state.seats[seat.name];
+    if (recorded?.stage !== 'ready') continue;
+    const listed = live.agents.find((candidate) => candidate.name === seat.name);
+    if (listed === undefined || listed.pane !== recorded.pane) continue;
+    let record: Agent | null;
+    try {
+      record = agentOf(seat.name);
+    } catch {
+      // A registry that does not read names no record: the same silence `registryDifferences`
+      // keeps for the seat, never a finding read off half a store.
+      continue;
+    }
+    // The class the seat's own launch left, from the one reader of it.
+    const delivery = seatDeliveryClass({ dir, root, session, seat: seat.name, declared: seat, state: recorded, home });
+    // Only the CLI whose profile declares push is read: a seat that never promised a socket is
+    // not falling short of one.
+    if (delivery.evidence.declared !== 'push') continue;
+    // An explicit opt-out in the team file is the team's choice, not a skipped socket; a human's
+    // signed settings say the same for its pane.
+    if (seat.inbound !== undefined && seat.inbound !== 'accept') continue;
+    const overrides = resolveSeatOverrides({ home, root, seat: seat.name });
+    if (!overrides.ok || overrides.overrides.human === true) continue;
+    // A seat its launch already wakes through another adapter keeps the promise without a socket.
+    if (delivery.class === 'push' || delivery.class === 'between-turns') continue;
+    let order: readonly DeliveryLeg[];
+    let declaredOrder: boolean;
+    try {
+      const chain = deliveryChainOf({
+        root,
+        seat: seat.name,
+        home,
+        file: team,
+        projectOfTeam: (id) => ofTeam(home, id),
+        overrides: overrides.overrides,
+        now,
+      });
+      order = deliveryOrder(chain);
+      declaredOrder = Object.values(chain).some((word) => word !== undefined && word.length > 0);
+    } catch {
+      continue;
+    }
+    // A declared order that names neither the socket nor `typed` — whose wake the socket stands
+    // in for — keeps the socket out by its own words: a configuration choice, never a finding.
+    if (declaredOrder && !order.includes('socket') && !order.includes('typed')) continue;
+    const leg = socketLegOf({
+      seat: seat.name,
+      declared: seat,
+      agent: record,
+      processes: live.processes?.[listed.pane] ?? null,
+      dir,
+      root,
+      session,
+      sockets,
+    });
+    if (leg.gate !== null) {
+      if (!socketEligible(seat.inbound, leg.declaration)) {
+        // The one refusal a team-file word fixes: the launch's effective settings declare
+        // accept, but this build did not generate them, so the team's own consent is missing.
+        if (seat.inbound === undefined && leg.declaration.generated !== true && leg.declaration.policy === 'accept') {
+          differences.push({
+            what: `${seat.name}: sends go to its drop folder, not its socket: ${leg.gate}`,
+            repair: `team config set seats.${seat.name}.inbound accept`,
+          });
+        }
+        continue;
+      }
+      // Eligible and refused: the box held a frame, and only a restart re-confirms it.
+      if (leg.held !== null) {
+        differences.push({
+          what: `${seat.name}: sends go to its drop folder, not its socket: ${leg.gate}`,
+          repair: `team restart ${seat.name}`,
+          needs: 'approve',
+        });
+      }
+      continue;
+    }
+    if (leg.address !== null && leg.address.kind === 'path') {
+      // Eligible, and the address a send would dial, but the running session predates the
+      // settings that declare it accepts: a frame sent there would be held.
+      if (!leg.live) {
+        differences.push({
+          what: `${seat.name}: sends go to its drop folder, not its socket: the socket predates the settings that declare it accepts`,
+          repair: `team restart ${seat.name}`,
+          needs: 'approve',
+        });
+      }
+      continue;
+    }
+    // No address a send would dial: the seat's class is already what its sends get, and the note
+    // says what happens to them next.
+    const waits = delivery.class === 'pull-on-turn'
+      ? 'it reads them at its next turn'
+      : 'nothing wakes it while idle';
+    notes.push(`${seat.name}: no cross-session socket is live, so sends go to its drop folder; its delivery class is ${delivery.class}, and ${waits}`);
+  }
+  return { differences, notes };
 }
 
 /**
