@@ -204,23 +204,72 @@ describe('team plan', () => {
       out:
         'team acme, session "acme"\n' +
         '  STEP  STATE    OWNER  TITLE\n' +
-        '  1     overdue  -      the past title\n' +
-        '  2     open     -      the future title\n' +
-        '  3     open     -      the unreadable title\n' +
-        '  4     overdue  -      the date-only title\n' +
+        '  1     overdue  -      the past title (its seat cannot be woken while idle)\n' +
+        '  2     open     -      the future title (its seat cannot be woken while idle)\n' +
+        '  3     open     -      the unreadable title (its seat cannot be woken while idle)\n' +
+        '  4     overdue  -      the date-only title (its seat cannot be woken while idle)\n' +
         '4 tasks\n',
       err: '',
     });
     // At the deadline itself the clock has not passed it: the comparison is strictly before now.
     const at = await run([], lead, { now: () => Date.parse('2026-01-01T00:00:00.000Z') });
     expect(at.code).toBe(0);
-    expect(at.out).toContain('  1     open   -      the past title\n');
-    expect(at.out).toContain('  4     open   -      the date-only title\n');
+    expect(at.out).toContain('  1     open   -      the past title (its seat cannot be woken while idle)\n');
+    expect(at.out).toContain('  4     open   -      the date-only title (its seat cannot be woken while idle)\n');
     expect(at.out).not.toContain('overdue');
+  });
+
+  test('a time-bound record nothing can hand out says why it stays put, and a wakeable seat\'s does not', async () => {
+    ready(
+      WITH,
+      '- id: timed\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n- id: plain\n  title: the ordinary title\n',
+    );
+    // The lead's launch installs no wake adapter, so an idle lead is pull-on-turn: the record
+    // with a deadline would fall due between its turns, and the plan says so on that row only.
+    expect(await run()).toEqual({
+      code: 0,
+      out:
+        'team acme, session "acme"\n' +
+        '  STEP  STATE  OWNER  TITLE\n' +
+        '  1     open   -      the time-bound title (its seat cannot be woken while idle)\n' +
+        '  2     open   -      the ordinary title\n' +
+        '2 tasks\n',
+      err: '',
+    });
+    // Control: the launch record names the development channel, so a wake reaches the seat while
+    // it is idle and the row is shown as written.
+    updateState(join(root, '.agents'), (state) => {
+      const seats = state.sessions.acme!.seats;
+      seats.lead = {
+        ...seats.lead!,
+        cli: 'claude-code',
+        launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+      };
+    });
+    expect(await run()).toEqual({
+      code: 0,
+      out:
+        'team acme, session "acme"\n' +
+        '  STEP  STATE  OWNER  TITLE\n' +
+        '  1     open   -      the time-bound title\n' +
+        '  2     open   -      the ordinary title\n' +
+        '2 tasks\n',
+      err: '',
+    });
   });
 
   test('the mark is plan\'s alone: next and issues do not carry one', async () => {
     ready(WITH, '- id: past\n  title: the past title\n  deadline: 2026-01-01T00:00:00Z\n');
+    // The state's launch record names the development channel, so an idle wake reaches the seat
+    // and next can take the time-bound record this scene is about.
+    updateState(join(root, '.agents'), (state) => {
+      const seats = state.sessions.acme!.seats;
+      seats.lead = {
+        ...seats.lead!,
+        cli: 'claude-code',
+        launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+      };
+    });
     const io = testIo(root, lead);
     expect(await runNext([], io, { home, now: () => now })).toBe(0);
     expect(io.out).toBe('team acme, session "acme"\npast  the past title\n  deadline: 2026-01-01T00:00:00Z\nteam next: claimed past\n');
