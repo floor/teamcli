@@ -27,7 +27,7 @@
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
 import { lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { isPresenceBinding } from '../daemon/presence/contract.ts';
+import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
 import {
   codexEndpointPath,
   readCodexEndpointRecord,
@@ -456,4 +456,30 @@ export async function ensureCodexEndpoint(
     started: true,
     ...(notes.length === 0 ? {} : { notes }),
   };
+}
+
+/**
+ * The launch side of a managed Codex seat: this launch is a new incarnation, so it mints and
+ * records the seat's presence binding first, then ensures the endpoint under it. A Claude seat
+ * gets its binding from the settings file its launch installs; a Codex seat has no such file,
+ * and without this it never held a binding, so no managed endpoint could ever start for it and
+ * its thread stayed out of the native queue's reach. A state that cannot be written mints
+ * nothing, and the endpoint read then says why.
+ */
+export async function launchCodexEndpoint(
+  input: { dir: string; session: string; seat: string; cwd?: string; deps?: CodexEndpointDeps },
+): Promise<ManagedEndpointRead> {
+  if (isPresenceSeatName(input.seat)) {
+    try {
+      const binding = mintPresenceBinding();
+      updateState(input.dir, (state) => {
+        const one = state.sessions[input.session];
+        const current = one?.seats[input.seat];
+        if (current !== undefined) current.presence_binding = binding;
+      });
+    } catch {
+      // The endpoint read below names the missing binding.
+    }
+  }
+  return ensureCodexEndpoint(input);
 }

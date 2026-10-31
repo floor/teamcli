@@ -57,7 +57,7 @@ import {
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
-import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
@@ -126,7 +126,7 @@ const realUpLaunch: Launch = {
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
-    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),

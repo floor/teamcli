@@ -61,7 +61,7 @@ import type { Host } from '../launch/execute.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
-import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefClaim, currentBriefEpochs, deliverBriefForAttribution, GENERAL_BRIEF_SHA256, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { launchedIdentity, paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
 import { launchLineFinding } from '../launch/line.ts';
@@ -260,7 +260,7 @@ const realLaunch: Launch = {
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
-    managed: (input) => ensureCodexEndpoint(input),
+    managed: (input) => launchCodexEndpoint(input),
     stop: (input) => stopSeatCodexEndpoint(input),
   },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),

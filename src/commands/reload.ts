@@ -49,7 +49,7 @@ import {
 import { deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import type { Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { ensureCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
 import { currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { plainLine } from '../launch/plain.ts';
@@ -127,7 +127,7 @@ const realLaunch: Launch = {
   registerInbox: (cli, seat, cwd, teamFile) =>
     registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
-    managed: (endpoint) => ensureCodexEndpoint(endpoint),
+    managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
   },
   reportDisplayAgent: (session, pane, text) => reportDisplayAgent(pane, text, aim(session)),

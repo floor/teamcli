@@ -13,6 +13,7 @@ import { presenceSessionFolder } from '../../src/daemon/presence/spool.ts';
 import {
   codexEndpointSocket,
   ensureCodexEndpoint,
+  launchCodexEndpoint,
   stopRecordedCodexEndpoint,
   stopSeatCodexEndpoint,
   type CodexEndpointDeps,
@@ -94,6 +95,36 @@ describe('the endpoint socket path', () => {
       expect(codexEndpointSocket(deep, SESSION, SEAT, BINDING)).toBeNull();
     } finally {
       rmSync(deep, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the launch side mints the binding a Codex seat has no settings file to carry', () => {
+  test('a seat with no binding gets a fresh one, and its endpoint starts under it', async () => {
+    const dir = scratch();
+    try {
+      updateState(dir, (state) => {
+        (state.sessions[SESSION] ??= emptySession()).seats[SEAT] = { stage: 'launched' };
+      });
+      let spawned = 0;
+      let listening = false;
+      const answer = await launchCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          spawn: () => { spawned++; listening = true; return { pid: 9020 }; },
+          alive: () => true,
+          isPlainDir: () => true,
+          isSocket: () => listening,
+          sleep: async () => {},
+        },
+      });
+      const binding = readState(dir).sessions[SESSION]?.seats[SEAT]?.presence_binding;
+      expect(typeof binding).toBe('string');
+      expect(answer.kind).toBe('up');
+      expect(spawned).toBe(1);
+      if (answer.kind === 'up') expect(answer.url).toContain(`${binding as string}.sock`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
