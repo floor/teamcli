@@ -112,7 +112,10 @@ test('no pane messaging, nothing is typed and the bus inbox keeps it; was: no pa
   expect(await retired).toBe(0);
 });
 
-test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a queued send whose trigger writes the read receipt is delivered (read) once, same id', async () => {
+test('a queued send whose receipt is written by the seat read is delivered (read) once, same id', async () => {
+  // The receiver's seat lock is held, so the send is accepted as queued; when the lock frees, no
+  // retry pass types anything — the seat's own signed drop read writes the receipt, and the
+  // watch promotes the same id to `delivered (read)` exactly once.
   const made = world();
   cleanup = made.cleanup;
   const host = fake(made);
@@ -122,20 +125,41 @@ test('no pane messaging, the watch types nothing and the bus inbox keeps it; was
 
   expect(await runSend(['lead', 'hello', '--json'], io, host)).toBe(0);
   const doc = assertMatchesOutputSchema<QueuedDoc>(io.out, SEND_OUTPUT_SCHEMA);
+  expect(doc.status).toBe('queued (receiver busy)');
+  expect(doc.channel).toBe('drop');
   const id = doc.ids.sent;
   if (id === null) throw new Error('the queued send named no id');
   const dir = dropDir(made.dir, 'lead');
+  expect(recordBody(join(dir, id))).toBe(filed('hello'));
+  expect(readPending(dir)).toHaveLength(1);
 
   held.release();
   const one = pane(claudeBox(''));
   const said: string[] = [];
-  // The seat does what the trigger asks: its own signed drop read, inside the retry's window.
-  one.onSubmit = () => {
-    const read = readMessage({ dropDir: dir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, id, made.home);
-    if (!read.ok) throw new Error(read.reason);
-  };
-  const retired = await retryHeldDrops(scene(made, one, said));
-  await retired;
+  await retryHeldDrops(scene(made, one, said));
+
+  // No pane messaging: the pass types nothing, and the retry record waits for the seat's read.
+  expect(one.typed).toEqual([]);
+  expect(one.enters).toBe(0);
+  expect(readPending(dir)).toHaveLength(1);
+
+  // The seat's own read, inside the retry's window: the signed receipt the watch promotes on.
+  const read = readMessage({ dropDir: dir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, id, made.home);
+  expect(read.ok).toBe(true);
+  promoteInboxDrops(scene(made, one, said));
+  promoteInboxDrops(scene(made, one, said));
+
+  expect(readPending(dir)).toEqual([]);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  // The acceptance, then the read itself: one delivery line, its own message id, and the seat's
+  // read is the word that ends it. A second promotion writes no second line.
+  expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.via])).toEqual([
+    [id, 'queued (receiver busy)', undefined],
+    [id, 'delivered (read)', 'drop'],
+  ]);
+  expect(history.entries[1]).toMatchObject({ body: filed('hello') });
 });
 
 test('a drop send queued on a held seat lock is never typed, and its watcher read promotes it once', async () => {

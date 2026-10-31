@@ -1,9 +1,7 @@
-// A send its seat took without showing it: the later confirmation, and the word when it never
-// came. A box that clears with no status or transcript evidence is sent with the note
-// `trigger taken, no read receipt yet`; the watch's later passes read the transcript and the
-// status for the sign the seat acted, and past the window say "taken but never acted on" once. A
-// taken line is never typed again. A trigger left in the box is the other case: not-submitted,
-// and the watch's retry.
+// After 0.5.9 nothing is typed into a seat to talk to it, so a send leaves no "taken" record for
+// a later pass to confirm: the signed drop file is the delivery, and the confirmation passes
+// (transcript rows, status moves, the age bound, a dead pane) all find nothing and say nothing.
+// The retry record a not-submitted line used to leave is gone with the typing that produced it.
 // Fixtures only: a scripted pane, a temporary home, no live session.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
@@ -58,8 +56,8 @@ seats:
     model: Test
     version: "1"
     launch: claude
-# These scenes walk the typed trigger: the inbox is tried and skipped for want of a listener,
-# then the line is typed. The team's word keeps the default's drop step out.
+# The word names the inbox leg and the retired typing leg; after 0.5.9 the typing leg is refused
+# everywhere and the transport that carries these scenes is the bus inbox's own drop.
 delivery_order: [mcp-inbox, typed]
 `;
 }
@@ -174,7 +172,8 @@ function dropDirOf(made: World): string {
   return join(made.dir, 'send-drops', 'acme', 'lead');
 }
 
-/** The trigger note on the sender's line, and the record it leaves beside the drop. */
+/** A send in a scene that used to leave a taken record: the drop is the delivery, no taken
+ *  record is written, and the pane is typed nothing. */
 async function sendTaken(made: World, one: Pane): Promise<string> {
   const io = testIo(made.root, { kind: 'owner' });
   expect(await runSend(['lead', 'hello'], io, sendHost(made, one, () => NOW))).toBe(0);
