@@ -63,7 +63,11 @@ function scanned(root: string): { hits: PublicNameHit[]; scanned: number } {
 }
 
 function runCli(args: string[], cwd: string = REPO): { code: number; stdout: string; stderr: string } {
-  const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], { cwd });
+  // This suite asserts the declared public policy; external private lists have their own suite.
+  const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], {
+    cwd,
+    env: { ...process.env, HOME: scratch() },
+  });
   return { code: result.exitCode ?? -1, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
 
