@@ -355,7 +355,12 @@ status read before Enter), or the transcript shows the drop being read — is a 
 reported `sent (unconfirmed)` with `trigger taken, no read receipt yet`, not a message read
 (`src/send/deliver.ts`). A line that left the box with no status, transcript or receipt evidence
 inside the window is reported `sent (unconfirmed)` the same way: taken, never a failed send, and
-never a read. Only a signed read receipt makes a message `delivered (read)`. A seat
+never a read. The console line for a send that ends without a delivery carries the receiving
+seat's delivery class in plain words after the leg's own parenthetical — `woken through its event
+adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next turn
+(pull-only)`, or `queued; <seat> has no way to be woken while idle` — because `unconfirmed` is a
+fact about the receipt, not an answer to whether the seat will read the message. Only a signed
+read receipt makes a message `delivered (read)`. A seat
 whose CLI builds its own work item from its screens gets the drop file but the body typed
 through those screens; `delivered` there means the CLI printed the line that creates the item. A
 hold on the receiver's side — a message that reached

@@ -13,6 +13,10 @@ unattended:
   - --dangerously-skip-permissions
 rules:
   option: --append-system-prompt
+# The delivery class a run measured: the development channel (src/mcp/channel.ts) and the
+# cross-session socket (src/send/inbound.ts) each wake an idle seat. The settings hooks mark turn
+# boundaries, so a launch carrying neither adapter reads its inbox only when it takes a turn.
+delivery: push
 login:
   check:
     - auth

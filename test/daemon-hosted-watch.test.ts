@@ -55,7 +55,7 @@ seats:
     vendor: anthropic
     model: Claude Opus
     version: "${WIN}"
-    launch: claude
+    launch: claude --dangerously-load-development-channels server:team-inbox
 `;
 
 function teamOf(text: string): TeamFile {

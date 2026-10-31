@@ -81,7 +81,7 @@ export function seatRules(input: RulesInput): string[] {
     // CLI: only a profile with a measured `mcp_inbox` route gives the seat the tools it names, so
     // every other seat's rules stay exactly as earlier builds wrote them.
     ...(input.inbox === true
-      ? ['If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.']
+      ? ['If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.']
       : []),
     TRUST_RULE[input.origin ?? 'file'],
     'In a protected checkout, never switch the branch, reset or commit.',

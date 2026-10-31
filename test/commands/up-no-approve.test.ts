@@ -293,7 +293,7 @@ describe('team up without an approval record', () => {
       // No socket file under the host's sockets folder: a plain send is the typed trigger, and
       // the outcome names the trigger sent, never a read.
       expect(sendIo.out).toBe(
-        'team acme, session "acme"\nbuilder-1: sent (unconfirmed) (drop, 0 ms)\n',
+        'team acme, session "acme"\nbuilder-1: sent (unconfirmed) (drop, 0 ms); queued; builder-1 reads it at its next turn (pull-only)\n',
       );
       expect(existsSync(approval(here.root, here.home))).toBe(false);
     } finally {

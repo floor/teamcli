@@ -4,7 +4,9 @@ Prints the queue a claim would consider, in the order `team next` would consider
 nothing: no lease, no renewal, no state write, no tracker write. A seat cannot pull until `team up`
 has recorded its pane; the owner is refused, and so is a name that is not a seat. A record another
 seat holds can still appear, and a deadline the clock has passed reads `overdue` in the STATE
-column and is never acted on.
+column and is never acted on. A record with a deadline, planned by a seat that cannot be woken
+while it sits idle, carries `(its seat cannot be woken while idle)` after its title: dispatch
+hands that seat no time-bound record.
 
 ## Synopsis
 
@@ -33,7 +35,7 @@ The refusals are `team next`'s, with this command's prefix.
 | STEP | the record's place in the queue, from 1 |
 | STATE | `overdue` when the clock has passed the record's deadline, `open` otherwise |
 | OWNER | the record's assignee, or `-` when the file names none |
-| TITLE | the record's title |
+| TITLE | the record's title, with `(its seat cannot be woken while idle)` after it when the record has a deadline and the planning seat cannot be woken while it sits idle |
 
 The other record fields are carried whole in `--json`; the plain plan is the four columns above.
 The STATE mark decides nothing: an overdue record is still takeable and is never dropped, blocked,
@@ -88,7 +90,7 @@ seats:
 $ team plan ; echo "exit $?"
 team beacon, session "beacon"
   STEP  STATE    OWNER  TITLE
-  1     overdue  -      the task title
+  1     overdue  -      the task title (its seat cannot be woken while idle)
 1 task
 exit 0
 ```

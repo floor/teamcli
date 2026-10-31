@@ -34,6 +34,9 @@ unattended:
 # stands between a seat and its rules.
 rules:
   option: --rules
+# The delivery class a run measured: the seat reads its registered MCP inbox when it takes a
+# turn; this CLI has no event adapter that reaches it while idle.
+delivery: pull-on-turn
 login:
   check:
     - models

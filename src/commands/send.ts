@@ -18,8 +18,10 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, type DeliveryClass } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
+import { readState, type SeatState } from '../state.ts';
 import { logLine } from '../log.ts';
 import { briefTransportOf, MEMORY_TRANSPORT_UNSUPPORTED } from '../policy/brief-transport.ts';
 import { codexDaemonForSeat } from '../policy/codex-daemon.ts';
@@ -147,6 +149,14 @@ the message and a short wait for the receipt its \`inbox_read\` call leaves; tha
 receipt is \`delivered (read)\` — the seat read the message, not that it acted on
 it — and its absence is \`sent (unconfirmed)\`, exit 0: the file is safe on disk
 and the walk ends rather than typing into a pane the inbox was chosen over.
+
+Every sent, sent (unconfirmed), sent (channel) and queued (receiver busy) line ends
+with the receiving seat's delivery class in plain words: \`woken through its event
+adapter\` for a seat an event adapter wakes, \`woken through its runtime queue\` for a
+runtime that holds the message between turns, \`queued; <seat> reads it at its next turn
+(pull-only)\` for a seat that reads its inbox when it takes a turn, and \`queued; <seat>
+has no way to be woken while idle\` for a person or a launch with no route at all. A
+delivered line needs no class: the delivery itself is the answer.
 
 The outcome is one of eight, and none of them is silent:
   delivered    the socket path (exit 0): the frame was taken, or herdr reported the
@@ -468,6 +478,10 @@ type Report = {
   /** The resolved walk's legs, in order: a real send fills each state as the walk runs, and a
    *  dry run lists the candidates it would walk. Absent on a run that never resolved a walk. */
   delivery?: LegReport[];
+  /** The receiving seat's delivery class in plain words, when the run resolved one. A line that
+   *  ends without a delivery appends it, so `sent (unconfirmed)` never stands as the whole answer
+   *  to whether the seat will read the message. Absent on paths that never read the class. */
+  deliveryWords?: string;
 };
 
 /** The address as the caller wrote it, kept on the history line beside the resolved seat: the
@@ -478,6 +492,47 @@ type SentAs = { spec: string; resolved: string };
 /** The sender's team as every history line this run writes carries it. */
 function historySender(report: Report): { from_team?: string } {
   return report.from_team === undefined ? {} : { from_team: report.from_team };
+}
+
+/** The receiving seat's runtime record, when the team's state can be read: the launch's own
+ *  words, which the class reader trusts over the file's. A state that cannot be read is no
+ *  record: the class then falls to what the file and the launch line prove, never to a guess. */
+function seatStateOf(dir: string, session: string, seat: string): SeatState | undefined {
+  try {
+    return readState(dir).sessions[session]?.seats[seat];
+  } catch {
+    return undefined;
+  }
+}
+
+/** The receiving seat's delivery class in plain words, ready for an outcome line. The runtime
+ *  record wins over the team file's row; a state that cannot be read is no record, so the class
+ *  falls to what the file and its launch line prove, never to a guess. */
+function deliveryWordsOf(input: {
+  dir: string;
+  root: string;
+  session: string;
+  seat: string;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound'>;
+  home?: string;
+}): string {
+  const state = seatStateOf(input.dir, input.session, input.seat);
+  return seatDeliveryClass({
+    dir: input.dir,
+    root: input.root,
+    session: input.session,
+    seat: input.seat,
+    ...(input.declared === undefined ? {} : { declared: input.declared }),
+    ...(state === undefined ? {} : { state }),
+    ...(input.home === undefined ? {} : { home: input.home }),
+  }).words;
+}
+
+/** A console summary with the receiving seat's delivery class appended when the run read one: a
+ *  line that ended at the leg's own word would leave "unconfirmed" as the whole answer to
+ *  whether the seat ever reads the message. */
+function withDelivery(summary: string, report: Report): string {
+  return report.deliveryWords === undefined ? summary : `${summary}; ${report.deliveryWords}`;
 }
 
 /** Where one send goes: the registry's answer for the spec, or the declared seat of the
@@ -895,6 +950,19 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   const receiving = to.cross ? readTeamConfig(to.root, { home: host.home }) : loaded;
   const declared = receiving.ok ? receiving.team.seats.find((seat) => seat.name === to.seat) : undefined;
   if (declared?.stopped === true) return stoppedSeat(io, dir, who, to.seat, host, report);
+  // The receiving seat's delivery class, read once for this send. An outcome that cannot claim
+  // delivery appends it, so `sent (unconfirmed)` never stands as the whole answer to whether the
+  // seat will read the message: the line says whether it is woken, holds the message between
+  // turns, or reads it at its next turn. The class comes from the launch's own records, never
+  // from the CLI's shipped profile alone.
+  report.deliveryWords = deliveryWordsOf({
+    dir: to.dir,
+    root: to.root,
+    session: to.session,
+    seat: to.seat,
+    ...(declared === undefined ? {} : { declared }),
+    home: host.home,
+  });
   // The registry's signing model is the running seat's authority. A pane whose live status
   // names another model is held before the body is read and before any delivery leg is walked;
   // the team file is only the roster projection and cannot override that signed record.
@@ -1513,6 +1581,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
       }
       failures.push(`socket: ${attempt.reason}`);
+      // The walk proved the receiving session has no dialable socket now — none for its pane, a
+      // recorded one gone, or a session started before its declaration. The class cached before
+      // the walk follows that evidence, so a fallback that ends in the bus inbox never claims a
+      // wake the fallback itself just disproved.
+      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(to), to.seat);
       markLeg('socket', 'attempted', attempt.reason);
       note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
       socketNote = `typed, socket ${attempt.reason}`;
@@ -2226,9 +2299,8 @@ async function handOff(
   const found = findAgent(host, to.session, to.seat);
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   const at = socketPathFor(host, to, found.pane);
-  if (at === null) {
-    return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
-  }
+  if (at === null) return { kind: 'fallback', reason: noSocketReason(host) };
+  if (at.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, at.path) };
   const id = host.newId?.() ?? randomUUID();
   if (!PENDING_ID.test(id)) {
     return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
@@ -2562,6 +2634,21 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     screen !== null &&
     showsTranscriptToken(screen, record.nonce, `team send --confirm ${record.id}`);
   const outcome: 'delivered' | 'sent (unconfirmed)' = verified ? 'delivered' : 'sent (unconfirmed)';
+  // An unconfirmed confirm appends the receiving seat's class, read from the receiving team's
+  // own records: the sender learns whether the seat is woken, holds the message between turns,
+  // or reads it at its next turn. A verified delivery needs none.
+  if (outcome === 'sent (unconfirmed)') {
+    const receiving = readTeamConfig(record.root, { home: host.home });
+    const receivingSeat = receiving.ok ? receiving.team.seats.find((seat) => seat.name === record.to) : undefined;
+    report.deliveryWords = deliveryWordsOf({
+      dir: join(record.root, '.agents'),
+      root: record.root,
+      session: record.session,
+      seat: record.to,
+      ...(receivingSeat === undefined ? {} : { declared: receivingSeat }),
+      home: host.home,
+    });
+  }
   // Take before writing: only the confirm that renamed the record writes the line.
   const taken = takePending(team.project, root, host.home, id);
   if (!taken.ok) return refuse(io, dir, who, `${id}: ${taken.reason}`, host, report);
@@ -2604,7 +2691,7 @@ function confirmed(
   report: Report,
 ): number {
   report.sent = id;
-  const summary = `${seat}: ${outcome} (native, ${String(ms)} ms)`;
+  const summary = withDelivery(`${seat}: ${outcome} (native, ${String(ms)} ms)`, report);
   if (report.json) {
     writeAction(io, report, { status: outcome, summary, channel: 'native' });
   } else {
@@ -2709,7 +2796,7 @@ function queuedBusy(
     logLine(dir, 'send', who, `${seatName}: queued (receiver busy) (${leg}; ${why}; id ${msgId})`, host.now());
   }
   const ms = host.now().getTime() - startedAt;
-  const summary = `${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`;
+  const summary = withDelivery(`${seatName}: queued (receiver busy) (${leg}, ${String(ms)} ms; id ${msgId})`, report);
   if (report.json) {
     writeAction(io, report, { status: 'queued (receiver busy)', summary, channel: leg });
   } else {
@@ -3873,6 +3960,9 @@ async function deliverClientRecord(
         continue;
       }
       failures.push(`socket: ${attempt.reason}`);
+      // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
+      // the reported class, so the summary never claims a wake that did not happen.
+      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(aim), aim.seat);
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
       continue;
@@ -4127,7 +4217,13 @@ function socketDirs(host: SendHost): string {
   return host.socketsDirAlt === undefined ? host.socketsDir : `${host.socketsDir}, ${host.socketsDirAlt}`;
 }
 
-type SocketAttempt = { kind: 'delivered' } | { kind: 'held'; reason: string } | { kind: 'fallback'; reason: string };
+/** A socket attempt's ending. `socketUnusable` marks a fallback that proved the receiving
+ *  session has no dialable socket now — none for its pane, a recorded one gone, or a session
+ *  started before its declaration — the walk's own evidence, which the reported class follows. */
+type SocketAttempt =
+  | { kind: 'delivered' }
+  | { kind: 'held'; reason: string }
+  | { kind: 'fallback'; reason: string; socketUnusable?: true };
 
 /** The one sentence a held socket frame reports: the pane, the frame's state, and why nothing
  *  further is typed. */
@@ -4277,14 +4373,17 @@ async function deliverSocketFrame(
     return { kind: 'fallback', reason: 'another command holds the seat' };
   }
   const first = socketPathFor(host, to, found.pane);
-  if (first === null) {
-    return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
-  }
+  if (first === null) return { kind: 'fallback', reason: noSocketReason(host), socketUnusable: true };
+  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path), socketUnusable: true };
   // A session started before the file that declares `accept` changed was launched without the
   // setting in force: the frame would be held at its box, so the walk passes this leg over until
   // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
   if (!inboundIsLive(inbound, first.path)) {
-    return { kind: 'fallback', reason: 'the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts' };
+    return {
+      kind: 'fallback',
+      reason: 'the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts',
+      socketUnusable: true,
+    };
   }
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
@@ -4425,18 +4524,67 @@ export async function redeliverChannelOnSocket(input: {
 /** The address a send tries: the registry's recorded one while it is still live — its pid among
  *  the pane's, its socket present — else the pane's own processes (`socketOf`). `recorded` marks
  *  the difference — only the recorded address gets the live re-resolution after its write
- *  refuses. A pane that cannot be read leaves a recorded address as the only thing this run has;
- *  a write that refuses still falls back to the typed trigger. */
-function socketPathFor(host: SendHost, to: Aim, pane: string): { path: string; recorded: boolean } | null {
+ *  refuses. A pane that cannot be read leaves a recorded address as the only thing this run has,
+ *  unless the socket it names is not there: a record of a socket that no longer exists is stale,
+ *  and an attempt to dial it cannot land. */
+type SocketAddress =
+  | { kind: 'path'; path: string; recorded: boolean }
+  | { kind: 'stale'; path: string };
+
+function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | null {
   const processes = host.processInfo(to.session, pane);
   if (to.address !== null) {
     const live = liveSocketOf(to.address, processes, host.socketsDir);
-    if (live !== null) return { path: live, recorded: live === to.address };
-    if (processes === null) return { path: to.address, recorded: true };
+    if (live !== null) return { kind: 'path', path: live, recorded: live === to.address };
+    if (processes === null) {
+      return existsSync(to.address)
+        ? { kind: 'path', path: to.address, recorded: true }
+        : { kind: 'stale', path: to.address };
+    }
   }
   if (processes === null) return null;
   const path = socketOf(host, processes);
-  return path === null ? null : { path, recorded: false };
+  return path === null ? null : { kind: 'path', path, recorded: false };
+}
+
+/** The class the receiving seat reads under once the walk proved its socket unusable: the socket
+ *  is no evidence of a way to wake the seat any more, so the words say what will actually reach
+ *  it — its runtime queue, its next turn, or nothing. A record that cannot be read keeps the
+ *  class the launch line the registry carries implies. */
+function classWithoutSocket(to: Aim): DeliveryClass {
+  let record: Pick<SeatState, 'cli' | 'launch_line' | 'watcher' | 'codex_endpoint' | 'presence_binding'> | undefined;
+  try {
+    record = readState(to.dir).sessions[to.session]?.seats[to.seat];
+  } catch {
+    record = undefined;
+  }
+  const read = seatDeliveryClass({
+    dir: to.dir,
+    root: to.root,
+    session: to.session,
+    seat: to.seat,
+    declared: { cli: to.cli, launch: record?.launch_line ?? '' },
+    ...(record === undefined ? {} : { state: record }),
+  });
+  return effectiveDeliveryClass({
+    declared: read.evidence.declared,
+    watcher: read.evidence.watcher,
+    channel: read.evidence.channel,
+    socket: false,
+    endpoint: read.evidence.endpoint,
+    ...(read.evidence.human ? { human: true } : {}),
+  });
+}
+
+/** The two endings an address that cannot take a frame has, in the words a person reads: nothing
+ *  was found for the pane, or the record names a socket that is gone — the second reported under
+ *  the seat's real class, never dialed. */
+function noSocketReason(host: SendHost): string {
+  return `no socket was found for its pane's processes (looked in ${socketDirs(host)})`;
+}
+
+function staleSocketReason(to: Aim, path: string): string {
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${deliveryWords(classWithoutSocket(to), to.seat)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
@@ -4918,7 +5066,7 @@ function delivered(io: Io, seat: string, report: Report, note?: string, via?: 't
  *  composer and the drop is still the message. The `note` says which — a typed send's names the
  *  trigger and the receipt that has not come back. Exit 0, always. */
 function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 'mcp-inbox' | 'drop' | 'typed' | 'native' | 'headless-resume', note?: string): number {
-  const summary = `${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`;
+  const summary = withDelivery(`${seat}: sent (unconfirmed) (${leg}, ${String(ms)} ms${note === undefined ? '' : `; ${note}`})`, report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (unconfirmed)', summary, channel: leg });
   } else {
@@ -4932,7 +5080,7 @@ function sentUnconfirmed(io: Io, seat: string, report: Report, ms: number, leg: 
  *  channel's own word says so. The push is not a read — the signed receipt that follows is — so
  *  a channel ending is never `delivered (read)`. Exit 0, always. */
 function sentChannel(io: Io, seat: string, report: Report, ms: number): number {
-  const summary = `${seat}: sent (channel) (${String(ms)} ms)`;
+  const summary = withDelivery(`${seat}: sent (channel) (${String(ms)} ms)`, report);
   if (report.json) {
     writeAction(io, report, { status: 'sent (channel)', summary, channel: 'channel' });
   } else {

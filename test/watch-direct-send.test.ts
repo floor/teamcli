@@ -182,9 +182,14 @@ describe("the watch's direct-work sender", () => {
     );
 
     // The record was staged before the recheck, and the recheck read the replaced epoch: the
-    // walk ends at the socket, with no dial and no resume attempt behind it.
+    // walk ends at the socket, with no dial and no resume attempt behind it. The refusal carries
+    // the staged copy the seat reads at its next wake.
     expect(stagedIds(made)).toHaveLength(1);
-    expect(result).toEqual({ ok: false, refused: "socket: refused: the recorded watch is another watch's epoch" });
+    expect(result).toEqual({
+      ok: false,
+      refused: "socket: refused: the recorded watch is another watch's epoch",
+      staged: true,
+    });
     expect(dials).toHaveLength(0);
     expect(pane.typed).toEqual([]);
     expect(pane.enters).toBe(0);

@@ -38,6 +38,8 @@ import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { readMessage } from '../src/mcp/inbox.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readRecord, verifyRecord, type SignedRecord } from '../src/send/record.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import type { Live } from '../src/status/compare.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { messageKeyState } from '../src/store/keys.ts';
@@ -310,17 +312,38 @@ function workerRuntime(target: { seat: string; pane: string } = { seat: SEAT, pa
   return { pump, claims, wake };
 }
 
-/** The worker's session accepts cross-session frames and exposes a socket for its pane: the direct
- *  route a push is allowed to take. The declaration file is backdated so the socket is newer than
- *  it, as a session launched after its accept declaration would be. */
-function directRoute(target: string = SEAT): void {
+/** The worker's session declares that it takes cross-session frames: the class a push may wake.
+ *  The declaration file is backdated so a socket the session exposes after it is newer, as a
+ *  session launched after its accept declaration would be. */
+function declareAccept(target: string = SEAT): void {
   const settings = cliHookSettingsPath(join(root, '.agents'), SESSION, target);
   if (settings === null) throw new Error(`${target}: no settings path for the fixture`);
   mkdirSync(dirname(settings), { recursive: true });
   writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
   const past = new Date(Date.now() - 60_000);
   utimesSync(settings, past, past);
-  writeFileSync(join(sockets, '222.sock'), '');
+}
+
+/** The worker's session accepts cross-session frames and exposes a socket for its pane: the direct
+ *  route a push is allowed to take. The registry record names that socket, as a launched seat's
+ *  record does: the delivery class proves a dialable route only from a recorded address. */
+function directRoute(target: string = SEAT): void {
+  declareAccept(target);
+  const socket = join(sockets, '222.sock');
+  writeFileSync(socket, '');
+  registerAgent(home, {
+    name: target,
+    signing: { model: 'Test', version: '1', role: 'worker' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(root), seat: target, session: SESSION, pane: PANE, address: socket },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
 }
 
 /** The push the watch makes, wired to the REAL production sender: the fixture host only supplies
@@ -699,13 +722,31 @@ describe('the watch gives an idle worker its queued work', () => {
   });
 
   test('a receiver with no direct route gets one refusal, and nothing is typed or claimed', async () => {
-    // The worker exposes no socket for its pane: no direct leg can take the push. The watch
-    // attempts it once and the attempt is refused before any typed fallback. The admitted send
-    // still leaves its durable signed copy before any attempt, and that copy alone wakes nothing:
-    // nothing is typed into the pane and no lease is taken.
+    // The worker's session accepts cross-session frames and its record names a socket, so the
+    // seat is one a wake reaches and the dispatch makes the attempt. The pane exposes no socket
+    // of its own and the recorded one is not the pane's, so no direct leg can take the push: the
+    // attempt is refused before any typed fallback. The admitted send still leaves its durable
+    // signed copy before any attempt, and that copy alone wakes nothing: nothing is typed into
+    // the pane and no lease is taken.
+    declareAccept();
+    const standing = join(sockets, '424242.sock');
+    writeFileSync(standing, '');
+    registerAgent(home, {
+      name: SEAT,
+      signing: { model: 'Test', version: '1', role: 'worker' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamIdOf(root), seat: SEAT, session: SESSION, pane: PANE, address: standing },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
     const io = testIo(root, { kind: 'owner' });
     const runtime = workerRuntime();
-    const sent = pushViaSend({ direct: false, onDeliver: runtime.wake });
+    const sent = pushViaSend({ direct: true, onDeliver: runtime.wake });
     const { sources, typed, paneRuns } = watchSources({
       workerStatus: 'idle',
       passes: 13,

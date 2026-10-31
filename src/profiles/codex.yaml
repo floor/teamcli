@@ -16,6 +16,10 @@ unattended:
   - --no-alt-screen
 rules:
   launch_prompt: positional
+# The delivery class a run measured: a seat whose app-server endpoint the runtime hosts takes a
+# pointer through its own queue between turns (src/send/push-adapters/codex-relay.ts); a seat
+# without that endpoint reads its MCP inbox when it takes a turn.
+delivery: between-turns
 login:
   check:
     - login

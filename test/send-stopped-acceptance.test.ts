@@ -253,7 +253,7 @@ describe('the same seat without the stopped mark plans and delivers normally', (
     const deliveredCode = await runSend([STOPPED, 'hello', 'there'], delivered, host);
     expect(deliveredCode, said(delivered)).toBe(0);
     expect(delivered.out, said(delivered)).toBe(
-      `team acme, session "${SESSION}"\n${STOPPED}: sent (unconfirmed) (drop, 0 ms)\n`,
+      `team acme, session "${SESSION}"\n${STOPPED}: sent (unconfirmed) (drop, 0 ms); queued; ${STOPPED} reads it at its next turn (pull-only)\n`,
     );
     expect(host.typed.length).toBe(0);
     // No event adapter took it, so the drop waits with its pending mark beside it.

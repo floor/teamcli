@@ -245,7 +245,15 @@ beforeEach(() => {
   writeFileSync(join(root, '.agents', 'tasks.yaml'), QUEUE);
   updateState(join(root, '.agents'), (state) => {
     const session = (state.sessions[SESSION] ??= emptySession());
-    session.seats[SEAT] = { stage: 'ready', pane: PANE, last_active: new Date(START - THRESHOLD_MS - 5_000).toISOString() };
+    // The worker's launch enabled the development channel: an idle wake reaches it, so a pass
+    // with a readable chain is a pass that pushes.
+    session.seats[SEAT] = {
+      stage: 'ready',
+      pane: PANE,
+      last_active: new Date(START - THRESHOLD_MS - 5_000).toISOString(),
+      cli: 'claude-code',
+      launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+    };
     session.seats.lead = { stage: 'ready', pane: 'lead:pane', last_active: new Date(START).toISOString() };
   });
   clock = START;

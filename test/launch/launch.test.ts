@@ -106,7 +106,7 @@ describe('the rules of a seat', () => {
     expect(withInbox.slice(0, 4)).toEqual([
       'End every commit message and every pull request body with your signature, given below.',
       'Never stop at a question: tell the orchestrator (claude-coordinator-acme) in one line and keep working.',
-      'If your tools include `inbox_check`, call it at the start of every turn and `inbox_read` for each message it lists, and act on what you read.',
+      'If your tools include `inbox_check`, call it at the start and the end of every turn and `inbox_read` for each message it lists, and act on what you read.',
       'Never run `team grant`, `team delegate` or `team revoke`, and never edit `trust:` in the team file.',
     ]);
     // A seat whose CLI carries no measured route is asked for nothing: its rules are the ones

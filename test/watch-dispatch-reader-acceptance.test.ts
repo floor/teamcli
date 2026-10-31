@@ -43,6 +43,8 @@ const RULE = '─'.repeat(40);
 const STATUS = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
 const IDLE_SCREEN = `● Done.\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
 const WIN = '5.5';
+// The worker's launch enables the development channel, so an idle wake reaches it.
+const PUSH_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
 
 // The crew names its entity, so the main orchestrator is mapped from the registry; it declares
 // no `tasks:` block, so its queue is the local `.agents/queue.yaml`.
@@ -75,7 +77,7 @@ seats:
     vendor: anthropic
     model: Claude Opus
     version: "${WIN}"
-    launch: claude
+    launch: ${PUSH_LAUNCH}
 `;
 
 // The entity's own team: its coordinator is the main orchestrator the dispatcher maps, and its
@@ -200,7 +202,7 @@ async function readMail(where = root): Promise<{ code: number; out: string; err:
 }
 
 const REFUSED_BODY =
-  'acme-web: worker-1 is idle with takeable work but was not told directly (the route refused); nothing was typed for it';
+  'acme-web: worker-1 is idle with takeable work but was not told directly (the route refused); nothing was written for it and the attempt is not retried in this idle episode';
 
 beforeEach(() => {
   forgetIdleEpisodes();
@@ -429,7 +431,7 @@ describe('publication recovers without another push', () => {
     expect(main).toMatch(/^evt-work-push-main-worker-1-[0-9a-f]{16}\.json$/);
     expect(noticeBytes('crew-lead', lead)).toContain(REFUSED_BODY);
     expect(noticeBytes('head-lead', main, entityRoot)).toContain(
-      'acme-web: worker-1 is idle with takeable work and its direct work request was refused earlier in this idle episode; nothing was typed for it',
+      'acme-web: worker-1 is idle with takeable work and its direct work request was refused earlier in this idle episode; the attempt is spent and will not be repeated',
     );
     // The main team's own reader serves that recovered body once.
     const read = await readMail(entityRoot);

@@ -17,7 +17,10 @@ The queue is this clone's view of one source read.
 
 A deadline the clock has passed is marked overdue here. The mark decides nothing: an overdue
 record is still takeable and is never dropped, blocked, reordered or released by lateness. An
-unparseable deadline is printed as written and unmarked.
+unparseable deadline is printed as written and unmarked. A record with a deadline, planned by a
+seat that cannot be woken while it is idle, carries `(its seat cannot be woken while idle)` after
+its title: dispatch hands that seat no time-bound record, so the row says why it stays in the
+queue.
 
 The source is a file the owner committed, or a tracker the owner's broker reads. A team that
 names no source reads its own local queue, `.agents/queue.yaml`; a missing one is an empty
@@ -34,8 +37,9 @@ local queue at `.agents/queue.yaml`. The path is relative to that root. A record
 `title` are required. The plain plan is the
 contract's table: one row per takeable record, in `team next`'s order — priority first (a number
 before a text, ascending), then the `tasks.fallback` tie-break — with the queue position, the
-STATE mark, the owner or `-`, and the title. Every other field the record carries is in the
-`--json` task. A record with `blocked-by`, `repos`, or `needs` is not takeable and is not printed.
+STATE mark, the owner or `-`, and the title (with the note above when the planning seat cannot be
+woken while it is idle and the record has a deadline). Every other field the record carries is in
+the `--json` task. A record with `blocked-by`, `repos`, or `needs` is not takeable and is not printed.
 
 On a broker source it reads the same root and team file, then asks the broker over
 `.agents/broker.sock`: one request line carrying the caller's seat and pane, one answer line
@@ -60,7 +64,8 @@ team plan: the state records pane <pane> for seat <name> in this session, not th
 
 The context line, then the takeable records as the contract's `STEP  STATE  OWNER  TITLE` table,
 then `1 task` / `<n> tasks`. A deadline the clock has passed reads `overdue` in the STATE column; the mark
-decides nothing.
+decides nothing. A record with a deadline, planned by a seat that cannot be woken while it is
+idle, carries `(its seat cannot be woken while idle)` after its title.
 
 The context line and `0 tasks` when no record is takeable. That is one answer, exit 0.
 
@@ -139,7 +144,7 @@ seats:
 $ team plan ; echo "exit $?"
 team beacon, session "beacon"
   STEP  STATE    OWNER  TITLE
-  1     overdue  -      the task title
+  1     overdue  -      the task title (its seat cannot be woken while idle)
 1 task
 exit 0
 ```

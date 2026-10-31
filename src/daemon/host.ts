@@ -639,6 +639,9 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
         action: request.action ?? 'claim',
         mine: request.mine ?? false,
         now: at.getTime(),
+        // The registry home this daemon was started with: the one the route's team was read in,
+        // and the one the handler reads the seat's agent record from.
+        home,
       });
       return { v: request.v, id: request.id, ok: true, next: answer };
     } catch (error) {

@@ -110,6 +110,10 @@ export interface Profile {
   /** How the team inbox registers with this CLI, from the route a run measured. Null when no
    *  route is measured for this CLI: its seats stay on the drop and typed legs. */
   mcpInbox: InboxBlock | null;
+  /** How an idle seat of this CLI can be told it has a message, as the profile's own
+   *  measurements show: a push adapter, a runtime queue between turns, an inbox read on a
+   *  turn, or nothing. The launch refines it (src/launch/delivery-class.ts). */
+  delivery: DeliveryClass;
   /** Seconds to wait for the idle prompt after a launch. */
   idleTimeout: number;
   /** Seconds to wait for the pane's shell after the exit command. */
@@ -164,6 +168,16 @@ export function shellQuote(word: string): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word)) return word;
   return `'${word.replaceAll("'", `'\\''`)}'`;
 }
+
+/** A profile's measured way of reaching an idle seat. `push`: an event adapter wakes it (the
+ *  development channel, the cross-session socket); `between-turns`: its own runtime queue holds
+ *  the message for it (a Codex seat on a managed endpoint); `pull-on-turn`: an MCP inbox the
+ *  model reads when it takes a turn; `none`: no way to be woken while idle. A seat's effective
+ *  class also depends on what its launch installed (src/launch/delivery-class.ts). */
+export type DeliveryClass = 'push' | 'between-turns' | 'pull-on-turn' | 'none';
+
+/** The delivery classes a profile may declare, in the order an effective class is chosen. */
+export const DELIVERY_CLASSES = ['push', 'between-turns', 'pull-on-turn', 'none'] as const;
 
 /** The team inbox's registration for one CLI, as a run measured it. */
 export type InboxBlock = {
@@ -704,7 +718,7 @@ const NAMES = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini'
 // CLI starts on its last-used model when a launch names none, and no shipped profile sets it.
 // `exit` and `exit_keys` are one or the other: a CLI exits by typing a word or by a key.
 // `models` is optional for a CLI that names no model on its screen or its launch line.
-const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'login', 'timeouts'] as const;
+const LAUNCH_KEYS = ['binary', 'process_names', 'tested', 'unattended', 'rules', 'delivery', 'login', 'timeouts'] as const;
 const OPTIONAL_LAUNCH_KEYS = ['exit', 'exit_keys', 'models', 'compose_module', 'status_model', 'last_used_model', 'unread_model', 'exit_clear', 'exit_confirm', 'input', 'lobby_files', 'startup_reads', 'standing_rules', 'herdr_status', 'mcp_inbox', 'not_started', 'abandon_answers'] as const;
 // The keys `pane send-keys` takes that can empty an input box, one of which a profile may name
 // to clear an exit text that did not read back as typed. `enter` is not among them on purpose:
@@ -809,6 +823,15 @@ function unreadModelOf(entry: YamlEntry): 'launch' {
   const value = text(entry, 'unread_model');
   if (value !== 'launch') fail(entry.line, '"unread_model" must be launch');
   return 'launch';
+}
+
+/** The value of `delivery`: one word from the closed set, never a guess. */
+function deliveryOf(entry: YamlEntry): DeliveryClass {
+  const value = text(entry, 'delivery');
+  if (!(DELIVERY_CLASSES as readonly string[]).includes(value)) {
+    fail(entry.line, `"delivery" must be one of: ${DELIVERY_CLASSES.join(', ')}`);
+  }
+  return value as DeliveryClass;
 }
 
 /** The value of `herdr_status`: `reliable` (the default when the key is absent) or
@@ -1145,6 +1168,7 @@ function launchOf(root: YamlNode): Shipped {
       lobbyFiles: lobbyFilesEntry ? lobbyFilesOf(lobbyFilesEntry) : [],
       startupReads: startupReadsEntry ? startupReadsOf(startupReadsEntry) : [],
       mcpInbox: mcpInboxEntry ? inboxOf(mcpInboxEntry) : null,
+      delivery: deliveryOf(required(entries, 'delivery', root.line)),
       idleTimeout: seconds(timeouts, 'idle'),
       exitTimeout: seconds(timeouts, 'exit'),
       lastUsedModel: lastUsedEntry ? boolOf(lastUsedEntry.value, 'last_used_model') : false,

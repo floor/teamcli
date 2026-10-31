@@ -130,12 +130,34 @@ test('the dispatcher reads only a delivered route as a wake', () => {
   const delivered: DirectSendResult = { outcome: 'delivered', route: 'socket', id: 'i', record: '/r' };
   expect(workPushResultOf(delivered, '')).toEqual({ ok: true, outcome: 'socket: delivered' });
   const held: DirectSendResult = { ...delivered, outcome: 'held', reason: 'the box held it' };
-  expect(workPushResultOf(held, '')).toEqual({ ok: false, refused: 'socket: held: the box held it' });
+  // The signed record was staged before the attempt, so the refusal reports the copy the seat
+  // reads at its next wake.
+  expect(workPushResultOf(held, '')).toEqual({
+    ok: false,
+    refused: 'socket: held: the box held it',
+    staged: true,
+  });
   const unreachable: DirectSendResult = { ...delivered, outcome: 'unreachable' };
-  expect(workPushResultOf(unreachable, '')).toEqual({ ok: false, refused: 'socket: unreachable' });
+  expect(workPushResultOf(unreachable, '')).toEqual({
+    ok: false,
+    refused: 'socket: unreachable',
+    staged: true,
+  });
   // A stored copy is never a wake, even though the send command exits 0 for it.
   const copied: DirectSendResult = { ...delivered, route: 'drop', outcome: 'held', reason: 'the record is stored; no seat was woken' };
-  expect(workPushResultOf(copied, '')).toEqual({ ok: false, refused: 'drop: held: the record is stored; no seat was woken' });
+  expect(workPushResultOf(copied, '')).toEqual({
+    ok: false,
+    refused: 'drop: held: the record is stored; no seat was woken',
+    staged: true,
+  });
+  // A refusal before any record was staged leaves the seat's inbox empty.
+  const unwritten: DirectSendResult = {
+    ...delivered,
+    outcome: 'refused',
+    reason: 'the box was busy',
+    record: null,
+  };
+  expect(workPushResultOf(unwritten, '')).toEqual({ ok: false, refused: 'socket: refused: the box was busy' });
   expect(workPushResultOf(null, 'team send: refused: no live agent\n'))
     .toEqual({ ok: false, refused: 'team send: refused: no live agent' });
   expect(workPushResultOf(null, ''))

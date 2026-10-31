@@ -43,7 +43,7 @@ test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async 
   expect(doc.dry_run).toBe(false);
   expect(doc.seat).toBe('native');
   expect(doc.status).toBe('sent (unconfirmed)');
-  expect(doc.action_summary).toBe('native: sent (unconfirmed) (drop, 0 ms)');
+  expect(doc.action_summary).toBe('native: sent (unconfirmed) (drop, 0 ms); queued; native reads it at its next turn (pull-only)');
   expect(doc.project).toBe('acme');
   expect(doc.session).toBe('acme');
   expect(doc.channel).toBe('drop');

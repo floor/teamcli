@@ -288,7 +288,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms)\n');
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -314,7 +314,7 @@ test('confirm without the nonce in the recipient transcript records sent (unconf
     format: 1,
     dry_run: false,
     status: 'sent (unconfirmed)',
-    action_summary: 'lead: sent (unconfirmed) (native, 0 ms)',
+    action_summary: 'lead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)',
     project: 'acme',
     session: 'acme',
     seat: 'lead',
@@ -336,7 +336,7 @@ test('a nonce from another handoff in the recipient transcript does not count as
 
   const confirmIo = helperCaller(made.root);
   expect(await runSend(['--confirm', ID], confirmIo, host)).toBe(0);
-  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms)\n');
+  expect(confirmIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (native, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok && history.entries).toEqual([
     {
@@ -387,7 +387,7 @@ test('a handoff with no socket falls back to the typed drop and records the skip
   const code = await runSend(['lead', 'hello'], io, host);
 
   expect(code).toBe(0);
-  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   expect(pane.typed.length).toBe(0);
   expect(readdirSync(dropDir(made.dir, 'lead')).filter((name) => !name.includes('.')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
@@ -1193,7 +1193,7 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   // Without a socket, handOff returns fallback and the walk continues straight to drop with zero pane writes.
   const sendIo = helperCaller(made.root);
   expect(await runSend(['lead', 'hello'], sendIo, host)).toBe(0);
-  expect(sendIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+  expect(sendIo.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n');
   expect(pane.typed).toEqual([]);
   expect(pane.enters).toBe(0);
 
