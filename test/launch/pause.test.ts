@@ -440,7 +440,7 @@ describe('o, open the pane', () => {
 describe('s, skip the seat', () => {
   test('an endpoint cleanup refusal keeps the record and never reports a successful skip', async () => {
     OWN_CLOCK.reset();
-    const f = fake({ keys: ['s'], state: { current: { stage: 'launched', pane: 'w2:p1', workspace: 'w2' } } });
+    const f = fake({ keys: ['s'], state: { current: { stage: 'launched', pane: 'pane-a', workspace: 'w2' } } });
     f.host.drop = () => { f.calls.push('endpoint-stop-refused'); return false; };
     expect(await runPause(input(), f.host)).toEqual({
       kind: 'left out', reason: 'its endpoint was not stopped; its launch record was kept', detail: '',

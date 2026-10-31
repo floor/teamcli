@@ -93,12 +93,12 @@ function scene(shadow: Shadow, localNickname?: string, declared = false): Scene 
     seats: declared
       ? [
         { name: 'lead', role: 'facilitator', inbound: true },
-        { name: 'sender5', role: 'builder', label: 'Agamemnon · builder' },
+        { name: 'sender5', role: 'builder', label: 'Fixture Sender · builder' },
       ]
       : [{
         name: 'sender5',
         role: 'builder',
-        label: 'Agamemnon · builder',
+        label: 'Fixture Sender · builder',
         ...(localNickname === undefined ? {} : { nickname: localNickname }),
       }],
   }));
@@ -111,7 +111,7 @@ function scene(shadow: Shadow, localNickname?: string, declared = false): Scene 
       inProject: 'acme',
       seats: [
         { name: 'lead', role: 'facilitator', inbound: true },
-        ...(['receiving', 'receiving-id'].includes(shadow ?? '') ? [{ name: 'sender5', role: 'builder', nickname: 'Atlas' }] : []),
+        ...(['receiving', 'receiving-id'].includes(shadow ?? '') ? [{ name: 'sender5', role: 'builder', nickname: 'fixture-nickname' }] : []),
       ],
     }));
 
@@ -132,7 +132,7 @@ function scene(shadow: Shadow, localNickname?: string, declared = false): Scene 
     const receiverLead = 'agt_999999999998';
     setRoster(home, teamIdOf(receiverRoot), [
       { agent: receiverLaunch.id, seat: 'lead', role: 'facilitator', leads: true },
-      { agent: shadow === 'receiving-id' ? senderLaunch?.id ?? receiverLead : receiverLead, seat: 'sender5', role: 'builder', nickname: 'Atlas' },
+      { agent: shadow === 'receiving-id' ? senderLaunch?.id ?? receiverLead : receiverLead, seat: 'sender5', role: 'builder', nickname: 'fixture-nickname' },
     ]);
   } else if (shadow === 'foreign' || shadow === 'foreign-id') {
     upsertTeam(home, FOREIGN_TEAM_ID, {
@@ -140,7 +140,7 @@ function scene(shadow: Shadow, localNickname?: string, declared = false): Scene 
       entity: 'other',
       session: 'other',
       root: join(base, 'other'),
-      roster: [{ agent: shadow === 'foreign-id' ? senderLaunch?.id ?? 'agt_999999999997' : 'agt_999999999997', seat: 'sender5', role: 'builder', nickname: 'Atlas' }],
+      roster: [{ agent: shadow === 'foreign-id' ? senderLaunch?.id ?? 'agt_999999999997' : 'agt_999999999997', seat: 'sender5', role: 'builder', nickname: 'fixture-nickname' }],
       lifecycle: 'running',
       by: 'test',
       at: NOW.toISOString(),
@@ -207,7 +207,7 @@ test('a receiving team nickname cannot rename a sender whose own roster lacks it
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Agamemnon (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
 });
 
 test('a foreign team nickname cannot rename a sender whose own roster lacks its id', async () => {
@@ -215,7 +215,7 @@ test('a foreign team nickname cannot rename a sender whose own roster lacks its 
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Agamemnon (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
 });
 
 test('a receiving team roster cannot answer a sender id with a conflicting nickname', async () => {
@@ -223,7 +223,7 @@ test('a receiving team roster cannot answer a sender id with a conflicting nickn
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Agamemnon (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
 });
 
 test('a foreign team roster cannot answer a sender id with a conflicting nickname', async () => {
@@ -231,7 +231,7 @@ test('a foreign team roster cannot answer a sender id with a conflicting nicknam
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Agamemnon (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
 });
 
 test('a declared sender also uses its own team label when a foreign team has the same seat nickname', async () => {
@@ -239,5 +239,5 @@ test('a declared sender also uses its own team label when a foreign team has the
   made = one;
 
   expect(await one.run()).toBe(0);
-  expect(frameLine(one.frames)).toBe('Message from Agamemnon (sender5@acme)');
+  expect(frameLine(one.frames)).toBe('Message from Fixture Sender (sender5@acme)');
 });

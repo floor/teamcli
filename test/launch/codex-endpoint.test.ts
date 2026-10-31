@@ -175,14 +175,14 @@ describe('the launch side mints the binding a Codex seat has no settings file to
       let hookReads = 0;
       let signals = 0;
       const answer = await launchCodexEndpoint({
-        dir, session: SESSION, seat: SEAT, pane: 'w9:p1',
+        dir, session: SESSION, seat: SEAT, pane: 'pane-a',
         deps: {
           alive: () => true,
           commandOf: () => `codex app-server --listen ${prior.url}`,
           startOf: () => T0_MS + 500,
           isSocket: () => true,
           isPlainDir: () => true,
-          herdrEnv: () => { hookReads++; return { HERDR_PANE_ID: 'w9:p1' }; },
+          herdrEnv: () => { hookReads++; return { HERDR_PANE_ID: 'pane-a' }; },
           spawn: () => { spawned++; return { pid: 9002 }; },
           terminate: () => { signals++; },
         },

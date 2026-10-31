@@ -120,7 +120,7 @@ function seedWatch(
 }
 
 const agent = (): HerdrAgent => ({
-  name: 'worker', agent: 'claude', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null,
+  name: 'worker', agent: 'claude', pane: 'pane-a', workspace: 'w1', status: 'idle', cwd: null,
 });
 
 function launchOf(over: Partial<DownLaunch> = {}): DownLaunch {
@@ -209,7 +209,7 @@ describe('a seat and its managed endpoint', () => {
     const at = place();
     // A launch-installed presence binding without an endpoint record: the shape a seat whose
     // launch managed no endpoint has, and every non-Codex seat's.
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING });
+    seedSeat(at, { stage: 'ready', pane: 'pane-a', workspace: 'w1', presence_binding: BINDING });
     const { sources, stops } = sourcesOf(at, {}, () => ({ stopped: true }));
     const run = await down(at, sources);
     expect(run.code).toBe(0);
@@ -221,7 +221,7 @@ describe('a seat and its managed endpoint', () => {
 
   test('a seat that records one for its current binding is stopped through it before the record goes', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
+    seedSeat(at, { stage: 'ready', pane: 'pane-a', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
     const { sources, stops } = sourcesOf(at, {}, () => ({ stopped: true }));
     const run = await down(at, sources);
     expect(run.code).toBe(0);
@@ -231,7 +231,7 @@ describe('a seat and its managed endpoint', () => {
 
   test('an endpoint that cannot be proven is left alone and the refusal is said', async () => {
     const at = place();
-    seedSeat(at, { stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
+    seedSeat(at, { stage: 'ready', pane: 'pane-a', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
     const { sources, stops } = sourcesOf(at, {}, () => ({
       stopped: false,
       why: 'the recorded process cannot be proven to serve this endpoint; it was not signalled',
@@ -245,7 +245,7 @@ describe('a seat and its managed endpoint', () => {
   test('a record for another binding names no endpoint of this seat and is not stopped', async () => {
     const at = place();
     seedSeat(at, {
-      stage: 'ready', pane: 'w1:p1', workspace: 'w1', presence_binding: BINDING,
+      stage: 'ready', pane: 'pane-a', workspace: 'w1', presence_binding: BINDING,
       codex_endpoint: { ...ENDPOINT, binding: OTHER, url: `unix:///tmp/acme/run/acme/worker/${OTHER}.sock` },
     });
     const { sources, stops } = sourcesOf(at, {}, () => ({ stopped: true }));
@@ -370,7 +370,7 @@ describe('a watch whose pid is only in the state', () => {
   });
 
   test('a record with a pane is left to `up` and to the session stop', async () => {
-    const run0 = await run({ watch: { pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED, pane: 'w9:p1', workspace: 'w9' } });
+    const run0 = await run({ watch: { pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED, pane: 'pane-b', workspace: 'w9' } });
     expect(run0.code).toBe(0);
     expect(run0.kills).toEqual([]);
     expect(run0.out).not.toContain('watch: the stop signal was sent');
