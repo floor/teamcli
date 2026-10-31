@@ -138,16 +138,16 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
 - **A seat's delivery class is read from its launch, not from its CLI's declaration.** Each
   shipped CLI profile declares one of `push`, `between-turns`, `pull-on-turn` or `none` — the
   loader requires the word and refuses one outside the set — and the launch refines it from
-  what it left behind: the development channel on the launch line, a cross-session socket the
-  send itself admits (its declaration, the team file's own `inbound` word, and an address the
-  seat's record names that still stands and is live), the managed endpoint bound to the seat's
-  current presence binding, and the recorded watcher. A declared `push` seat whose launch turned
-  nothing on falls to its watcher; a person's seat is `none`. A send that ends without a
-  delivery appends the class to its `sent (unconfirmed)`, `sent (channel)` and `queued
-  (receiver busy)` lines, and to `action_summary` in `--json`, in plain words: `woken through
-  its event adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next
-  turn (pull-only)`, or `queued; <seat> has no way to be woken while idle`. A delivered line
-  carries none: the delivery itself is the answer.
+  what it left behind: the development channel on the launch line; a cross-session socket
+  counted only while its address still exists, the launch settings accept it, the team file
+  permits it, and it does not predate that declaration; the managed endpoint bound to the
+  seat's current presence binding; and the recorded watcher. A declared `push` seat
+  whose launch turned nothing on falls to its watcher; a person's seat is `none`. A send that
+  ends without a delivery appends the class to its `sent (unconfirmed)`, `sent (channel)` and
+  `queued (receiver busy)` lines, and to `action_summary` in `--json`, in plain words: `woken
+  through its event adapter`, `woken through its runtime queue`, `queued; <seat> reads it at
+  its next turn (pull-only)`, or `queued; <seat> has no way to be woken while idle`. A
+  delivered line carries none: the delivery itself is the answer.
 
 ### Changed
 
@@ -275,14 +275,13 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   rules file told the seat not to continue earlier work and not to read drops, so a message
   queued before it was never read. It now tells the seat to read its inbox, act on what is
   addressed to it, and leave earlier work alone unless a message asks for it.
-- **A recorded socket is a route only while it is there and dialable.** A seat's delivery class
-  reads a socket from what a send itself admits — the effective settings' accept, the team
-  file's own `inbound` word, and an address the seat's record names that still exists and does
-  not predate the declaration that accepts it — never from a declaration alone, so dispatch no
-  longer spends work on a route the send would refuse. A recorded address whose file is gone is
-  never dialed: the send says it is gone, under the class the seat has without that socket, and
-  leaves the message where that turn reads it. A fallback that ends in the bus inbox never
-  claims a wake the attempt just disproved.
+- **A recorded socket counts only while its address is there and the declarations admit it.** A
+  seat's delivery class reads a socket from the launch settings' accept, the team file's own
+  `inbound` word, and an address the seat's record names that still exists and does not
+  predate the declaration that accepts it. Dispatch counts no socket for a seat whose socket is
+  absent or refused by declaration. A send that disproves the socket falls back to the bus
+  inbox, and reports the class the seat has without it, so it never claims a wake the attempt
+  just disproved.
 - **A restart waits for the session lock instead of refusing at once.** `team restart` takes the
   session's mutator lock before its first effect — the stop — standing aside up to fifteen
   seconds for the run already holding it, so a restart that arrives while the watch is restoring
