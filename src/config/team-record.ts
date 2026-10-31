@@ -17,9 +17,16 @@ import { parseYaml, stripComment, toValue, type YamlEntry, type YamlNode, type Y
 
 export type RecordPath = string[];
 
+/** Names every object inherits from its prototype chain. A path addresses the record's own keys,
+ *  so these three are never segments: a walk through one would reach a shared object, not the
+ *  record. */
+const RESERVED_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function parsePath(raw: string): RecordPath | string {
   if (raw === '' || raw.startsWith('.') || raw.endsWith('.') || raw.includes('..')) return `"${raw}" is not a path: write dotted keys, like watch.unread_after or seats.lead.model`;
-  return raw.split('.');
+  const segments = raw.split('.');
+  if (segments.some((segment) => RESERVED_SEGMENTS.has(segment))) return `"${raw}" is not a path: __proto__, constructor and prototype cannot be addressed`;
+  return segments;
 }
 
 type Container = { [key: string]: YamlValue } | YamlValue[];
@@ -71,7 +78,9 @@ export function withValue(root: YamlValue, path: RecordPath, value: YamlValue | 
       if (next === null || typeof next !== 'object') return { ok: false, why: `${where} is a value, not a section` };
       at = next as Container;
     } else {
-      let next = at[segment];
+      // Own keys only, as `getAt` reads them: a name the record does not hold is a section to
+      // make, never an inherited object to walk into and write through.
+      let next = Object.prototype.hasOwnProperty.call(at, segment) ? at[segment] : undefined;
       if (next === undefined) {
         if (value === undefined) return { ok: true, root: copy, changed: false };
         next = {};
