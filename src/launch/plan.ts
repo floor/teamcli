@@ -514,6 +514,8 @@ export function codexEndpointConfig(command: string): string[] {
  * Repeat after stopping that endpoint and starting another with the same config. All three
  * completed turns recorded `approval_policy: "never"` and `sandbox_policy.type:
  * "danger-full-access"` in the synthetic rollout's `turn_context`, on the same thread.
+ * Evidence: ~/Code/floor/briefs/teamcli-notes/briefs-0.5.10/a7-measurement/measurement.json
+ * and provider.py. This measurement used an endpoint carrying the line's config words.
  */
 export function remoteCodexCommand(command: string): string {
   // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
