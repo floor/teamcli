@@ -809,7 +809,7 @@ describe('team down', () => {
     );
   });
 
-  test('--dry-run never closes an agent the file does not name, and stops the watch it knows', async () => {
+  test('--dry-run never closes an agent the file does not name, and stops a watch whose pid is only in the state', async () => {
     writeFileSync(
       join(root, '.agents/team.state.json'),
       JSON.stringify({
@@ -836,13 +836,13 @@ describe('team down', () => {
         'pane x:p1: not recorded for a seat of this team; left as it is',
         'deepseek-acme-tmp-1: its record is not an approved seat; left running (the owner cleans it: team remove deepseek-acme-tmp-1 --abandon)',
         'stranger: its record is not an approved seat; left running (the owner cleans it: team remove stranger --abandon)',
-        'watch: its pid is only in the state; left running',
         '  skip codex-acme: is blocked at a prompt, which `team` never answers; left running',
+        '+ kill 4242',
+        '    (the watch)',
         '  skip session acme-web: not stopped, 4 agents left in it',
       ].join('\n'),
     );
     expect(run.out).not.toContain('workspace close');
-    expect(run.out).not.toContain('+ kill');
     expect(run.out).toContain('dry run: nothing was run\n');
     expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(state);
   });

@@ -353,6 +353,20 @@ export function stopSeatCodexEndpoint(
   return stopped;
 }
 
+/** Whether the seat records a managed endpoint for the presence binding it holds now: the same
+ *  strict read a stop acts on. A seat that records none — every seat whose launch managed no
+ *  endpoint — has nothing to stop, and no notice is owed for it. A state that cannot be read
+ *  answers true, so the stop itself says why nothing was stopped. */
+export function seatRecordsCodexEndpoint(input: { dir: string; session: string; seat: string }): boolean {
+  let seatState;
+  try {
+    seatState = readState(input.dir).sessions[input.session]?.seats[input.seat];
+  } catch {
+    return true;
+  }
+  return readRecordedCodexEndpoint(seatState?.codex_endpoint, seatState?.presence_binding) !== null;
+}
+
 /** Starts (or reuses) the seat's managed app-server and records it on the seat state under the
  *  state lock, re-checking the binding the path was built from. The caller attaches the TUI only
  *  when this answers `up`; a `started` server the caller does not attach is its to stop. */

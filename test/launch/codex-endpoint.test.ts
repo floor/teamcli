@@ -17,6 +17,7 @@ import {
   isSocketFile,
   launchCodexEndpoint,
   seatOfManagedEndpoint,
+  seatRecordsCodexEndpoint,
   stopRecordedCodexEndpoint,
   stopSeatCodexEndpoint,
   type CodexEndpointDeps,
@@ -735,6 +736,33 @@ describe('stopping the endpoint recorded on a seat', () => {
       seed(dir);
       const answer = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT }, {});
       expect(answer).toEqual({ stopped: false, why: 'the seat records no endpoint for its current binding' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('whether a seat records an endpoint of its own', () => {
+  test('true only under the strict read a stop acts on', () => {
+    const dir = scratch();
+    try {
+      seed(dir);
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(false);
+      seedRecord(dir, ownedRecord(dir));
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(true);
+      // A record for another binding is not this seat's current endpoint, as the stop reads it.
+      seedRecord(dir, ownedRecord(dir, { binding: OTHER, url: `unix://${join(rootOf(dir), `${OTHER}.sock`)}` }));
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a state that cannot be read answers true, so the stop itself says why', () => {
+    const dir = scratch();
+    try {
+      writeFileSync(join(dir, 'team.state.json'), 'not a state\n');
+      expect(seatRecordsCodexEndpoint({ dir, session: SESSION, seat: SEAT })).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

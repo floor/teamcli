@@ -41,7 +41,7 @@ import {
 import type { Command, Io } from '../io.ts';
 import type { ExitKeys, ExitTyping, Host } from '../launch/execute.ts';
 import { executePlan } from '../launch/execute.ts';
-import { stopSeatCodexEndpoint, type EndpointStopRead } from '../launch/codex-endpoint.ts';
+import { seatRecordsCodexEndpoint, stopSeatCodexEndpoint, type EndpointStopRead } from '../launch/codex-endpoint.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { downPlan, formatPlan, type DownSeat } from '../launch/plan.ts';
 import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
@@ -55,6 +55,7 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
+import { isWatchEpoch } from '../watch/epoch.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -1206,17 +1207,23 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   }
 
   const watch = state?.watch;
-  // Only a pid can be killed; a record whose pane's first pass has not written one yet is left
-  // as it is, as a watch whose process is not alive is.
-  const watchAlive = Boolean(watch && watch.pid !== undefined && sources.alive(watch.pid));
-  if (watchAlive && refusals.length === 0) notes.push('watch: its pid is only in the state; left running');
+  // A watch whose pid the state records and no pane does — a watch started outside a herdr pane
+  // of this team — is stopped by pid. A record carrying a well-formed epoch is the session host's
+  // own process, never a watch to signal: killing it would stop the host. A record with a pane is
+  // left alone here — `up` verifies through that pane — and stopping the session takes it with
+  // the session. A record whose process is dead, or whose pane's first pass has not written a
+  // pid yet, has nothing to stop.
+  const watchPid = watch !== undefined && watch.pid !== undefined && watch.pane === undefined
+    && !isWatchEpoch(watch.epoch) && sources.alive(watch.pid)
+    ? watch.pid
+    : null;
   if (json) for (const line of notes) jsonNotes.push(line);
   else for (const line of notes) io.stdout(`${line}\n`);
   const plan = downPlan({
     session,
     seats,
     extra,
-    watchPid: refusals.length === 0 ? null : watchAlive && watch ? watch.pid ?? null : null,
+    watchPid,
     // The bus `team up` started goes with the team, as the watch does; one the owner runs in a
     // terminal of their own is not in the state and is left running.
     busWorkspace: refusals.length === 0 ? null : state?.bus?.workspace ?? null,
@@ -1429,11 +1436,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
       },
       drop(name) {
         // The endpoint a managed launch recorded is the launch's, not the pane's: it is stopped
-        // before the record that names it goes. An endpoint whose process cannot be proven is
-        // left alone — its pid is never signalled on trust alone — and the refusal is said.
-        const endpoint = sources.codexEndpoint?.stop({ dir, session, seat: name });
-        if (endpoint !== undefined && !endpoint.stopped && endpoint.why !== undefined) {
-          io.stderr(`team down: ${name}: ${endpoint.why}\n`);
+        // before the record that names it goes. A seat that records none for the binding it holds
+        // now has no managed endpoint, and is not mentioned. An endpoint whose process cannot be
+        // proven is left alone — its pid is never signalled on trust alone — and the refusal is
+        // said.
+        if (sources.codexEndpoint !== undefined && seatRecordsCodexEndpoint({ dir, session, seat: name })) {
+          const endpoint = sources.codexEndpoint.stop({ dir, session, seat: name });
+          if (!endpoint.stopped && endpoint.why !== undefined) {
+            io.stderr(`team down: ${name}: ${endpoint.why}\n`);
+          }
         }
         let pane: string | undefined;
         let temporaryDropped = false;
