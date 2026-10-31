@@ -10,8 +10,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../src/caller.ts';
 import { approveOwnerAction } from '../src/client/owner-action.ts';
+import { runAdd, type AddSources } from '../src/commands/add.ts';
+import type { DoctorSources } from '../src/commands/doctor.ts';
+import type { Launch } from '../src/commands/up.ts';
 import { runConfig, type ConfigSources } from '../src/commands/config.ts';
 import type { Io } from '../src/io.ts';
+import type { Machine } from '../src/watch/machine.ts';
 import { intoRegistry, storedTeam } from './helpers/registry-team.ts';
 import { seatOwner, type FakeStore } from './helpers/owner-seat.ts';
 
@@ -20,6 +24,7 @@ afterAll(() => { for (const dir of made) rmSync(dir, { recursive: true, force: t
 
 const NOW = new Date('2026-10-31T12:00:00.000Z');
 const detached: Caller = { kind: 'owner-no-tty' };
+const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 
 const TEAM = `format: 1
 project: acme
@@ -189,5 +194,57 @@ describe('a git team root', () => {
     const ran = ioOf(p.root);
     expect(await runConfig(['set', 'project', 'touched', '--approval', id], ran, sources), ran.err).toBe(0);
     expect(recordText(p)).toContain('project: touched');
+  });
+});
+
+function addSourcesOf(p: { home: string; store: FakeStore }): AddSources {
+  const doctor: DoctorSources = {
+    version: () => '2.1.288',
+    onPath: () => true,
+    loggedIn: () => true,
+    herdrVersion: () => '0.7.1',
+    sessionRunning: () => false,
+    now: () => NOW,
+    home: p.home,
+  };
+  return {
+    home: p.home,
+    sessionState: () => 'running',
+    agents: () => [],
+    workspaces: () => [],
+    doctor,
+    machine: () => fine,
+    now: () => NOW,
+    launch: {} as Launch,
+    ownerSeatStore: p.store,
+  };
+}
+
+describe('add from a team root that is not a git repository', () => {
+  test('its request files from the folder, and the approval opens the same door', async () => {
+    const p = place(false);
+    const sources = addSourcesOf(p);
+    const before = recordText(p);
+    const ask = ioOf(p.root);
+    expect(await runAdd(['worker-2', '--like', 'worker', '--request'], ask, sources), ask.err).toBe(0);
+    const id = requestId(ask.out);
+    expect(id).not.toBe('');
+    // A request records nothing in the team's record.
+    expect(recordText(p)).toBe(before);
+    expect(approveOwnerAction(p.home, id, 'oui', p.store, NOW)).toMatchObject({ ok: true });
+    const run = ioOf(p.root);
+    expect(await runAdd(['worker-2', '--like', 'worker', '--approval', id, '--dry-run'], run, sources), run.err).toBe(0);
+    // The approval admitted this run past the door: it reached the plan it would run.
+    expect(run.out).toContain('workspace create');
+    expect(run.err).not.toContain('not inside a git repository');
+    expect(recordText(p)).toBe(before);
+  });
+
+  test('control: a git root files the same request', async () => {
+    const p = place(true);
+    const sources = addSourcesOf(p);
+    const ask = ioOf(p.root);
+    expect(await runAdd(['worker-2', '--like', 'worker', '--request'], ask, sources), ask.err).toBe(0);
+    expect(requestId(ask.out)).not.toBe('');
   });
 });

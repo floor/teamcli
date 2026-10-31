@@ -23,7 +23,7 @@ import { seatNumberingInForce } from '../settings/seat-numbering.ts';
 import { branchPresent, readMerge } from '../end/condition.ts';
 import { branchProblem, resultPathProblem } from '../end/until.ts';
 import { clearStopped, copySeat, hasSeat, seatIsStopped } from '../file/lines.ts';
-import { placedProblems } from '../file/load.ts';
+import { findRoot, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { launchedTeamFile, forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -246,9 +246,13 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
   const clientText = clientRun === null ? null : `client:${clientRun.grant.clientId}`;
   // The owner-seat door (src/client/owner-action-step.ts): `--request` asks the owner seat and
   // returns; `--approval <id>` admits this run when the owner seat signed for exactly it.
+  // The root it records and admits is the one the record's readers resolve: a checkout's root, or
+  // the plain folder itself (the registry record is keyed by that folder). The step's own
+  // findRoot alone refused every team whose folder is not a repository.
+  const seatRoot = findRoot(io.cwd) ?? resolve(io.cwd);
   const seatStep = clientRun !== null && (args.flags.has('request') || args.values.approval !== undefined)
     ? (refuse(io, json, 'add', { id: 'add.approval-refused', message: '--client and the owner-seat door are two doors: pass one', repair: null }), { kind: 'refused' as const })
-    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, sources);
+    : ownerSeatStep('add', 'team-add', argv, { request: args.flags.has('request'), approval: args.values.approval, dry: args.flags.has('dry-run'), json }, io, { ...sources, root: seatRoot });
   if (seatStep.kind === 'requested') {
     // exit: add.approval-requested
     return 0;
