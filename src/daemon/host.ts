@@ -137,6 +137,10 @@ export type StartMachineDaemonInput = {
   heartbeatMs?: number;
   /** How long a request may be in flight before it is reported as stuck. */
   stuckMs?: number;
+  /** How long a close waits for an endpoint refresh sent before its admission; 10 s in
+   *  production. Past it the close answers pending and keeps ownership. A test shortens it to
+   *  observe that answer without waiting the production bound. */
+  refreshCloseBoundMs?: number;
   /** `absent` until the broker handler lands; never `on` without the owner's go. */
   features?: DaemonFeatures;
   /** Injected for a test that must not touch the real terminal host's pane sources. */
@@ -247,11 +251,32 @@ export type StartMachineDaemonResult =
 const HEARTBEAT_MS = 5_000;
 const STUCK_MS = 10_000;
 const PRESENCE_EVERY_MS = 250;
+/** The longest a close waits for an endpoint refresh sent before its admission. It sits above
+ *  the refresh's own bounds (the send probe, the bus probes and the start lock), so only a start
+ *  that never answers reaches it; that close answers pending and keeps ownership. */
+const REFRESH_CLOSE_BOUND_MS = 10_000;
 
 type InFlight = { op: string; since: number };
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Whether a run settles within `ms`, whether it resolves or rejects. The timer only decides
+ *  the close's answer: a run that loses the race is not cancelled, and nothing it owns is
+ *  released on the strength of the timer. */
+async function settlesWithin(run: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run.then(() => true, () => true),
+      new Promise<boolean>((done) => {
+        timer = setTimeout(() => done(false), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 type LockResult = { ok: true } | { ok: false; holder: number | null };
@@ -376,6 +401,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   const features: DaemonFeatures = input.features ?? { broker: 'absent' };
   const heartbeatMs = input.heartbeatMs ?? HEARTBEAT_MS;
   const stuckMs = input.stuckMs ?? STUCK_MS;
+  const refreshCloseBoundMs = input.refreshCloseBoundMs ?? REFRESH_CLOSE_BOUND_MS;
   const pid = process.pid;
   const uid = typeof process.getuid === 'function' ? process.getuid() : -1;
   const socketPath = daemonSocketPath(home);
@@ -1484,7 +1510,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   };
   const refreshOnce = async (): Promise<void> => {
     try {
-      await Promise.all(
+      // Every root's task is drained before the refresh counts as finished, and a failure is
+      // recorded rather than allowed to settle the run early: a close joins this run before it
+      // releases ownership, and a Promise.all rejection would let the other roots' revives
+      // outlive that close and bind a listener behind the release.
+      const settled = await Promise.allSettled(
         watched.map(async (watch) => {
           const { status } = watch;
           const probing = status.send === 'serving' || status.send === 'already-running' || (status.send === 'failed' && watch.sendWas !== null);
@@ -1528,6 +1558,11 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           }
         }),
       );
+      for (const [index, one] of settled.entries()) {
+        if (one.status !== 'rejected') continue;
+        const root = watched[index]?.status.root ?? 'an unknown root';
+        logLine(`root ${root}: the endpoint refresh failed: ${messageOf(one.reason)}`);
+      }
     } finally {
       writeState();
     }
@@ -1742,11 +1777,10 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
           // A synchronous throw is a handle that was already closed.
         }
       }
-      // A refresh sent before admission is still in flight: its probes were sent while the
-      // endpoints were up and settle after they close. Joining it here means the release below
-      // waits for it, so its late answer can neither reach the record nor the log behind the
-      // close. No new refresh starts once `closed` is set, so one join is enough.
-      if (refreshRun !== null) admissions.push(refreshRun.catch(() => undefined));
+      // The endpoint refresh is joined below, after this admission block, so its wait is bounded
+      // and a retry joins a run that outlived the first answer. It is not part of `admissions`:
+      // that join is unbounded, and a start that never settles must not keep the lock, the
+      // socket and the record held without an answer.
       // The record says the daemon is closing before anything unbounded is awaited: a hung
       // presence drain must not leave the old serving record standing behind it. A route that
       // does quiesce is released below and its record is unlinked; one that does not keeps this
@@ -1763,6 +1797,18 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       // close began can never reach one now: its writer is answered `not reached` instead of
       // being left to a later daemon that did not receive the request.
       faultInbox.close();
+    }
+    // The refresh sent before admission is joined here, bounded, and outside the admission
+    // block so a retry after a pending answer joins it again. Once it has settled, its late
+    // answer can neither reach the record nor the log behind the close. A run the bound outlasts
+    // is not cancelled and nothing it owns is released: the answer is a pending close that keeps
+    // the lock, the socket and the record, so the revive it still holds can bind and close its
+    // own listener without another daemon taking the routes beside it.
+    const refresh = refreshRun;
+    if (refresh !== null && !(await settlesWithin(refresh, refreshCloseBoundMs))) {
+      logLine('close pending: the endpoint refresh did not settle', true);
+      writeState(true);
+      return;
     }
     // Presence drain: the in-flight pass of each route (an ingester step and the activity write
     // that follows it) finishes, then every ingester's own truthful close. No timeout races the

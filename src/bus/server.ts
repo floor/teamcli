@@ -180,6 +180,10 @@ export type StartBusResult =
 const REQUEST_IDLE_MS = 5000;
 const START_WALKS = 8;
 const STALE_CONFIRM_MS = 50;
+/** How long a liveness probe waits for a unix-socket connect. A path that neither connects nor
+ *  refuses within the bound is unreachable: the probe answers so, and a start walk that reaches
+ *  one attempts its own bind, which fails while a listener still holds the path. */
+const PROBE_TIMEOUT_MS = 400;
 const LOCK_WAIT_MS = 2000;
 const LOCK_POLL_MS = 50;
 const LOCK_YOUNG_MS = 1000;
@@ -355,13 +359,26 @@ type Probe = 'live' | 'stale' | 'none';
 function probeSocket(path: string): Promise<Probe> {
   return new Promise((done) => {
     const socket = connect(path);
+    let settled = false;
+    const settle = (probe: Probe): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      done(probe);
+    };
+    // A connect that neither completes nor errors would otherwise wait forever, and `busListening`
+    // and the start walk both await it. The bound answers unreachable instead.
+    const timer = setTimeout(() => {
+      socket.destroy();
+      settle('none');
+    }, PROBE_TIMEOUT_MS);
     socket.once('connect', () => {
       socket.destroy();
-      done('live');
+      settle('live');
     });
     socket.once('error', (error) => {
       socket.destroy();
-      done((error as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? 'stale' : 'none');
+      settle((error as NodeJS.ErrnoException).code === 'ECONNREFUSED' ? 'stale' : 'none');
     });
   });
 }
