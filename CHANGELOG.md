@@ -174,6 +174,15 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   whole section keeps the comments written inside it. A change the editor cannot address that
   way rewrites the record whole, and the command says so on stderr, with `comments_kept: false`
   in `--json`.
+- **Time-bound work is never handed to a seat that cannot be woken while it is idle.** `team
+  next`, in the command and in the daemon, and the workflow's reservation take leave a record
+  carrying a deadline out of the candidates they offer such a seat, while ordinary work stays
+  on offer. The watch's dispatch spends no idle attempt on it: the push would be a wake that
+  never lands and the episode's one attempt would be gone with it, and an episode whose wake
+  already went is still settled. `team plan` marks such a record `(its seat cannot be woken
+  while idle)` after its title, and `team up` warns that `<seat> is a lead seat and <cli>
+  cannot be woken while it is idle; time-bound work is never dispatched to it` (a reviewer
+  seat says so as a reviewer; a person's seat is left out).
 
 ### Fixed
 
