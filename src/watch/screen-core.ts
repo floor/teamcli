@@ -377,8 +377,8 @@ function resetOf(lines: string[], region?: Set<number>): Reset | null {
   return null;
 }
 
-function asScreen(kind: Screen['kind'], lines: string[], region?: Set<number>): Screen {
-  if (kind === 'rate limit') return { kind, reset: resetOf(lines, region) };
+function asScreen(kind: Screen['kind'], lines: string[], region?: Set<number>, reason?: string): Screen {
+  if (kind === 'rate limit') return { kind, reset: resetOf(lines, region), ...(reason === undefined ? {} : { reason }) };
   return { kind };
 }
 
@@ -421,7 +421,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
       const fn = getProfileFn(data.profile, name);
       if (fn !== undefined) {
         const outcome = evalPredicate(fn, plain);
-        if (outcome === 'match') return asScreen(kind, plain);
+        if (outcome === 'match') return asScreen(kind, plain, undefined, stage?.reason);
         if (outcome === 'fail') return { kind: 'unknown' };
       }
       if (stage) {
@@ -432,7 +432,7 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
           // elsewhere on the pane cannot date a wall it does not belong to.
           if (hit) {
             const block = rule.atComposer ? edge([...(rule.any ?? []), ...(rule.all ?? [])]) : null;
-            return asScreen(kind, plain, block === null ? undefined : new Set(block));
+            return asScreen(kind, plain, block === null ? undefined : new Set(block), rule.reason ?? stage.reason);
           }
         }
       }
@@ -928,6 +928,17 @@ function lineSomewhere(data: ScreenData, lines: string[], pattern: LinePattern, 
     const hit = matches(data, lines, i, pattern, tick, inWindow);
     if (hit === 'stop') return 'stop';
     if (hit) return true;
+    // Some terminal panes wrap a transcript row at their current width. A live rule can read
+    // that row as one sentence when the next live row is indented continuation text. The join
+    // is deliberately limited to one adjacent pair: separate transcript paragraphs never make
+    // a pattern match just because their words happen to fit together.
+    if (region === undefined || !region.has(i + 1)) continue;
+    const line = lines[i] ?? '';
+    const next = lines[i + 1] ?? '';
+    if (line.trimEnd() !== line || !/^\s+\S/.test(next)) continue;
+    const wrapped = matches(data, [`${line} ${next.trimStart()}`], 0, pattern, tick, false);
+    if (wrapped === 'stop') return 'stop';
+    if (wrapped) return true;
   }
   return false;
 }

@@ -5,12 +5,15 @@ import { cpus, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { loadReadings, loadSpendReadings, saveReadings, type Seen } from '../src/budgets/readings.ts';
+import { runDrops } from '../src/commands/drops.ts';
 import { runStatus } from '../src/commands/status.ts';
 import { listUnacked, plantMessage, plantRecord, type MessagePayload } from '../src/commands/messages.ts';
 import { signReceiptPayload, writeReceipt } from '../src/send/record.ts';
 import { runWatch, USAGE } from '../src/commands/watch.ts';
 import { readTriggerLine } from '../src/send/native.ts';
 import { findRoot } from '../src/file/load.ts';
+import { deliverBriefForAttribution } from '../src/launch/general-brief.ts';
+import { listUnread } from '../src/mcp/inbox.ts';
 import type { WatchSources } from '../src/commands/watch.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
@@ -2126,6 +2129,59 @@ describe('team watch', () => {
     // was handed over.
     expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.json'))).toBe(true);
     expect(existsSync(join(dir, '.agents', 'messages', 'deepseek-acme', 'm1.read.json'))).toBe(false);
+  });
+
+  test('a superseded brief dropped from the claim is not offered for read or rung', async () => {
+    const currentTeam = team();
+    const session = currentTeam.session;
+    const seat = 'deepseek-acme';
+    const root = findRoot(dir);
+    if (!root) throw new Error('the watch fixture is not a git checkout');
+    const agentsDir = join(root, '.agents');
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+
+    const deliver = (at: string) => deliverBriefForAttribution({
+      dir: agentsDir,
+      root,
+      session,
+      home,
+      now: new Date(at),
+      team: currentTeam,
+      state: readState(agentsDir).sessions[session] ?? emptySession(),
+      attributed: [seat],
+    }).deliveries.find((delivery) => delivery.seat === seat);
+    const first = deliver('2026-10-03T13:30:00.000Z');
+    const second = deliver('2026-10-03T13:35:00.000Z');
+    const third = deliver('2026-10-03T13:40:00.000Z');
+    if (!first?.ok || !second?.ok || !third?.ok) throw new Error('the fixture could not deliver its briefs');
+    const claim = readState(agentsDir).sessions[session]?.briefs?.[seat];
+    expect(claim?.superseded).toContain(second.id);
+    expect(claim?.superseded).not.toContain(first.id);
+
+    // Read the current brief as the launch hook does. The old signed record cannot be served and
+    // stays on disk without a receipt, but it must no longer appear in the reader's waiting list.
+    const currentRead = testIo(root, { kind: 'owner' });
+    expect(await runDrops(['--read', '--seat', seat, '--session', session], currentRead, { home })).toBe(0);
+    expect(currentRead.out).toContain('from the launch');
+    expect(existsSync(`${join(agentsDir, 'send-drops', session, seat, third.id)}.read.json`)).toBe(true);
+    const oldPath = join(agentsDir, 'send-drops', session, seat, first.id);
+    expect(existsSync(oldPath)).toBe(true);
+    expect(existsSync(`${oldPath}.read.json`)).toBe(false);
+    expect(listUnacked(root, session, home).map((message) => message.id)).toContain(first.id);
+    expect(listUnread(join(agentsDir, 'send-drops', session, seat), { to: seat, root, session }, home)).toEqual([]);
+
+    const retry = testIo(root, { kind: 'owner' });
+    expect(await runDrops(['--read', '--seat', seat, '--session', session], retry, { home })).toBe(0);
+    expect(retry.out).toBe('');
+    expect(retry.err).toBe('');
+
+    const io = testIo(dir, { kind: 'owner' });
+    expect(await runWatch(['--file', file], io, sources(2, { home }))).toBe(0);
+    expect(typed).toEqual([]);
+    expect(io.out).not.toContain(`rang ${seat}`);
+    expect(existsSync(oldPath)).toBe(true);
+    expect(existsSync(`${oldPath}.read.json`)).toBe(false);
   });
 
   test('an older-store evt-work record is never rung, and types nothing', async () => {

@@ -1115,7 +1115,9 @@ function stuckPromptDifference(
   // Every detail below is text the screen showed, not text `team` wrote: each is cleaned the way
   // the report cleans a difference line, so the same string is safe in `--json`, which renders
   // `what` as it stands (a control sequence or a `\r` in it would otherwise reach the document).
-  if (screen.kind === 'rate limit') {
+  if (screen.kind === 'rate limit' && screen.reason !== undefined) {
+    details.push(plainLine(screen.reason));
+  } else if (screen.kind === 'rate limit') {
     // The reset in the screen's own phrase: `at` a clock or `in` a span, never the other. A
     // screen that names none says so, rather than leaving the reader to guess one.
     details.push(screen.reset === null
@@ -1824,4 +1826,3 @@ function modelRuleCheck(
   }
   return { differences, notes: [] };
 }
-
