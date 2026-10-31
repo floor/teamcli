@@ -804,18 +804,18 @@ describe('the prune', () => {
       error: { id: 'brief.prune-refused' },
     });
 
-    const ghost = await runPrune([], { caller: { kind: 'seat', name: 'ghost', pane: 'w1:p9', session: 'acme' } });
+    const ghost = await runPrune([], { caller: { kind: 'seat', name: 'ghost', pane: 'fixture-pane-9', session: 'acme' } });
     expect({ code: ghost.code, out: ghost.out, err: ghost.err }).toEqual({
       code: 1,
       out: '',
       err: 'team brief prune: only a seat of this team retires its own launch-brief retry markers; this call is ghost\n',
     });
 
-    const moved = await runPrune([], { caller: { kind: 'seat', name: 'lead', pane: 'w9:p9', session: 'acme' } });
+    const moved = await runPrune([], { caller: { kind: 'seat', name: 'lead', pane: 'fixture-pane-8', session: 'acme' } });
     expect({ code: moved.code, out: moved.out, err: moved.err }).toEqual({
       code: 1,
       out: '',
-      err: 'team brief prune: the state records pane w1:p1 for seat lead in this session, not the pane this call is on: '
+      err: `team brief prune: the state records pane ${PANE.lead as string} for seat lead in this session, not the pane this call is on: `
         + 'a lead stops the team and starts it again (`team down`, then `team up`)\n',
     });
     expect(snapshot()).toEqual(before);
