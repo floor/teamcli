@@ -231,6 +231,12 @@ not a message) are unchanged.
   words: the whole default, its value included, is suppressed, and an option's short, long and
   `=` spellings all count as the same option. A quoted config or prompt word is not read as a
   flag, and neither is a word after `--`.
+- **A managed Codex endpoint stop proves the process, not its socket file.** A missing socket
+  file is no evidence the server is gone: a live pid that its command line and start instant
+  prove to be this record's server is stopped by pid, and the socket file is removed only when
+  it is that socket. A live pid that cannot be proved is never signalled. A record that is
+  present but unreadable reads as unproven, not absent: the stop says why it cannot act, and a
+  removal that needs it is refused while the seat and its record stay.
 
 ## [0.5.5] - 2026-10-26
 
