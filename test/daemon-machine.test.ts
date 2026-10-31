@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { daemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon, type HostedWatchExtras } from '../src/daemon/host.ts';
+import { busListening, startBus, type StartBusInput, type StartBusResult } from '../src/bus/server.ts';
 import type { BrokerWorkSource } from '../src/idle_work.ts';
 import { daemonLockPath, daemonLogPath, daemonSocketPath, daemonStatePath, machineConfigDir } from '../src/daemon/paths.ts';
 import { mintPresenceBinding } from '../src/daemon/presence/contract.ts';
@@ -414,6 +415,48 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     } finally {
       for (const socket of held.splice(0)) socket.destroy();
       await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
+  });
+
+  test('a close that lands during a bus revive closes the revived listener instead of adopting it', async () => {
+    const { root, home } = scratch();
+    // The injected start holds the revive until the close has begun, so the bus it binds is a
+    // listener that lands after admission had already spliced the handles it stops.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const reviving = new Promise<void>((resolve) => { reached = resolve; });
+    let outcome: StartBusResult['kind'] | null = null;
+    const busStart = async (input: StartBusInput): Promise<StartBusResult> => {
+      reached();
+      await held;
+      const result = await startBus(input);
+      outcome = result.kind;
+      return result;
+    };
+    const started = await startMachineDaemon({
+      home,
+      roots: [root],
+      startedBy: 'manual',
+      version: '0.5.3-daemon-test',
+      heartbeatMs: 25,
+      busStart,
+    });
+    expect(started.kind).toBe('serving');
+    if (started.kind !== 'serving') return;
+    try {
+      unlinkSync(join(root, '.agents', 'bus.sock'));
+      await reviving;
+      const closeRun = started.daemon.close();
+      release();
+      await closeRun;
+      // The revive did bind a listener, behind the close that had already spliced the handles
+      // it stops; it may not outlive that close.
+      expect(outcome as StartBusResult['kind'] | null).toBe('serving');
+      expect(await busListening(root)).toBe(false);
+    } finally {
+      release();
+      await started.daemon.close();
     }
   });
 

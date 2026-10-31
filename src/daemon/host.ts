@@ -22,7 +22,7 @@ import {
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
-import { busSocket, startBus, type BusHandle } from '../bus/server.ts';
+import { busSocket, startBus, type BusHandle, type StartBusInput, type StartBusResult } from '../bus/server.ts';
 import { freshBusWatch, nextBackoffMs, reviveBus, type BusWatch } from '../bus/supervise.ts';
 import { projectIdOfTeam } from '../dev_mode.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -144,6 +144,10 @@ export type StartMachineDaemonInput = {
   /** Starts one root's per-project send server. The default starts the real server; a test
    *  injects its own to read the start input without binding a socket. */
   sendStart?: typeof startSendDaemon;
+  /** Starts one root's bus server when the heartbeat finds it stopped. The default starts the
+   *  real server; a test injects its own to hold or observe a revive. It is never the start that
+   *  hosts the bus beside send: that one is `startBus` itself. */
+  busStart?: (input: StartBusInput) => Promise<StartBusResult>;
   /**
    * Whether each hosted route carries a watch on the daemon's heartbeat. Off by default: the
    * quiet foundation lands before any activation, and a daemon started only to host endpoints
@@ -1449,7 +1453,21 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       stderr: (text) => logLine(text),
       heldThresholdSeconds: thresholds.thresholds.held_threshold_seconds,
       now,
-    }, watch.busState, at);
+    }, watch.busState, at, undefined, input.busStart);
+    // A revive started before admission can land after it: the handles admission stopped were
+    // already spliced, so a listener bound now would belong to no one. It is closed here instead
+    // of adopted. Admission joined this refresh, so the daemon's close waits for this close to
+    // settle and cannot answer with the listener still bound.
+    if (closed) {
+      if (revived.kind === 'serving') {
+        try {
+          await revived.handle.close();
+        } catch {
+          // A handle that was already closed has nothing left to stop.
+        }
+      }
+      return;
+    }
     if (revived.kind === 'serving') {
       busHandles.push(revived.handle);
       watch.status.bus = 'serving';
