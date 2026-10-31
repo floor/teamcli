@@ -114,6 +114,15 @@ not a message) are unchanged.
   the start the watch record holds and the version the daemon reports, `unknown` when it
   reports none. The line no longer carries a relative last-cycle time; a failed last pass is
   still the check's line.
+- **`team agents prune` retires agent records no roster names.** It lists one row for each
+  record this machine holds that no registered team's roster names: the agent, the seat and
+  team it reaches, its lifecycle, why no roster names it, and what a run would do. `--apply`
+  retires the orphaned and superseded records and leaves three kinds alone: a seat the team's
+  configuration still declares, a record whose team the registry no longer holds, and a record
+  whose team's configuration cannot be read. Retiring is a recorded state, never a delete: the
+  record keeps every field, its signed settings among them, and the lookups that place a live
+  seat skip it. `--apply` is the owner's, from a terminal rather than a seat's pane, and a
+  scoped grant reaches only its own entities.
 
 ### Changed
 
