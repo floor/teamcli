@@ -323,10 +323,11 @@ Hidden: no
 Usage:
 
     team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
+    team brief prune [--apply] [--json]
 
 ### Who may run it
 
-`team-read` — the rollout plan reads the team's seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner's alone, and --apply delivers the general seat brief to the team's live seats
+`team-read` — the rollout plan reads the team's seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner's alone, and --apply delivers the general seat brief to the team's live seats. The prune verb is seat-only, and its own row says so
 
 ### Flags
 
@@ -341,6 +342,33 @@ Usage:
 
 None.
 
+### `prune`
+
+Hidden: no
+
+Usage:
+
+    team brief prune [--apply] [--json]
+
+#### Who may run it
+
+`seat-only` — a retry marker is one seat's mailbox: the seat the team declares, on the pane the state records for it, and never the owner; the dry run changes nothing, and --apply removes only that seat's launch-brief retry markers
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--apply` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ### `rollout`
 
 Hidden: no
@@ -351,7 +379,7 @@ Usage:
 
 #### Who may run it
 
-`team-read` — the command's only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat's claim and its signed drop
+`team-read` — the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat's claim and its signed drop
 
 #### Flags
 

@@ -38,23 +38,36 @@ runtime in this build proves zero-persistence for: a `memory` policy delivers no
 every seat and every `team send --brief`, and falls back to neither of the other two transports.
 A launch reads the same policy and delivers the same way.
 
+`team brief prune` is the other verb: it retires the calling seat's own launch-brief retry
+sidecars — the `<id>.pending` markers a held delivery leaves beside its record for `team watch` to
+retry. A marker's retry can no longer be right when the seat's claim has moved past that delivery,
+or when the seat has read the delivery the claim names; a marker of the current claim that is not
+read is exactly the one a retry still owes, and is never touched. Prune applies the retry pass's
+own two rules, reads them from the state and the drop folder, and prints what it would retire; it
+removes nothing without `--apply`, and then removes only those markers. A signed record, a
+receipt, an unread delivery and any other send's marker are left exactly where they are. The
+caller must be the seat itself, on the pane the state records for it: the owner and every other
+pane are refused.
+
 ## Synopsis
 
     team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
+    team brief prune [--apply] [--json]
 
 ## Flags
 
 | Flag | Value | Effect |
 | --- | --- | --- |
-| `--apply` | — | run the plan: write each due seat's claim and signed drop, recover a held name at the claim's next attempt, and report each seat as it ended; without it nothing is written |
-| `--seat` | a declared seat name | plan or deliver for that seat alone; the other seats are not planned, written or reported, so a targeted retry leaves the team alone |
-| `--session` | a session name | the session to deliver in; the team file's own unless the owner names another |
-| `--file` | a path | the team file to read; the owner's alone |
-| `--json` | — | print one `team.brief` document (`format: 1`, `project`, `session`, `apply`, `seats`, `counts`) instead of the per-seat lines |
+| `--apply` | — | rollout: run the plan: write each due seat's claim and signed drop, recover a held name at the claim's next attempt, and report each seat as it ended. prune: remove the markers the dry run listed. Without it nothing is written or removed |
+| `--seat` | a declared seat name | rollout only: plan or deliver for that seat alone; the other seats are not planned, written or reported, so a targeted retry leaves the team alone |
+| `--session` | a session name | rollout only: the session to deliver in; the team file's own unless the owner names another |
+| `--file` | a path | rollout only: the team file to read; the owner's alone |
+| `--json` | — | one document instead of the lines: `team.brief` (`format: 1`, `project`, `session`, `apply`, `seats`, `counts`) for rollout, `team.brief-prune` (`format: 1`, `project`, `session`, `seat`, `apply`, `files`, `counts`) for prune |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
-`rollout` is the command's one subcommand, and it is required: `team brief` alone, another word,
-or an extra word is an invocation error, as is an unknown flag.
+A subcommand is required: `team brief` alone, another word, or an extra word is an invocation
+error, as is an unknown flag. `prune` takes `--apply` and `--json` alone; `--seat`, `--session`
+and `--file` are `rollout`'s.
 
 ## What it reads and writes
 
@@ -71,6 +84,16 @@ file, a link, a FIFO or a folder is never replaced, removed or followed: the run
 claim's next attempt and posts the drop at that attempt's id instead, leaving the held name byte
 for byte as it was found. Nothing is typed, no pane is read, and herdr is not called.
 
+`prune` reads the team file and, for the calling seat, the state's brief claim and the markers in
+the seat's own drop folder. A marker is listed when its id is not the claim's — the seat's reader
+refuses the older delivery as superseded — or when a signed read receipt bound to the claim says
+the seat read it. The receipt must carry the claim's brief sha256, incarnation and epoch, as this
+build's reader writes them: a receipt from a build that bound no claim proves no read, and the
+marker stays. `--apply` removes each listed marker with one removal per file and checks that the
+name is gone, so a removal that fails is reported as failed rather than counted as retired. The
+folder is guarded the way `team drops` guards it: a step that is a link or a file refuses the run
+instead of reading through it, and a claim that cannot be read retires nothing.
+
 ## Who may run it
 
 The owner reads any team file it names. Everyone else is held to the read gate: a seat whose own
@@ -78,6 +101,10 @@ placement — name, session and pane — matches the state's record may read its
 caller outside every seat is told `this team is not yours to read`. A caller who is not the owner
 cannot aim `--file` or `--session`: those flags name another team's or another session's records,
 and the refusal is the owner's.
+
+`prune` is the seat's own act and only the seat's: the caller must be the seat whose drop folder
+it is, placed on the pane the state records for it. The owner is refused, and so is a seat calling
+from any other pane; a seat the file does not declare is refused with the same sentence.
 
 ## Output and exit codes
 
@@ -99,6 +126,15 @@ The plan prints one line per declared seat:
 stale seat is printed as stale and written nothing, and a seat whose delivery failed is
 `failed <seat>: <reason>`.
 
+The prune prints one line per marker, then a count:
+
+- `would retire <path>: <why>` — the dry run would remove the marker; `<why>` is `the delivery was
+  read` or `the seat's current claim names a newer delivery`;
+- `retired <path>: <why>` — `--apply` removed it;
+- `failed <path>: <error>` — `--apply` could not remove it, and the run says so;
+- `1 file to retire` / `2 files to retire`, or with `--apply` `1 file retired` and, when a removal
+  failed, `1 file not removed`.
+
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the dry run finds every live or human seat current | the per-seat lines | 0 |
@@ -106,6 +142,11 @@ stale seat is printed as stale and written nothing, and a seat whose delivery fa
 | the dry run finds delivery, recovery or stale work | the per-seat lines | 1 |
 | `--apply` leaves a live or human seat stale or failed | the per-seat lines, with the failed seat's reason | 1 |
 | a caller who is not the owner aims `--file` or `--session` | the owner-only refusal | 1 |
+| prune's dry run finds nothing to retire | `0 files to retire` | 0 |
+| prune's `--apply` removes every marker it listed | the retired rows and `N files retired` | 0 |
+| prune's dry run lists markers to retire | the `would retire` rows and `N files to retire` | 1 |
+| prune's `--apply` leaves a marker unremoved | the failed row and `N files not removed` | 1 |
+| prune's caller is not the seat, or not on its recorded pane | `team brief prune: <why>` | 1 |
 | the invocation can't be read | `team brief: <problem>`, with the usage | 2 |
 | a caller who may not read this team asks | `team brief: this team is not yours to read` | 2 |
 | the team file can't be read or parsed | `team brief: <problem>` | 2 |
@@ -117,6 +158,12 @@ The `--json` document is `{"schema": {"name": "team.brief", "version": 1}, "form
 `not-running`, `stale-listener`, `human` or `failed`; `hash12` is the first twelve hex digits of
 the brief's sha256; `from` and `reason` are `null` unless the row names them. An invocation or
 team-file error under `--json` prints the `team.error` document with its `brief.*` id instead.
+
+The prune's document is `{"schema": {"name": "team.brief-prune", "version": 1}, "format": 1,
+"project": …, "session": …, "seat": …, "apply": …, "files": [{"path", "id", "from", "reason",
+"outcome", "error"}], "counts": {"files", "retired", "failed"}}`. `reason` is `read` or
+`superseded`; `outcome` is `would-retire`, `retired` or `failed`, and `error` is `null` unless the
+row failed. A refusal under `--json` prints the `team.error` document with `brief.prune-refused`.
 
 ## Example
 
@@ -310,12 +357,58 @@ $ team brief rollout --json ; echo "exit $?"
 exit 0
 ```
 
+A held delivery leaves a retry marker beside its record. Here the keeper's folder holds one marker
+for the delivery its claim names — unread, so a retry still owes it — and one for an earlier
+delivery the claim has moved past:
+
+```file file=.agents/send-drops/beacon/claude-keeper/a41f5f43-2689-5329-9e9c-ce349ba1329d.pending
+{"id":"a41f5f43-2689-5329-9e9c-ce349ba1329d","from":"the launch","to":"claude-keeper","body":"an earlier held delivery\n","ts":"2026-10-04T08:30:00.000Z","tries":0}
+```
+
+```file file=.agents/send-drops/beacon/claude-keeper/0b2c4d6e-8f0a-4b1c-9d2e-3f4a5b6c7d8e.pending
+{"id":"0b2c4d6e-8f0a-4b1c-9d2e-3f4a5b6c7d8e","from":"the launch","to":"claude-keeper","body":"an earlier held delivery\n","ts":"2026-10-04T08:45:00.000Z","tries":0}
+```
+
+The seat's own prune lists only the second: the first is the delivery its claim names, and
+nothing says the seat has read it:
+
+```console caller=claude-keeper
+$ team brief prune ; echo "exit $?"
+would retire ./.agents/send-drops/beacon/claude-keeper/0b2c4d6e-8f0a-4b1c-9d2e-3f4a5b6c7d8e.pending: the seat's current claim names a newer delivery
+1 file to retire
+exit 1
+```
+
+```console caller=claude-keeper
+$ team brief prune --apply ; echo "exit $?"
+retired ./.agents/send-drops/beacon/claude-keeper/0b2c4d6e-8f0a-4b1c-9d2e-3f4a5b6c7d8e.pending: the seat's current claim names a newer delivery
+1 file retired
+exit 0
+```
+
+The current claim's unread marker is still there, so the run after it has nothing to do:
+
+```console caller=claude-keeper
+$ team brief prune ; echo "exit $?"
+0 files to retire
+exit 0
+```
+
+The owner is not a seat of the team, so their prune is refused and touches nothing:
+
+```console
+$ team brief prune ; echo "exit $?"
+team brief prune: only a seat of this team retires its own launch-brief retry markers; this call is owner
+exit 1
+```
+
 The invocation is checked before anything is read:
 
 ```console
 $ team brief ; echo "exit $?"
-team brief: a subcommand is required: rollout
+team brief: a subcommand is required: rollout or prune
 Usage: team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]
+       team brief prune [--apply] [--json]
 
 Delivers this build's general seat brief to every declared seat that is live
 or human. The plan reads each seat's claim and the signed record the claim
@@ -329,23 +422,39 @@ written to: that server keeps the parsers it started with, and restarting the
 seat's CLI host is what reloads the installed build. Without --apply the plan
 is printed and nothing is written: no state, no drop, no receipt.
 
-Options:
-  --apply    run the plan; each seat is reported as delivered, recovered or
-             failed, and a seat already current is reported current
-  --seat     one declared seat to plan or deliver for; the others are left
-             untouched
-  --session  the session to deliver in, the team file's own unless the owner
-             names another
-  --file     the team file to read, the owner's alone
-  --json     one team.brief document ({format, project, session, apply, seats,
-             counts}) instead of the per-seat lines
+The launch-brief retry sidecars in the calling seat's own folder are what
+`prune` retires: a launch delivery that a held send left a try marker for, and
+whose retry can no longer be right because the seat's claim names a newer
+delivery, or because the seat has read the one it names. It prints one row per
+file and, without --apply, removes nothing. It never removes a signed record, a
+receipt, the marker of a delivery the seat has not read, or any other send's
+marker; a claim it cannot read retires nothing; and a caller that is not a seat
+of this team on its recorded pane is refused.
 
-Exits 0 when the dry run finds every live or human seat current (brief.plan)
-or --apply leaves every one of them current (brief.current); 1 when the dry
-run finds delivery work (brief.stale), --apply leaves a seat stale or failed
-(brief.incomplete), or a caller who is not the owner aims --file or --session
-(brief.file-owner, brief.session-owner); 2 when the invocation can't be read
-(brief.invocation), a caller who may not read this team asks
+Options:
+  --apply    rollout: run the plan; each seat is reported as delivered,
+             recovered or failed, and a seat already current is reported
+             current. prune: remove the files the dry run listed
+  --seat     rollout only: one declared seat to plan or deliver for; the
+             others are left untouched
+  --session  rollout only: the session to deliver in, the team file's own
+             unless the owner names another
+  --file     rollout only: the team file to read, the owner's alone
+  --json     one document instead of the per-command lines: team.brief
+             ({format, project, session, apply, seats, counts}) for rollout,
+             team.brief-prune ({format, project, session, seat, apply, files,
+             counts}) for prune
+
+Exits 0 when the dry run finds every live or human seat current (brief.plan),
+--apply leaves every one of them current (brief.current), prune has nothing to
+retire (brief.prune-clean), or prune's --apply removes every file it listed
+(brief.prune-applied); 1 when the dry run finds delivery work (brief.stale),
+--apply leaves a seat stale or failed (brief.incomplete), prune's dry run lists
+files to retire (brief.prune-due), prune's --apply leaves one unremoved
+(brief.prune-incomplete), a caller who is not the seat's own pane asks prune
+(brief.prune-refused), or a caller who is not the owner aims --file or
+--session (brief.file-owner, brief.session-owner); 2 when the invocation can't
+be read (brief.invocation), a caller who may not read this team asks
 (brief.not-yours), or the team file can't be read (brief.file,
 brief.file-invalid).
 exit 2

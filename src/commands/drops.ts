@@ -146,8 +146,9 @@ export const DROP_READ_BATCH = 10;
 
 /** Whether every step down to the seat's drop folder is a real folder of this user's. A step
  *  that is missing is no fault — no send has written yet, and the read is empty; anything else
- *  at a step (a link, a file) refuses the read rather than reading through it. */
-function dropFolderReadable(dir: string, session: string, seat: string): boolean {
+ *  at a step (a link, a file) refuses the read rather than reading through it. `team brief
+ *  prune` guards its own folder with the same steps. */
+export function dropFolderReadable(dir: string, session: string, seat: string): boolean {
   const ours = (held: { uid: number }): boolean => process.getuid === undefined || held.uid === process.getuid();
   const agents = heldAt(dir);
   if (agents.kind !== 'folder' || !ours(agents)) return false;

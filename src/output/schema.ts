@@ -1918,6 +1918,50 @@ export const BRIEF_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team brief prune` (`schema/brief-prune.schema.json`):
+ *  one row per launch-brief retry marker the run looked at, and what it did with it. */
+export const BRIEF_PRUNE_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.brief-prune',
+  fileName: 'brief-prune.schema.json',
+  title: 'team brief prune --json output',
+  required: ['format', 'project', 'session', 'seat', 'apply', 'files', 'counts'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    project: { type: 'string', minLength: 1 },
+    session: { type: 'string', minLength: 1 },
+    seat: { type: 'string', minLength: 1 },
+    apply: { type: 'boolean' },
+    files: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['path', 'id', 'from', 'reason', 'outcome', 'error'],
+        properties: {
+          path: { type: 'string', minLength: 1 },
+          id: { type: 'string', minLength: 1 },
+          from: { type: 'string', minLength: 1 },
+          // Why the retry cannot be right: the delivery was read, or a newer one is claimed.
+          reason: { type: 'string', enum: ['read', 'superseded'] },
+          outcome: { type: 'string', enum: ['would-retire', 'retired', 'failed'] },
+          // Why the file could not be removed; null for a row that retired or would retire.
+          error: { type: ['string', 'null'] },
+        },
+      },
+    },
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['files', 'retired', 'failed'],
+      properties: {
+        files: { type: 'integer', minimum: 0 },
+        retired: { type: 'integer', minimum: 0 },
+        failed: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team reply` (`schema/reply.schema.json`): one record
  *  written on a thread (`replied`), or a close beside the record it ends (`closed`). */
 export const REPLY_OUTPUT_SCHEMA: CommandSchemaSpec = {
@@ -3023,6 +3067,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   CLIENT_MESSAGES_OUTPUT_SCHEMA,
   DROPS_OUTPUT_SCHEMA,
   BRIEF_OUTPUT_SCHEMA,
+  BRIEF_PRUNE_OUTPUT_SCHEMA,
   ROUTE_OUTPUT_SCHEMA,
   SEND_OUTPUT_SCHEMA,
   REPLY_OUTPUT_SCHEMA,

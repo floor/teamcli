@@ -85,6 +85,27 @@ Delivery is idempotent in both directions: a verified record already at the id i
 delivery it is, and a retried apply keeps the same lifetime and attempt and posts the same id, so
 a failed seat is retried by the next apply with no duplicate.
 
+## Retry sidecars, and prune
+
+A held delivery leaves a retry marker — `<id>.pending` beside the record — and the marker is the
+send walk's, not the delivery's: the mcp-inbox and drop legs write one so `team watch` can retry
+the trigger, and a typed delivery leaves none. Two rules retire a launch-brief marker, in the
+watch's retry pass and in `team brief prune` alike. A marker whose id is not the seat's current
+claim is superseded: the seat's reader refuses that older delivery by name, and a retry would hand
+the seat a record it cannot read. A marker whose id is the claim's is retired only when a signed
+read receipt bound to the claim says the seat read it — the typed leg has no other way to show a
+read, and an earlier build's receipt, which bound no claim, proves nothing. A marker of the
+current claim that is not read is exactly what a retry still owes, and is never touched.
+
+The retry pass applies the rules before it decides a seat is human (whose typed trigger would be
+given up without them), keeps a native held record, or ages a marker out, and says one line per
+retirement. A broadcast of a claim the seat already holds writes no new sidecar at all: the
+delivery is the claim and the record it names, and a repeat is not a new notification. `prune` is
+the supported maintenance path for the markers already on disk: it is the seat's own verb, its dry
+run is the default, and it only removes the launch-brief markers the two rules name — never a
+signed record, a receipt, an unread current claim or another send's marker. A claim it cannot read
+is a refusal, because a prune that cannot say which delivery is current retires nothing.
+
 ## Crash reconciliation
 
 | Crash point | On disk | The next boundary | `team check` until then |
@@ -105,7 +126,9 @@ the drop folder of each live or human seat, including the `.inbox-listener` its 
 and one signed record per due seat under `.agents/send-drops/<session>/<seat>/`; nothing else.
 Delivery is local file I/O with no network leg. A folder that cannot be written, a checkout with
 no message key, a link at the name or a read-back failure is reported for that seat alone, and a
-later apply or launch retries it.
+later apply or launch retries it. `prune` reads the same team file, the seat's claim in the state
+and its drop folder, and `--apply` removes only the marker files it listed; its only written byte
+is a removal. A step down to the folder that is a link or a file refuses the run.
 
 ## Known limits
 

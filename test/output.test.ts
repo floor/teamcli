@@ -756,6 +756,28 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           counts: { current: 0, deliver: 1, recover: 0, not_running: 0, human: 0, stale_listener: 0, failed: 0 },
         }),
       ],
+      // The prune's dry run: one marker a read receipt would retire, with the counts. The
+      // `retired` and `failed` outcomes are exercised by the command's own scenes.
+      'team.brief-prune': [
+        jsonEnvelope('team.brief-prune', {
+          format: 1 as const,
+          project: 'beacon',
+          session: 'beacon',
+          seat: 'worker',
+          apply: false,
+          files: [
+            {
+              path: '/work/beacon/.agents/send-drops/beacon/worker/5e4d3c2b-1a0f-4e6d-8c7b-6a5f4e3d2c1b.pending',
+              id: '5e4d3c2b-1a0f-4e6d-8c7b-6a5f4e3d2c1b',
+              from: 'the launch',
+              reason: 'read',
+              outcome: 'would-retire',
+              error: null,
+            },
+          ],
+          counts: { files: 1, retired: 0, failed: 0 },
+        }),
+      ],
       'team.down': [
         jsonEnvelope('team.down', {
           format: 1 as const,
