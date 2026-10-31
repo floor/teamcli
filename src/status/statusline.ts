@@ -139,16 +139,29 @@ function idWords(text: string): string[] {
 /** Whether the banner id names the declared model. A provider writes the same model its own way —
  *  `glm-5.3` for GLM 5 5.3 (the version's number written inside the model name too),
  *  `deepseek-v4.1-flash` for DeepSeek Flash V4.1 (a variant word after the version), `kimi-k2.5`
- *  for Kimi K2.5 (an alphanumeric version family) — so both sides are compared as the words they
- *  are made of, the declaration's version words taken out of its model's. An id with no version
- *  part names the family alone (`deepseek-flash`), and is compared with the model's words. */
+ *  for Kimi K2.5 (an alphanumeric version family) — so the id's name and variant words are
+ *  compared as a set, the declaration's version words taken out of its model's, while its version
+ *  words are compared as the order they are written in: `glm-3.5` names 3.5, not 5.3. An id with
+ *  no version part names the family alone (`deepseek-flash`), and is compared with the model's
+ *  words. */
 function bannerNames(id: string, declared: Running): boolean {
   const shown = idWords(id);
   const version = idWords(declared.version);
   const name = idWords(declared.model).filter((word) => !version.includes(word));
-  const wanted = shown.some((word) => /[0-9]/.test(word)) ? [...name, ...version] : name;
   const sorted = (list: string[]): string => [...list].sort().join(' ');
-  return sorted(shown) === sorted(wanted);
+  // The declaration's version, held as one unbroken run in its own order — wherever in the id the
+  // provider wrote it. A run out of order (`glm-3.5` for 5.3) names another version.
+  const at = version.length === 0
+    ? -1
+    : shown.findIndex((_word, index) => version.every((word, offset) => shown[index + offset] === word));
+  if (at === -1) {
+    // An id naming no version at all names the family alone; one naming a version that is not the
+    // declaration's names another model.
+    if (shown.some((word) => /[0-9]/.test(word))) return false;
+    return sorted(shown) === sorted(name);
+  }
+  const rest = [...shown.slice(0, at), ...shown.slice(at + version.length)];
+  return sorted(rest) === sorted(name);
 }
 
 /** The wrapper's banner id as the file's two fields, for the column and drift line of an id that

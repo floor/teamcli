@@ -262,6 +262,31 @@ test('a wrapper banner naming another version is still held', async () => {
   expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
 });
 
+// The provider's words are not a bag of tokens: a version is the order its parts are written in,
+// so a banner holding the signed version's parts in another order names another version. (At the
+// round-2 head the sorted comparison called these matches, and the send walked.)
+test('a wrapper banner holding the signed version in another order is held', async () => {
+  const cases = [
+    { signing: { model: 'GLM', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-3.5', drift: 'GLM 5.3 vs glm 3.5' },
+    {
+      signing: { model: 'DeepSeek Flash', version: 'V4.1' }, launch: 'claude-deepseek.sh',
+      banner: 'deepseek-v1.4-flash', drift: 'DeepSeek Flash V4.1 vs deepseek v1.4.flash',
+    },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, one.launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain(`model drift: ${one.drift}`);
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    made.cleanup();
+  }
+});
+
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
