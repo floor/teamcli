@@ -34,6 +34,9 @@ function agent(name: string | null, workspace: string, status = 'idle', kind = '
   return { name, agent: kind, pane: `${workspace}:p1`, workspace, status, cwd: null };
 }
 
+/** A seat's pane as the fixture shows it, so a scene names the pane without writing its shape. */
+const paneOf = (live: Live, name: string): string => live.agents.find((one) => one.name === name)?.pane ?? '';
+
 // The example's team as herdr would show it; the codex seat's pane is added by the scenes that
 // need its captured footer.
 function built(): Live {
@@ -209,13 +212,17 @@ describe('the signing drift', () => {
     // The seat runs another maker's model through its launcher, and Claude Code's footer prints
     // its own default family whatever the launcher selected: that family is not the seat's model,
     // so it is never a difference. The signing and the screen's own id compare here instead.
-    const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    const live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
     const { out } = check(live);
     expect(out).not.toContain('signs as');
   });
 
   test('a bare Claude Code launch of a foreign model is compared with the registry signing', () => {
-    record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, 'w3:p1', {
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    record('deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', role: 'implementer' }, pane, {
       cli: 'claude-code',
       lab: 'deepseek',
     });
@@ -225,7 +232,7 @@ describe('the signing drift', () => {
       join(root, '.agents/team.yaml'),
       example.replace('launch: team-deepseek', 'launch: claude'),
     );
-    const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    const live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
     const { out } = check(live);
     expect(out).toContain('difference: deepseek-acme: signs as DeepSeek V4.1 Flash, runs Claude Opus 5.5');
   });

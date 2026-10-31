@@ -124,6 +124,11 @@ test('a registered recipient behind a provider wrapper is not held for the famil
   const made = world(['typed']);
   cleanup = made.cleanup;
   const leadId = teamIdOf(made.root);
+  const pane = scripted(['idle', 'working'], `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`);
+  const host = fake(made, { native: pane });
+  // The record's reach names the pane the fixture's live agent holds, so the caller and the
+  // fixture agree without a hand-written pane shape.
+  const leadPane = host.agents('acme')?.find((one) => one.name === 'lead')?.pane ?? '';
   registerAgent(made.home, {
     name: 'lead',
     // The launcher selects GLM; Claude Code's status footer still prints its own default family.
@@ -133,11 +138,9 @@ test('a registered recipient behind a provider wrapper is not held for the famil
     cli: 'claude-code',
     launcher: null,
     launch: 'claude-glm.sh',
-    reach: { team: leadId, seat: 'lead', session: 'acme', pane: 'w1:p1', address: null },
+    reach: { team: leadId, seat: 'lead', session: 'acme', pane: leadPane, address: null },
     mcp: [], skills: [], lifecycle: 'running', by: 'up',
   });
-  const pane = scripted(['idle', 'working'], `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`);
-  const host = fake(made, { native: pane });
   const io = owner(made.root);
 
   expect(await runSend(['lead', 'hello'], io, host)).toBe(0);

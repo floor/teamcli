@@ -47,6 +47,9 @@ function agent(name: string | null, workspace: string, status = 'idle', kind = '
   return { name, agent: kind, pane: `${workspace}:p1`, workspace, status, cwd: null };
 }
 
+/** A seat's pane as the fixture shows it, so a scene names the pane without writing its shape. */
+const paneOf = (live: Live, name: string): string => live.agents.find((one) => one.name === name)?.pane ?? '';
+
 // The example's team as herdr would show it, fully built: grok-acme is stopped in the file.
 function built(): Live {
   return {
@@ -376,9 +379,11 @@ describe('team status', () => {
   // nothing to compare, so it is never wrong — the launcher's declaration is the reading the
   // row shows, without the unread suffix a version the caller does not know would keep.
   test('a seat that runs another maker\'s model through Claude Code shows its declaration, never a mismatch', async () => {
-    live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
     const { code, out } = await status();
-    expect(out).toMatch(/deepseek-acme\s+done\s+DeepSeek V4\.1 Flash\s+w3:p1/);
+    expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+DeepSeek V4\\.1 Flash\\s+${pane}`));
     expect(out).not.toContain('deepseek-acme runs');
     expect(out).not.toContain('note: deepseek-acme:');
     expect(code).toBe(0);
@@ -392,12 +397,15 @@ describe('team status', () => {
       '    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: claude-glm.sh',
     ));
     approveOnDisk();
-    live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    const second = paneOf(shown, 'deepseek-acme-2');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
     const { code, out } = await status();
     // Both count instances carry the wrapper; the one with a screen shows the declaration, and
     // the one with no screen keeps the unread suffix the caller's missing version earns it.
-    expect(out).toMatch(/deepseek-acme\s+done\s+GLM 5\.3\s+w3:p1/);
-    expect(out).toMatch(/deepseek-acme-2\s+idle \(screen not recognised\)\s+GLM 5\.3 \(declared, unread\)\s+w4:p1/);
+    expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+GLM 5\\.3\\s+${pane}`));
+    expect(out).toMatch(new RegExp(`deepseek-acme-2\\s+idle \\(screen not recognised\\)\\s+GLM 5\\.3 \\(declared, unread\\)\\s+${second}`));
     expect(out).not.toMatch(/deepseek-acme\s+done\s+Claude/);
     expect(out).not.toContain('note: deepseek-acme:');
     expect(code).toBe(0);

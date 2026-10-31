@@ -216,6 +216,10 @@ const SEATS = {
   'deepseek-acme-2': { pane: 'w94:p1', workspace: 'w94', label: 'DeepSeek V4.1 Flash', shell: 440, cli: 441, kind: 'claude' },
 } as const;
 
+/** The pane the seat under test is recorded on, read from the fixture's own record so a scene's
+ *  screen overlay and the seeded seat agree without a hand-written pane shape. */
+const RECORDED_PANE = SEATS['deepseek-acme'].pane;
+
 /** Writes the four-seat state alone. `session` is deepseek-acme's stored agent session, when a
  *  scene stores one; the other three never carry one (they read `same`, which does not need it). */
 function writeSeats(session?: string): void {
@@ -449,7 +453,7 @@ describe('team up, a restored session: boundaries', () => {
         : list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     };
     made.launch.agents = live;
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? DRIFTED_IDLE : IDLE);
+    made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE);
     const keys: string[] = [];
     made.launch.typeText = () => { keys.push('type'); return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };
@@ -607,7 +611,7 @@ describe('team up, a restored session: boundaries', () => {
         : list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     };
     made.launch.agents = live;
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? DRIFTED_IDLE : IDLE);
+    made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE);
     const keys: string[] = [];
     made.launch.typeText = () => { keys.push('type'); return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };
@@ -653,7 +657,7 @@ describe('team up, a restored session: boundaries', () => {
         : list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     };
     made.launch.agents = live;
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? DRIFTED_IDLE : IDLE);
+    made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE);
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
@@ -693,7 +697,7 @@ describe('team up, a restored session: boundaries', () => {
     // The new pane never draws the idle prompt: the wait goes to its deadline after the line ran.
     // The old pane reads the wrapper's drifted banner id — the reading that proves the repair.
     made.launch.paneText = (_session, pane) =>
-      made.runs.some((run) => run.pane === pane) ? 'startup still drawing\n' : pane === 'w93:p1' ? DRIFTED_IDLE : IDLE;
+      made.runs.some((run) => run.pane === pane) ? 'startup still drawing\n' : pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE;
     // What the state says at every sleep of the readiness wait: the successor must already be
     // persisted there, while the stage is still launched, not only after the run ends.
     const duringWait: { stage: string | undefined; binding: string | undefined }[] = [];
@@ -737,7 +741,7 @@ describe('team up, a restored session: boundaries', () => {
     made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? DRIFTED_IDLE : IDLE);
+    made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE);
     made.launch.createWorkspace = () => null;
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
@@ -763,7 +767,7 @@ describe('team up, a restored session: boundaries', () => {
     made.launch.processInfo = (_session, pane) => (pane === 'w93:p1' ? { shell: 900, foreground: [901] } : sameProcess(pane));
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
-    made.launch.paneText = (_session, pane) => (pane === 'w93:p1' ? DRIFTED_IDLE : IDLE);
+    made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE ? DRIFTED_IDLE : IDLE);
     const keys: string[] = [];
     made.launch.typeText = () => { keys.push('type'); return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };
@@ -846,7 +850,9 @@ describe('team up, a restored session: boundaries', () => {
     ];
     made.launch.agents = live;
     // The moved pane reads the wrapper's drifted banner id — the reading that proves the repair.
-    made.launch.paneText = (_session, pane) => (pane === 'w99:p1' || pane === 'w93:p1' ? DRIFTED_IDLE : IDLE);
+    // Both panes under test are read from the scene's own record and agent list, never written.
+    const moved = (): string | undefined => live().find((one) => one.name === 'deepseek-acme')?.pane;
+    made.launch.paneText = (_session, pane) => (pane === RECORDED_PANE || pane === moved() ? DRIFTED_IDLE : IDLE);
     const io = testIo(root, { kind: 'owner' });
     const code = await runUp(
       FILE,
