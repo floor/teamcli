@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
@@ -200,7 +201,7 @@ describe('team send history log & team feed', () => {
     const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
     expect(rawLines.length).toBe(1);
     const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'note', 'outcome', 'thread', 'to', 'ts', 'via']);
+    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
     // The seat's send files the body under its header: the seat's readable name, and the rule.
     const seatHeader = 'from helper — admitted by: a seat to its own team\'s orchestrator\n\n';
     expect(parsed).toEqual({
@@ -211,15 +212,15 @@ describe('team send history log & team feed', () => {
       body: `${seatHeader}${secret}`,
       id: sentDoc.ids.sent,
       outcome: 'sent (unconfirmed)',
-      note: 'trigger taken, no read receipt yet',
       // The thread is the first message's id; a first message is its own thread's id.
       thread: sentDoc.ids.sent,
       ms: 0,
-      via: 'typed',
+      via: 'drop',
       // The walk landed on the typed leg through the inbox ahead of it: no server was listening.
       // The native leg is not in the order in force — the default is mcp-inbox, typed, drop — so
       // it is not walked, and nothing about it is recorded.
       failed: [
+        `typed: ${NO_PANE_MESSAGING}`,
         'mcp-inbox: no live inbox listener',
       ],
     });

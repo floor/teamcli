@@ -118,7 +118,7 @@ import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
-import { analyze, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
+import { analyze as analyzeSource, loadContract, problems, render, type ExitRow } from '../scripts/exit-codes.ts';
 import { runRelease } from '../src/commands/release.ts';
 import type { KeyReader } from '../src/release/keychain.ts';
 import { leadPart, outsidePart, scenePart, skipsScene, unknownScenes, wantedScenes } from './exit-filter.ts';
@@ -5141,18 +5141,6 @@ scene('send.brief-memory', async (place) => {
   expect(wrote.ok).toBe(true);
   return show(await sent(place, ['lead', '--brief', path], owner, sendHost(place)), 'brief-transport is memory');
 });
-scene('send.held', async (place) => {
-  write(place, TEAM);
-  // No socket file: a held message is the typed path's own refusal, and a taken frame on a
-  // present socket would deliver before the pane was ever read for a dialog.
-  const host = sendHost(place, { socket: false });
-  host.native.paneText = () => `${'─'.repeat(30)}\n❯ draft in box\n${'─'.repeat(30)}`;
-  return show(await sent(place, ['lead', 'hello'], owner, host), 'held');
-});
-scene('send.unreachable', async (place) => {
-  write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello'], owner, sendHost(place, { agents: false })), 'unreachable');
-});
 scene('send.stopped', async (place) => {
   write(place, TWO);
   // The dry run reports the real run's refusal: the file marks the seat stopped, and no leg is
@@ -5165,21 +5153,13 @@ scene('send.stopped', async (place) => {
   expect(existsSync(historyPath('acme', place.root, place.home))).toBe(false);
   return real;
 });
-scene('send.not-submitted', async (place) => {
-  write(place, TEAM);
-  // The trigger not being taken is the typed path's refusal: the seat is idle, so the send takes
-  // the drop-file route and types — and the pane never turns working.
-  const host = sendHost(place, { socket: false });
-  host.native.status = () => 'idle';
-  return show(await sent(place, ['lead', 'hello'], owner, host), 'not-submitted');
-});
 scene('send.delivered', async (place) => {
   write(place, TEAM);
   // The typed leg took the trigger line: a trigger sent, and no signed receipt, so the words say
   // `sent (unconfirmed)` and never claim a read. The contract row's own meaning is unchanged.
   return show(
     await sent(place, ['lead', 'hello'], owner, sendHost(place)),
-    'lead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)',
+    'lead: sent (unconfirmed) (drop, 0 ms)',
   );
 });
 scene('send.sent-unconfirmed', async (place) => {
@@ -5211,43 +5191,9 @@ scene('send.sent-channel', async (place) => {
   };
   return show(await sent(place, ['lead', 'hello'], owner, host), 'lead: sent (channel)');
 });
-scene('send.queued', async (place) => {
-  write(place, TEAM);
-  // A daemon that answers `queued`: the receiver is busy, the signed copy is stored, and the
-  // sender is answered now. The id on the line is the one the daemon will deliver under.
-  const id = '55555555-5555-4555-8555-555555555555';
-  const sock = join(place.base, 'daemon.sock');
-  const server = createServer((socket) => {
-    socket.on('data', () => {
-      socket.end(`${JSON.stringify({
-        v: 1,
-        ok: true,
-        id,
-        seat: 'lead',
-        outcome: 'queued',
-        status: 'receiver busy',
-        detail: 'lead: queued (receiver busy)',
-      })}\n`);
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(sock, resolve);
-  });
-  try {
-    const host = sendHost(place);
-    host.daemonSocket = sock;
-    return show(await sent(place, ['lead', 'hello'], owner, host), `lead: queued (receiver busy) (typed, 0 ms; id ${id})`);
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => {
-        resolve();
-      });
-    });
-  }
-});
 scene('send.dry-run', async (place) => {
   write(place, TEAM);
-  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file and one trigger line; nothing was written');
+  return show(await sent(place, ['lead', 'hello', '--dry-run'], owner, sendHost(place)), 'lead: dry-run: claude-code via the seat\'s own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written');
 });
 scene('send.listed', async (place) => {
   write(place, TEAM);
@@ -6557,7 +6503,18 @@ scene('up.approval-refused', async (place) => {
   return show(await up(place, ['--approval', 'oa_nope'], other, upSources(place)), 'is not an owner-seat request id');
 });
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed']);
+// The source probe reads every command file (~2 s); the tree does not change during a run.
+let analyzed: ReturnType<typeof analyzeSource> | undefined;
+function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof analyzeSource> {
+  if (args.length > 0) return analyzeSource(...args);
+  analyzed ??= analyzeSource();
+  return analyzed;
+}
+
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed',
+  // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
+  // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
+  'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable']);
 
 const contract = loadContract();
 contract.rows.forEach((row, index) => scenePosition.set(row.id, index));

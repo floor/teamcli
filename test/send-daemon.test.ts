@@ -1,3 +1,4 @@
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import {
@@ -271,7 +272,7 @@ describe('the hosted send socket and its durable copy, through the relay package
     });
   }
 
-  test('frames through the relay host with the same refusal bytes, and a body past the machine limit still lands', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: frames through the relay host with the same refusal bytes, and a body past the machine limit still lands', async () => {
     const w = setupWorld();
     const host = makeHost(w);
     const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
@@ -289,10 +290,8 @@ describe('the hosted send socket and its durable copy, through the relay package
     // This socket carried no measured frame limit, so a body past the machine protocol's
     // 65,536 characters is still accepted, exactly as it was before the framing host.
     const big = 'x'.repeat(70_000);
-    const asked = await requestDaemon(sock, { v: 1, op: 'send', id: 'big-body', from: 'owner', to: 'native', body: big });
-    expect(asked && 'outcome' in asked ? asked.outcome : null).toBe('delivered');
-    expect(host.typed.length).toBe(1);
-    expect(readFileSync(join(daemonDropDir('acme', w.root, w.home, 'acme', 'native'), 'big-body'), 'utf8')).toBe(big);
+    const retired = await requestDaemon(sock, { v: 1, op: 'send', id: 'big-body', from: 'owner', to: 'native', body: big });
+    expect(retired && 'outcome' in retired ? retired.outcome : null).toBe('unreachable');
   });
 
   test('the drop is the relay durable write: a different holder is refused and left untouched, the same bytes are reused', async () => {
@@ -315,12 +314,13 @@ describe('the hosted send socket and its durable copy, through the relay package
     expect(host.typed).toEqual([]);
 
     // The same bytes at the name are this message's copy: the write is reused and the delivery
-    // proceeds, rather than being refused as a different holder.
+    // reaches the no-typing refusal, rather than being refused as a different holder.
     const samePath = join(drops, 'same-id');
     writeFileSync(samePath, 'the same body', { mode: 0o600 });
     const same = await requestDaemon(sock, { v: 1, op: 'send', id: 'same-id', from: 'owner', to: 'native', body: 'the same body' });
-    expect(same && 'outcome' in same ? same.outcome : null).toBe('delivered');
-    expect(host.typed.length).toBe(1);
+    // 0.5.9: the copy is reused, and the endpoint's typed delivery is refused: nothing is typed.
+    expect(same && 'outcome' in same ? same.outcome : null).toBe('unreachable');
+    expect(host.typed.length).toBe(0);
     expect(readdirSync(drops).sort()).toEqual(['held-id', 'same-id']);
     expect(readFileSync(samePath, 'utf8')).toBe('the same body');
   });
@@ -367,7 +367,7 @@ function writePresence(w: ReturnType<typeof setupWorld>, seat: string, state: 'w
 }
 
 describe('per-seat FIFO queue and concurrent sends', () => {
-  test('two concurrent sends to the same seat serialize in FIFO order without seat-lock refusal', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: two concurrent sends to the same seat serialize in FIFO order without seat-lock refusal', async () => {
     const w = setupWorld();
     const events: string[] = [];
     let releaseFirstTurn: (() => void) | null = null;
@@ -410,49 +410,12 @@ describe('per-seat FIFO queue and concurrent sends', () => {
 
     const io1 = ownerIo(w.root);
     const io2 = ownerIo(w.root);
-    const p1 = runSend(['native', 'first message'], io1, host);
-    await new Promise((r) => setTimeout(r, 15));
-    const p2 = runSend(['native', 'second message'], io2, host);
-    await new Promise((r) => setTimeout(r, 10));
-    releaseFirstTurn!();
-
-    const [c1, c2] = await Promise.all([p1, p2]);
-    expect(c1).toBe(0);
-    expect(c2).toBe(0);
-    expect(io1.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
-    // The second send reached the daemon while the first was still being delivered: it is
-    // answered at once with the queue's word and the message id, and delivered behind it.
-    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
-    const queuedId = /id ([0-9a-f-]+)\)\n$/.exec(io2.out)?.[1] ?? '';
-    expect(queuedId).not.toBe('');
-
-    await until(() => {
-      const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.length === 2;
-    });
-    const hist = readHistory('acme', w.root, w.home);
-    expect(hist.ok).toBe(true);
-    if (!hist.ok) return;
-    expect(hist.entries.map((e) => ({ body: e.body, outcome: e.outcome }))).toEqual([
-      { body: filed('first message'), outcome: 'sent (unconfirmed)' },
-      { body: filed('second message'), outcome: 'sent (unconfirmed)' },
-    ]);
-    expect(hist.entries[0]?.id).toBeTruthy();
-    expect(hist.entries[1]?.id).toBe(queuedId);
-    expect(hist.entries[0]?.id).not.toBe(queuedId);
-
-    const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'native');
-    const dropFiles = readdirSync(drops);
-    expect(dropFiles.length).toBe(2);
-    for (const file of dropFiles) {
-      expect(lstatSync(join(drops, file)).mode & 0o777).toBe(0o600);
-    }
-    const logContent = readFileSync(join(w.dir, LOG_FILE), 'utf8');
-    expect(logContent).not.toContain('first message');
-    expect(logContent).not.toContain('second message');
+    const retired = runSend(['native', 'first message'], io1, host);
+    expect(await retired).toBe(0);
+    expect(io1.err).toContain('queued, no event adapter');
   });
 
-  test('two concurrent sends to a busy receiver are both accepted queued and delivered exactly once in FIFO order', async () => {
+  test('two concurrent sends to a busy receiver are both accepted queued in its bus inbox, and nothing is ever typed', async () => {
     const w = setupWorld();
     let pendingTake = 0;
     const host = makeHost(w, {
@@ -500,8 +463,8 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     const [c1, c2] = await Promise.all([p1, p2]);
     expect(c1).toBe(0);
     expect(c2).toBe(0);
-    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
-    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\)\n$/);
+    expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\)\n$/);
     const id1 = /id ([0-9a-f-]+)\)\n$/.exec(io1.out)?.[1] ?? '';
     const id2 = /id ([0-9a-f-]+)\)\n$/.exec(io2.out)?.[1] ?? '';
     expect(id1).not.toBe('');
@@ -518,27 +481,19 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
 
+    // 0.5.9: releasing the lock types nothing. Both copies stay in the seat's bus inbox, where
+    // an event adapter takes them; the senders were told so.
     busyLock.release();
-    await until(() => host.enters.length === 2);
-    await until(() => {
-      const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.length === 2;
-    });
-    // One delivery each, in the order the sends reached the queue: the ids in the senders'
-    // answers are the ids on the two receipts.
-    const hist = readHistory('acme', w.root, w.home);
-    expect(hist.ok).toBe(true);
-    if (!hist.ok) return;
-    expect(hist.entries.map((e) => ({ id: e.id, body: e.body, outcome: e.outcome }))).toEqual([
-      { id: id1, body: filed('first queued'), outcome: 'sent (unconfirmed)' },
-      { id: id2, body: filed('second queued'), outcome: 'sent (unconfirmed)' },
-    ]);
-    expect(new Set(hist.entries.map((e) => e.id)).size).toBe(2);
-    expect(host.typed.length).toBe(2);
-    expect(host.enters.length).toBe(2);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(io1.err).toContain('queued, no event adapter');
+    expect(io2.err).toContain('queued, no event adapter');
+    expect(existsSync(join(staged, id1))).toBe(true);
+    expect(existsSync(join(staged, id2))).toBe(true);
   });
 
-  test('concurrent sends to two different seats run in parallel', async () => {
+  test('concurrent sends to two different seats both land in their bus inboxes, typing nothing', async () => {
     const w = setupWorld();
     const active = new Set<string>();
     const entered = new Set<string>();
@@ -573,10 +528,15 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     ]);
     expect(c1).toBe(0);
     expect(c2).toBe(0);
-    expect(sawBothActive).toBe(true);
+    // 0.5.9: neither pane is typed into; each send lands in its own seat's bus inbox at once.
+    expect(sawBothActive).toBe(false);
+    expect(active.size).toBe(0);
+    expect(entered.size).toBe(0);
+    expect(existsSync(join(w.dir, 'send-drops', 'acme', 'lead'))).toBe(true);
+    expect(existsSync(join(w.dir, 'send-drops', 'acme', 'native'))).toBe(true);
   });
 
-  test('enforces MAX_QUEUE_DEPTH per seat and returns held when the queue is full', async () => {
+  test('no typing queue fills: every send past MAX_QUEUE_DEPTH still lands in the bus inbox', async () => {
     const w = setupWorld();
     let blocked = true;
     let unblock: (() => void) | null = null;
@@ -616,20 +576,23 @@ describe('per-seat FIFO queue and concurrent sends', () => {
     }
     await new Promise((r) => setTimeout(r, 40));
 
+    // 0.5.9: no send waits on a typed delivery, so no typing queue fills: the next send lands in
+    // the bus inbox like the rest.
     const overIo = ownerIo(w.root);
     const overCode = await runSend(['native', 'overflow'], overIo, host);
-    expect(overCode).toBe(1);
-    expect(overIo.err).toContain('held');
-    expect(overIo.err).toContain(`send queue is full (${String(MAX_QUEUE_DEPTH)} messages waiting)`);
+    expect(overCode).toBe(0);
+    expect(overIo.err).toContain('queued, no event adapter');
+    expect(overIo.err).not.toContain('send queue is full');
+    expect(inSub).toBe(false);
 
     blocked = false;
     unblock!();
-    await Promise.all(pending);
+    expect((await Promise.all(pending)).every((code) => code === 0)).toBe(true);
   });
 });
 
 describe('working seat retry and seat-lock coexistence', () => {
-  test('waits while seat is working and delivers once seat returns to idle', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: waits while seat is working and delivers once seat returns to idle', async () => {
     const w = setupWorld();
     let polls = 0;
     let entered = false;
@@ -663,31 +626,12 @@ describe('working seat retry and seat-lock coexistence', () => {
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    const code = await runSend(['native', 'deliver after turn'], io, host);
-    expect(code).toBe(0);
-    // The seat is in a turn at acceptance: the send is answered at once as queued and waits in
-    // the seat's FIFO for the turn to end, instead of spending the caller's wait budget.
-    expect(io.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
-    const queuedId = /id ([0-9a-f-]+)\)/.exec(io.out)?.[1];
-    if (queuedId === undefined) throw new Error('no queued id in the answer');
-    await until(() => host.enters.length === 1);
-    expect(polls).toBeGreaterThanOrEqual(3);
-    expect(host.typed.length).toBe(1);
-    expect(host.enters.length).toBe(1);
-    // The Enter is observed inside the worker's delivery, before it has verified the take and
-    // appended its history line: on a loaded host the poll above can return in that window, so
-    // wait for this send's own record — the delivery's last step — before reading its outcome.
-    // Waiting for its presence, not for the expected outcome, still fails on a wrong outcome.
-    await until(() => {
-      const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.some((e) => e.id === queuedId);
-    });
-    const hist = readHistory('acme', w.root, w.home);
-    expect(hist.ok).toBe(true);
-    if (hist.ok) expect(hist.entries[0]?.outcome).toBe('sent (unconfirmed)');
+    const retired = await runSend(['native', 'deliver after turn'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
-  test('answers queued at once and types nothing into a busy pane, never a false delivered', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: answers queued at once and types nothing into a busy pane, never a false delivered', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       deliverWaitMs: 25,
@@ -713,30 +657,14 @@ describe('working seat retry and seat-lock coexistence', () => {
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    const code = await runSend(['native', 'do not clobber working seat'], io, host);
-    // Accepted, not refused: busy is the queue's word, and the line carries the id.
-    expect(code).toBe(0);
-    expect(io.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
-    const queuedId = /id ([0-9a-f-]+)\)\n$/.exec(io.out)?.[1] ?? '';
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-
-    // The seat never becomes free. Closing the daemon ends the queued wait with a held receipt
-    // under the same id, so the send is neither lost nor reported as delivered.
-    await started.handle.close();
-    const hist = readHistory('acme', w.root, w.home);
-    expect(hist.ok).toBe(true);
-    if (hist.ok) {
-      expect(hist.entries[0]?.id).toBe(queuedId);
-      expect(hist.entries[0]?.outcome).toBe('held');
-    }
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
+    const retired = await runSend(['native', 'do not clobber working seat'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
   // The daemon's last mile reads the store itself. A projected turn this process did not see
   // in herdr's status still holds the drop: the runtime's own record outranks the screen.
-  test('holds the drop when the native proof says a turn is running, even with an idle screen', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: holds the drop when the native proof says a turn is running, even with an idle screen', async () => {
     const w = setupWorld();
     writePresence(w, 'native', 'working');
     const host = makeHost(w);
@@ -751,13 +679,9 @@ describe('working seat retry and seat-lock coexistence', () => {
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    const code = await runSend(['native', 'do not clobber the projected turn', '--json'], io, host);
-    expect(code).toBe(1);
-    const parsed = JSON.parse(io.out.trim()) as { error: { id: string; message: string } };
-    expect(parsed.error.id).toBe('send.held');
-    expect(parsed.error.message).toContain("the seat's native presence does not allow typing (working: the runtime reports a turn running)");
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
+    const retired = await runSend(['native', 'do not clobber the projected turn', '--json'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
   test('delivers on a qualified native idle when the caller provides the channel proof', async () => {
@@ -778,13 +702,13 @@ describe('working seat retry and seat-lock coexistence', () => {
     const code = await runSend(['native', 'the projected turn ended'], io, host);
     expect(code).toBe(0);
     expect(io.out).toContain('native: sent (unconfirmed)');
-    expect(host.typed).toHaveLength(1);
-    expect(host.enters).toHaveLength(1);
+    expect(host.typed).toHaveLength(0);
+    expect(host.enters).toHaveLength(0);
   });
 
   // The contract makes an unproven channel a hold, never a fallback: without a provider the
   // daemon cannot qualify the projection, so it does not type.
-  test('holds a native idle projection when no channel proof is provided', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: holds a native idle projection when no channel proof is provided', async () => {
     const w = setupWorld();
     writePresence(w, 'native', 'idle');
     const host = makeHost(w);
@@ -793,15 +717,12 @@ describe('working seat retry and seat-lock coexistence', () => {
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    const code = await runSend(['native', 'unproven channel', '--json'], io, host);
-    expect(code).toBe(1);
-    const parsed = JSON.parse(io.out.trim()) as { error: { id: string; message: string } };
-    expect(parsed.error.id).toBe('send.held');
-    expect(parsed.error.message).toContain('the presence channel is not known healthy this pass');
-    expect(host.typed).toEqual([]);
+    const retired = await runSend(['native', 'unproven channel', '--json'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
-  test('queues behind a seat lock held by another command and delivers once it is released', async () => {
+  test('a seat lock held by another command answers queued, and its release types nothing', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       deliverWaitMs: 80,
@@ -833,16 +754,13 @@ describe('working seat retry and seat-lock coexistence', () => {
     expect(await runSend(['native', 'waited for seat lock'], io1, host)).toBe(0);
     // The held lock is the queue's word: the sender is answered now, and the delivery follows
     // once the other command lets go.
-    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+    expect(io1.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\)\n$/);
     expect(host.typed).toEqual([]);
     externalLock.release();
-    await until(() => host.enters.length === 1);
-    expect(host.typed.length).toBe(1);
-    // The delivery has ended and the worker has let the seat go before the next hold.
-    await until(() => {
-      const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.length === 1;
-    });
+    // 0.5.9: the release types nothing; the copy waits in the bus inbox.
+    await new Promise((r) => setTimeout(r, 60));
+    expect(host.typed).toEqual([]);
+    expect(io1.err).toContain('queued, no event adapter');
     await until(() => {
       const probe = acquireSeatLock(w.dir, 'acme', 'native');
       if (!('release' in probe)) return false;
@@ -859,21 +777,15 @@ describe('working seat retry and seat-lock coexistence', () => {
     const io2 = ownerIo(w.root);
     try {
       expect(await runSend(['native', 'blocked by lock'], io2, host)).toBe(0);
-      expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
+      expect(io2.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(drop, 0 ms; id [0-9a-f-]+\)\n$/);
       expect(host.typed).toEqual([]);
       expect(host.enters).toEqual([]);
     } finally {
       heldLock.release();
     }
-    await until(() => host.enters.length === 1);
-    await until(() => {
-      const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.length === 2;
-    });
-    expect(host.typed.length).toBe(1);
-    const hist = readHistory('acme', w.root, w.home);
-    expect(hist.ok).toBe(true);
-    if (hist.ok) expect(hist.entries.map((e) => e.outcome)).toEqual(['sent (unconfirmed)', 'sent (unconfirmed)']);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
   });
 
   test('reclaims stale seat-lock whose holder PID is dead', async () => {
@@ -895,10 +807,10 @@ describe('working seat retry and seat-lock coexistence', () => {
 
     const io = ownerIo(w.root);
     expect(await runSend(['native', 'reclaim stale seat-lock'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    expect(io.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms)\n');
   });
 
-  test('a non-queued item reaching delivery while the recipient seat lock is held queues at delivery with preserved id, no premature success, and promotes to delivered (read) on receipt while keeping compose seats out of queue acceptance', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: a non-queued item reaching delivery while the recipient seat lock is held queues at delivery with preserved id, no premature success, and promotes to delivered (read) on receipt while keeping compose seats out of queue acceptance', async () => {
     const w = setupWorld();
     let heldAtDelivery: { release(): void } | null = null;
     let entered = false;
@@ -960,61 +872,9 @@ describe('working seat retry and seat-lock coexistence', () => {
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    const code = await runSend(['native', 'queued at delivery seam'], io, host);
-    expect(code).toBe(0);
-    expect(io.out).toMatch(/^team acme, session "acme"\nnative: queued \(receiver busy\) \(typed, 0 ms; id [0-9a-f-]+\)\n$/);
-    const queuedId = /id ([0-9a-f-]+)\)\n$/.exec(io.out)?.[1] ?? '';
-    expect(queuedId).not.toBe('');
-    currentMsgId = queuedId;
-
-    // While the recipient seat lock remains held, nothing was typed and no history line claims delivery.
-    expect(heldAtDelivery).not.toBeNull();
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    const beforeRelease = readHistory('acme', w.root, w.home);
-    if (beforeRelease.ok) {
-      expect(beforeRelease.entries).toEqual([]);
-    }
-
-    // Releasing the lock lets the worker deliver the staged message once under the preserved id,
-    // and the seat's signed read receipt records `delivered (read)`.
-    heldAtDelivery!.release();
-    await until(() => host.enters.length === 1);
-    await until(() => {
-      const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.length === 1;
-    });
-    expect(host.typed).toHaveLength(1);
-    expect(host.enters).toHaveLength(1);
-    const afterRelease = readHistory('acme', w.root, w.home);
-    expect(afterRelease.ok).toBe(true);
-    if (afterRelease.ok) {
-      expect(afterRelease.entries).toHaveLength(1);
-      expect(afterRelease.entries[0]?.id).toBe(queuedId);
-      expect(afterRelease.entries[0]?.outcome).toBe('delivered (read)');
-      expect(afterRelease.entries[0]?.via).toBe('typed');
-    }
-
-    // A compose seat (Jules) stays out of .21 daemon queue acceptance even when its seat lock is held.
-    const julesLock = acquireSeatLock(w.dir, 'acme', 'compose');
-    if (!('release' in julesLock)) throw new Error('expected compose lock');
-    try {
-      const composeRes = await started.handle.deliver({
-        v: 1,
-        op: 'send',
-        from: 'owner',
-        to: 'compose',
-        body: 'jules compose brief',
-        session: 'acme',
-      });
-      expect(composeRes.ok).toBe(false);
-      expect(composeRes.outcome).toBe('refused');
-      if (composeRes.outcome === 'refused') {
-        expect(composeRes.detail).toContain('compose runs jules');
-      }
-    } finally {
-      julesLock.release();
-    }
+    const retired = await runSend(['native', 'queued at delivery seam'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
   test('stages the signed copy (create-or-match) before answering queued and refuses on conflicting bytes without touching the held file or typing', async () => {
@@ -1144,31 +1004,21 @@ describe('working seat retry and seat-lock coexistence', () => {
       heldLock.release();
     }
 
-    // Releasing the lock delivers only the two valid queued messages (once each, preserving msgId and read-receipt promotion),
-    // and never types the refused conflicting payload.
-    await until(() => host.enters.length === 2);
-    await until(() => {
-      const h = readHistory('acme', w.root, w.home);
-      return h.ok && h.entries.length === 2;
-    });
-    expect(host.typed).toHaveLength(2);
-    expect(host.enters).toHaveLength(2);
-    expect(host.typed.some((t: { pane: string; text: string }) => t.text.includes('prestage-conflict-id'))).toBe(false);
+    // 0.5.9: releasing the lock types nothing. The two staged copies stay in the bus inbox, the
+    // conflicting holder is untouched, and no history line claims a typed delivery.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
+    expect(existsSync(join(dropDir, 'prestage-create-id'))).toBe(true);
+    expect(existsSync(join(dropDir, 'prestage-match-id'))).toBe(true);
     expect(readFileSync(conflictPath, 'utf-8')).toBe('original held record that must not be overwritten');
-
     const historyAfter = readHistory('acme', w.root, w.home);
-    expect(historyAfter.ok).toBe(true);
-    if (historyAfter.ok) {
-      expect(historyAfter.entries.map((e) => ({ id: e.id, outcome: e.outcome, via: e.via }))).toEqual([
-        { id: 'prestage-create-id', outcome: 'delivered (read)', via: 'typed' },
-        { id: 'prestage-match-id', outcome: 'delivered (read)', via: 'typed' },
-      ]);
-    }
+    if (historyAfter.ok) expect(historyAfter.entries.filter((e) => e.outcome !== 'unreachable')).toEqual([]);
   });
 });
 
 describe('composer read-back, unsent draft protection, dialog guard, and bare-shell check', () => {
-  test('holds without typing when composer already holds an unsent user draft (both daemon and direct)', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: holds without typing when composer already holds an unsent user draft (both daemon and direct)', async () => {
     // This fake host carries no key surface: the box words are the fallback a delivery keeps
     // where no measured way into the box exists. The shipped queue route, which reads the
     // profile's measured keys, is the next test.
@@ -1179,24 +1029,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     // 1. Direct send (no daemon)
     const directIo = ownerIo(w.root);
-    expect(await runSend(['lead', 'do not clobber draft'], directIo, host)).toBe(1);
-    expect(directIo.err).toContain('held: the composer already holds unsent text');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-
-    // 2. Daemon send
-    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
-    if (started.kind !== 'serving') throw new Error(started.kind);
-    handles.push(started.handle);
-
-    const daemonIo = ownerIo(w.root);
-    expect(await runSend(['lead', 'do not clobber draft via daemon'], daemonIo, host)).toBe(1);
-    expect(daemonIo.err).toContain('held: the composer already holds unsent text');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
+    const retired = await runSend(['lead', 'do not clobber draft'], directIo, host);
+    expect(await retired).toBe(0);
+    expect(directIo.err).toContain('queued, no event adapter');
   });
 
-  test('holds a running turn whose composer holds a draft, typing nothing and keeping the draft', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: holds a running turn whose composer holds a draft, typing nothing and keeping the draft', async () => {
     // The release's own capture of text typed while a turn runs: the classifier reads the
     // screen `working` (its caution stage runs before the composer stage), and only the
     // composer read sees the draft. The typed leg must hold, never type into it.
@@ -1206,15 +1044,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     host.native.paneText = () => workingUnsent;
 
     const io = ownerIo(w.root);
-    expect(await runSend(['lead', 'do not clobber the running draft'], io, host)).toBe(1);
-    expect(io.err).toContain('held: the composer already holds unsent text');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-    // The draft is still where the owner left it.
-    expect(host.native.paneText('acme', 'pane-lead')).toBe(workingUnsent);
+    const retired = await runSend(['lead', 'do not clobber the running draft'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
-  test('the shipped queue route copies an unsent draft, delivers, and pastes it back', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: the shipped queue route copies an unsent draft, delivers, and pastes it back', async () => {
     // The real daemon host carries the measured keys; with them, the queue's delivery empties
     // the box, takes the trigger, and puts the owner's text back — the same delivery the direct
     // leg makes. The fake models the composer: a key empties it, a bracketed paste redraws it.
@@ -1249,26 +1084,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    expect(await runSend(['lead', 'take the box'], io, host)).toBe(0);
-    // The queue's own delivery says what became of the owner's text: the draft receipt travels
-    // with the sent line, its history entry and the response, as it does on the direct leg.
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet; the unsent text was pasted back)\n');
-    const hist = readHistory('acme', w.root, w.home);
-    expect(hist.ok).toBe(true);
-    if (!hist.ok) return;
-    expect(hist.entries.at(-1)).toMatchObject({
-      outcome: 'sent (unconfirmed)',
-      via: 'typed',
-      note: 'trigger taken, no read receipt yet; the unsent text was pasted back',
-    });
-    // claude-code's idle clear is ctrl+c; the trigger was typed, submitted, and the draft
-    // redrawn by a bracketed paste, with no literal typing of the draft.
-    expect(keys).toEqual(['ctrl+c']);
-    expect(host.typed[host.typed.length - 1]?.text).toBe(`\x1b[200~${draft}\x1b[201~`);
-    expect(box).toBe(draft);
+    const retired = await runSend(['lead', 'take the box'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
-  test('delivers into a running turn whose composer is empty', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: delivers into a running turn whose composer is empty', async () => {
     const w = setupWorld();
     const host = makeHost(w);
     const busy = (box: string) => `✻ Thinking… (12s · esc to interrupt)\n${RULE}\n❯ ${box}\n${RULE}`;
@@ -1278,16 +1099,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     };
 
     const io = ownerIo(w.root);
-    const code = await runSend(['lead', 'send into an empty working box'], io, host);
-    if (code !== 0) console.log('DEBUG', JSON.stringify(io.err), JSON.stringify(host.typed.length), JSON.stringify(host.enters.length));
-    expect(code).toBe(0);
-    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
-    expect(io.out).toContain('trigger taken, no read receipt yet');
-    expect(host.typed.length).toBe(1);
-    expect(host.enters).toEqual(['pane-lead']);
+    const retired = await runSend(['lead', 'send into an empty working box'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
-  test('holds without typing when screen shows a dialog before typing', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: holds without typing when screen shows a dialog before typing', async () => {
     const w = setupWorld();
     const questionScreen = [
       '☐ Scope',
@@ -1304,20 +1121,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('held: the screen reads question');
-    // The daemon's drop folder is not the one a watch scans, so its line promises no retry.
-    expect(io.err).not.toContain('a running watch retries it');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-
-    // The drop is on disk in the daemon's own folder, with no pending record beside it.
-    const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'lead');
-    expect(readPending(drops)).toHaveLength(0);
-    expect(readdirSync(drops).filter((name) => !name.endsWith('.pending'))).toHaveLength(1);
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
-  test('single-Enter discipline: a screen that cannot be read as a box takes the line once, and the send is taken', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: single-Enter discipline: a screen that cannot be read as a box takes the line once, and the send is taken', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       native: {
@@ -1338,25 +1147,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     // Direct: the screen is not an unsent box and never holds the trigger, so the box the
     // delivery sees is empty after Enter — the line left it, and no read receipt followed.
     const directIo = ownerIo(w.root);
-    expect(await runSend(['lead', 'single enter direct'], directIo, host)).toBe(0);
-    expect(directIo.out).toContain('lead: sent (unconfirmed) (typed, ');
-    expect(directIo.out).toContain('trigger taken, no read receipt yet');
-    expect(directIo.err).toBe('');
-    expect(host.enters.length).toBe(1);
-
-    // Daemon
-    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
-    if (started.kind !== 'serving') throw new Error(started.kind);
-    handles.push(started.handle);
-
-    const io = ownerIo(w.root);
-    expect(await runSend(['lead', 'single enter test'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
-    expect(io.out).toContain('trigger taken, no read receipt yet');
-    expect(host.enters.length).toBe(2);
+    const retired = await runSend(['lead', 'single enter direct'], directIo, host);
+    expect(await retired).toBe(0);
+    expect(directIo.err).toContain('queued, no event adapter');
   });
 
-  test('returns unreachable without typing when target pane is at a bare shell (both direct and daemon)', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: returns unreachable without typing when target pane is at a bare shell (both direct and daemon)', async () => {
     const w = setupWorld();
     const host = makeHost(w, {
       processInfo: () => ({ shell: 111, foreground: [111] }),
@@ -1364,21 +1160,9 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     // Direct
     const directIo = ownerIo(w.root);
-    expect(await runSend(['native', 'shell guard direct'], directIo, host)).toBe(1);
-    expect(directIo.err).toContain('unreachable: the seat is back at its shell; nothing was typed');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
-
-    // Daemon
-    const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
-    if (started.kind !== 'serving') throw new Error(started.kind);
-    handles.push(started.handle);
-
-    const daemonIo = ownerIo(w.root);
-    expect(await runSend(['native', 'shell guard daemon'], daemonIo, host)).toBe(1);
-    expect(daemonIo.err).toContain('unreachable: the seat is back at its shell; nothing was typed');
-    expect(host.typed).toEqual([]);
-    expect(host.enters).toEqual([]);
+    const retired = await runSend(['native', 'shell guard direct'], directIo, host);
+    expect(await retired).toBe(0);
+    expect(directIo.err).toContain('queued, no event adapter');
   });
 
   test('--wait bypasses the daemon and waits on the thread, while the daemon refuses an older caller', async () => {
@@ -1399,12 +1183,13 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     if (started.kind !== 'serving') throw new Error(started.kind);
     handles.push(started.handle);
 
-    // The CLI's own --wait bypasses the daemon, delivers on the typed leg, and waits on the thread.
+    // The CLI's own --wait bypasses the daemon, queues in the bus inbox (nothing is typed), and
+    // waits on the thread.
     const io = ownerIo(w.root);
     const code = await runSend(['lead', 'ping over socket', '--wait', '--timeout', '1'], io, host);
     expect(code).toBe(1);
     expect(io.err).toBe(
-      'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n',
+      `${queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT)}team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n`,
     );
 
     // An older CLI that still asks the daemon for a waited send gets the refusal from the
@@ -1428,7 +1213,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(hist.ok).toBe(true);
     if (!hist.ok) return;
     expect(hist.entries.map((e) => ({ to: e.to, outcome: e.outcome, via: e.via }))).toEqual([
-      { to: 'lead', outcome: 'timeout', via: 'typed' },
+      { to: 'lead', outcome: 'timeout', via: 'drop' },
     ]);
   });
 
@@ -1534,7 +1319,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     expect(hist.entries).toEqual([]);
   });
 
-  test('trigger points at state-folder drop path when delivered through the daemon', async () => {
+  test('no pane messaging, nothing typed and the bus inbox keeps it; was: trigger points at state-folder drop path when delivered through the daemon', async () => {
     const w = setupWorld();
     const host = makeHost(w);
     const started = await startSendDaemon({ root: w.root, dir: w.dir, team: w.team, host });
@@ -1542,19 +1327,12 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
     handles.push(started.handle);
 
     const io = ownerIo(w.root);
-    expect(await runSend(['native', 'stored in state drops'], io, host)).toBe(0);
-    expect(host.typed.length).toBe(1);
-    const drops = daemonDropDir('acme', w.root, w.home, 'acme', 'native');
-    const files = readdirSync(drops);
-    expect(files.length).toBe(1);
-    const dropFile = join(drops, files[0]!);
-    expect(host.typed[0]?.text ?? null).toBe(
-      triggerLine(dropFile, { seat: 'owner', team: 'acme', body: 'stored in state drops' }),
-    );
-    expect(readFileSync(dropFile, 'utf8')).toBe(filed('stored in state drops'));
+    const retired = await runSend(['native', 'stored in state drops'], io, host);
+    expect(await retired).toBe(0);
+    expect(io.err).toContain('queued, no event adapter');
   });
 
-  test('refuses cross-session and non-orchestrator requests, and recovers cleanly if a throw occurs mid-delivery', async () => {
+  test('refuses cross-session requests, lets a declared seat send, and types nothing however the pane would behave', async () => {
     const w = setupWorld();
     let shouldThrow = true;
     const host = makeHost(w, {
@@ -1597,16 +1375,21 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
       to: 'native',
       body: 'worker cannot send',
     });
-    expect(workerSend && 'outcome' in workerSend ? workerSend.outcome : null).toBe('refused');
+    // 0.5.9: a declared seat may send through the endpoint; what stops this one is the rule that
+    // nothing is typed into a pane, so the endpoint's typed delivery answers unreachable.
+    expect(workerSend && 'outcome' in workerSend ? workerSend.outcome : null).toBe('unreachable');
 
-    // First send throws inside typeText: Enter is never pressed, seat lock is released, and next send succeeds
+    // 0.5.9: the throwing typeText is never reached — nothing is typed — so both sends land in the
+    // seat's bus inbox, and the second is not held behind a lock the first left.
     const io1 = ownerIo(w.root);
-    expect(await runSend(['native', 'crash mid delivery'], io1, host)).toBe(1);
+    expect(await runSend(['native', 'crash mid delivery'], io1, host)).toBe(0);
+    expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
 
     const io2 = ownerIo(w.root);
     expect(await runSend(['native', 'recovers cleanly'], io2, host)).toBe(0);
-    expect(io2.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    expect(io2.out).toBe('team acme, session "acme"\nnative: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io2.err).toContain('queued, no event adapter');
   });
 
   test('a nickname sent through the daemon keeps the spec and the id it resolved to in history', async () => {
@@ -1647,7 +1430,7 @@ describe('composer read-back, unsent draft protection, dialog guard, and bare-sh
 
     const io = ownerIo(w.root);
     expect(await runSend(['zeus', 'by the human name'], io, host)).toBe(0);
-    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
 
     const hist = readHistory('acme', w.root, w.home);
     expect(hist.ok).toBe(true);

@@ -227,9 +227,9 @@ describe('team send: the owner-signed grant on the command path', () => {
     grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native@other'));
     const { code, err, out } = helperSend(root, sockets);
     expect(await code).toBe(0);
-    expect(err()).toBe('');
+    expect(err()).toContain('native: queued, no event adapter');
     expect(out()).toBe(
-      'team other, session "else"\nnative: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+      'team other, session "else"\nnative: sent (unconfirmed) (drop, 0 ms)\n',
     );
     const drops = join(otherDir, 'send-drops', 'else', 'native');
     const names = readdirSync(drops).filter(

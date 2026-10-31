@@ -1107,8 +1107,8 @@ describe('the client send walk', () => {
     expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
     expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
     expect(host.dials()).toBe(1);
-    expect(host.typed.map((one) => one.text)).toEqual([WAKE_LINE]);
-    expect(host.enters).toEqual(['pane-orchestrator']);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
     // The frame was never taken, so no read receipt exists for it.
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
     const last = walkHistory(w).at(-1);
@@ -1123,8 +1123,8 @@ describe('the client send walk', () => {
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    expect(host.typed.map((one) => one.text)).toEqual([WAKE_LINE]);
-    expect(host.enters).toEqual(['pane-orchestrator']);
+    expect(host.typed).toEqual([]);
+    expect(host.enters).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed', outcome: 'sent (unconfirmed)' });
   });
@@ -1137,7 +1137,7 @@ describe('the client send walk', () => {
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     // The typed leg is first in the receiver's own word and took the send; the channel never ran,
     // so no pending marker was written for it.
-    expect(host.typed.map((one) => one.text)).toEqual([WAKE_LINE]);
+    expect(host.typed).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
     expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed' });
   });

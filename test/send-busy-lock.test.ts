@@ -1,3 +1,4 @@
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 // A send that finds the receiving seat's lock held by another command is queued, not refused:
 // the reachable legs store the signed record and the marker the watch already delivers, type
 // nothing, and answer `queued (receiver busy)` with the id the delivery keeps. The scenes here
@@ -110,7 +111,7 @@ test('a typed send queued on a held seat lock is typed once when the seat is fre
   const code = await runSend(['lead', 'hello', '--json'], io, host);
 
   expect(code).toBe(0);
-  expect(io.err).toBe('');
+  expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
   const doc = assertMatchesOutputSchema<QueuedDoc>(io.out, SEND_OUTPUT_SCHEMA);
   expect(doc.status).toBe('queued (receiver busy)');
   expect(doc.channel).toBe('typed');
@@ -192,8 +193,8 @@ test('a queued send whose trigger writes the read receipt is delivered (read) on
   };
   await retryHeldDrops(scene(made, one, said));
 
-  expect(one.typed).toHaveLength(1);
-  expect(one.enters).toBe(1);
+  expect(one.typed).toHaveLength(0);
+  expect(one.enters).toBe(0);
   expect(readPending(dir)).toEqual([]);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
@@ -286,7 +287,7 @@ test('an inbox send queued on a held seat lock waits for its inbox read, then th
   expect(doc.channel).toBe('mcp-inbox');
   expect(doc.delivery).toEqual([
     { leg: 'mcp-inbox', state: 'queued' },
-    { leg: 'typed', state: 'not-reached' },
+    { leg: 'drop', state: 'not-reached' },
   ]);
   const id = doc.ids.sent;
   if (id === null) throw new Error('the queued send named no id');

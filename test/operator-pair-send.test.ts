@@ -1,3 +1,4 @@
+import { queuedLine } from '../src/send/no-pane-messaging.ts';
 // Operators of one team send to each other — the acceptance the issue asks for, from the
 // requested behaviour and not from the implementation: two seats whose file lines carry
 // `role: operator` in one team write to each other, both ways; the pair never leaves the team;
@@ -273,7 +274,7 @@ describe('a send admitted by the operators\' rule is logged like every send', ()
   test('the drop header names the rule and the team log carries the line', async () => {
     const root = world.roots.acme as string;
     const reading = await send({ team: 'acme', seat: 'operator-2' }, 'operator-3', []);
-    expect(reading.err).toBe('');
+    expect(reading.err).toBe(queuedLine('operator-3'));
     expect(reading.code).toBe(0);
     expect(reading.out).toContain('operator-3: sent (unconfirmed) (drop, 0 ms)');
     // The drop folder: the one signed record (the `.pending` marker beside it is the watch's),

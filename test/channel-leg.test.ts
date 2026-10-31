@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The channel leg as the sender and the watch see it: a Claude Code seat whose launch carries the
 // development channel, whose own inbox server is listening with `channel` declared, takes the
 // written record as a push. The server's `<id>.channel-push.json` marker is what ends the walk
@@ -304,6 +305,7 @@ describe('the channel leg', () => {
       outcome: 'sent (channel)',
       ms: 0,
       via: 'channel',
+      failed: [`typed: ${NO_PANE_MESSAGING}`],
     });
   });
 
@@ -380,7 +382,7 @@ describe('the channel leg', () => {
       outcome: 'sent (unconfirmed)',
       ms: 0,
       via: 'mcp-inbox',
-      failed: ['channel: no push receipt within 0 ms'],
+      failed: [`typed: ${NO_PANE_MESSAGING}`, 'channel: no push receipt within 0 ms'],
     });
   });
 });
@@ -405,9 +407,9 @@ describe('the channel redelivery', () => {
     const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
     const scene = sceneOf(made, box, due, said);
     await retryHeldDrops(scene);
-    expect(box.typed).toHaveLength(1);
-    expect(box.typed[0]).toContain(TRIGGER);
-    expect(box.enters).toBe(1);
+    expect(box.typed).toHaveLength(0);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
     expect(readPending(dir)).toEqual([]);
     expect(entries(made)).toEqual([
       {
@@ -648,9 +650,9 @@ describe('the channel redelivery', () => {
 
     await retryHeldDrops(scene);
 
-    expect(box.typed).toHaveLength(1);
-    expect(box.typed[0]).toContain(TRIGGER);
-    expect(box.enters).toBe(1);
+    expect(box.typed).toHaveLength(0);
+    expect(box.typed).toEqual([]);
+    expect(box.enters).toBe(0);
     expect(readPending(dir)).toEqual([]);
     expect(said).toEqual([
       `lead: a channel send from owner was not confirmed; the socket was not taken (the receiving seat does not declare crossSessionInbound accept), typing the trigger`,

@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The `socket` delivery leg: a receiver's own `crossSessionInbound` declaration decides whether a
 // send dials its cross-session socket, the signed record is written before the frame, and a
 // declared order is walked as written. No live pane and no real socket: the host's deliver is a
@@ -193,7 +194,7 @@ test('an owner send in a team that names no entity dials no frame: no owner repl
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('the reply line names the sending team, never the team the frame is delivered into', () => {
@@ -264,7 +265,7 @@ test('a receiver declaring hold is skipped and the typed trigger takes the send'
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a receiver declaring nothing is skipped and the typed trigger takes the send', async () => {
@@ -278,7 +279,7 @@ test('a receiver declaring nothing is skipped and the typed trigger takes the se
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a session started before its accept declaration is skipped, and the trigger takes the send', async () => {
@@ -292,7 +293,7 @@ test('a session started before its accept declaration is skipped, and the trigge
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a declared order that omits socket never dials, even for an accepting receiver', async () => {
@@ -306,7 +307,7 @@ test('a declared order that omits socket never dials, even for an accepting rece
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a declared order may place socket first, and it is walked there', async () => {
@@ -339,7 +340,7 @@ test('a declared order that puts the typed leg first takes the send there, and t
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a socket leg named for a non-Claude seat is skipped, and the typed leg behind it takes the send', async () => {
@@ -352,7 +353,7 @@ test('a socket leg named for a non-Claude seat is skipped, and the typed leg beh
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a wrapper accept overridden by the appended hooks file does not dial: the effective word is unset', async () => {
@@ -375,7 +376,7 @@ test('a wrapper accept overridden by the appended hooks file does not dial: the 
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 
   const found = declaredInboundOf({
     dir: made.dir,
@@ -489,7 +490,7 @@ test('a signed entity order that places typed before socket keeps the socket out
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a signed project order that places typed before socket keeps the socket out', async () => {
@@ -505,7 +506,7 @@ test('a signed project order that places typed before socket keeps the socket ou
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
 });
 
 test('a signed team order shadows the file’s word, and its socket dials for an accepting receiver', async () => {
@@ -571,11 +572,12 @@ test('an explicit team-file hold keeps the socket out though the launch accepts'
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   expect(history.entries.at(-1)?.failed).toEqual([
+    `typed: ${NO_PANE_MESSAGING}`,
     "socket: the receiving seat's team file declares inbound hold",
   ]);
 });
@@ -593,11 +595,12 @@ test('an explicit team-file refuse keeps the socket out though the launch accept
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   expect(history.entries.at(-1)?.failed).toEqual([
+    `typed: ${NO_PANE_MESSAGING}`,
     "socket: the receiving seat's team file declares inbound refuse",
   ]);
 });
@@ -618,11 +621,12 @@ test('a launch this build did not write still needs the team file’s accept wor
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   expect(history.entries.at(-1)?.failed).toEqual([
+    `typed: ${NO_PANE_MESSAGING}`,
     "socket: the receiving seat's team file does not declare inbound accept",
   ]);
 });
@@ -639,11 +643,12 @@ test('a launch with no accept word is never dialed, whatever the team file omits
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
+  expect(pane.typed.length).toBe(0);
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   expect(history.entries.at(-1)?.failed).toEqual([
+    `typed: ${NO_PANE_MESSAGING}`,
     'socket: the receiving Claude session does not declare crossSessionInbound accept',
   ]);
 });
@@ -684,7 +689,7 @@ test('a held frame is marked once, and the socket stays out until the declaratio
   // First send: one dial, held once, the typed route takes it.
   expect(await runSend(['lead', 'hello'], owner(made.root), host)).toBe(0);
   expect(dials).toHaveLength(1);
-  expect(pane.typed).toHaveLength(1);
+  expect(pane.typed).toHaveLength(0);
   const markPath = join(made.dir, 'send-held', 'acme', 'lead.json');
   const mark = JSON.parse(readFileSync(markPath, 'utf8')) as { at: string; declaredAt: number | null; source: string | null };
   expect(mark.source).toBe(settings);
@@ -694,16 +699,16 @@ test('a held frame is marked once, and the socket stays out until the declaratio
   expect(history.ok).toBe(true);
   if (!history.ok) return;
   expect(history.entries.at(-1)?.outcome).toBe('sent (unconfirmed)');
-  expect(history.entries.at(-1)?.failed?.[0]).toContain('Held message from another session');
+  expect(history.entries.at(-1)?.failed?.join('\n')).toContain('Held message from another session');
 
   // Second send under the same declaration: the socket is not dialed, and the walk says why.
   expect(await runSend(['lead', 'again'], owner(made.root), host)).toBe(0);
   expect(dials).toHaveLength(1);
-  expect(pane.typed).toHaveLength(2);
+  expect(pane.typed).toHaveLength(0);
   const second = readHistory('acme', made.root, made.home);
   expect(second.ok).toBe(true);
   if (!second.ok) return;
-  expect(second.entries.at(-1)?.failed?.[0]).toContain('held at its box');
+  expect(second.entries.at(-1)?.failed?.join('\n')).toContain('held at its box');
 
   // The declaration is re-confirmed: the file is rewritten at a new time and the restarted host
   // exposes a fresh socket. The socket is dialed again, and this frame is taken.
@@ -715,5 +720,5 @@ test('a held frame is marked once, and the socket stays out until the declaratio
   utimesSync(socket, reworded, reworded);
   expect(await runSend(['lead', 'third'], owner(made.root), host)).toBe(0);
   expect(dials).toHaveLength(2);
-  expect(pane.typed).toHaveLength(2);
+  expect(pane.typed).toHaveLength(0);
 });

@@ -1,3 +1,4 @@
+import { queuedLine } from '../../src/send/no-pane-messaging.ts';
 // The operator pair, end to end: two seats of one team whose file lines both write
 // `role: operator` write to each other. The file's line is the word admission reads, not the
 // role a record was registered under; the record carries the admitting rule, and the send is
@@ -88,7 +89,7 @@ describe('team send: two operators of one team', () => {
     const code = await runSend(['operator-b', 'the handover is ready'], io, fake(one));
 
     expect(code).toBe(0);
-    expect(io.err).toBe('');
+    expect(io.err).toBe(queuedLine('operator-b'));
     expect(io.out).toBe('team acme, session "acme"\noperator-b: sent (unconfirmed) (drop, 0 ms)\n');
     const drops = dropDir(one.dir, 'operator-b');
     // The drop leg leaves its retry marker beside the record, and readdir order is the
@@ -123,7 +124,7 @@ describe('team send: two operators of one team', () => {
     const code = await runSend(['operator-b', 'status?'], io, fake(one));
 
     expect(code).toBe(0);
-    expect(io.err).toBe('');
+    expect(io.err).toBe(queuedLine('operator-b'));
     const drops = dropDir(one.dir, 'operator-b');
     expect(recordBody(dropRecord(drops))).toBe(
       'from operator-a — admitted by: an operator to another operator of its own team\n\nstatus?',

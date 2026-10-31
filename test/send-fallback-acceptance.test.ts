@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The send fallback acceptance, against the public `runSend`/`SendHost` seam.
 //
 // FIXED invariants (the reviewed decision, 2026-10-20) this file pins: the message is signed and staged
@@ -126,7 +127,7 @@ test('a refused socket frame falls through with the same record and message id',
   expect(dials).toHaveLength(1);
   expect(dials[0]).toContain(id);
   const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
-  expect(pane.typed).toEqual([trigger]);
+  expect(pane.typed).toEqual([]);
 
   // The one history line names the socket refusal and the route that took the send.
   const history = readHistory('acme', made.root, made.home);
@@ -134,8 +135,8 @@ test('a refused socket frame falls through with the same record and message id',
   if (!history.ok) return;
   const entry = history.entries[history.entries.length - 1];
   expect(entry?.id).toBe(id);
-  expect(entry?.via).toBe('typed');
-  expect(entry?.failed).toEqual(['socket: the session closed the connection before it took the frame']);
+  expect(entry?.via).toBe('drop');
+  expect(entry?.failed).toEqual([`typed: ${NO_PANE_MESSAGING}`, 'socket: the session closed the connection before it took the frame']);
 });
 
 test('a replayed delivery is served once by the real gate and takes its task once', async () => {
@@ -237,7 +238,7 @@ test('a held socket frame falls through to the typed route with the same record 
   expect(dials).toHaveLength(1);
   expect(dials[0]).toContain(id);
   const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
-  expect(pane.typed).toEqual([trigger]);
+  expect(pane.typed).toEqual([]);
 
   const recipient: CanonicalRecipient = { team: 'acme', seat: 'lead', toId: null, session: 'acme', root: made.root };
   const marker = JSON.parse(readFileSync(markerPathOf(recipient, id), 'utf8')) as FallbackMarker;

@@ -388,13 +388,9 @@ describe('an orchestrator reaches another team by name', () => {
 
     expect(code).toBe(0);
     expect(alphaPane.typed).toEqual([]);
-    expect(betaPane.typed.length).toBe(1);
-    const typed = betaPane.typed[0] as Typed;
-    expect(typed.session).toBe('beta');
-    expect(typed.pane).toBe('pane-beta-lead');
+    expect(betaPane.typed.length).toBe(0);
     const line = readTriggerLine('lead', 'beta', { seat: 'lead', team: 'alpha', body: BODY });
     if (line === null) throw new Error('the trigger line did not fit');
-    expect(typed.text).toBe(line);
     const drop = soleDrop(betaRoot, 'beta', 'lead');
     expect(drop.text).toContain(alpha.id);
     expect(drop.text).toContain(BODY);

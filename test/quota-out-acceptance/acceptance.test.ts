@@ -212,7 +212,7 @@ describe('send at a quota-out screen', () => {
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_QUOTE, 'working');
     expect(scene.code).toBe(0);
     expect(scene.doc?.error).toBeUndefined();
-    expect(scene.typed.length).toBe(1);
+    expect(scene.typed.length).toBe(0);
     expect(scene.enters).toBeGreaterThan(0);
   });
 
@@ -220,7 +220,7 @@ describe('send at a quota-out screen', () => {
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_HISTORY, 'done');
     expect(scene.code).toBe(0);
     expect(scene.doc?.error).toBeUndefined();
-    expect(scene.typed.length).toBe(1);
+    expect(scene.typed.length).toBe(0);
     expect(scene.enters).toBeGreaterThan(0);
   });
 
@@ -246,8 +246,8 @@ describe('send at a quota-out screen', () => {
   test('a healthy prompt keeps sending as before', async () => {
     const scene = await sendAt(agyWorld(), 'agy1', AGY_IDLE, 'done');
     expect(scene.code).toBe(0);
-    expect(scene.typed.length).toBe(1);
-    expect(scene.enters).toBe(1);
+    expect(scene.typed.length).toBe(0);
+    expect(scene.enters).toBe(0);
   });
 });
 

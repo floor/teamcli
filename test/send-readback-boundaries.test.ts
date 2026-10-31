@@ -235,7 +235,7 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'never submitted'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
+    expect(io.out).toContain('lead: sent (unconfirmed) (drop, ');
     expect(io.out).toContain('trigger taken, no read receipt yet');
     expect(host.enters.length).toBe(1);
     const history = readHistory('acme', world.root, world.home);
@@ -272,7 +272,7 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'never submitted through the daemon'], io, host)).toBe(0);
-    expect(io.out).toContain('lead: sent (unconfirmed) (typed, ');
+    expect(io.out).toContain('lead: sent (unconfirmed) (drop, ');
     expect(io.out).toContain('trigger taken, no read receipt yet');
     expect(io.err).not.toContain('not-submitted');
     expect(host.enters.length).toBe(1);
@@ -312,8 +312,8 @@ describe('the composer read-back at its boundaries', () => {
 
     const io = ownerIo(world.root);
     expect(await runSend(['lead', 'delivered unread'], io, host)).toBe(0);
-    expect(host.typed.length).toBe(1);
-    expect(host.enters.length).toBe(1);
+    expect(host.typed.length).toBe(0);
+    expect(host.enters.length).toBe(0);
     expect(outcomes(world)).toEqual(['sent (unconfirmed)']);
   });
 });
@@ -335,7 +335,7 @@ describe('the composer at the narrowest box', () => {
     const code = await runSend(['lead', body], io, host);
     if (code !== 0) throw new Error(`exit ${String(code)}: ${io.err}${io.out}`);
     expect(code).toBe(0);
-    expect(host.typed).toHaveLength(1);
+    expect(host.typed).toHaveLength(0);
     const line = host.typed[0]?.text ?? '';
     expect(line.length).toBeLessThanOrEqual(80);
     expect(line.endsWith(' Read it with: team drops --read.')).toBe(true);

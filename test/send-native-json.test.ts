@@ -1,3 +1,4 @@
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 // --json for a native seat. The socket documents live in send.test.ts. No live pane.
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -26,7 +27,7 @@ test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async 
   const code = await runSend(['native', 'hello', '--json'], io, host);
 
   expect(code).toBe(0);
-  expect(io.err).toBe('');
+  expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
   const doc = JSON.parse(io.out) as {
     schema: { name: string; version: number };
     format: number;
@@ -44,7 +45,7 @@ test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async 
   expect(doc.dry_run).toBe(false);
   expect(doc.seat).toBe('native');
   expect(doc.status).toBe('sent (unconfirmed)');
-  expect(doc.action_summary).toBe('native: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)');
+  expect(doc.action_summary).toBe('native: sent (unconfirmed) (drop, 0 ms)');
   expect(doc.project).toBe('acme');
   expect(doc.session).toBe('acme');
   expect(doc.channel).toBe('typed');
@@ -109,7 +110,7 @@ test('--json --wait on a native seat sends the record and reports send.timeout w
   const code = await runSend(['native', 'hello', '--wait', '--timeout', '5', '--json'], io, host);
 
   expect(code).toBe(1);
-  expect(io.err).toBe('');
+  expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
   const doc = JSON.parse(io.out) as unknown;
   expect(doc).toEqual({
     schema: { name: 'team.error', version: 1 },
@@ -121,10 +122,10 @@ test('--json --wait on a native seat sends the record and reports send.timeout w
     // The error document carries the resolved walk, as the delivered one does.
     delivery: [
       { leg: 'mcp-inbox', state: 'skipped', reason: 'no live inbox listener' },
-      { leg: 'typed', state: 'attempted' },
+      { leg: 'drop', state: 'attempted' },
     ],
   });
-  expect(pane.typed.length).toBe(1);
-  expect(pane.enters).toBe(1);
+  expect(pane.typed.length).toBe(0);
+  expect(pane.enters).toBe(0);
   expect(host.frames).toEqual([]);
 });

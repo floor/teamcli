@@ -171,7 +171,7 @@ describe('the sending paths never dial while the socket is off', () => {
 
     expect(code).toBe(0);
     expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
     );
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);

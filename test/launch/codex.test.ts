@@ -396,12 +396,12 @@ function delivery(initial = 'idle') {
 }
 
 describe('Codex rules delivery', () => {
-  test('recognised idle, pasted text, then observed working with empty input', async () => {
+  test('no pane messaging, the rules line is never typed; was: recognised idle, pasted text, then observed working with empty input', async () => {
     const d = delivery();
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a ready box drawn with » takes the line and the Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a ready box drawn with » takes the line and the Enter', async () => {
     // The observed build's prompt glyph: the capture with `»` in place of `›`. The start, the
     // paste's read-back and the re-read before Enter all read the same composer, so the rules
     // are typed once and sent once, exactly as on the `›` screen.
@@ -413,49 +413,47 @@ describe('Codex rules delivery', () => {
       d.showText(wideGlyph(fixture('idle')).replace('» Ask Codex to do anything', `» ${text}`));
       return true;
     };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a »-headed dialog is waited out and never typed into', async () => {
+  test('no pane messaging, the rules line is never typed; was: a »-headed dialog is waited out and never typed into', async () => {
     // A dialog drawn with `»` rows matches none of the dialog stages, so it reads unknown and
     // `deliverRules` waits the deadline out and refuses: the wider prompt does not make a
     // dialog a ready box, and nothing is typed into it.
     const d = delivery();
     d.showText(fixture('permission-pinned').replace(/^›/gm, '»'));
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals.at(-1)?.stop).toBe('screen');
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('the captured multi-line box is not the text any more: typed, not sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: the captured multi-line box is not the text any more: typed, not sent', async () => {
     // The real capture, with the message as team once composed it. A row break may stand for at
     // most one space, never the newline between the lines, so the box never verifies and the
     // Enter is never the delivery's to send.
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('unsent'); return true; };
-    expect(await deliverRules('codex', CAPTURED_MESSAGE, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([CAPTURED_MESSAGE]);
-    expect(d.refusals.at(-1)?.stop).toBe('read-back');
+    const retired = await deliverRules('codex', CAPTURED_MESSAGE, 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a box holding a person\'s own text gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box holding a person\'s own text gets no Enter', async () => {
     // The captured rules box against a different first message: the box is not the typed text.
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('unsent'); return true; };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('the typed text with one character changed gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the typed text with one character changed gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed('Rules!')); return true; };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('the typed text with more below it gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the typed text with more below it gets no Enter', async () => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed('Rules.\nand a line of their own')); return true; };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a box whose rows are the typed line word-wrapped on the pane is entered', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box whose rows are the typed line word-wrapped on the pane is entered', async () => {
     // No Codex capture shows its composer wrapping a line, so no wrap is modelled for it: the
     // box rows must read back as the typed line laid out in order — the words that fit, the rest
     // continued at the prompt row's two columns — and then the Enter is the paste's.
@@ -464,18 +462,18 @@ describe('Codex rules delivery', () => {
     expect(rows.length).toBeGreaterThan(1);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed(rows.join('\n'))); return true; };
-    expect(await deliverRules('codex', line, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([line, 'Enter']);
+    const retired = await deliverRules('codex', line, 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a word-wrapped box with one character changed gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a word-wrapped box with one character changed gets no Enter', async () => {
     const line = 'End every commit message and every pull request body with your signature, given below.';
     const changed = line.replace('signature', 'signatvre');
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed(wordWrap(changed, 53 - 2).join('\n'))); return true; };
-    expect(await deliverRules('codex', line, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([line]);
+    const retired = await deliverRules('codex', line, 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a word-wrapped box with a blank row between its rows gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a word-wrapped box with a blank row between its rows gets no Enter', async () => {
     // An empty continuation row is not part of the wrapped line: the pane draws one only where
     // the text itself has a blank line, and this line has none.
     const line = 'End every commit message and every pull request body with your signature, given below.';
@@ -483,20 +481,20 @@ describe('Codex rules delivery', () => {
     const [firstRow = '', ...rest] = rows;
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed([firstRow, '', ...rest].join('\n'))); return true; };
-    expect(await deliverRules('codex', line, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([line]);
+    const retired = await deliverRules('codex', line, 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a blank line the typed text itself has is refused: a blank row is never the text\'s', async () => {
+  test('no pane messaging, the rules line is never typed; was: a blank line the typed text itself has is refused: a blank row is never the text\'s', async () => {
     // A blank row was the pane's drawing of a blank line the text had, when texts could hold
     // newlines. A row break may stand for at most one space, never a newline, so the blank row
     // never reads back and there is no Enter.
     const typed = 'Rules.\n\nMore rules.';
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(boxed(typed)); return true; };
-    expect(await deliverRules('codex', typed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([typed]);
+    const retired = await deliverRules('codex', typed, 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a trailing blank row after the word-wrapped line gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trailing blank row after the word-wrapped line gets no Enter', async () => {
     // One empty row of the pane's own sits under the text — idle.txt and unsent.txt show it
     // between the text and the status line, and it is the box's frame, not content. A second
     // empty row is a row the text does not have: someone pressed a newline after it.
@@ -508,8 +506,8 @@ describe('Codex rules delivery', () => {
     expect(boxHoldsText('codex', line, screen)).toBe(false);
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.showText(screen); return true; };
-    expect(await deliverRules('codex', line, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([line]);
+    const retired = await deliverRules('codex', line, 1, d.io);
+    expect(retired).toBe(false);
   });
   test('two spaces typed, one shown, gets no Enter', async () => {
     // The shared read refuses a box that shows a single space where the typed text has two: the
@@ -521,7 +519,7 @@ describe('Codex rules delivery', () => {
     expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
     expect(d.calls).toEqual([]);
   });
-  test('a vendor notice at the first frame is refused at once, not waited out', async () => {
+  test('no pane messaging, the rules line is never typed; was: a vendor notice at the first frame is refused at once, not waited out', async () => {
     // The reading is the first read's, and the refusal follows it before any wait: without the
     // vendor-notice branch the loop would poll the same screen to the deadline and report the
     // same reading from there. No sleep, no text, no key.
@@ -529,10 +527,8 @@ describe('Codex rules delivery', () => {
     let naps = 0;
     const napping = d.io.sleep;
     d.io.sleep = async (ms) => { naps++; return napping(ms); };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(naps).toBe(0);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals.at(-1)?.kind).toBe('vendor notice');
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
   test('working screen with a stale idle status still receives nothing', async () => {
     const d = delivery('working'); d.status('idle');
@@ -542,28 +538,28 @@ describe('Codex rules delivery', () => {
   test.each(['trust', 'permission'])('a %s dialog appearing after paste gets no Enter', async (dialog) => {
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show(dialog); return true; };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
   test.each(['trust', 'permission'])('a %s dialog arriving at the final re-read gets no Enter', async (dialog) => {
     const d = delivery(); let reads = 0;
     d.io.screen = () => fixture(++reads === 3 ? dialog : reads === 1 ? 'idle' : 'unsent');
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a permission dialog above the pinned status line appearing after paste gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a permission dialog above the pinned status line appearing after paste gets no Enter', async () => {
     // Read before the fix: the dialog was `unsent` to both re-reads below, so the paste looked
     // submitted and the Enter went to the dialog's first choice.
     const d = delivery();
     d.io.type = (text) => { d.calls.push(text); d.show('permission-pinned'); return true; };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
-  test('a permission dialog above the pinned status line arriving at the final re-read gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a permission dialog above the pinned status line arriving at the final re-read gets no Enter', async () => {
     const d = delivery(); let reads = 0;
     d.io.screen = () => fixture(++reads === 3 ? 'permission-pinned' : reads === 1 ? 'idle' : 'unsent');
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
-    expect(d.calls).toEqual(['Rules.']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
   test('a swallowed Enter, working with pasted input, and a failed Enter are not delivery', async () => {
     for (const state of ['idle', 'working', 'failed']) {
@@ -572,12 +568,13 @@ describe('Codex rules delivery', () => {
       expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(false);
     }
   });
-  test('a paste that has not rendered is awaited, never submitted blind', async () => {
+  test('no pane messaging, the rules line is never typed; was: a paste that has not rendered is awaited, never submitted blind', async () => {
     const d = delivery(); let clock = 0;
     d.io.type = () => true;
     d.io.now = () => clock;
     d.io.sleep = async (ms) => { clock += ms; d.showText(boxed('Rules.')); };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(true);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 });
 
@@ -659,7 +656,7 @@ describe('the box\'s top frame (Codex)', () => {
   // frame — so the constructed screens below stand in for it.
   const shaped = (body: string) => fixture('idle').replace('› Ask Codex to do anything', body);
 
-  test('the transcript\'s echo over the gap leaves the empty box idle, and the typed text reads back exactly', async () => {
+  test('no pane messaging, the rules line is never typed; was: the transcript\'s echo over the gap leaves the empty box idle, and the typed text reads back exactly', async () => {
     // The routine post-send layout: the person's sent message echoed at the prompt column, the
     // captured blank frame, the empty input row. It reads `idle` on every reader and rules
     // delivery types and enters; the read-back holds exactly the typed text.
@@ -672,8 +669,8 @@ describe('the box\'s top frame (Codex)', () => {
     const d = delivery();
     d.showText(at());
     d.io.type = (text) => { d.calls.push(text); d.showText(at(text)); return true; };
-    expect(await deliverRules('codex', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('codex', 'Rules.', 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test('two and three blank rows above the input read the same', () => {
@@ -850,10 +847,10 @@ describe('Codex rules delivery of the one line (0.160.0 capture)', () => {
     expect(boxHoldsText('codex', rulesLine(CAPTURED_PATH, '4d0c9f8b3a2e'), screen)).toBe(false);
   });
 
-  test('the line is typed once at an empty prompt, read back row by row, and entered once', async () => {
+  test('no pane messaging, the rules line is never typed; was: the line is typed once at an empty prompt, read back row by row, and entered once', async () => {
     const d = lineDelivery();
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
   test.each([
@@ -864,33 +861,27 @@ describe('Codex rules delivery of the one line (0.160.0 capture)', () => {
   ] as const)('one character changed %s gets no Enter', async (what, [from, to]) => {
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(capture('rules-line').replace(from, to)); return true; };
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('read-back');
-    expect(why?.typed).toBe(true);
-    expect(why?.sent).toBe(false);
-    expect(why?.row).not.toBeNull();
-    expect(refusalReport(why!)).toContain("the read-back didn't match");
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a row of the line with one character more than the line has gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a row of the line with one character more than the line has gets no Enter', async () => {
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(capture('rules-line').replace('wait for your brief.', 'wait for your brief. x')); return true; };
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the line with one character more than the box shows gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the line with one character more than the box shows gets no Enter', async () => {
     // The other way round: the box draws the line's own four rows, and the text claims a
     // fifth the pane never drew.
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(capture('rules-line')); return true; };
-    expect(await deliverRules('codex', `${capturedLine} x`, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([`${capturedLine} x`]);
+    const retired = await deliverRules('codex', `${capturedLine} x`, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('two spaces in the line where the row break hides one get no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: two spaces in the line where the row break hides one get no Enter', async () => {
     // The captured break after `your` hides the line's single space. A line with two spaces
     // there draws the same rows — the read-back refuses it: a break may stand for exactly one
     // space, never a run of them.
@@ -898,20 +889,20 @@ describe('Codex rules delivery of the one line (0.160.0 capture)', () => {
     expect(boxHoldsText('codex', doubled, capture('rules-line'))).toBe(false);
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(capture('rules-line')); return true; };
-    expect(await deliverRules('codex', doubled, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([doubled]);
+    const retired = await deliverRules('codex', doubled, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a tab in the line gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a tab in the line gets no Enter', async () => {
     const tabbed = capturedLine.replace('Read ', 'Read\t');
     expect(boxHoldsText('codex', tabbed, capture('rules-line'))).toBe(false);
     const d = lineDelivery();
     d.io.type = (text) => { d.calls.push(text); d.show(capture('rules-line')); return true; };
-    expect(await deliverRules('codex', tabbed, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([tabbed]);
+    const retired = await deliverRules('codex', tabbed, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a trust dialog at the final re-read gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: a trust dialog at the final re-read gets no Enter', async () => {
     // The other way round: the line reads back in the loop, and the re-read that immediately
     // precedes the Enter sees the dialog. Without that re-read the Enter goes to the dialog's
     // first choice.
@@ -922,67 +913,52 @@ describe('Codex rules delivery of the one line (0.160.0 capture)', () => {
       d.io.screen = () => (++reads <= 1 ? capture('rules-line') : fixture('trust'));
       return true;
     };
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('read-back');
-    expect(why?.sent).toBe(false);
-    expect(why?.kind).toBe('trust');
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the file changing after it was written gets no Enter', async () => {
+  test('no pane messaging, the rules line is never typed; was: the file changing after it was written gets no Enter', async () => {
     // The line read back as its own rows; between that and the key, the file at its path no
     // longer holds the text whose hash the line names. Nothing is sent, and the report says
     // the file changed — the seat is never pointed at a file team cannot vouch for.
     const d = lineDelivery();
     d.io.file = () => false;
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('file-changed');
-    expect(why?.sent).toBe(false);
-    expect(refusalReport(why!)).toBe('rules typed, not sent: the rules file changed after it was written');
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a seat mid-turn is reported as working; nothing is typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a seat mid-turn is reported as working; nothing is typed', async () => {
     const d = lineDelivery();
     d.status('working');
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('working');
-    expect(refusalReport(why!)).toBe('rules not confirmed: the seat is working; run up again when it is idle');
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box already holding the person\'s own text is left alone', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box already holding the person\'s own text is left alone', async () => {
     const d = lineDelivery();
     d.show(capture('idle').replace('› Ask Codex to do anything', drawn('the person\'s own message')));
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('leftover');
-    expect(refusalReport(why!)).toContain('its box already holds text that is not the rules line');
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat whose box already holds the line is verified and entered, never typed onto', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat whose box already holds the line is verified and entered, never typed onto', async () => {
     const d = lineDelivery();
     d.show(capture('rules-line'));
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Enter']);
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat whose box holds another seat\'s line is refused, nothing typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat whose box holds another seat\'s line is refused, nothing typed', async () => {
     const d = lineDelivery();
     d.show(capture('rules-line').replace('implementer', 'scribe'));
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals.at(-1)?.stop).toBe('leftover');
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a resumed seat with an empty box is typed once, verified and sent', async () => {
+  test('no pane messaging, the rules line is never typed; was: a resumed seat with an empty box is typed once, verified and sent', async () => {
     const d = lineDelivery();
-    expect(await deliverRules('codex', capturedLine, 1, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('codex', capturedLine, 1, d.io);
+    expect(retired).toBe(false);
   });
 });
 
@@ -1369,38 +1345,28 @@ function submitRetryDelivery(takes: (enters: number) => boolean) {
 }
 
 describe('Codex rules delivery retries a submit the CLI did not take', () => {
-  test('the second Enter is accepted; the line is typed once and every retry still waits for the acknowledgement', async () => {
+  test('no pane messaging, the rules line is never typed; was: the second Enter is accepted; the line is typed once and every retry still waits for the acknowledgement', async () => {
     const d = submitRetryDelivery((enters) => enters >= 2);
-    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, 'Enter', 'Enter']);
+    const retired = await deliverRules('codex', capturedLine, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the third Enter is the last try, and it can be the one accepted', async () => {
+  test('no pane messaging, the rules line is never typed; was: the third Enter is the last try, and it can be the one accepted', async () => {
     const d = submitRetryDelivery((enters) => enters >= RULES_ENTER_TRIES);
-    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(true);
-    expect(d.calls).toEqual([capturedLine, ...Array<string>(RULES_ENTER_TRIES).fill('Enter')]);
-    expect(d.presses()).toBe(RULES_ENTER_TRIES);
+    const retired = await deliverRules('codex', capturedLine, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('three Enters the CLI does not take end the delivery: the line sits unsent, and the report says so', async () => {
+  test('no pane messaging, the rules line is never typed; was: three Enters the CLI does not take end the delivery: the line sits unsent, and the report says so', async () => {
     const d = submitRetryDelivery(() => false);
-    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([capturedLine, ...Array<string>(RULES_ENTER_TRIES).fill('Enter')]);
-    const why = d.refusals.at(-1);
-    expect(why?.stop).toBe('ack');
-    expect(why?.typed).toBe(true);
-    expect(why?.sent).toBe(true);
-    expect(why?.kind).toBe('unsent');
-    expect(refusalReport(why!)).toBe(
-      'rules typed, not sent: its box still holds the line after Enter; '
-      + 'press Enter in its pane to send it, or clear the box (Ctrl+U), then run up again',
-    );
+    const retired = await deliverRules('codex', capturedLine, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('no retry ever types the line again', async () => {
+  test('no pane messaging, the rules line is never typed; was: no retry ever types the line again', async () => {
     const d = submitRetryDelivery(() => false);
-    await deliverRules('codex', capturedLine, 30, d.io);
-    expect(d.calls.filter((call) => call !== 'Enter')).toEqual([capturedLine]);
+    const retired = await deliverRules('codex', capturedLine, 30, d.io);
+    expect(retired).toBe(false);
   });
 
   // Each of these changes the world after the first Enter did not take: the retry's gates read
@@ -1415,39 +1381,26 @@ describe('Codex rules delivery retries a submit the CLI did not take', () => {
     const d = submitRetryDelivery(() => false);
     const plain = d.io.enter;
     d.io.enter = () => { const taken = plain(); change(d); return taken; };
-    const delivered = await deliverRules('codex', capturedLine, 30, d.io);
-    if (outcome === 'no-agent') {
-      expect(delivered).toBe('no-agent');
-      expect(d.refusals).toEqual([]);
-    } else {
-      expect(delivered).toBe(false);
-      const why = d.refusals.at(-1);
-      expect(why?.stop).toBe('ack');
-      if (kind !== 'none') expect(why?.kind).toBe(kind);
-    }
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
-    expect(d.presses()).toBe(1);
+    const retired = await deliverRules('codex', capturedLine, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a box that changed reads as its own reading, not as the line still sitting in it', async () => {
+  test('no pane messaging, the rules line is never typed; was: a box that changed reads as its own reading, not as the line still sitting in it', async () => {
     const d = submitRetryDelivery(() => false);
     const plain = d.io.enter;
     d.io.enter = () => { const taken = plain(); d.show(capture('rules-line').replace('wait for your brief.', 'wait for your brief!')); return taken; };
-    await deliverRules('codex', capturedLine, 30, d.io);
-    expect(refusalReport(d.refusals.at(-1)!)).toBe(
-      'the seat did not come back to its idle prompt (unsent); read its box, then run up again',
-    );
+    const retired = await deliverRules('codex', capturedLine, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('the caller\'s check before the key is asked before each retry, and a refusal presses nothing', async () => {
+  test('no pane messaging, the rules line is never typed; was: the caller\'s check before the key is asked before each retry, and a refusal presses nothing', async () => {
     const d = submitRetryDelivery(() => false);
     const asked: string[] = [];
     d.io.beforeInput = (action) => {
       asked.push(action);
       return asked.filter((entry) => entry === 'enter').length < 2;
     };
-    expect(await deliverRules('codex', capturedLine, 30, d.io)).toBe(false);
-    expect(asked).toEqual(['type', 'enter', 'enter']);
-    expect(d.calls).toEqual([capturedLine, 'Enter']);
+    const retired = await deliverRules('codex', capturedLine, 30, d.io);
+    expect(retired).toBe(false);
   });
 });

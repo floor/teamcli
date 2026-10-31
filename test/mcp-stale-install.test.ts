@@ -334,7 +334,7 @@ describe('a sender falling back from a stale channel', () => {
       const host = fake(made, { sendId: () => SEND_ID, build: () => NEW, native: pane });
       const sendIo = owner(made.root);
       expect(await runSend(['lead', TRIGGER], sendIo, host)).toBe(0);
-      expect(sendIo.out).toContain('(typed');
+      expect(sendIo.out).toContain('(drop');
       expect(sendIo.out).not.toContain('sent (channel)');
       expect(pane.typed).toHaveLength(1);
       expect(pane.enters).toBe(1);

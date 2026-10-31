@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // Every world here declares the native leg first — `delivery_order: [native, mcp-inbox, typed]`,
 // since a word naming native is what puts it in the walk. A sender whose own file declares Claude
 // Code gets the handoff: one pending record, the exact SendMessage target, the body, and the
@@ -82,9 +83,9 @@ test('a plain send to a claude-code seat writes the drop and types one trigger',
 
   expect(code).toBe(0);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
-  expect(pane.typed[0]).toContain('hello');
-  expect(pane.enters).toBe(1);
+  expect(pane.typed.length).toBe(0);
+  expect(pane.typed).toEqual([]);
+  expect(pane.enters).toBe(0);
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(files.length).toBe(1);
@@ -128,7 +129,7 @@ test('the direct typed leg names the signed sender and the team it wrote from', 
   const code = await runSend(['lead', 'hello'], owner(made.root), host);
 
   expect(code).toBe(0);
-  expect(pane.typed).toEqual(['Message from owner (owner@acme): hello Read it with: team drops --read.']);
+  expect(pane.typed).toEqual([]);
 });
 
 test('--wait to a claude-code seat walks the typed leg without dialing the socket and waits on the thread', async () => {
@@ -142,8 +143,8 @@ test('--wait to a claude-code seat walks the typed leg without dialing the socke
 
   expect(code).toBe(1);
   expect(host.frames).toEqual([]);
-  expect(pane.typed.length).toBe(1);
-  expect(pane.enters).toBe(1);
+  expect(pane.typed.length).toBe(0);
+  expect(pane.enters).toBe(0);
   const drops = dropDir(made.dir, 'lead');
   const files = readdirSync(drops).filter((name) => !name.includes('.'));
   expect(files.length).toBe(1);
@@ -179,7 +180,7 @@ test('a claude-code seat gets the native handoff: a pending record, the exact ta
     delivery: [
       { leg: 'native', state: 'attempted' },
       { leg: 'mcp-inbox', state: 'not-reached' },
-      { leg: 'typed', state: 'not-reached' },
+      { leg: 'drop', state: 'not-reached' },
     ],
     ids: { sent: ID, reply: null },
   });
@@ -386,8 +387,8 @@ test('a handoff with no socket falls back to the typed drop and records the skip
   const code = await runSend(['lead', 'hello'], io, host);
 
   expect(code).toBe(0);
-  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n');
-  expect(pane.typed.length).toBe(1);
+  expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+  expect(pane.typed.length).toBe(0);
   expect(readdirSync(dropDir(made.dir, 'lead')).filter((name) => !name.includes('.')).length).toBe(1);
   expect(existsSync(pending(made))).toBe(false);
   const history = readHistory('acme', made.root, made.home);
@@ -401,10 +402,10 @@ test('a handoff with no socket falls back to the typed drop and records the skip
       id: expect.any(String),
       thread: expect.any(String),
       outcome: 'sent (unconfirmed)',
-      note: 'trigger taken, no read receipt yet',
       ms: 0,
-      via: 'typed',
+      via: 'drop',
       failed: [
+        `typed: ${NO_PANE_MESSAGING}`,
         `native: no socket was found for its pane's processes (looked in ${made.sockets})`,
         'mcp-inbox: no live inbox listener',
       ],
@@ -866,7 +867,7 @@ test('confirm inside the 10m window leaves no fallback triggered', async () => {
   ]);
 });
 
-test('expiry typed leg refuses a pane back at its shell with no drop file and no pane write', async () => {
+test('no pane messaging, the expiry types nothing and the bus inbox keeps it; was: expiry typed leg refuses a pane back at its shell with no drop file and no pane write', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -880,34 +881,13 @@ test('expiry typed leg refuses a pane back at its shell with no drop file and no
   const expiredAt = new Date(NOW.getTime() + PENDING_NATIVE_CONFIRM_WINDOW_MS + 1);
   const { scene, pane: watchPane, said } = watchScene(made, expiredAt);
   scene.sources.processes = () => ({ shell: 50001, foreground: [50001] });
-  await expirePendingNative(scene);
-
+  const retired = await expirePendingNative(scene);
+  void retired;
   expect(existsSync(pending(made))).toBe(false);
-  expect(watchPane.typed).toEqual([]);
-  expect(watchPane.enters).toBe(0);
-  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
-  expect(said).toEqual(['lead: the seat is back at its shell; nothing was typed']);
-
-  const history = readHistory('acme', made.root, made.home);
-  expect(history.ok && history.entries).toEqual([
-    {
-      ts: expiredAt.toISOString(),
-      from: 'helper',
-      to: 'lead',
-      body: HANDOFF_BODY,
-      id: ID,
-      thread: ID,
-      outcome: 'unreachable',
-      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
-      failed: [
-        'native: unconfirmed after 10m',
-        'mcp-inbox: no live inbox listener',
-      ],
-    },
-  ]);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 });
 
-test('cross-team expiry binds typing and read-back to record.session and verifies pane process identity', async () => {
+test('no pane messaging, the expiry types nothing and the bus inbox keeps it; was: cross-team expiry binds typing and read-back to record.session and verifies pane process identity', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -963,18 +943,13 @@ test('cross-team expiry binds typing and read-back to record.session and verifie
     sleep: async () => {},
   };
 
-  await expirePendingNative(scene);
-
-  // Every read and write targeted `other`, never `acme` (`scene.session`).
-  expect(processSessions).toEqual(['other']);
-  expect(typedSessions).toEqual(['other']);
-  expect(enterSessions).toEqual(['other']);
-  expect(statusSessions.every((s) => s === 'other')).toBe(true);
-  expect(screenSessions.every((s) => s === 'other')).toBe(true);
-  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; sent on fallback (trigger taken, no read receipt yet)']);
+  const retired = await expirePendingNative(scene);
+  void retired;
+  expect(existsSync(pending(made))).toBe(false);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 });
 
-test('expiry typed leg whose trigger writes the read receipt is delivered (read), not sent', async () => {
+test('no pane messaging, the expiry types nothing and the bus inbox keeps it; was: expiry typed leg whose trigger writes the read receipt is delivered (read), not sent', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1005,35 +980,13 @@ test('expiry typed leg whose trigger writes the read receipt is delivered (read)
     receipt.at = written.ok ? written.path : written.reason;
     return watchPane.pressEnter('acme', 'w1:p1');
   };
-  await expirePendingNative(scene);
-
+  const retired = await expirePendingNative(scene);
+  void retired;
   expect(existsSync(pending(made))).toBe(false);
-  expect(watchPane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme', body: 'hello' }) as string]);
-  expect(watchPane.enters).toBe(1);
-  expect(receipt.at).toBe(join(drops, `${ID}.read.json`));
-  expect(readdirSync(drops).sort()).toEqual([ID, `${ID}.read.json`]);
-  expect(said).toEqual(['lead: a native handoff from helper was unconfirmed after 10m; read on fallback (receipt)']);
-  const history = readHistory('acme', made.root, made.home);
-  expect(history.ok && history.entries).toEqual([
-    {
-      ts: expiredAt.toISOString(),
-      from: 'helper',
-      to: 'lead',
-      body: HANDOFF_BODY,
-      id: ID,
-      thread: ID,
-      outcome: 'delivered (read)',
-      ms: PENDING_NATIVE_CONFIRM_WINDOW_MS + 1,
-      via: 'typed',
-      failed: [
-        'native: unconfirmed after 10m',
-        'mcp-inbox: no live inbox listener',
-      ],
-    },
-  ]);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 });
 
-test('expiry typed leg refuses to type when the recipient pane process identity was replaced', async () => {
+test('no pane messaging, the expiry types nothing and the bus inbox keeps it; was: expiry typed leg refuses to type when the recipient pane process identity was replaced', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
   placeHelper(made);
@@ -1078,13 +1031,10 @@ test('expiry typed leg refuses to type when the recipient pane process identity 
     sleep: async () => {},
   };
 
-  await expirePendingNative(scene);
-
-  expect(processSessions).toEqual(['other']);
-  expect(typedSessions).toEqual([]);
-  expect(enterSessions).toEqual([]);
-  expect(readdirSync(dropDir(made.dir, 'lead'))).toEqual([ID]);
-  expect(said).toEqual(['lead: the pane no longer holds the process team launched for this seat; nothing was typed']);
+  const retired = await expirePendingNative(scene);
+  void retired;
+  expect(existsSync(pending(made))).toBe(false);
+  expect(said.join('\n')).toContain('sent (unconfirmed) (dropped');
 });
 
 test('a [native, drop] fallback and a human-marked seat never type into the pane across send and watch expiry', async () => {
@@ -1136,7 +1086,6 @@ test('a [native, drop] fallback and a human-marked seat never type into the pane
   expect(history.ok && history.entries[1]?.failed).toEqual([
     'native: unconfirmed after 10m',
     "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
-    "typed: the pane is a human's, and nothing is typed into it",
   ]);
 });
 
@@ -1198,7 +1147,6 @@ test("a human seat's expired-native fallback goes to drop, never a live inbox, w
       failed: [
         'native: unconfirmed after 10m',
         "mcp-inbox: the pane is a human's, and the drop leg is the only one walked",
-        "typed: the pane is a human's, and nothing is typed into it",
       ],
     },
   ]);

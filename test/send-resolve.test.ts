@@ -699,10 +699,7 @@ describe('the whole command on a registry-resolved spec', () => {
 
     expect(code).toBe(0);
     expect(alphaPane.typed).toEqual([]);
-    expect(betaPane.typed.length).toBe(1);
-    const typed = betaPane.typed[0] as Typed;
-    expect(typed.session).toBe('beta');
-    expect(typed.pane).toBe('pane-beta-lead');
+    expect(betaPane.typed.length).toBe(0);
     const drop = dropOf(beta.root, 'beta', 'lead');
     const admitted = admitSend('owner', betaAgent, readTeams(beta.home));
     if (!admitted.ok) throw new Error(`the owner's send is not admitted: ${admitted.why}`);
@@ -759,9 +756,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const code = await runSend([builder.id, BODY], io, host);
 
     expect(code).toBe(0);
-    expect(builderPane.typed.length).toBe(1);
-    const typed = builderPane.typed[0] as Typed;
-    expect(typed.pane).toBe('pane-live-builder');
+    expect(builderPane.typed.length).toBe(0);
     const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text.split('\n')[0]).toBe(senderHeader('owner', admitRuleFor(alpha.home, builder)).trimEnd());
     expect(drop.text).toContain(BODY);
@@ -780,11 +775,11 @@ describe('the whole command on a registry-resolved spec', () => {
 
     const code = await runSend([builder.id, BODY], io, host);
 
-    expect(code).toBe(1);
-    expect(io.err).toBe('team send: builder-1: unreachable: no live agent carries that name in the session\n');
+    expect(code).toBe(0);
+    expect(io.err).toContain('builder-1: queued, no event adapter');
     expect(leadPane.typed).toEqual([]);
     expect(leadPane.enters).toBe(0);
-    expect(existsSync(join(alpha.root, '.agents', 'send-drops'))).toBe(false);
+    expect(existsSync(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
   });
 
   test('a seat herdr lists on another pane is reached there, never at the pane the record carries', async () => {
@@ -798,9 +793,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const code = await runSend([builder.id, BODY], io, host);
 
     expect(code).toBe(0);
-    expect(builderPane.typed.length).toBe(1);
-    const typed = builderPane.typed[0] as Typed;
-    expect(typed.pane).toBe('pane-new');
+    expect(builderPane.typed.length).toBe(0);
     const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text).toContain(BODY);
   });
@@ -822,8 +815,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const code = await runSend([target.id, BODY], io, host);
 
     expect(code).toBe(0);
-    const typed = builderPane.typed[0] as Typed;
-    expect(typed.pane).toBe('pane-builder');
+    expect(builderPane.typed).toEqual([]);
     const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text.split('\n')[0]).toBe(
       "from the file's seat lead (no registry record yet) — admitted by: an orchestrator or operator to a seat of its own team",
@@ -900,9 +892,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const code = await runSend(['hephaestus', BODY], io, host);
 
     expect(code).toBe(0);
-    expect(helperPane.typed.length).toBe(1);
-    const typed = helperPane.typed[0] as Typed;
-    expect(typed.pane).toBe('pane-builder');
+    expect(helperPane.typed.length).toBe(0);
     const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
     expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
@@ -924,9 +914,7 @@ describe('the whole command on a registry-resolved spec', () => {
     const code = await runSend(['wren', BODY], io, host);
 
     expect(code).toBe(0);
-    expect(helperPane.typed.length).toBe(1);
-    const typed = helperPane.typed[0] as Typed;
-    expect(typed.pane).toBe('pane-builder');
+    expect(helperPane.typed.length).toBe(0);
     const drop = dropOf(alpha.root, 'alpha', 'builder-1');
     expect(drop.path.startsWith(join(alpha.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
 
@@ -977,8 +965,8 @@ describe('the whole command from a folder that is no team', () => {
       const sent = await sends(w, spec);
       expect(sent.code).toBe(0);
       const typed = sent.panes['builder-1'].typed;
-      expect(typed.length).toBe(1);
-      expect((typed[0] as Typed).pane).toBe('pane-builder');
+      expect(typed).toEqual([]);
+      expect(sent.io.err).toContain('queued, no event adapter');
       const drop = dropOf(w.root, 'alpha', 'builder-1');
       expect(drop.text).toBe(`from the owner — admitted by: the owner\n\n${BODY}`);
       expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'builder-1'))).toBe(true);
@@ -987,7 +975,7 @@ describe('the whole command from a folder that is no team', () => {
 
     const toLead = await sends(w, 'lead@alpha');
     expect(toLead.code).toBe(0);
-    expect((toLead.panes.atlas.typed[0] as Typed).pane).toBe('pane-atlas');
+    expect(toLead.panes.atlas.typed).toEqual([]);
     expect(AGENT_ID.test(lead.id)).toBe(true);
     expect(AGENT_ID.test(builder.id)).toBe(true);
   });
@@ -1023,9 +1011,7 @@ describe('the whole command on a legacy seat named lead', () => {
     const code = await runSend(['lead@alpha', BODY], io, host);
 
     expect(code).toBe(0);
-    expect(leadPane.typed.length).toBe(1);
-    const typed = leadPane.typed[0] as Typed;
-    expect(typed.pane).toBe('pane-alpha-lead');
+    expect(leadPane.typed.length).toBe(0);
     const drop = dropOf(w.root, 'alpha', 'lead');
     expect(drop.text).toContain(BODY);
     expect(drop.path.startsWith(join(w.root, '.agents', 'send-drops', 'alpha', 'lead'))).toBe(true);
@@ -1049,14 +1035,12 @@ describe('the whole command on a legacy seat named lead', () => {
     const legacyPane = scripted(['idle', 'working']);
     const host = () => sendHost(w, 'alpha', { atlas: { pane: 'pane-atlas', paneStatus: atlasPane }, lead: { pane: 'pane-legacy', paneStatus: legacyPane } });
     expect(await runSend(['lead@alpha', BODY], testIo(outside, OWNER), host())).toBe(0);
-    expect(atlasPane.typed.length).toBe(1);
-    expect((atlasPane.typed[0] as Typed).pane).toBe('pane-atlas');
+    expect(atlasPane.typed.length).toBe(0);
     expect(legacyPane.typed).toEqual([]);
 
     // The bare name is the legacy seat's own, in its own team.
     expect(await runSend(['lead', BODY], testIo(w.root, OWNER), host())).toBe(0);
-    expect(legacyPane.typed.length).toBe(1);
-    expect((legacyPane.typed[0] as Typed).pane).toBe('pane-legacy');
-    expect(atlasPane.typed.length).toBe(1);
+    expect(legacyPane.typed).toEqual([]);
+    expect(atlasPane.typed).toEqual([]);
   });
 });

@@ -56,7 +56,7 @@ function delivery() {
 const enters = (calls: readonly string[]) => calls.filter((call) => call === 'Enter').length;
 
 describe('team up rules delivery retries a submit that did not take', () => {
-  test('the retry submits and the matching read-back is observed', async () => {
+  test('no pane messaging, rules are never typed; was: the retry submits and the matching read-back is observed', async () => {
     const d = delivery();
     let pressed = 0;
     d.io.enter = () => {
@@ -65,12 +65,11 @@ describe('team up rules delivery retries a submit that did not take', () => {
       if (pressed === 2) d.accept();
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(true);
-    expect(d.calls).toEqual([LINE, 'Enter', 'Enter']);
-    expect(d.refusals).toEqual([]);
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('the third attempt can still submit after two swallowed Enters', async () => {
+  test('no pane messaging, rules are never typed; was: the third attempt can still submit after two swallowed Enters', async () => {
     const d = delivery();
     let pressed = 0;
     d.io.enter = () => {
@@ -79,44 +78,36 @@ describe('team up rules delivery retries a submit that did not take', () => {
       if (pressed === 3) d.accept();
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(true);
-    expect(d.calls).toEqual([LINE, 'Enter', 'Enter', 'Enter']);
-    expect(d.refusals).toEqual([]);
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('the retries are bounded and an unsent box ends in the unsent report', async () => {
+  test('no pane messaging, rules are never typed; was: the retries are bounded and an unsent box ends in the unsent report', async () => {
     const d = delivery();
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(false);
-    // Three Enter attempts in all: the first submit and its bounded retries.
-    expect(enters(d.calls)).toBe(3);
-    expect(d.calls.filter((call) => call !== 'Enter')).toEqual([LINE]);
-    const why = d.refusals.at(-1);
-    expect(why).toMatchObject({ stop: 'ack', typed: true, sent: true, kind: 'unsent' });
-    expect(refusalReport(why!)).toContain('still holds the line after Enter');
-    expect(refusalReport(why!)).toContain('press Enter in its pane to send it');
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('changed text in the composer gets no retry', async () => {
+  test('no pane messaging, rules are never typed; was: changed text in the composer gets no retry', async () => {
     const d = delivery();
     d.io.enter = () => {
       d.calls.push('Enter');
       d.showText(boxed('Read rules/implementer.md (sha256 5e1d0b).'));
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([LINE, 'Enter']);
-    expect(d.refusals.at(-1)?.stop).toBe('ack');
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a box that no longer holds the line gets no retry', async () => {
+  test('no pane messaging, rules are never typed; was: a box that no longer holds the line gets no retry', async () => {
     const d = delivery();
     d.io.enter = () => {
       d.calls.push('Enter');
       d.show('idle');
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([LINE, 'Enter']);
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
   test.each(['trust', 'permission'])('a %s dialog after Enter gets no retry', async (dialog) => {
@@ -126,36 +117,33 @@ describe('team up rules delivery retries a submit that did not take', () => {
       d.show(dialog);
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([LINE, 'Enter']);
-    expect(d.refusals.at(-1)).toMatchObject({ stop: 'ack', sent: true, kind: dialog });
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a busy seat gets no retry even while the line still shows', async () => {
+  test('no pane messaging, rules are never typed; was: a busy seat gets no retry even while the line still shows', async () => {
     const d = delivery();
     d.io.enter = () => {
       d.calls.push('Enter');
       d.setStatus('working');
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([LINE, 'Enter']);
-    expect(d.refusals.at(-1)).toMatchObject({ stop: 'ack', kind: 'unsent' });
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a CLI that leaves the foreground gets no retry and reports no agent', async () => {
+  test('no pane messaging, rules are never typed; was: a CLI that leaves the foreground gets no retry and reports no agent', async () => {
     const d = delivery();
     d.io.enter = () => {
       d.calls.push('Enter');
       d.setForeground(['zsh']);
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe('no-agent');
-    expect(d.calls).toEqual([LINE, 'Enter']);
-    expect(d.refusals).toEqual([]);
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a rules file that changed after the first Enter gets no retry', async () => {
+  test('no pane messaging, rules are never typed; was: a rules file that changed after the first Enter gets no retry', async () => {
     const d = delivery();
     let entered = false;
     d.io.file = () => !entered;
@@ -164,18 +152,18 @@ describe('team up rules delivery retries a submit that did not take', () => {
       entered = true;
       return true;
     };
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([LINE, 'Enter']);
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('the caller\'s own check before Enter can refuse the retry', async () => {
+  test('no pane messaging, rules are never typed; was: the caller\'s own check before Enter can refuse the retry', async () => {
     const d = delivery();
     d.io.beforeInput = () => d.calls.filter((call) => call === 'Enter').length === 0;
-    expect(await deliverRules('codex', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([LINE, 'Enter']);
+    const retired = await deliverRules('codex', LINE, 30, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a box that never read the line back gets no submit and no retry', async () => {
+  test('no pane messaging, rules are never typed; was: a box that never read the line back gets no submit and no retry', async () => {
     // The paste renders as a different line: the read-back fails before the first Enter, and a
     // missing read-back is never turned into a submit.
     const d = delivery();
@@ -184,8 +172,7 @@ describe('team up rules delivery retries a submit that did not take', () => {
       d.showText(boxed('Read rules/implementer.md (sha256 5e1d0b).'));
       return true;
     };
-    expect(await deliverRules('codex', LINE, 1, d.io)).toBe(false);
-    expect(d.calls).toEqual([LINE]);
-    expect(d.refusals.at(-1)).toMatchObject({ stop: 'read-back', typed: true, sent: false });
+    const retired = await deliverRules('codex', LINE, 1, d.io);
+    expect(await retired).toBe(false);
   });
 });

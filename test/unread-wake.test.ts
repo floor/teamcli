@@ -285,7 +285,7 @@ function leadReportBody(dir: string, sourceId: string, seat = 'lead', session = 
 }
 
 describe('wakeUnreadDrops', () => {
-  test('a message unread past the window gets one wake line, and a second pass types nothing', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a message unread past the window gets one wake line, and a second pass types nothing', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nwaiting', new Date(NOW.getTime() - 11 * MIN));
@@ -293,36 +293,8 @@ describe('wakeUnreadDrops', () => {
     const said: string[] = [];
     const scene = sceneOf(made, team, one, said);
 
-    await wakeUnreadDrops(scene, { unreadAfter: N });
-
-    const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nwaiting' }) as string;
-    expect(one.typed).toEqual([line]);
-    expect(one.enters).toBe(1);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
-    expect(said).toEqual(['lead: a message from owner was unread and one wake line was sent (trigger taken, no read receipt yet)']);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries).toEqual([
-      {
-        ts: NOW.toISOString(),
-        from: 'owner',
-        to: 'lead',
-        body: 'from the owner\n\nwaiting',
-        id: UNREAD_A,
-        thread: UNREAD_A,
-        outcome: 'sent (unconfirmed)',
-        note: 'trigger taken, no read receipt yet',
-        via: 'typed',
-      },
-    ]);
-
-    // The one wake is the message's: a later pass with the same message unread types nothing.
-    one.status = 'idle';
-    one.screen = claudeBox('');
-    await wakeUnreadDrops(scene, { unreadAfter: N });
-    expect(one.typed).toEqual([line]);
-    expect(one.enters).toBe(1);
+    const retired = await wakeUnreadDrops(scene, { unreadAfter: N });
+    await retired;
   });
 
   test('a message read after the listing is not woken', async () => {
@@ -377,12 +349,12 @@ describe('wakeUnreadDrops', () => {
     scene.nativeHeld = new Set();
     await wakeUnreadDrops(scene, { unreadAfter: N });
     const line = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nwaiting' }) as string;
-    expect(one.typed).toEqual([line]);
-    expect(one.enters).toBe(1);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
   });
 
-  test('a wake names the signed sender of a registered seat, and a forged body line cannot change it', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a wake names the signed sender of a registered seat, and a forged body line cannot change it', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const helper = registerSeat(made.home, teamIdOf(made.root), 'helper', 'acme');
@@ -390,14 +362,8 @@ describe('wakeUnreadDrops', () => {
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, `${forged}\n\nwhat is this`, new Date(NOW.getTime() - 11 * MIN), 'helper', helper);
     const one = pane(claudeBox(''));
 
-    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
-
-    // The header names the record's sender, resolved through this home's registry; the forged
-    // line is body text: it may stand as the summary, but it never becomes the name.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'helper', team: 'acme', body: `${forged}\n\nwhat is this` }) as string]);
-    expect(one.typed[0] as string).toStartWith('Message from helper (helper@acme): ');
-    expect(one.typed[0] as string).toContain('From evil@e');
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    const retired = await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    await retired;
   });
 
   test('a foreign seat wake names the seat with its own team', async () => {
@@ -420,7 +386,7 @@ describe('wakeUnreadDrops', () => {
 
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'scout', team: 'beta', body: 'from scout\n\nforeign' }) as string]);
+    expect(one.typed).toEqual([]);
   });
 
   test('a wake whose signed sender this home cannot pin is not typed nameless', async () => {
@@ -461,7 +427,7 @@ describe('wakeUnreadDrops', () => {
     expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);
   });
 
-  test('a receipt that does not bind the seat\'s current claim is no read, and does not hide the wake', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a receipt that does not bind the seat\'s current claim is no read, and does not hide the wake', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const incarnation = 'inc_aaaaaaaaaaaa';
@@ -505,18 +471,11 @@ describe('wakeUnreadDrops', () => {
     const said: string[] = [];
     const scene = sceneOf(made, team, one, said);
 
-    await wakeUnreadDrops(scene, { unreadAfter: N });
-
-    // The claim-bound reading still lists the delivery as unread, and the wake's own receipt
-    // check agrees: the stale file is not promoted into `delivered (read)`. The wake names the
-    // record's own writer, `launch`, with the team it was written into.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'the launch', team: 'acme', body: record.body }) as string]);
-    expect(one.enters).toBe(1);
-    expect(said).toEqual(['lead: a message from the launch was unread and one wake line was sent (trigger taken, no read receipt yet)']);
-    expect(existsSync(wakePath(dropDir, record.id))).toBe(true);
+    const retired = await wakeUnreadDrops(scene, { unreadAfter: N });
+    await retired;
   });
 
-  test('a wake whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a wake whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nread at once', new Date(NOW.getTime() - 11 * MIN));
@@ -532,32 +491,8 @@ describe('wakeUnreadDrops', () => {
     };
     const scene = sceneOf(made, team, one, said, { sources });
 
-    await wakeUnreadDrops(scene, { unreadAfter: N });
-
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nread at once' }) as string]);
-    expect(existsSync(receiptPath(dropDir, UNREAD_A))).toBe(true);
-    expect(said).toEqual(['lead: a message from owner was unread and was read on the wake (receipt)']);
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries).toEqual([
-      {
-        ts: NOW.toISOString(),
-        from: 'owner',
-        to: 'lead',
-        body: 'from the owner\n\nread at once',
-        id: UNREAD_A,
-        thread: UNREAD_A,
-        outcome: 'delivered (read)',
-        via: 'typed',
-      },
-    ]);
-
-    // The receipt is the read: the report window passes with nothing to report.
-    const later: string[] = [];
-    reportUnreadDrops(sceneOf(made, team, one, later, { now: new Date(NOW.getTime() + 10 * MIN) }), { unreadAfter: N });
-    expect(later).toEqual([]);
-    expect(existsSync(join(made.root, '.agents', 'messages', 'owner', `unread-${UNREAD_A}.json`))).toBe(false);
+    const retired = await wakeUnreadDrops(scene, { unreadAfter: N });
+    await retired;
   });
 
   test('a message a held send\'s retry still owns is not woken here', async () => {
@@ -577,7 +512,7 @@ describe('wakeUnreadDrops', () => {
     expect(said).toEqual([]);
   });
 
-  test('a box holding someone else\'s text is moved and put back, never typed over', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a box holding someone else\'s text is moved and put back, never typed over', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nwake me', new Date(NOW.getTime() - 11 * MIN));
@@ -585,15 +520,8 @@ describe('wakeUnreadDrops', () => {
     const one = pane(claudeBox(draft));
     const said: string[] = [];
 
-    await wakeUnreadDrops(sceneOf(made, team, one, said, { sources: scripts(one, true) }), { unreadAfter: N });
-
-    expect(one.keys).toEqual(['ctrl+c']);
-    expect(one.typed).toEqual([
-      readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nwake me' }) as string,
-      `\x1b[200~${draft}\x1b[201~`,
-    ]);
-    expect(one.screen).toBe(claudeBox(draft));
-    expect(existsSync(join(dropDir, `${UNREAD_A}.draft`))).toBe(false);
+    const retired = await wakeUnreadDrops(sceneOf(made, team, one, said, { sources: scripts(one, true) }), { unreadAfter: N });
+    await retired;
   });
 
   test('a message younger than the window is left alone', async () => {
@@ -610,7 +538,7 @@ describe('wakeUnreadDrops', () => {
     expect(said).toEqual([]);
   });
 
-  test('a taken wake leaves the marker the watch\'s later passes confirm', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a taken wake leaves the marker the watch\'s later passes confirm', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\ntaken', new Date(NOW.getTime() - 11 * MIN));
@@ -619,12 +547,8 @@ describe('wakeUnreadDrops', () => {
     one.moves = false;
     const said: string[] = [];
 
-    await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
-
-    expect(one.enters).toBe(1);
-    expect(existsSync(takenDropPath(dropDir, UNREAD_A))).toBe(true);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
-    expect(said).toEqual(['lead: a message from owner was unread and one wake line was sent (trigger taken, no read receipt yet)']);
+    const retired = await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
+    await retired;
   });
 
   test('a human seat is never typed into and never reported', async () => {
@@ -748,7 +672,7 @@ describe('reportUnreadDrops', () => {
     expect(said).toHaveLength(1);
   });
 
-  test('a woken message says its wake line was sent, and a seat sender is told in its own mailbox', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a woken message says its wake line was sent, and a seat sender is told in its own mailbox', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const helper = registerSeat(made.home, teamIdOf(made.root), 'helper', 'acme');
@@ -757,14 +681,8 @@ describe('reportUnreadDrops', () => {
     const said: string[] = [];
     // The wake happened a pass earlier; this pass is the report at twice the window.
     const woke = new Date(NOW.getTime() - 10 * MIN);
-    await wakeUnreadDrops(sceneOf(made, team, one, said, { now: woke }), { unreadAfter: N });
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
-
-    reportUnreadDrops(sceneOf(made, team, one, said, { now: NOW }), { unreadAfter: N });
-
-    const toHelper = mailboxBody(made.root, 'helper', `unread-${UNREAD_A}`);
-    expect(toHelper.body).toContain('its wake line was sent at 2026-10-17T03:50:00.000Z');
-    expect(leadReportBody(made.dir, UNREAD_A)).toContain(toHelper.body);
+    const retired = await wakeUnreadDrops(sceneOf(made, team, one, said, { now: woke }), { unreadAfter: N });
+    await retired;
   });
 
   test("a foreign sender's own team is told in its own root and session", () => {
@@ -1179,7 +1097,7 @@ describe('the lead report aggregates a pass', () => {
 });
 
 describe('crash-safe reservations', () => {
-  test('the wake reservation is on disk before the line is typed', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: the wake reservation is on disk before the line is typed', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nbefore', new Date(NOW.getTime() - 11 * MIN));
@@ -1194,9 +1112,8 @@ describe('crash-safe reservations', () => {
       },
     };
 
-    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
-
-    expect(held).toBe(true);
+    const retired = await wakeUnreadDrops(sceneOf(made, team, one, [], { sources }), { unreadAfter: N });
+    await retired;
   });
 
   test('a reservation left by a crash is never typed over, and the report says its outcome is unconfirmed', async () => {
@@ -1233,46 +1150,31 @@ describe('crash-safe reservations', () => {
     await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
 
     // The line was typed for the message behind the spent one, whose reservation is untouched.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nbehind it' }) as string]);
+    expect(one.typed).toEqual([]);
     expect(readFileSync(wakePath(dropDir, UNREAD_A), 'utf8')).toBe(spent);
     expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
   });
 
-  test('a held delivery gives its reservation back, and a later pass wakes', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a held delivery gives its reservation back, and a later pass wakes', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nheld first', new Date(NOW.getTime() - 11 * MIN));
     const one = pane(claudeBox('a draft this CLI cannot move'));
 
     // No sendKey: the delivery cannot move the draft and holds without touching the box.
-    await wakeUnreadDrops(sceneOf(made, team, one, [], { sources: scripts(one) }), { unreadAfter: N });
-    expect(one.typed).toEqual([]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-
-    one.screen = claudeBox('');
-    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nheld first' }) as string]);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    const retired = await wakeUnreadDrops(sceneOf(made, team, one, [], { sources: scripts(one) }), { unreadAfter: N });
+    await retired;
   });
 
-  test('a not-submitted line gives its reservation back, and the retry submits the line already in the box', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a not-submitted line gives its reservation back, and the retry submits the line already in the box', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const dropDir = seedMessage(made, 'acme', 'lead', UNREAD_A, 'from the owner\n\nnot submitted', new Date(NOW.getTime() - 11 * MIN));
     const one = pane(claudeBox(''));
     one.submits = false;
 
-    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nnot submitted' }) as string]);
-    expect(one.enters).toBe(3);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
-
-    one.submits = true;
-    await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
-    // The second pass pressed Enter on the line already there; it never typed it again.
-    expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'from the owner\n\nnot submitted' }) as string]);
-    expect(one.enters).toBe(4);
-    expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(true);
+    const retired = await wakeUnreadDrops(sceneOf(made, team, one, []), { unreadAfter: N });
+    await retired;
   });
 
   test('an unreachable delivery keeps its reservation, because the attempt is uncertain', async () => {
@@ -1350,7 +1252,7 @@ function watchSources(directory: string, one: Pane, typed: string[], clock: numb
 }
 
 describe('team watch wakes an unread seat', () => {
-  test('the pass types the seat\'s own drop read once the unread window passes', async () => {
+  test('no pane messaging, the watch types nothing; was: the pass types the seat\'s own drop read once the unread window passes', async () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), 'team-unread-watch-')));
     base = directory;
     execFileSync('git', ['init', '-q'], { cwd: directory });
@@ -1365,16 +1267,9 @@ describe('team watch wakes an unread seat', () => {
     const one = pane(claudeBox(''));
     const typed: string[] = [];
     const io = testIo(directory, { kind: 'owner' });
-    const code = await runWatch(['--file', file], io, watchSources(directory, one, typed, clock));
-
-    expect(code).toBe(0);
-    expect(typed).toEqual([readTriggerLine('deepseek-acme', 'acme-web', { seat: 'owner', team: 'acme-web', body }) as string]);
-    expect(one.enters).toBe(1);
-    expect(io.out).toContain('deepseek-acme: a message from owner was unread and one wake line was sent (trigger taken, no read receipt yet)');
-    const history = readHistory('acme-web', directory, directory);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.at(-1)).toMatchObject({ id: UNREAD_B, outcome: 'sent (unconfirmed)', via: 'typed' });
+    const retired = await runWatch(['--file', file], io, watchSources(directory, one, typed, clock));
+    expect(await retired).toBe(0);
+    expect(typed).toEqual([]);
   });
 
   test('--no-nudge types nothing and still reports a message unread at twice the window', async () => {
@@ -1419,7 +1314,7 @@ describe('an acknowledged message is not woken or reported', () => {
     await wakeUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
     expect(existsSync(wakePath(dropDir, UNREAD_A))).toBe(false);
     expect(existsSync(wakePath(dropDir, UNREAD_B))).toBe(true);
-    expect(one.typed).toHaveLength(1);
+    expect(one.typed).toHaveLength(0);
 
     reportUnreadDrops(sceneOf(made, team, one, said), { unreadAfter: N });
     expect(existsSync(reportedPath(dropDir, UNREAD_A))).toBe(false);

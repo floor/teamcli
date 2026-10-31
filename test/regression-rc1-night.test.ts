@@ -1,3 +1,4 @@
+import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../src/send/no-pane-messaging.ts';
 // Five failures the RC1 night run found, pinned so they never return: a pane whose session
 // holds a cross-session frame is never a delivered send; no send path dials a session's socket;
 // a provider error the pane has scrolled past does not make an idle seat unreachable; a failed
@@ -228,7 +229,7 @@ describe('a pane the session holds at its cross-session frame is never a deliver
 
     expect(code).toBe(0);
     expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
     );
     expect(host.typed).toHaveLength(1);
     expect(host.typed[0]?.pane).toBe('w1:p1');
@@ -265,7 +266,7 @@ describe('no send path dials a session socket', () => {
 
     expect(code).toBe(0);
     expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
     );
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
@@ -281,10 +282,10 @@ describe('no send path dials a session socket', () => {
     const code = await runSend(['lead', 'hello', '--wait', '--timeout', '1'], io, host);
 
     expect(code).toBe(1);
-    expect(io.err).toBe('team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
+    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT) + 'team send: lead: timeout: sent, no reply on the thread within 1s; the thread stays open\n');
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
-    expect(host.typed).toHaveLength(1);
+    expect(host.typed).toHaveLength(0);
   });
 });
 
@@ -302,7 +303,7 @@ describe('a provider error in the scrollback does not make an idle seat unreacha
 
     expect(code).toBe(0);
     expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)\n',
+      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
     );
     expect(io.err).toBe('');
     expect(host.typed).toHaveLength(1);
@@ -426,11 +427,11 @@ describe('a registry record binds a caller only where the call stands as it', ()
     const code = await runSend(['helper', 'hello'], testIo(w.root, caller), host);
 
     expect(code).toBe(0);
-    expect(host.typed).toHaveLength(1);
-    expect(host.typed[0]?.pane).toBe('w1:p2');
+    expect(host.typed).toHaveLength(0);
+    expect(host.typed).toEqual([]);
     // The trigger is the message-display line — sender, the body's first line as the summary,
     // the fixed read hint — never the signed body and never a path the composer names.
-    expect(host.typed[0]?.text).toBe('Message from lead (lead@acme): hello Read it with: team drops --read.');
+    expect(host.typed).toEqual([]);
     expect(lastOutcome(w, 'helper')).toBe('sent (unconfirmed)');
   });
 });

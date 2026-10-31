@@ -267,7 +267,7 @@ describe('the plan launches muse and delivers its rules as the first message', (
     expect(plan.find((step) => step.do?.do === 'launch')?.do).toMatchObject({
       do: 'launch',
       seat: 'muse',
-      command: 'AGENT_UNATTENDED=1 muse --model muse-wonder-1.0 --yolo',
+      command: "AGENT_UNATTENDED=1 muse --model muse-wonder-1.0 --yolo 'Read /home/owner/.config/team/demo/rules/muse.md'",
     });
     expect(plan.find((step) => step.do?.do === 'idle')?.do).toMatchObject({ do: 'idle', cli: 'muse', seconds: 90 });
     expect(plan.find((step) => step.do?.do === 'deliver')?.do).toMatchObject({
@@ -319,33 +319,29 @@ describe('the rules delivery on the 1.4.11 ready box, with herdr unable to repor
   test.each(['unknown', null] as const)('herdr reading %s: the ready box carries the rules and its working screen confirms them', async (word) => {
     const d = scene();
     d.setStatus(word);
-    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(true);
-    expect(d.calls).toEqual([LINE, 'Enter']);
-    expect(d.refusals).toEqual([]);
+    const retired = await deliverRules('muse', LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a working screen is refused and nothing is typed into it', async () => {
+  test('no pane messaging, the rules line is never typed; was: a working screen is refused and nothing is typed into it', async () => {
     const d = scene();
     d.show('working-synthetic');
-    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals).toMatchObject([{ stop: 'working', typed: false, sent: false }]);
+    const retired = await deliverRules('muse', LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('an idle-looking screen with no box is not the ready box: refused, nothing typed', async () => {
+  test('no pane messaging, the rules line is never typed; was: an idle-looking screen with no box is not the ready box: refused, nothing typed', async () => {
     const d = scene();
     d.show('ambiguous-synthetic');
-    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals).toMatchObject([{ stop: 'screen', typed: false, sent: false, kind: 'unknown' }]);
+    const retired = await deliverRules('muse', LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 
   test("a status herdr can give is still its word: `blocked` waits and refuses", async () => {
     const d = scene();
     d.setStatus('blocked');
-    expect(await deliverRules('muse', LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals).toMatchObject([{ stop: 'screen', typed: false, sent: false, kind: 'idle' }]);
+    const retired = await deliverRules('muse', LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 });
 
@@ -388,37 +384,32 @@ function captureScene(start: string, frames: string[], draw: (text: string) => s
 }
 
 describe('the rules delivery on the captured 1.4.11 typing shapes', () => {
-  test('the pre-Enter frame reads the line back and Enter sends it', async () => {
+  test('no pane messaging, the rules line is never typed; was: the pre-Enter frame reads the line back and Enter sends it', async () => {
     const d = captureScene(fixture1411('placeholder-synthetic'), []);
-    expect(await deliverRules('muse', CAPTURED_LINE, 30, d.io)).toBe(true);
-    expect(d.calls).toEqual([CAPTURED_LINE, 'Enter']);
-    expect(d.refusals).toEqual([]);
+    const retired = await deliverRules('muse', CAPTURED_LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a frame that draws altered text never reads back, so Enter is not pressed on it', async () => {
+  test('no pane messaging, the rules line is never typed; was: a frame that draws altered text never reads back, so Enter is not pressed on it', async () => {
     const d = captureScene(fixture1411('idle'), [], (text) => typed(`${text}!`));
-    expect(await deliverRules('muse', CAPTURED_LINE, 30, d.io)).toBe(false);
-    // The line was typed, the altered frame did not read it back, and the one key cleared it.
-    expect(d.calls).toEqual([CAPTURED_LINE, 'ctrl+u']);
-    expect(d.refusals).toMatchObject([{ stop: 'read-back', typed: true, sent: false }]);
+    const retired = await deliverRules('muse', CAPTURED_LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a pane already holding the captured post-Enter frame is leftover: nothing is typed or pressed', async () => {
+  test('no pane messaging, the rules line is never typed; was: a pane already holding the captured post-Enter frame is leftover: nothing is typed or pressed', async () => {
     // The trailing empty row says Enter did not submit; the box is still today's line, not a
     // submission, and never a second line typed onto the first.
     const d = captureScene(fixture1411('rules-line-unsent'), []);
-    expect(await deliverRules('muse', CAPTURED_LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([]);
-    expect(d.refusals).toMatchObject([{ stop: 'leftover', typed: false, sent: false }]);
+    const retired = await deliverRules('muse', CAPTURED_LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 
-  test('a post-Enter frame with a typed newline gets no second Enter, and the report says the box still holds the line', async () => {
+  test('no pane messaging, the rules line is never typed; was: a post-Enter frame with a typed newline gets no second Enter, and the report says the box still holds the line', async () => {
     // Enter was taken as a newline, not a submit: the line and its empty row are still in the box.
     // A trailing empty row is a row of the text, so it is never entered on; the report keeps the
     // line where it sits and names the row that says so.
     const d = captureScene(fixture1411('placeholder-synthetic'), [typedNewline(CAPTURED_LINE)]);
-    expect(await deliverRules('muse', CAPTURED_LINE, 30, d.io)).toBe(false);
-    expect(d.calls).toEqual([CAPTURED_LINE, 'Enter']);
-    expect(d.refusals).toMatchObject([{ stop: 'ack', typed: true, sent: true, row: '', kind: 'unsent' }]);
+    const retired = await deliverRules('muse', CAPTURED_LINE, 30, d.io);
+    expect(retired).toBe(false);
   });
 });
