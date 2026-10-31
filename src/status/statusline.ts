@@ -125,9 +125,36 @@ export function bannerModel(screen: string | undefined): string | null {
   return null;
 }
 
-/** The wrapper's banner id as the file's two fields: the id's leading words are the model and
- *  the numeric run after them is the version — `glm-5.3` is GLM 5.3, `deepseek-v4` is deepseek
- *  v4. An id with no version-shaped part keeps the declaration's version. */
+/** A provider id or a declaration as the comparison's words: lowercased, split where the id uses
+ *  its own separators, and a leading `v` before a digit dropped — `v4` and `4` are the same
+ *  version word, so `deepseek-v4.1-flash` and DeepSeek Flash V4.1 spell the same model. */
+function idWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word !== '')
+    .map((word) => word.replace(/^v(?=[0-9])/, ''));
+}
+
+/** Whether the banner id names the declared model. A provider writes the same model its own way —
+ *  `glm-5.3` for GLM 5 5.3 (the version's number written inside the model name too),
+ *  `deepseek-v4.1-flash` for DeepSeek Flash V4.1 (a variant word after the version), `kimi-k2.5`
+ *  for Kimi K2.5 (an alphanumeric version family) — so both sides are compared as the words they
+ *  are made of, the declaration's version words taken out of its model's. An id with no version
+ *  part names the family alone (`deepseek-flash`), and is compared with the model's words. */
+function bannerNames(id: string, declared: Running): boolean {
+  const shown = idWords(id);
+  const version = idWords(declared.version);
+  const name = idWords(declared.model).filter((word) => !version.includes(word));
+  const wanted = shown.some((word) => /[0-9]/.test(word)) ? [...name, ...version] : name;
+  const sorted = (list: string[]): string => [...list].sort().join(' ');
+  return sorted(shown) === sorted(wanted);
+}
+
+/** The wrapper's banner id as the file's two fields, for the column and drift line of an id that
+ *  names another model: the id's leading words are the model and the numeric run after them is the
+ *  version — `glm-5.3` is GLM 5.3, `deepseek-v4` is deepseek v4. An id with no version-shaped part
+ *  keeps the declaration's version. */
 function bannerRunning(id: string, declared: Running): Running {
   const parts = id.toLowerCase().split(/[^a-z0-9]+/).filter((part) => part !== '');
   const at = parts.findIndex((part) => /^v?[0-9]+$/.test(part));
@@ -154,8 +181,10 @@ export function seatModel(
   const declared: Running = { model: seat.model, version: seat.version };
   const banner = bannerModel(screen);
   if (banner === null) return declared;
-  const shown = bannerRunning(banner, declared);
-  return modelDiffers(shown, declared) ? shown : declared;
+  // The banner's own spelling is compared with the declaration's, like for like: an id naming the
+  // declared model confirms it in its own words, and only an id naming another model is read as
+  // one — a provider's separator, variant word or version family is not a drift.
+  return bannerNames(banner, declared) ? declared : bannerRunning(banner, declared);
 }
 
 /** The model a seat runs where the caller must compare like with like — a send's drift hold, the

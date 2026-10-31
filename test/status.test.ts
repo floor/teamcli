@@ -464,6 +464,32 @@ describe('team status', () => {
     expect(code).toBe(1);
   });
 
+  // A provider's id is its own spelling of the same model: the version's number inside the
+  // model's name, a variant word after the version, an alphanumeric version family. An id
+  // naming the declared model is the reading, and the column keeps the declaration.
+  test('a wrapper banner naming the declared model in its own words is not a drift', async () => {
+    const cases = [
+      { block: '    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: claude-glm.sh', banner: 'glm-5.3', row: 'GLM 5\\.3' },
+      { block: '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: claude-deepseek.sh', banner: 'deepseek-v4.1-flash', row: 'DeepSeek V4\\.1 Flash' },
+    ];
+    for (const one of cases) {
+      writeFileSync(file, example.replace(
+        '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+        one.block,
+      ));
+      approveOnDisk();
+      const shown = built();
+      const pane = paneOf(shown, 'deepseek-acme');
+      live = { ...shown, screens: { ...shown.screens, [pane]: `  ${one.banner} · API Usage Billing\n${claudeScreen('Opus 5.5')}` } };
+      const { code, out } = await status();
+      // The banner line is not the composer, so the row's state word alone is unread; the model
+      // column is the reading this scene is about.
+      expect(out).toMatch(new RegExp(`deepseek-acme\\s+done \\(screen not recognised\\)\\s+${one.row}\\s+${pane}`));
+      expect(out).not.toContain('difference: deepseek-acme:');
+      expect(code).toBe(0);
+    }
+  });
+
   test('a stored classification outside the closed list reads unknown in the row and the difference', async () => {
     // A state file as a hand-edited or corrupted one can hold: an escape sequence and a forged
     // line where the classification belongs. The row, the difference and its repair carry the

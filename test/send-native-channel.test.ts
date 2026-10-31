@@ -223,6 +223,45 @@ test('an unrecognized launcher leaves a foreign model unread: its banner is not 
   expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
 
+// A provider writes the model it selected its own way: the version's number may be inside the
+// model's name, a variant word may follow the version, and a version family may be alphanumeric.
+// An id naming the signed model in its own words is that model — the leg walks.
+test('a wrapper banner naming the signed model in its own words is not a drift', async () => {
+  const cases = [
+    { signing: { model: 'GLM 5', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-5.3' },
+    { signing: { model: 'DeepSeek Flash', version: 'V4.1' }, launch: 'claude-deepseek.sh', banner: 'deepseek-v4.1-flash' },
+    { signing: { model: 'Kimi', version: 'K2.5' }, launch: 'claude-kimi.sh', banner: 'kimi-k2.5' },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, one.launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.err).not.toContain('model drift');
+    const drops = dropDir(made.dir, 'lead');
+    const files = readdirSync(drops).filter((name) => !name.includes('.'));
+    expect(files.length).toBe(1);
+    made.cleanup();
+  }
+});
+
+// The control: a banner naming another version of the signed model is a real change, and is held.
+test('a wrapper banner naming another version is still held', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  glm-5.4 · API Usage Billing\n`);
+  const host = fake(made, { native: pane });
+  registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'claude-glm.sh');
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+  expect(io.err).toContain('model drift: GLM 5.3 vs glm 5.4');
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;
