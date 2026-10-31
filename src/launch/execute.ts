@@ -17,7 +17,7 @@ import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeT
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
-import { IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
+import { codexEndpointConfig, IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
@@ -73,7 +73,7 @@ export type Host = {
    * when this answers `up`. Absent on a host that starts no endpoint: the seat then launches on
    * its own line and its presence stays unproven.
    */
-  managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string }): Promise<ManagedEndpointRead>;
+  managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[] }): Promise<ManagedEndpointRead>;
   /**
    * Stops the endpoint a launch this run started when its pane never ran, so a partial launch
    * leaves no orphaned server. The record is cleared only after a proven stop.
@@ -1129,9 +1129,13 @@ export async function executePlan(
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
-            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
+            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
-            command = `${remoteCodexCommand(command)} --remote ${shellQuote(read.url)}`;
+            const attached = remoteCodexCommand(command);
+            if (attached !== command) {
+              hold(op.seat, `${op.seat}: starts a fresh Codex thread on its managed endpoint: codex-cli refuses permission overrides on a remote resume, and without them the seat would run under the default sandbox\n`);
+            }
+            command = `${attached} --remote ${shellQuote(read.url)}`;
             startedEndpoint = read.started;
             for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
           } else {

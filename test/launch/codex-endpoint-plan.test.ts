@@ -9,7 +9,7 @@ import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readTeamConfig } from '../../src/file/team-config.ts';
-import { remoteCodexCommand, upPlan, type UpInput, type UpSeat } from '../../src/launch/plan.ts';
+import { codexEndpointConfig, remoteCodexCommand, upPlan, type UpInput, type UpSeat } from '../../src/launch/plan.ts';
 
 const REPAIR = '`team remove coder --keep` then `team add coder`';
 const STATE_DIR = '/tmp/acme/.agents';
@@ -110,7 +110,7 @@ describe('the managed Codex endpoint intent', () => {
     expect(launchOp(upPlan(input({ ...over, team: loaded.team }, seatOver))).do).toHaveProperty('codexEndpoint');
   });
 
-  test('a resume carrying permission overrides is marked; the attach sheds the overrides', () => {
+  test('a resume carrying permission overrides is marked; the attach starts a fresh thread', () => {
     // codex-cli 0.161.0 refuses -a/-s on a remote resume and exits to the shell; without them the
     // resumed thread keeps the permissions it was recorded with.
     const launch = launchOp(upPlan(input({}, { launch: 'codex resume 01a1 -a never -s danger-full-access' })));
@@ -119,20 +119,36 @@ describe('the managed Codex endpoint intent', () => {
     expect(fresh.do).toHaveProperty('codexEndpoint');
   });
 
-  test('remoteCodexCommand strips permission overrides from a resume line only', () => {
-    expect(remoteCodexCommand('AGENT_UNATTENDED=1 codex -m gpt resume 01a1 -a never -s danger-full-access'))
-      .toBe('AGENT_UNATTENDED=1 codex -m gpt resume 01a1');
-    expect(remoteCodexCommand('codex resume 01a1 --ask-for-approval=never --sandbox workspace-write --full-auto -m gpt'))
-      .toBe('codex resume 01a1 -m gpt');
+  test('remoteCodexCommand starts a fresh thread for a resume that carries permission overrides', () => {
+    expect(remoteCodexCommand('AGENT_UNATTENDED=1 codex resume 01a1 -m gpt -a never -s danger-full-access'))
+      .toBe('AGENT_UNATTENDED=1 codex -m gpt -a never -s danger-full-access');
+    expect(remoteCodexCommand('codex resume --last --sandbox=workspace-write')).toBe('codex --sandbox=workspace-write');
     expect(remoteCodexCommand('codex resume 01a1 --dangerously-bypass-approvals-and-sandbox'))
-      .toBe('codex resume 01a1');
-    // A fresh thread takes its permissions from the line, so they stay.
+      .toBe('codex --dangerously-bypass-approvals-and-sandbox');
+    // No overrides: the thread is kept. A fresh line is unchanged.
+    expect(remoteCodexCommand('codex resume 01a1 -m gpt')).toBe('codex resume 01a1 -m gpt');
     expect(remoteCodexCommand('codex -a never -s danger-full-access')).toBe('codex -a never -s danger-full-access');
-    // A quoted argument that happens to hold the flags is not touched.
-    expect(remoteCodexCommand(`codex resume 01a1 -s danger-full-access 'Read /x -s y.md'`))
-      .toBe(`codex resume 01a1 'Read /x -s y.md'`);
-    // Words that only contain the flags are not touched.
-    expect(remoteCodexCommand('codex resume 01a1 -m gpt-sa')).toBe('codex resume 01a1 -m gpt-sa');
+    // A quoted argument that holds the words is not touched.
+    expect(remoteCodexCommand(`codex -s danger-full-access 'Read /resume -s y.md'`))
+      .toBe(`codex -s danger-full-access 'Read /resume -s y.md'`);
+  });
+
+  test('codexEndpointConfig carries the line\'s config and permissions to the endpoint', () => {
+    // A TUI attached with --remote loads neither its own -c pairs nor its permissions: the
+    // endpoint's configuration is what its turns run under (measured on codex-cli 0.161.0).
+    const line = `AGENT_UNATTENDED=1 zsh as.sh codex resume 01a1 -m gpt -c model_reasoning_effort=high -a never -s danger-full-access --no-alt-screen -c 'mcp_servers.team_inbox.command="/bin/node"' -c 'mcp_servers.team_inbox.args=["cli.js","mcp","serve","--seat","w"]' 'Read /x -s y.md'`;
+    expect(codexEndpointConfig(line)).toEqual([
+      '-c', 'model_reasoning_effort=high',
+      '-c', 'approval_policy="never"',
+      '-c', 'sandbox_mode="danger-full-access"',
+      '-c', 'mcp_servers.team_inbox.command="/bin/node"',
+      '-c', 'mcp_servers.team_inbox.args=["cli.js","mcp","serve","--seat","w"]',
+    ]);
+    expect(codexEndpointConfig('codex --sandbox=workspace-write --ask-for-approval on-request'))
+      .toEqual(['-c', 'sandbox_mode="workspace-write"', '-c', 'approval_policy="on-request"']);
+    expect(codexEndpointConfig('codex --dangerously-bypass-approvals-and-sandbox'))
+      .toEqual(['-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"']);
+    expect(codexEndpointConfig('codex -m gpt')).toEqual([]);
   });
 
   test('a non-Codex seat is never marked, whatever the policy value', () => {

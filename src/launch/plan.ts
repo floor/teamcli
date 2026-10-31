@@ -455,32 +455,77 @@ function watcherNote(watcher: CliWatcher): string {
 }
 
 /** Every step of `team up`, in order. Nothing here runs anything. */
+/** One shell word without its quoting: `'a'\''b'` and `"a\"b"` read as the shell reads them. */
+function unquoteWord(word: string): string {
+  let out = '';
+  for (const part of word.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\\.|[^'"\\]+/g) ?? []) {
+    if (part.startsWith("'")) out += part.slice(1, -1);
+    else if (part.startsWith('"')) out += part.slice(1, -1).replace(/\\(.)/g, '$1');
+    else if (part.startsWith('\\')) out += part.slice(1);
+    else out += part;
+  }
+  return out;
+}
+
 /**
- * The line a managed Codex seat runs once it attaches to its endpoint. Measured on codex-cli
- * 0.161.0: `codex resume <id> --remote …` with `-a`/`-s` (or their long forms) exits at once with
- * "Permission overrides are not supported when resuming a remote task", leaving the seat at its
- * shell; the same resume without them attaches, and the thread keeps the permissions it was
- * recorded with (a thread started with `-s danger-full-access` reads "Full Access" after the
- * remote resume; one started read-only stays read-only). So a resume line sheds its permission
- * overrides when attached, and a fresh line keeps them: a new thread takes them from the line.
+ * The configuration a managed Codex endpoint is started with, from the seat's own line.
+ * Measured on codex-cli 0.161.0: a TUI attached with `--remote` runs its turns under the
+ * app-server's configuration, not its own: the TUI's `-c mcp_servers.…` pairs are not loaded
+ * (the seat loses its team inbox server), and a resumed thread's permissions are the
+ * app-server's (a danger-full-access thread read "Workspace" under a default app-server and
+ * "Full Access" under one started with `-c sandbox_mode="danger-full-access"`). So every `-c`
+ * pair of the line, and its `-a`/`-s` overrides as their config keys, go to the endpoint.
  */
-export function remoteCodexCommand(command: string): string {
-  // Raw shell words, quotes kept: an override is only ever a whole unquoted word, so a quoted
-  // argument (the rules line, a `-c` value) that happens to contain ` -s ` is never touched.
-  const words: string[] = command.match(/(?:[^\s'"]+|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
-  if (!words.includes('resume')) return command;
-  const kept: string[] = [];
+export function codexEndpointConfig(command: string): string[] {
+  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const config: string[] = [];
+  const toml = (value: string): string => JSON.stringify(value);
   for (let i = 0; i < words.length; i++) {
     const word = words[i]!;
-    if (word === '--full-auto' || word === '--dangerously-bypass-approvals-and-sandbox') continue;
-    if (/^--(ask-for-approval|sandbox)=/.test(word)) continue;
-    if (['-a', '-s', '--ask-for-approval', '--sandbox'].includes(word)) {
-      if (i + 1 < words.length && !words[i + 1]!.startsWith('-')) i++;
-      continue;
+    const next = i + 1 < words.length ? unquoteWord(words[i + 1]!) : undefined;
+    const eq = /^(--[a-z-]+)=(.*)$/.exec(word);
+    const flag = eq ? eq[1]! : word;
+    const value = eq ? unquoteWord(eq[2]!) : next;
+    const took = eq ? 0 : 1;
+    if ((flag === '-c' || flag === '--config') && value !== undefined) {
+      config.push('-c', value); i += took;
+    } else if ((flag === '-a' || flag === '--ask-for-approval') && value !== undefined && !value.startsWith('-')) {
+      config.push('-c', `approval_policy=${toml(value)}`); i += took;
+    } else if ((flag === '-s' || flag === '--sandbox') && value !== undefined && !value.startsWith('-')) {
+      config.push('-c', `sandbox_mode=${toml(value)}`); i += took;
+    } else if (word === '--dangerously-bypass-approvals-and-sandbox') {
+      config.push('-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"');
+    } else if (word === '--full-auto') {
+      config.push('-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"');
     }
-    kept.push(word);
   }
-  return kept.join(' ');
+  return config;
+}
+
+/**
+ * The line a managed Codex seat runs once it attaches to its endpoint. Measured on codex-cli
+ * 0.161.0: an attached TUI sends its own permissions with each turn, and `codex resume <id>
+ * --remote …` refuses `-a`/`-s` (and their long forms, and the same keys as `-c`) with
+ * "Permission overrides are not supported when resuming a remote task", leaving the seat at its
+ * shell. Without them the resumed turns ran under the TUI's own default (workspace-write in the
+ * rollout's turn context), whatever the thread or the endpoint was started with, so the seat
+ * could not write its own inbox receipts. A fresh `codex --remote … -s danger-full-access -a
+ * never` turn ran danger-full-access. So a resume line that carries permission overrides starts
+ * a fresh thread when attached: its `resume <id>` words go, its overrides stay. A resume line with
+ * no overrides keeps its thread, and a fresh line is unchanged.
+ */
+export function remoteCodexCommand(command: string): string {
+  // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
+  // argument (the rules line, a `-c` value) that happens to hold `resume` is never touched.
+  const words: string[] = command.match(/(?:[^\s'"]+|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const at = words.indexOf('resume');
+  if (at < 0) return command;
+  const overrides = words.some((word) => ['-a', '-s', '--ask-for-approval', '--sandbox', '--full-auto', '--dangerously-bypass-approvals-and-sandbox'].includes(word)
+    || /^--(ask-for-approval|sandbox)=/.test(word));
+  if (!overrides) return command;
+  const next = words[at + 1];
+  const drop = next !== undefined && (next === '--last' || !next.startsWith('-')) ? 2 : 1;
+  return [...words.slice(0, at), ...words.slice(at + drop)].join(' ');
 }
 
 export function upPlan(input: UpInput): Step[] {

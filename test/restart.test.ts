@@ -1280,7 +1280,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).not.toContain('--resume');
   });
 
-  test('a restarted Codex seat that resumes attaches its endpoint without permission overrides', async () => {
+  test('a restarted Codex seat with permission overrides attaches its endpoint on a fresh thread', async () => {
     // The plan reads the seat's codex-daemon policy from the home, as `team up` does, and
     // attaches the managed endpoint; codex-cli 0.161.0 refuses -a/-s on a remote resume (the
     // seat would exit to its shell), so the attached line sheds them and the thread keeps the
@@ -1295,8 +1295,12 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       launch,
     });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    const endpointConfigs: (string[] | undefined)[] = [];
     run.sources.upLaunch.codexEndpoint = {
-      managed: async () => ({ kind: 'up', url: 'unix:///tmp/worker.sock', started: true }),
+      managed: async (endpoint: { config?: string[] }) => {
+        endpointConfigs.push(endpoint.config);
+        return { kind: 'up', url: 'unix:///tmp/worker.sock', started: true };
+      },
       stop: () => ({ stopped: true }),
     } as unknown as NonNullable<Launch['codexEndpoint']>;
     run.sources.screenText = (_session, pane) =>
@@ -1304,11 +1308,15 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
-    expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${launch} resume ses_codex`);
-    expect(run.did.runs.join('\n')).toContain(`${launch} resume ses_codex --no-alt-screen`);
+    // The plan resumed ses_codex; the attach starts a fresh thread so the overrides can ride it.
+    expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${launch} -a never`);
+    expect(run.did.runs.join('\n')).not.toContain('resume ses_codex');
+    expect(run.did.runs.join('\n')).toContain(`${launch} -a never -s danger-full-access --no-alt-screen`);
     expect(run.did.runs.join('\n')).toContain(' --remote unix:///tmp/worker.sock');
-    expect(run.did.runs.join('\n')).not.toContain(' -a never');
-    expect(run.did.runs.join('\n')).not.toContain(' -s danger-full-access');
+    // The endpoint carries what the attached line shed: its turns run under the endpoint's config.
+    expect(endpointConfigs).toHaveLength(1);
+    expect(endpointConfigs[0]).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_mode="danger-full-access"']));
+    expect(endpointConfigs[0]!.some((word) => word.startsWith('mcp_servers.team_inbox.args='))).toBe(true);
   });
 
   test('a recorded launcher that selects another conversation is refused before the stop', async () => {

@@ -207,7 +207,7 @@ function socketsLeftAlone(
 
 export type CodexEndpointDeps = {
   /** Starts `codex app-server --listen <url>` detached; null when the process did not start. */
-  spawn?: (input: { url: string; cwd?: string }) => { pid: number } | null;
+  spawn?: (input: { url: string; cwd?: string; config?: string[] }) => { pid: number } | null;
   alive?: (pid: number) => boolean;
   /** The proof a signal requires: the pid's full command line, or null when its executable name
    *  is not `codex`. Injected in scenes so no test reads another process. */
@@ -224,8 +224,10 @@ export type CodexEndpointDeps = {
   waitMs?: number;
 };
 
-function spawnAppServer(input: { url: string; cwd?: string }): { pid: number } | null {
-  const child = nodeSpawn('codex', ['app-server', '--listen', input.url], {
+function spawnAppServer(input: { url: string; cwd?: string; config?: string[] }): { pid: number } | null {
+  // The seat's configuration follows the listen words, so the ownership proof's exact
+  // `app-server --listen <url>` still reads from the command line.
+  const child = nodeSpawn('codex', ['app-server', '--listen', input.url, ...(input.config ?? [])], {
     detached: true,
     stdio: 'ignore',
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
@@ -342,6 +344,8 @@ export async function ensureCodexEndpoint(
     session: string;
     seat: string;
     cwd?: string;
+    /** `-c key=value` words from the seat's line (`codexEndpointConfig`). */
+    config?: string[];
     deps?: CodexEndpointDeps;
   },
 ): Promise<ManagedEndpointRead> {
@@ -424,7 +428,7 @@ export async function ensureCodexEndpoint(
   if (leftAlone.length > 0) {
     notes.push(`an endpoint socket no record names was left in place: ${leftAlone.join(', ')}; nothing proves its process has gone`);
   }
-  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }) });
+  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }), ...(input.config === undefined ? {} : { config: input.config }) });
   if (started === null) {
     return { kind: 'unmanaged', why: 'the Codex app-server did not start' };
   }
@@ -480,7 +484,7 @@ export async function ensureCodexEndpoint(
  * nothing, and the endpoint read then says why.
  */
 export async function launchCodexEndpoint(
-  input: { dir: string; session: string; seat: string; cwd?: string; deps?: CodexEndpointDeps },
+  input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; deps?: CodexEndpointDeps },
 ): Promise<ManagedEndpointRead> {
   if (isPresenceSeatName(input.seat)) {
     try {

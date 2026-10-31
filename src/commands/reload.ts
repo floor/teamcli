@@ -691,7 +691,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       ...(launch.codexEndpoint === undefined
         ? {}
         : {
-            managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(endpoint),
+            managedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string; cwd?: string; config?: string[] }) => launch.codexEndpoint!.managed(endpoint),
             stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
           }),
       ...(launch.registerInbox

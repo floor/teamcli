@@ -175,7 +175,7 @@ export type Launch = {
    *  launch surface; a fake launch that omits it plans no endpoint, so no scene reaches a real
    *  process. */
   codexEndpoint?: {
-    managed(input: { dir: string; session: string; seat: string; cwd?: string }): Promise<ManagedEndpointRead>;
+    managed(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[] }): Promise<ManagedEndpointRead>;
     stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
   };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
@@ -2244,7 +2244,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       ...(launch.codexEndpoint === undefined
         ? {}
         : {
-            managedCodexEndpoint: (input: { dir: string; session: string; seat: string; cwd?: string }) => launch.codexEndpoint!.managed(input),
+            managedCodexEndpoint: (input: { dir: string; session: string; seat: string; cwd?: string; config?: string[] }) => launch.codexEndpoint!.managed(input),
             stopManagedCodexEndpoint: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(input),
           }),
       ...(launch.registerInbox
