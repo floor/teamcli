@@ -103,7 +103,7 @@ import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
-import { canShowModel, modelDiffers, seatModel, signedSeatModel } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, recordSignedModel, seatModel } from '../status/statusline.ts';
 import { watchSitting } from '../watch/liveness.ts';
 import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
 import { busAnswers } from '../bus/follow.ts';
@@ -453,7 +453,9 @@ function modelDrift(
   processes: Readonly<Record<string, PaneProcesses | null>>,
   screenOf: (pane: string) => string | null,
   owner: boolean,
-  expected: { model: string; version: string } = seat,
+  /** The registry's own signing and provenance where the seat has a record; the file's seat
+   *  object itself where it has none. */
+  expected: { model: string; version: string; cli?: string; launch?: string } = seat,
   restored = false,
   /** The seat this run is running inside, when it is one: its pane is never closed here. */
   callerSeat: string | null = null,
@@ -467,10 +469,12 @@ function modelDrift(
   // Registry signing governs even a model that the team file says a different CLI hosts (for
   // example DeepSeek via Claude Code), so it stands in as the declaration the comparison reads
   // against: a provider wrapper's own banner id, or the signing where it prints none, instead of
-  // the wrapper CLI's default family. The file's own comparison keeps the display read.
+  // the wrapper CLI's default family. The record's own cli and launch are the provenance the
+  // reader takes — the line the process was started from, never the file's line edited since.
+  // The file's own comparison keeps the display read.
   const running = expected === seat
     ? seatModel(seat, text)
-    : signedSeatModel({ ...seat, model: expected.model, version: expected.version }, text);
+    : recordSignedModel({ ...seat, model: expected.model, version: expected.version }, expected, text);
   if (!running || !modelDiffers(running, expected)) return { kind: 'skip' };
   const kind = readScreen(seat.cli, text).kind;
   const way = driftWay(owner, seat.name);

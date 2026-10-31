@@ -14,7 +14,7 @@ import { pluralCount, type DifferenceWho } from '../output/text.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { watchLabel } from '../watch/pane.ts';
 import { readScreen, screenWord, type Screen } from '../watch/screen.ts';
-import { launchModelWhenUnread, modelDiffers, runningModel, seatModel, signedSeatModel, wrapperSeat } from './statusline.ts';
+import { launchModelWhenUnread, modelDiffers, recordSignedModel, runningModel, seatModel, wrapperSeat } from './statusline.ts';
 
 // What herdr shows of a session. `screens` holds a pane's visible text, where it could be read;
 // `processes` each seat pane's process identity, where it was read, and null where herdr can't
@@ -182,7 +182,7 @@ export function compare(
   watch: TeamFile['watch'] = team.watch,
   sockets: string | readonly string[] = defaultSocketsDirs(),
   trust = false,
-  signing?: ReadonlyMap<string, { model: string; version: string }>,
+  signing?: ReadonlyMap<string, { model: string; version: string; cli?: string; launch?: string }>,
   continuityIds?: ReadonlyMap<string, string | null>,
 ): Comparison {
   const rows: Row[] = [];
@@ -260,7 +260,7 @@ export function compare(
       const shell = noIdentity && paneHoldsShell(live.processes?.[agent.pane] ?? null);
       // A shell has no model to compare. Reading it would add an "unread" note beside the
       // repair that already says the pane runs no CLI.
-      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered !== undefined);
+      const model = shell ? seat.display : modelOf(seat, agent, live, differences, notes, team, unidentified, registered);
       const held = waitingView(seat.name, recorded, trust);
       if (held) {
         rows.push({
@@ -752,14 +752,15 @@ function modelOf(
   team: TeamFile,
   /** The seat's record has no process identity and is ready: the repair is abandon, then up. */
   unidentified: boolean,
-  registered: boolean,
+  record: { cli?: string; launch?: string } | undefined,
 ): string {
   const screen = live.screens[agent.pane];
   // A registered seat carries its record's signing as its model and version here, so the
   // comparison is like for like: a wrapper's signed declaration against its banner, a bare
-  // Claude Code launch against the Claude family its screen names. An unregistered seat has
-  // only the file's declaration, so the display read stands.
-  const running = registered ? signedSeatModel(seat, screen) : seatModel(seat, screen);
+  // Claude Code launch against the Claude family its screen names — with the record's own cli
+  // and launch as the provenance, never the file's. An unregistered seat has only the file's
+  // declaration, so the display read stands.
+  const running = record ? recordSignedModel(seat, record, screen) : seatModel(seat, screen);
   if (!running) {
     // A profile may say the launch line's model stands when the screen names none: its column
     // shows it labelled, and the note says where the name comes from.
@@ -771,7 +772,7 @@ function modelOf(
     // the seat's declared display and marks both halves — declared, and unread. A registry
     // record's declaration is named as the registry's; without one the file's (or the state's
     // retained) declaration stands, still marked as a declaration and never as a reading.
-    if (registered) {
+    if (record !== undefined) {
       notes.push(`${seat.name}: its screen shows no model; the registry declares ${seat.display}, and the screen reading is unread`);
     } else {
       notes.push(`${seat.name}: its screen shows no model; the declared ${seat.display} stands, and the screen reading is unread`);
@@ -791,7 +792,7 @@ function modelOf(
   const observed = `${running.model} ${running.version}${seen ? ` ${seen}` : ''}`;
   const file = `${declared}${seat.effort ? ` ${seat.effort}` : ''}`;
   const detail = modelDrifts
-    ? `running ${observed}, ${registered ? 'registry' : 'file'} says ${file}`
+    ? `running ${observed}, ${record !== undefined ? 'registry' : 'file'} says ${file}`
     : `effort ${seen}, file says ${seat.effort}`;
   differences.push(unidentified
     ? {

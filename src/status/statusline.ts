@@ -206,6 +206,31 @@ export function signedSeatModel(
   return null;
 }
 
+/** The model a seat runs, read with a registry record's own provenance: the record's cli and
+ *  launch are the ones the running process was started from, and a team file edited after the
+ *  launch cannot prove what it started. The file's `model_from` stands only where the recorded
+ *  launch is a line this reader cannot follow — a generic launcher's model is the file's
+ *  declaration about the launcher the record names, and nothing else there reads a model. */
+export function recordSignedModel(
+  seat: { cli: string; model: string; version: string; launch?: string; modelFrom?: 'launcher' },
+  record: { cli?: string; launch?: string },
+  screen: string | undefined,
+): Running | null {
+  const cli = record.cli === undefined || record.cli === '' ? seat.cli : record.cli;
+  const launch = record.launch === undefined || record.launch === '' ? seat.launch : record.launch;
+  const unexplained = launchProof({ cli, model: seat.model, launch }) === 'unknown';
+  return signedSeatModel(
+    {
+      cli,
+      model: seat.model,
+      version: seat.version,
+      ...(launch === undefined ? {} : { launch }),
+      ...(unexplained && seat.modelFrom === 'launcher' ? { modelFrom: 'launcher' as const } : {}),
+    },
+    screen,
+  );
+}
+
 /**
  * Whether the seat's declared model could ever be read off its screen: `seatModel`'s question
  * asked of the model the file declares instead of the text the screen shows. The answer is

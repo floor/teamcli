@@ -906,7 +906,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           machineAccounts,
           signing: sources.home === undefined ? undefined : new Map(team.seats.map((seat) => {
             const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
-            return [seat.name, agent?.signing ?? null] as const;
+            return [seat.name, agent ? { ...agent.signing, cli: agent.cli, launch: agent.launch } : null] as const;
           })),
           // The same records, read for continuity: a pane restored from outside the launch line
           // is the seat while the record's session is the one the pane runs.

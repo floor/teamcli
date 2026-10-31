@@ -475,6 +475,47 @@ describe('team up, a restored session: boundaries', () => {
     expect(record?.reach.agent_session).toBe('kept');
   });
 
+  // The launch that proves a wrapper is the one the record holds, never the line the file was
+  // edited to since: the file now names the bare CLI, and the pane still shows the wrapper's
+  // banner naming the signed model above the CLI family its footer always prints. The restored
+  // seat runs what it signs, so it is left as it is — not cycled on a family its launch never
+  // selected.
+  test('a restored seat is compared with the launch the record proves, not the launch line the file carries now', async () => {
+    writeFileSync(
+      join(root, '.agents/team.yaml'),
+      makeExample(base, root, EXAMPLE.replace('stopped: true\n', 'parked: true\n').replace('launch: team-deepseek', 'launch: claude')),
+    );
+    await approve();
+    writeState('kept', true);
+    const { sameProcess, list, workspaces } = baseline();
+    const made = world();
+    made.launch.processInfo = (_session, pane) => (pane === RECORDED_PANE ? { shell: 900, foreground: [901] } : sameProcess(pane));
+    const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
+    made.launch.agents = live;
+    made.launch.paneText = (_session, pane) =>
+      pane === RECORDED_PANE ? `deepseek-v4.1-flash · API Usage Billing\n${IDLE}` : IDLE;
+    const keys: string[] = [];
+    made.launch.typeText = () => { keys.push('type'); return true; };
+    made.launch.pressEnter = () => { keys.push('enter'); return true; };
+    const io = testIo(root, { kind: 'owner' });
+    const code = await runUp(
+      FILE,
+      io,
+      sources({ sessionState: () => 'running', workspaces, agents: live, doctor: doctor() }, made),
+    );
+    expect(code).toBe(0);
+    expect(made.closes).toEqual([]);
+    expect(keys).toEqual([]);
+    expect(made.runs.filter((run) => run.command.includes('team-deepseek'))).toEqual([]);
+    expect(io.err).toContain('  restored; left as it is\n');
+    expect(seatsOf()['deepseek-acme']).toMatchObject({
+      stage: 'ready',
+      pane: RECORDED_PANE,
+      launched: { shell: 900, cli: [901] },
+      agent_session: 'kept',
+    });
+  });
+
   // The release's recognition gap, closed through `up`: the state copy names no session (an
   // older record, or one written before the id was known), and the registry's binding is the
   // only proof the pane is the seat. The pane is adopted, nothing is closed or typed, and the
