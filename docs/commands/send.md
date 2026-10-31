@@ -620,8 +620,11 @@ queued; <seat> has no way to be woken while idle       a person, or a launch wit
 ```
 
 `<delivery>` below stands for one of those four sentences. It is read from the seat's launch as
-the send runs — the watched endpoint, the channel, the socket accept, the watcher — and a
-delivered line has none, because the delivery itself is the answer.
+the send runs — the watched endpoint, the channel, the socket route the send itself admits (its
+cross-session declaration, the team file's own `inbound` word, and the address the seat's launch
+recorded that still stands), the watcher — and a delivered line has none, because the delivery
+itself is the answer. A fallback whose walk proved the receiving session has no dialable socket
+lowers the class the line reports: it never claims a wake the attempt just disproved.
 
 | Outcome | Exit | Printed |
 | --- | --- | --- |

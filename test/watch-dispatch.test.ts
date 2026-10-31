@@ -19,6 +19,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { HostedLoop } from '../src/watch/hosted.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, readState, type SessionState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
@@ -424,6 +425,45 @@ describe('a seat nothing can wake while it is idle', () => {
     const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
     expect(idleClaimOf(state, 'worker-1')).toBeDefined();
     expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
+  });
+
+  test('an accepted socket whose recorded address does not stand is no wake either', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    // Both workers' generated settings declare accept and their registry records name a socket
+    // address, but no socket stands there: the route the send would dial does not exist.
+    const sockets = ['worker-1', 'worker-2'].map((seat) => {
+      mkdirSync(join(root, '.agents', 'hooks', 'crew'), { recursive: true });
+      writeFileSync(join(root, '.agents', 'hooks', 'crew', `${seat}.json`), '{"crossSessionInbound":"accept"}\n');
+      const socket = join(base, `${seat}.sock`);
+      registerAgent(home, {
+        name: seat,
+        signing: { model: 'Test', version: '1', role: 'builder' },
+        lab: 'test-lab',
+        cli: 'claude-code',
+        launcher: null,
+        launch: 'claude',
+        reach: { team: teamIdOf(root), seat, session: 'crew', pane: seat === 'worker-1' ? 'fixture-pane-1' : 'fixture-pane-2', address: socket },
+        mcp: [],
+        skills: [],
+        lifecycle: 'running',
+        by: 'team up',
+      });
+      return socket;
+    });
+    const result = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW) }));
+    expect(calls).toEqual([]);
+    expect(result.pushed).toEqual([]);
+    expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
+    // The same records with the sockets standing: both seats are push-class and pushed once.
+    for (const socket of sockets) writeFileSync(socket, '');
+    const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
+    expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
+    expect(calls.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
   });
 });
 

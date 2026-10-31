@@ -95,7 +95,7 @@ const UNWAKEABLE_NOTE = '(its seat cannot be woken while idle)';
  * reads it: the launch's records first, the file's row second. A state that cannot be read falls
  * to the file's row, never to a guess.
  */
-function cannotBeWokenWhileIdle(team: TeamFile, root: string, path: string, seat: string): boolean {
+function cannotBeWokenWhileIdle(team: TeamFile, root: string, path: string, seat: string, home?: string): boolean {
   const dir = dirname(path);
   let recorded: SeatState | undefined;
   try {
@@ -111,6 +111,7 @@ function cannotBeWokenWhileIdle(team: TeamFile, root: string, path: string, seat
     seat,
     ...(declared === undefined ? {} : { declared }),
     ...(recorded === undefined ? {} : { state: recorded }),
+    ...(home === undefined ? {} : { home }),
   });
   return !wakeableWhileIdle(delivery.class);
 }
@@ -182,7 +183,7 @@ export async function runPlan(argv: string[], io: Io, sources: PlanSources = {})
     else out.stderr('team plan: the task file is not a list\n');
     return shape();
   }
-  return show(io, read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, cannotBeWokenWhileIdle(loaded.team, loaded.root, loaded.path, placed.seat), json);
+  return show(io, read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, cannotBeWokenWhileIdle(loaded.team, loaded.root, loaded.path, placed.seat, sources.home), json);
 }
 
 /**
@@ -214,7 +215,7 @@ async function planFromBroker(
   // A notice about the read is for a person reading the table; a `--json` run's stderr stays
   // empty, the document on stdout being the whole answer.
   if (outcome.notice !== undefined && !json) io.stderr(`team plan: ${outcome.notice}\n`);
-  return show(io, outcome.read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, cannotBeWokenWhileIdle(loaded.team, loaded.root, loaded.path, placed.seat), json);
+  return show(io, outcome.read, placed.seat, tasks.pull ?? 'self', tasks.fallback ?? 'file', sources.now ?? Date.now, loaded.team, cannotBeWokenWhileIdle(loaded.team, loaded.root, loaded.path, placed.seat, sources.home), json);
 }
 
 /**

@@ -11,15 +11,19 @@
 //
 // This module is the one reader of that refinement. It reads the facts the launch left behind —
 // the recorded watcher (or the one its launch line implies), the development channel on the
-// line, the seat's declared cross-session socket, and the managed app-server endpoint bound to
+// line, the cross-session socket the send itself would dial (its declaration, the team file's
+// own word, and the address the registry recorded), and the managed app-server endpoint bound to
 // its current presence incarnation — and answers one class plus the evidence it read, so a
 // caller that skips a seat can say why. The words a console prints come from the same class
 // (`deliveryWords`), so the report and the gating can never disagree.
+import { existsSync } from 'node:fs';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import type { Seat } from '../file/types.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { DELIVERY_CLASSES, profileFor, type DeliveryClass } from '../profiles/profile.ts';
-import { declaredInboundOf } from '../send/inbound.ts';
+import { findAgent } from '../registry/agents.ts';
+import { teamIdOf } from '../registry/teams.ts';
+import { declaredInboundOf, inboundIsLive, socketEligible } from '../send/inbound.ts';
 import type { SeatState } from '../state.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 
@@ -38,9 +42,10 @@ export type DeliveryFacts = {
   /** Whether the launch enables the CLI's development channel, the push adapter that wakes an
    *  idle seat. Measured from the line, the way the send's channel leg measures it. */
   channel: boolean;
-  /** Whether the receiving session's launch declares `crossSessionInbound: accept`, the
-   *  cross-session socket that wakes an idle Claude seat. A caller that read the pane may pass
-   *  `false` for a socket the session no longer holds. */
+  /** Whether the receiving session's cross-session socket is a route the send admits: its
+   *  effective settings declare `crossSessionInbound: accept`, the team file's own `inbound`
+   *  word does not opt out, and the address the seat's registry record names still stands. A
+   *  caller that read the pane may pass `false` for a socket the session no longer holds. */
   socket: boolean;
   /** Whether the seat's managed app-server endpoint is recorded and bound to its current
    *  presence incarnation: its runtime's own queue holds a message between turns. */
@@ -129,13 +134,30 @@ export type SeatDeliveryInput = {
   root: string;
   session: string;
   seat: string;
-  /** The seat's row in the team file, when the caller has one: its `cli`, its launch line, and
-   *  its `human` word. A temporary seat has none. */
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human'>;
+  /** The seat's row in the team file, when the caller has one: its `cli`, its launch line, its
+   *  `human` word, and its `inbound` word — the team's own opt-out the send admits by. A
+   *  temporary seat has none. */
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound'>;
   /** The seat's runtime record, when the seat is launched. Its `launch_line` is what the
    *  launch actually ran, and its `watcher` is what the launch actually installed. */
   state?: Pick<SeatState, 'cli' | 'launch_line' | 'watcher' | 'codex_endpoint' | 'presence_binding'>;
+  /** The registry home: where the seat's agent record keeps the cross-session address its
+   *  launch recorded. A caller that cannot name it proves no recorded address, and the socket
+   *  is then no evidence — the conservative reading, never a guess. */
+  home?: string;
 };
+
+/** The cross-session address the seat's registry record names, when one is recorded: the same
+ *  record a send resolves its dial from. A home the caller cannot name, or a registry that
+ *  cannot be read, proves no address. */
+function recordedSocketAddress(input: SeatDeliveryInput): string | null {
+  if (input.home === undefined) return null;
+  try {
+    return findAgent(input.home, { team: teamIdOf(input.root), seat: input.seat })?.reach.address ?? null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * One seat's effective delivery class, read from the records the launch left.
@@ -143,7 +165,8 @@ export type SeatDeliveryInput = {
  * The class is measured, not assumed: the CLI and launch line come from the runtime record
  * first (what ran) and the file's row second (what a launch will run); the watcher is the
  * recorded one, or the one `cliWatcher` derives from the line; the channel is the launch
- * line's own flag; the socket is the receiving session's declared `crossSessionInbound`; and
+ * line's own flag; the socket is the route the send itself admits — the effective settings'
+ * `crossSessionInbound`, the team file's own word, and the address the launch recorded; and
  * the endpoint is the recorded app-server URL only while it is bound to the seat's current
  * presence incarnation. A record that cannot be read falls to the conservative class, never to
  * a guess.
@@ -167,11 +190,21 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     input.state?.presence_binding,
   ).kind === 'ok';
   const human = input.declared?.human === true;
+  // The socket is the route the send itself admits: the effective settings' accept, the team
+  // file's own `inbound` word, and the address the launch recorded still standing. A
+  // declaration alone is no evidence that a socket exists; without a recorded address that is
+  // there, nothing can be dialed, and a dispatch must not spend time-bound work on it.
+  const address = recordedSocketAddress(input);
+  const socket =
+    socketEligible(input.declared?.inbound, inbound) &&
+    address !== null &&
+    existsSync(address) &&
+    inboundIsLive(inbound, address);
   const facts: DeliveryFacts = {
     declared: declaredClass,
     watcher,
     channel,
-    socket: inbound.policy === 'accept',
+    socket,
     endpoint,
     ...(human ? { human: true } : {}),
   };

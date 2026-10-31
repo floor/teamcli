@@ -700,13 +700,19 @@ test('a socket recorded for a seat that no longer exists is reported under its r
   const outside = join(made.root, '..', 'nowhere');
   mkdirSync(outside, { recursive: true });
 
-  const code = await runSend(['plain@acme', 'hello'], testIo(outside, { kind: 'owner' }), host);
+  const io = testIo(outside, { kind: 'owner' });
+  const code = await runSend(['plain@acme', 'hello'], io, host);
 
   expect(code).toBe(0);
   // The recorded path was never opened, and no frame left the sender.
   expect(dialed).toBe(0);
   expect(host.frames).toEqual([]);
   expect(existsSync(gone)).toBe(false);
+  // The final line follows the class the walk proved, never the one cached before it: nothing
+  // was woken, and the message waits for the seat's next turn.
+  expect(io.out).toBe(
+    'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn (pull-only)\n',
+  );
   const history = readHistory('acme', made.root, made.home);
   expect(history.ok).toBe(true);
   if (!history.ok) return;
@@ -716,6 +722,69 @@ test('a socket recorded for a seat that no longer exists is reported under its r
   ]);
   // The message still waits where the seat's next turn reads it.
   expect(readdirSync(dropDir(made.dir, 'plain')).filter((name) => !name.includes('.')).length).toBe(1);
+});
+
+test('a recorded socket the pane does not own is no attempt, and the line follows what the walk proved', async () => {
+  // The registry names a socket that still stands on disk, but it is not one of the pane's
+  // processes and the pane exposes none of its own. The class read before the walk sees an
+  // accepted declaration and a standing address and would say the seat is woken; the walk
+  // proves there is no route to dial, so nothing is dialed and the line says what is true.
+  const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer' }]);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  const settings = cliHookSettingsPath(made.dir, 'acme', 'plain');
+  if (settings === null) throw new Error('the fixture declares no settings path for plain');
+  mkdirSync(dirname(settings), { recursive: true });
+  writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+  utimesSync(settings, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+  const standing = join(made.sockets, '424242.sock');
+  writeFileSync(standing, '');
+  const id = teamIdOf(made.root);
+  const record = registerAgent(made.home, {
+    name: 'plain',
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: id, seat: 'plain', session: 'acme', pane: 'fixture-pane-1', address: standing },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(made.home, id, {
+    project: 'acme',
+    entity: 'floor',
+    session: 'acme',
+    root: made.root,
+    lobby: resolveLobby(made.home, { entity: 'floor' }),
+    roster: [{ agent: record.id, seat: 'plain', role: 'implementer', leads: false }],
+    lifecycle: 'running',
+  });
+  const dials: string[] = [];
+  const host = fake(made, {
+    agents: () => [{ name: 'plain', pane: 'fixture-pane-1' }],
+    processInfo: () => ({ shell: 100, foreground: [200] }),
+    deliver: async (path: string) => {
+      dials.push(path);
+      return { ok: true };
+    },
+  });
+  const outside = join(made.root, '..', 'nowhere');
+  mkdirSync(outside, { recursive: true });
+
+  const io = testIo(outside, { kind: 'owner' });
+  const code = await runSend(['plain@acme', 'hello'], io, host);
+
+  expect(code).toBe(0);
+  // The recorded path stands, but it is not the pane's socket and the pane exposes none: no dial.
+  expect(existsSync(standing)).toBe(true);
+  expect(dials).toEqual([]);
+  expect(host.frames).toEqual([]);
+  expect(io.out).toBe(
+    'team acme, session "acme"\nplain: sent (unconfirmed) (drop, 0 ms); queued; plain reads it at its next turn (pull-only)\n',
+  );
 });
 
 test('a held frame is marked once, and the socket stays out until the declaration is re-confirmed', async () => {

@@ -182,6 +182,7 @@ function deliveryClassOf(input: IdleDispatchInput, seat: string) {
     seat,
     ...(declared === undefined ? {} : { declared }),
     ...(state === undefined ? {} : { state }),
+    ...(input.home === undefined ? {} : { home: input.home }),
   }).class;
 }
 

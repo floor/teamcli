@@ -17,6 +17,8 @@ import { runNext, USAGE, type NextSources } from '../src/commands/next.ts';
 import { NOT_A_REPO_NO_FILE } from '../src/file/load.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import { NEXT_OUTPUT_SCHEMA } from '../src/output/index.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 import type { Fetch } from '../src/release/http.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
@@ -119,6 +121,32 @@ function ready(text = WITH, tasks: string | null = '- id: m1\n  title: the task 
   project(text);
   if (tasks !== null) list(tasks);
   record();
+}
+
+/** The launch one socket seat leaves behind: generated settings that declare accept, and a
+ *  registry record naming an address. `live` writes the socket at that address; without it the
+ *  record names a socket that is gone. */
+function launchingSocket(text: string, live: boolean): string {
+  ready(text, '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n- id: plain\n  title: the ordinary title\n');
+  const state = join(root, '.agents');
+  mkdirSync(join(state, 'hooks', 'acme'), { recursive: true });
+  writeFileSync(join(state, 'hooks', 'acme', 'worker.json'), '{"crossSessionInbound":"accept"}\n');
+  const socket = join(base, 'worker.sock');
+  if (live) writeFileSync(socket, '');
+  registerAgent(home, {
+    name: 'worker',
+    signing: { model: 'Test', version: '1', role: 'builder' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: teamIdOf(root), seat: 'worker', session: 'acme', pane: 'fixture-pane-2', address: socket },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'team up',
+  });
+  return socket;
 }
 
 async function run(
@@ -328,6 +356,34 @@ describe('team next', () => {
     expect((await run([], worker)).out).toBe(
       `${CTX}urgent  the time-bound title\n  deadline: 2026-12-31T00:00:00Z\nteam next: claimed urgent\n`,
     );
+  });
+
+  test('a socket the send cannot dial cannot wake an idle seat: its recorded address must stand', async () => {
+    // The launch declares accept, and a registry record names an address — but no socket stands
+    // there, so the route the send would dial does not exist. The seat is pull-on-turn, and the
+    // time-bound record is not offered to it.
+    launchingSocket(WITH_BOTH, false);
+    expect(await run([], worker)).toEqual({
+      code: 0,
+      out: `${CTX}plain  the ordinary title\nteam next: claimed plain\n`,
+      err: '',
+    });
+  });
+
+  test('a socket that does stand is a wake, and the time-bound record is offered first', async () => {
+    launchingSocket(WITH_BOTH, true);
+    expect((await run([], worker)).out).toBe(
+      `${CTX}urgent  the time-bound title\n  deadline: 2026-12-31T00:00:00Z\nteam next: claimed urgent\n`,
+    );
+  });
+
+  test('the team file’s own inbound word keeps even a standing socket out of the class', async () => {
+    launchingSocket(WITH_BOTH.replace('    name: worker\n', '    name: worker\n    inbound: refuse\n'), true);
+    expect(await run([], worker)).toEqual({
+      code: 0,
+      out: `${CTX}plain  the ordinary title\nteam next: claimed plain\n`,
+      err: '',
+    });
   });
 
   test('a non-empty blocked-by, repos, or needs is not taken, and an empty list is', async () => {

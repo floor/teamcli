@@ -513,7 +513,8 @@ function deliveryWordsOf(input: {
   root: string;
   session: string;
   seat: string;
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human'>;
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound'>;
+  home?: string;
 }): string {
   const state = seatStateOf(input.dir, input.session, input.seat);
   return seatDeliveryClass({
@@ -523,6 +524,7 @@ function deliveryWordsOf(input: {
     seat: input.seat,
     ...(input.declared === undefined ? {} : { declared: input.declared }),
     ...(state === undefined ? {} : { state }),
+    ...(input.home === undefined ? {} : { home: input.home }),
   }).words;
 }
 
@@ -959,6 +961,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     session: to.session,
     seat: to.seat,
     ...(declared === undefined ? {} : { declared }),
+    home: host.home,
   });
   // The registry's signing model is the running seat's authority. A pane whose live status
   // names another model is held before the body is read and before any delivery leg is walked;
@@ -1578,6 +1581,11 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         return held(io, dir, who, to.seat, attempt.reason, host, report, 'socket');
       }
       failures.push(`socket: ${attempt.reason}`);
+      // The walk proved the receiving session has no dialable socket now — none for its pane, a
+      // recorded one gone, or a session started before its declaration. The class cached before
+      // the walk follows that evidence, so a fallback that ends in the bus inbox never claims a
+      // wake the fallback itself just disproved.
+      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(to), to.seat);
       markLeg('socket', 'attempted', attempt.reason);
       note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
       socketNote = `typed, socket ${attempt.reason}`;
@@ -2638,6 +2646,7 @@ function confirmRun(args: Args, io: Io, host: SendHost, json: boolean): number {
       session: record.session,
       seat: record.to,
       ...(receivingSeat === undefined ? {} : { declared: receivingSeat }),
+      home: host.home,
     });
   }
   // Take before writing: only the confirm that renamed the record writes the line.
@@ -3951,6 +3960,9 @@ async function deliverClientRecord(
         continue;
       }
       failures.push(`socket: ${attempt.reason}`);
+      // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
+      // the reported class, so the summary never claims a wake that did not happen.
+      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(aim), aim.seat);
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
       continue;
@@ -4205,7 +4217,13 @@ function socketDirs(host: SendHost): string {
   return host.socketsDirAlt === undefined ? host.socketsDir : `${host.socketsDir}, ${host.socketsDirAlt}`;
 }
 
-type SocketAttempt = { kind: 'delivered' } | { kind: 'held'; reason: string } | { kind: 'fallback'; reason: string };
+/** A socket attempt's ending. `socketUnusable` marks a fallback that proved the receiving
+ *  session has no dialable socket now — none for its pane, a recorded one gone, or a session
+ *  started before its declaration — the walk's own evidence, which the reported class follows. */
+type SocketAttempt =
+  | { kind: 'delivered' }
+  | { kind: 'held'; reason: string }
+  | { kind: 'fallback'; reason: string; socketUnusable?: true };
 
 /** The one sentence a held socket frame reports: the pane, the frame's state, and why nothing
  *  further is typed. */
@@ -4355,13 +4373,17 @@ async function deliverSocketFrame(
     return { kind: 'fallback', reason: 'another command holds the seat' };
   }
   const first = socketPathFor(host, to, found.pane);
-  if (first === null) return { kind: 'fallback', reason: noSocketReason(host) };
-  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path) };
+  if (first === null) return { kind: 'fallback', reason: noSocketReason(host), socketUnusable: true };
+  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path), socketUnusable: true };
   // A session started before the file that declares `accept` changed was launched without the
   // setting in force: the frame would be held at its box, so the walk passes this leg over until
   // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
   if (!inboundIsLive(inbound, first.path)) {
-    return { kind: 'fallback', reason: 'the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts' };
+    return {
+      kind: 'fallback',
+      reason: 'the receiving session was started before its crossSessionInbound declaration; restart its CLI host so it accepts',
+      socketUnusable: true,
+    };
   }
   // The record is on disk before the frame leaves: a frame the seat never reads still leaves a
   // signed record in its folder, which is the copy `team messages` and the watch read.
@@ -4525,11 +4547,11 @@ function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | n
   return path === null ? null : { kind: 'path', path, recorded: false };
 }
 
-/** The class the receiving seat reads under once its recorded address is known to be gone: the
- *  socket is no evidence of a way to wake the seat any more, so the words say what will actually
- *  reach it — its runtime queue, its next turn, or nothing. A record that cannot be read keeps
- *  the class the launch line the registry carries implies. */
-function classWithoutGoneSocket(to: Aim): DeliveryClass {
+/** The class the receiving seat reads under once the walk proved its socket unusable: the socket
+ *  is no evidence of a way to wake the seat any more, so the words say what will actually reach
+ *  it — its runtime queue, its next turn, or nothing. A record that cannot be read keeps the
+ *  class the launch line the registry carries implies. */
+function classWithoutSocket(to: Aim): DeliveryClass {
   let record: Pick<SeatState, 'cli' | 'launch_line' | 'watcher' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
     record = readState(to.dir).sessions[to.session]?.seats[to.seat];
@@ -4562,7 +4584,7 @@ function noSocketReason(host: SendHost): string {
 }
 
 function staleSocketReason(to: Aim, path: string): string {
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${deliveryWords(classWithoutGoneSocket(to), to.seat)}`;
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${deliveryWords(classWithoutSocket(to), to.seat)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the

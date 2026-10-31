@@ -233,6 +233,7 @@ async function pass(
     seat: placed.seat,
     ...(declaredSeat === undefined ? {} : { declared: declaredSeat }),
     ...(stateSeat === undefined ? {} : { state: stateSeat }),
+    ...(sources.home === undefined ? {} : { home: sources.home }),
   }).class;
   // The seat's own pause: `team pause <seat>` stops this seat alone, while the rest of the team
   // keeps claiming. It is read after the seat is placed, because the record is keyed by the

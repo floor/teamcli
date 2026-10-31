@@ -15,6 +15,8 @@ import {
   type DeliveryFacts,
 } from '../src/launch/delivery-class.ts';
 import { DELIVERY_CLASSES, profileFor } from '../src/profiles/profile.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf } from '../src/registry/teams.ts';
 
 const FACTS: DeliveryFacts = {
   declared: 'push',
@@ -113,8 +115,9 @@ describe('a seat read from its records', () => {
 
   const read = (input: {
     seat?: string;
-    declared?: { cli: string; launch: string; human?: true };
+    declared?: { cli: string; launch: string; human?: true; inbound?: 'accept' | 'hold' | 'refuse' };
     state?: Parameters<typeof seatDeliveryClass>[0]['state'];
+    home?: string;
   }) => seatDeliveryClass({
     dir,
     root: dir,
@@ -122,7 +125,33 @@ describe('a seat read from its records', () => {
     seat: input.seat ?? 'helper',
     ...(input.declared === undefined ? {} : { declared: input.declared }),
     ...(input.state === undefined ? {} : { state: input.state }),
+    ...(input.home === undefined ? {} : { home: input.home }),
   });
+
+  /** The launch a socket seat leaves behind: generated settings that declare accept, a registry
+   *  record that names a socket address, and the socket file itself. The settings are written
+   *  first and the socket after, so the socket does not predate its declaration. */
+  function socketSeat(seat = 'helper'): { home: string; socket: string } {
+    const home = join(dir, 'home');
+    mkdirSync(join(dir, 'hooks', 'acme'), { recursive: true });
+    writeFileSync(join(dir, 'hooks', 'acme', `${seat}.json`), '{"crossSessionInbound":"accept"}\n');
+    const socket = join(dir, `${seat}.sock`);
+    writeFileSync(socket, '');
+    registerAgent(home, {
+      name: seat,
+      signing: { model: 'Test', version: '1', role: 'builder' },
+      lab: 'test-lab',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamIdOf(dir), seat, session: 'acme', pane: 'fixture-pane-9', address: socket },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    return { home, socket };
+  }
 
   test('a claude seat with its hook and no adapter is pull-on-turn, and says so', () => {
     const read_ = read({
@@ -152,15 +181,66 @@ describe('a seat read from its records', () => {
     expect(read_.words).toBe('woken through its event adapter');
   });
 
-  test('an accepted cross-session socket makes the seat push without any channel', () => {
-    mkdirSync(join(dir, 'hooks', 'acme'), { recursive: true });
-    writeFileSync(join(dir, 'hooks', 'acme', 'helper.json'), '{"crossSessionInbound":"accept"}\n');
+  test('an accepted cross-session socket with a recorded, standing address makes the seat push without any channel', () => {
+    const { home } = socketSeat();
     const read_ = read({
       declared: { cli: 'claude-code', launch: 'claude' },
       state: { cli: 'claude-code', watcher: 'hook' },
+      home,
     });
     expect(read_.evidence.socket).toBe(true);
     expect(read_.class).toBe('push');
+  });
+
+  test('a socket the launch accepts but whose recorded address is gone is no evidence: pull-on-turn', () => {
+    const { home, socket } = socketSeat();
+    rmSync(socket, { force: true });
+    const read_ = read({
+      declared: { cli: 'claude-code', launch: 'claude' },
+      state: { cli: 'claude-code', watcher: 'hook' },
+      home,
+    });
+    expect(read_.evidence.socket).toBe(false);
+    expect(read_.class).toBe('pull-on-turn');
+    expect(wakeableWhileIdle(read_.class)).toBe(false);
+  });
+
+  test('the team file’s own inbound word keeps the socket out however the launch declares it', () => {
+    const { home } = socketSeat();
+    for (const word of ['hold', 'refuse'] as const) {
+      const read_ = read({
+        declared: { cli: 'claude-code', launch: 'claude', inbound: word },
+        state: { cli: 'claude-code', watcher: 'hook' },
+        home,
+      });
+      expect(read_.evidence.socket).toBe(false);
+      expect(read_.class).toBe('pull-on-turn');
+    }
+    const accepted = read({
+      declared: { cli: 'claude-code', launch: 'claude', inbound: 'accept' },
+      state: { cli: 'claude-code', watcher: 'hook' },
+      home,
+    });
+    expect(accepted.evidence.socket).toBe(true);
+    expect(accepted.class).toBe('push');
+  });
+
+  test('an accepted declaration with no recorded address proves no socket, with or without a home', () => {
+    socketSeat();
+    const noRecord = read({
+      declared: { cli: 'claude-code', launch: 'claude' },
+      state: { cli: 'claude-code', watcher: 'hook' },
+    });
+    expect(noRecord.evidence.socket).toBe(false);
+    expect(noRecord.class).toBe('pull-on-turn');
+    // A caller that cannot name the registry home reads no record either: never a guess.
+    const noHome = read({
+      declared: { cli: 'claude-code', launch: 'claude' },
+      state: { cli: 'claude-code', watcher: 'hook' },
+      home: undefined,
+    });
+    expect(noHome.evidence.socket).toBe(false);
+    expect(noHome.class).toBe('pull-on-turn');
   });
 
   test('a held socket is not evidence, and the seat stays pull-on-turn', () => {
