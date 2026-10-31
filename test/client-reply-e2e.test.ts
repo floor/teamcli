@@ -122,19 +122,19 @@ test('a seat answers a client thread and the client reads and acks the reply', a
   const inbox = clientInboxFolder(w.root, 'acme', 'grok-bot');
   expect(readdirSync(inbox)).toContain(REPLY);
 
-  const read = testIo(w.root);
+  const read = testIo(w.root, { kind: 'owner' });
   const shown = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--json'], read, { home: w.home, now });
   expect(read.err).not.toMatch(/refused|cannot|invalid/);
   expect(shown).toBe(0);
   expect(read.out).toContain('all green, shipping today');
   expect(read.out).toContain(REPLY);
 
-  const ack = testIo(w.root);
+  const ack = testIo(w.root, { kind: 'owner' });
   const acked = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--ack', REPLY], ack, { home: w.home, now });
   expect(ack.err).not.toMatch(/refused|cannot|invalid/);
   expect(acked).toBe(0);
 
-  const again = testIo(w.root);
+  const again = testIo(w.root, { kind: 'owner' });
   expect(await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--since', REPLY], again, { home: w.home, now })).toBe(0);
   expect(again.out).not.toContain('all green, shipping today');
 });

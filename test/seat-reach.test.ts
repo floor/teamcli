@@ -55,8 +55,8 @@ function seatOf(name: string, text: string = teamText()): TeamFile['seats'][numb
 
 describe('a seat\'s reach grant', () => {
   test('reads as written, and a seat without one carries none', () => {
-    const granted = seatOf('iris', teamText('    reach:\n      to: [grokbot]\n      alias: iris-x\n      route: floor-20\n      key_id: seat-iris-1\n      guard_dir: /Users/x/guard-floor-iris\n'));
-    expect(granted.reach).toEqual({ to: ['grokbot'], alias: 'iris-x', route: 'floor-20', keyId: 'seat-iris-1', guardDir: '/Users/x/guard-floor-iris' });
+    const granted = seatOf('iris', teamText('    reach:\n      to: [grokbot]\n      alias: iris-x\n      route: session-20\n      key_id: seat-iris-1\n      guard_dir: /home/x/guard-floor-iris\n'));
+    expect(granted.reach).toEqual({ to: ['grokbot'], alias: 'iris-x', route: 'session-20', keyId: 'seat-iris-1', guardDir: '/home/x/guard-floor-iris' });
     const bare = seatOf('iris', teamText(REACH));
     expect(bare.reach).toEqual({ to: ['grokbot'] });
     expect(seatOf('lead', teamText(REACH)).reach).toBeUndefined();

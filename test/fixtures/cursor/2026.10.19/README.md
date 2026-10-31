@@ -2,7 +2,7 @@
 
 This folder holds one screen, the composer's ready frame at `v2026.10.19-6bbf2c4`. It is a
 derivative of the single read-only pane capture the orchestrator made on 2026-10-22 at
-02:21:27Z, authorized by Atlas at 02:17:41Z (source visible, text format, exit 0, empty
+02:21:27Z, authorized by Reviewer at 02:17:41Z (source visible, text format, exit 0, empty
 stderr). It is not the builder's own native capture: the builder neither read a pane nor
 reproduced the screen. The raw result is retained privately outside this repository at mode
 0600, 1,794 bytes, SHA-256

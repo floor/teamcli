@@ -14,6 +14,8 @@ const TEAM_FILE = join(ROOT, '.github', 'team.yaml');
 
 /** A ticket id no policy names, built from parts so this file never matches its own check. */
 const TICKET = ['FL', 'O-', '77', '0'].join('');
+/** The id the boundary near-miss controls use, built from parts for the same reason. */
+const NEAR = ['FL', 'O-', '77'].join('');
 /** The declared pattern's source, also built from parts. */
 const TRACKER = ['\\bFL', 'O-[0-9]+\\b'].join('');
 /** A session-shaped name and a synthetic pane id the tests use as data. */
@@ -92,7 +94,7 @@ test('clean prose, a hash and a public issue reference pass', () => {
       '// naïve café, 日本語, an emoji',
       `const digest = '${'a'.repeat(64)}';`,
       '// see #123 for the public issue',
-      '// xFLO-77, FLO- and FLO-77x are near misses, never a ticket id',
+      `// x${NEAR}, FLO- and ${NEAR}x are near misses, never a ticket id`,
     ].join('\n') + '\n',
   });
   const result = run(root);

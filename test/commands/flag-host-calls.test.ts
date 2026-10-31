@@ -281,7 +281,7 @@ describe('status: --session for a non-owner', () => {
     };
     const io = testIo(root);
     io.callerSources = underHerdr(calls);
-    const code = await runStatus(['--session', 'team-test'], io, sources);
+    const code = await runStatus(['--session', 'sandbox'], io, sources);
     expect(code).toBe(1);
     expect(io.out).toBe('');
     expect(io.err).toBe(
@@ -310,11 +310,11 @@ describe('doctor: --session for a non-owner', () => {
       home,
     };
     const io = testIo(root, { kind: 'seat', name: 'worker', pane: 'w3:p1' });
-    const code = await runDoctor(['--session', 'team-test'], io, sources);
+    const code = await runDoctor(['--session', 'sandbox'], io, sources);
     expect(code).toBe(0);
     // The aimed session is the one asked about, and the report names it.
-    expect(asked).toEqual(['team-test']);
-    expect(io.out).toContain('session team-test is not running');
+    expect(asked).toEqual(['sandbox']);
+    expect(io.out).toContain('session sandbox is not running');
     // Doctor writes nothing beside the file it read.
     expect(existsSync(stateFile)).toBe(false);
   });

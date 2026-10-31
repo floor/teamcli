@@ -1,6 +1,6 @@
 import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The registry MVP's acceptance scenes (design-registry-mvp.md, §Acceptance), test-first:
-// (a) an agy seat — a CLI with no SendMessage — sends to the main coordinator by `name@team`,
+// (a) an agy seat — a CLI with no SendMessage — sends to the lead coordinator by `name@team`,
 //     and the drop the receiver is pointed at names the sender's agent id and the rule that
 //     admitted it;
 // (b) an orchestrator reaches another team's orchestrator by `name@team`, no guessing: two
@@ -286,7 +286,7 @@ function boxCli(swallow: number, after: 'empty' | 'suggestion' = 'empty'): BoxCl
   return cli;
 }
 
-describe('an agy seat sends to the main coordinator', () => {
+describe('an agy seat sends to the lead coordinator', () => {
   test('the drop record carries its agent id and its headline the readable name before the body, and the pane is never typed; was: the drop record carries its agent id, and its headline the readable name, before the body', async () => {
     const world = sendWorld({
       floor: {

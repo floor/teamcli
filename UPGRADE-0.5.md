@@ -186,7 +186,7 @@ points at the drop file while it is still there, and asks the sender to send it 
 Who may send to whom is a rule table: a seat to its own team's orchestrator, a team's leads to its
 own seats, a lead to another team's lead inside the same entity — cross-entity refused — an
 owner-signed grant last — and a seat the file marks `assistant: true` is admitted to its entity's
-main coordinator.
+lead coordinator.
 
 ## What else is new
 

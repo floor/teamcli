@@ -36,13 +36,13 @@ function why(check: ReturnType<typeof checkConfigValue>): string {
 describe('a key no policy governs', () => {
   test('is admitted while the chain resolves', () => {
     expect(checkConfigValue('effort', 'high', OPEN)).toEqual({ ok: true });
-    expect(checkConfigValue('nickname', 'Atlas', OPEN)).toEqual({ ok: true });
+    expect(checkConfigValue('nickname', 'Reviewer', OPEN)).toEqual({ ok: true });
     expect(checkConfigValue('human', true, OPEN)).toEqual({ ok: true });
   });
 
   test('is admitted even when the chain does not resolve, because no limit was expected', () => {
     expect(checkConfigValue('effort', 'high', BROKEN)).toEqual({ ok: true });
-    expect(checkConfigValue('nickname', 'Atlas', BROKEN)).toEqual({ ok: true });
+    expect(checkConfigValue('nickname', 'Reviewer', BROKEN)).toEqual({ ok: true });
   });
 
   test('the model is unconstrained until the model policy ships, and the answer says so', () => {

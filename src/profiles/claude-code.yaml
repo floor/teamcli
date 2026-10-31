@@ -284,7 +284,7 @@ screen:
     prompt: '^[❯›>]'
     # The box's two rules, as unsent-typed-ansi.txt draws them: one unbroken run of ─ from the
     # pane's first column, the closing rule the window's last rule row. The opening rule may
-    # carry a right-aligned label in its run, as Atlas's retained RC2 capture of builder-7 (an
+    # carry a right-aligned label in its run, as Reviewer's retained RC2 capture of builder-7 (an
     # installed 0.5.4-rc.2 on source 4e50561d; CLI version unknown) draws
     # `──── … ──── builder-7 ─` over an empty box, so the run may hold one label; the two rules
     # still compare at one width. The label and the run after it are one optional group: a flat

@@ -1,4 +1,4 @@
-❯ /Users/example/.local/bin/muse --no-session-log
+❯ /home/example/.local/bin/muse --no-session-log
 Do you trust this workspace?
 Workspace:
 <workspace>

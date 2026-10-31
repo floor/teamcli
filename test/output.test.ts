@@ -66,11 +66,11 @@ describe('src/output/ — context line and tables', () => {
     expect(pluralCount(4, 'seat')).toBe('4 seats');
     expect(pluralCount(1, 'task')).toBe('1 task');
 
-    expect(displayPath('/Users/alice/.config/team/lobbies/acme', '/Users/alice')).toBe('~/.config/team/lobbies/acme');
-    expect(displayPath('the lobby /Users/alice/.config/team/lobby is not in trust', '/Users/alice')).toBe(
+    expect(displayPath('/home/alice/.config/team/lobbies/acme', '/home/alice')).toBe('~/.config/team/lobbies/acme');
+    expect(displayPath('the lobby /home/alice/.config/team/lobby is not in trust', '/home/alice')).toBe(
       'the lobby ~/.config/team/lobby is not in trust',
     );
-    expect(displayPath('/Users/alice_other/work', '/Users/alice')).toBe('/Users/alice_other/work');
+    expect(displayPath('/home/alice_other/work', '/home/alice')).toBe('/home/alice_other/work');
   });
 
   test('renderTable prints uppercase headers, aligns on cleaned text, uses "-" for empty cells, and supports indent: ""', () => {
@@ -162,7 +162,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
       'proc dev-server: builder-1 since 2026-10-17T10:00:00Z, pid 1234',
     ]);
     expect(renderNotes(['codex-acme: version unread'])).toEqual(['note: codex-acme: version unread']);
-    expect(renderNotes(['lobby at /Users/alice/.config/team/lobby'], { home: '/Users/alice' })).toEqual([
+    expect(renderNotes(['lobby at /home/alice/.config/team/lobby'], { home: '/home/alice' })).toEqual([
       'note: lobby at ~/.config/team/lobby',
     ]);
   });
@@ -236,7 +236,7 @@ describe('src/output/ — note collapsing, differences, severity, deprecation, a
     expect(renderFinding({ level: 'note', text: 'session beacon is running' })).toBe('note  session beacon is running');
     expect(renderFinding({ level: 'warn', text: 'older herdr' })).toBe('warn  older herdr');
     expect(renderFinding({ level: 'miss', text: 'install herdr' })).toBe('MISS  install herdr');
-    assertCleanHumanOutput('note  session beacon is running\nno differences\n', { home: '/Users/alice' });
+    assertCleanHumanOutput('note  session beacon is running\nno differences\n', { home: '/home/alice' });
 
     expect(formatDeprecationWarning({ line: 3, message: '`coordinator:` is now `leads: true`' })).toBe(
       'warning: the file, line 3: `coordinator:` is now `leads: true`',
@@ -1218,14 +1218,14 @@ describe('src/output/ — JSON envelope, error writer, and schema validation', (
           format: 1 as const,
           dry_run: false,
           status: 'updated' as const,
-          action_summary: 'settings: set nickname=Atlas at seat (claude-keeper)',
+          action_summary: 'settings: set nickname=Reviewer at seat (claude-keeper)',
           project: 'beacon',
           session: 'beacon',
           level: 'seat' as const,
           target: 'agt_000000000000',
           seat: 'claude-keeper',
           settings: [
-            { key: 'nickname', value: 'Atlas', old: null, applies: 'at-once' },
+            { key: 'nickname', value: 'Reviewer', old: null, applies: 'at-once' },
           ],
         }),
       ],

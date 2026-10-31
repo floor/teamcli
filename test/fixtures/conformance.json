@@ -2115,7 +2115,7 @@
       "provenance": "capture"
     },
     {
-      "file": "cursor/2026.10.22/rules-unsent-reviewer-cursor.txt",
+      "file": "cursor/2026.10.22/rules-unsent-reviewer-agent.txt",
       "cli": "cursor",
       "classify": "unsent",
       "composer": "unsent",

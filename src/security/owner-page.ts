@@ -1,5 +1,5 @@
 // The owner page: a tiny WebAuthn page served by `team owner-seat serve` on 127.0.0.1, so the
-// owner never types a command. Iris starts the server and sends the link; the owner opens it in
+// owner never types a command. The orchestrator starts the server and sends the link; the owner opens it in
 // the Mac's browser and approves with a passkey: Touch ID on the Mac, or the iPhone through the
 // browser's "use a phone" QR code (hybrid transport). The relying party is `localhost`, a secure
 // context for WebAuthn without a certificate.
@@ -186,7 +186,7 @@ export function ownerPageHandler(options: OwnerPageOptions & { port: number; tok
   const routes: Record<string, (body: Record<string, unknown>) => { status: number; body: unknown }> = {
     'GET /api/state': () => ({ status: 200, body: state() }),
     'POST /api/register/options': () => {
-      if (readOwnerSeat(home) === null) return { status: 409, body: { error: 'no owner seat yet: Iris runs team owner-seat setup first' } };
+      if (readOwnerSeat(home) === null) return { status: 409, body: { error: 'no owner seat yet: the orchestrator runs team owner-seat setup first' } };
       const challenge = randomBytes(32).toString('base64url');
       registrations.set(challenge, now().getTime());
       return { status: 200, body: { challenge, rp_id: OWNER_PAGE_RP_ID, user_id: randomBytes(16).toString('base64url') } };
@@ -354,7 +354,7 @@ export function serveOwnerPage(options: OwnerPageOptions): Promise<{ server: Ser
   });
 }
 
-/** Fingerprint shown on the page so the owner can match it with what Iris said. */
+/** Fingerprint shown on the page so the owner can match it with what the orchestrator said. */
 export function challengeWords(challenge: string): string {
   return createHash('sha256').update(challenge).digest('hex').slice(0, 8);
 }
@@ -408,7 +408,7 @@ async function load() {
   const cards = document.getElementById('cards'); cards.innerHTML = '';
   const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const card = (html) => { const d = document.createElement('div'); d.className = 'card'; d.innerHTML = html; cards.appendChild(d); return d; };
-  if (!S.seat) { card('No owner seat yet. Ask Iris to run setup.'); return; }
+  if (!S.seat) { card('No owner seat yet. Ask the orchestrator to run setup.'); return; }
   const hasPasskey = S.seat.signers.some(s => s.type === 'webauthn');
   const reg = card('<b>Passkey</b>: ' + (hasPasskey ? 'saved.' : 'none yet.') + '<br><button>Add a passkey (iPhone or Mac)</button>'); reg.querySelector('button').onclick = run(register);
   if (S.proposal && hasPasskey) { const d = card('<b>Proposed security profile</b>: ' + esc(S.proposal.profile) + ' until ' + esc(S.proposal.expires) + '<br><button>Approve with my passkey</button>'); d.querySelector('button').onclick = run(signProfile); }

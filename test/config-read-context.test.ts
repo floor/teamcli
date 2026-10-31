@@ -164,7 +164,7 @@ delivery_order: [mcp-inbox, typed]
 seats:
   - role: coordinator
     name: lead
-    nickname: Atlas
+    nickname: Reviewer
     effort: high
     label: lead
     cli: claude-code

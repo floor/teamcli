@@ -321,8 +321,8 @@ describe('Codex launch and captured screens', () => {
     };
     expectResume(flagged, `AGENT_UNATTENDED=1 ${flagged} resume ${id} ${tail}`);
     expectResume(
-      `zsh /Users/owner/as-floor.sh ${flagged}`,
-      `AGENT_UNATTENDED=1 zsh /Users/owner/as-floor.sh ${flagged} resume ${id} ${tail}`,
+      `zsh /home/owner/as-floor.sh ${flagged}`,
+      `AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh ${flagged} resume ${id} ${tail}`,
     );
     expectResume(
       `zsh -lc "${flagged}"`,

@@ -16,7 +16,7 @@ describe('a seat that writes every setting', () => {
   const seat: ConfigSeatInput = {
     model: 'claude-opus-5-5',
     effort: 'high',
-    nickname: 'Atlas',
+    nickname: 'Reviewer',
     human: true,
     deliveryOrder: ['mcp-inbox', 'typed'],
   };
@@ -28,7 +28,7 @@ describe('a seat that writes every setting', () => {
   test('the values are the seat entry\'s own', () => {
     expect(row(seat, ['drop'], 'model').value).toBe('claude-opus-5-5');
     expect(row(seat, ['drop'], 'effort').value).toBe('high');
-    expect(row(seat, ['drop'], 'nickname').value).toBe('Atlas');
+    expect(row(seat, ['drop'], 'nickname').value).toBe('Reviewer');
     expect(row(seat, ['drop'], 'delivery_order').value).toEqual(['mcp-inbox', 'typed']);
     expect(row(seat, ['drop'], 'human').value).toBe(true);
   });
@@ -147,7 +147,7 @@ describe('signed records', () => {
   const seat: ConfigSeatInput = {
     model: 'Claude Opus',
     effort: 'high',
-    nickname: 'Atlas',
+    nickname: 'Reviewer',
     human: true,
     deliveryOrder: ['typed'],
   };
@@ -167,7 +167,7 @@ describe('signed records', () => {
     const fileWins = composeSeatConfig(seat, ['drop'], {
       nickname: { level: 'team', value: 'team-name' },
     }).find((entry) => entry.key === 'nickname')!;
-    expect(fileWins.value).toBe('Atlas');
+    expect(fileWins.value).toBe('Reviewer');
     expect(fileWins.origin).toBe('team file');
 
     const recordWins = composeSeatConfig(BARE, ['drop'], {

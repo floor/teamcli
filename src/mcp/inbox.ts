@@ -35,7 +35,9 @@ import { readState } from '../state.ts';
 import {
   isRead,
   readRecord,
+  readSealedRecord,
   receiptFile,
+  recordAuthOfSealed,
   signReceiptPayload,
   verifyRecord,
   type ReceiptPayload,
@@ -452,7 +454,7 @@ export function legacyDropAt(path: string): boolean {
  *  of the checks the read makes; the object is the record's id, the seat whose inbox it holds,
  *  and its path. A missing file or a bad id is not a refusal of a record and carries none. */
 export type InboxRefusal = {
-  rule: 'shape' | 'seat' | 'session' | 'root' | 'key' | 'signature';
+  rule: 'shape' | 'seat' | 'session' | 'root' | 'key' | 'signature' | 'unsupported';
   id: string;
   seat: string;
   path: string;
@@ -521,12 +523,36 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
     reason,
     refusal: { rule, id, seat: target.seat, path: at },
   });
-  const looked = readRecord(at, id);
+  const looked = readSealedRecord(at);
   if (!looked.ok) {
     return refused('shape', `message ${JSON.stringify(id)} is not a signed record: ${looked.reason}`);
   }
-  if (looked.record === null) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const payload = looked.record.payload;
+  if (looked.sealed === null) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') {
+    return refused(
+      'key',
+      key.kind === 'unreadable' ? `the message key is unreadable: ${key.why}` : 'no message key; nothing was shown',
+    );
+  }
+  // The signature covers the complete raw payload before any field is projected or read: an
+  // unsigned field inserted after signing is `tampered`, and a signed field this version does
+  // not read is `unsupported`. Both refuse with no body and no receipt; the unsupported refusal
+  // is on its own ground, never reported as a signature failure.
+  const auth = recordAuthOfSealed(looked.sealed, key.key);
+  if (auth.kind === 'shape') {
+    return refused('shape', `message ${JSON.stringify(id)} is not a signed record`);
+  }
+  if (auth.kind === 'tampered') {
+    return refused('signature', `message ${JSON.stringify(id)} does not verify against this message key`);
+  }
+  if (auth.kind === 'unsupported') {
+    return refused('unsupported', `message ${JSON.stringify(id)} is signed, and this version cannot read it: ${auth.reason}`);
+  }
+  const payload = auth.value.payload;
+  if (payload.id !== id) {
+    return refused('shape', `message ${JSON.stringify(id)} is not the record at that name`);
+  }
   if (payload.to !== target.seat) {
     return refused('seat', `message ${JSON.stringify(id)} is not addressed to this inbox`);
   }
@@ -535,16 +561,6 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
   }
   if (!sameRoot(payload.root, target.root)) {
     return refused('root', `message ${JSON.stringify(id)} is bound to another checkout`);
-  }
-  const key = messageKeyState(home);
-  if (key.kind !== 'key') {
-    return refused(
-      'key',
-      key.kind === 'unreadable' ? `the message key is unreadable: ${key.why}` : 'no message key; nothing was shown',
-    );
-  }
-  if (!verifyRecord(looked.record, key.key)) {
-    return refused('signature', `message ${JSON.stringify(id)} does not verify against this message key`);
   }
   // The launch's own record is served only as the seat's current brief. The claim is resolved
   // again directly before the receipt so a delivery that landed during this read is noticed.
@@ -634,7 +650,11 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
       ...(servedClaim?.pane_root_pid === undefined ? {} : { brief_pane_root_pid: servedClaim.pane_root_pid }),
     }),
   };
-  const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home), null, 2)}\n`);
+  // The signed writer provenance names the runtime this reader ran under: the launch's epoch,
+  // or — for a manual read — the claim it served. It is never the key's own generation.
+  const writerEpoch = brief?.epoch ?? binding?.epoch;
+  const signedReceipt = signReceiptPayload(receipt, home, writerEpoch === undefined ? undefined : { epoch: writerEpoch });
+  const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
   if (published === 'exists') {
     // A rival won the name between the check and this link. Its receipt is the single serving of
     // this id: verify it, and never replace it. If it does not verify, the name is uncertain and

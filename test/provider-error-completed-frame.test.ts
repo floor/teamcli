@@ -1,4 +1,4 @@
-// Atlas's retained RC2 frame, captured 2026-10-22T03:01:25Z from a seat running installed
+// Reviewer's retained RC2 frame, captured 2026-10-22T03:01:25Z from a seat running installed
 // TeamCLI 0.5.4-rc.2 (source 4e50561d46a29e0452908fece2a2573cb8f93124). The pane shows no CLI
 // version marker, so the CLI's own version is unknown. The seat's turn printed the CLI's
 // connection-lost sentence and then ended; the composer under the transcript was empty. The

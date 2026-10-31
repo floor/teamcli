@@ -66,7 +66,7 @@ describe('the team file the run drives', () => {
     const text = teamFile({ coordinator: 'bash -c run-fake-1', worker: 'bash -c run-fake-2' });
     const result = validateTeamFile(text);
     if (!result.ok) throw new Error(JSON.stringify(result.errors));
-    expect(result.team.session).toBe('team-test-e2e');
+    expect(result.team.session).toBe('sandbox-e2e');
     expect(result.team.seats.map((seat) => seat.name)).toEqual(['fake-coordinator', 'fake-work']);
     // Its machine limits are wide open: the gate is the script's own, read before anything runs.
     expect(result.team.machine.loadStart).toBe(60);

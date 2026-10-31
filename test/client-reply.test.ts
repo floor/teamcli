@@ -66,7 +66,7 @@ function world(inbox: boolean) {
   const teamId = teamIdOf(root);
   const agent = (seat: string, role: string) => registerAgent(home, {
     name: seat, signing: { model: 'Claude Opus', version: '5.5', role }, lab: 'test', cli: 'claude-code', launcher: null, launch: 'true',
-    reach: { team: teamId, seat, session: 'acme', pane: seat === 'orchestrator' ? 'w1:p1' : 'w1:p2', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
+    reach: { team: teamId, seat, session: 'acme', pane: seat === 'orchestrator' ? 'fixture:lead' : 'fixture:worker', address: null }, mcp: [], skills: [], lifecycle: 'running', by: 'test',
   });
   const orch = agent('orchestrator', 'orchestrator');
   const builder = agent('builder', 'builder');
@@ -76,7 +76,7 @@ function world(inbox: boolean) {
     lifecycle: 'running',
   });
   updateState(join(root, '.agents'), (state) => {
-    state.sessions.acme = { seats: { orchestrator: { stage: 'ready' as const, pane: 'w1:p1' }, builder: { stage: 'ready' as const, pane: 'w1:p2' } } } as never;
+    state.sessions.acme = { seats: { orchestrator: { stage: 'ready' as const, pane: 'fixture:lead' }, builder: { stage: 'ready' as const, pane: 'fixture:worker' } } } as never;
   });
   const pair = newClientKeyPair();
   const keyDir = clientKeyDir(home, 'grok-bot');
@@ -100,14 +100,16 @@ async function clientSend(w: World, text: string) {
 }
 
 async function seatReply(w: World, seat: string, id: string, text: string) {
-  const pane = seat === 'orchestrator' ? 'w1:p1' : 'w1:p2';
+  const pane = seat === 'orchestrator' ? 'fixture:lead' : 'fixture:worker';
   const io = testIo(w.root, { kind: 'seat', name: seat, pane, session: 'acme' });
   const code = await runReply([id, text, '--json'], io, { home: w.home, now: () => new Date(NOW.getTime() + 60_000), newId: nextId });
   return { code, out: io.out, err: io.err, json: io.out.trim().startsWith('{') ? JSON.parse(io.out) : null };
 }
 
 async function clientRead(w: World, extra: string[] = []) {
-  const io = testIo(w.root);
+  // Model the client's own external caller, as clientSend already does. An omitted caller
+  // invokes the real parent-process walk and inherits the host running this synthetic suite.
+  const io = testIo(w.root, { kind: 'owner' });
   const code = await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--json', ...extra], io, { home: w.home, now: () => new Date(NOW.getTime() + 120_000) });
   return { code, out: io.out, err: io.err, json: io.out.trim().startsWith('{') ? JSON.parse(io.out) : null };
 }
@@ -115,9 +117,9 @@ async function clientRead(w: World, extra: string[] = []) {
 describe('a client sends, the recipient seat replies, the client reads the reply', () => {
   test('the full round trip, then the client acks it', async () => {
     const w = world(true);
-    const sent = await clientSend(w, 'Atlas, can you hear me?');
+    const sent = await clientSend(w, 'Reviewer, can you hear me?');
     expect(sent.code).toBe(0);
-    const reply = await seatReply(w, 'orchestrator', sent.id, 'Loud and clear, Iris.');
+    const reply = await seatReply(w, 'orchestrator', sent.id, 'Loud and clear, Assistant.');
     expect(reply.err).toBe('');
     expect(reply.code).toBe(0);
     expect(reply.json).toMatchObject({ status: 'replied', to: 'client:grok-bot', thread: sent.id });
@@ -125,7 +127,7 @@ describe('a client sends, the recipient seat replies, the client reads the reply
     const read = await clientRead(w);
     expect(read.err).not.toContain('refused');
     expect(read.code).toBe(0);
-    expect(JSON.stringify(read.json)).toContain('Loud and clear, Iris.');
+    expect(JSON.stringify(read.json)).toContain('Loud and clear, Assistant.');
     expect(read.json.rows).toHaveLength(1);
     expect(read.json.rows[0]).toMatchObject({ id: reply.json.record, from: 'orchestrator', to: 'client:grok-bot', status: 'shown' });
     const acked = await clientRead(w, ['--ack', reply.json.record]);
@@ -147,7 +149,7 @@ describe('the client follows its thread', () => {
   test('--follow prints a reply as soon as a read finds it, once, and only new ones after', async () => {
     const w = world(true);
     const sent = await clientSend(w, 'follow me');
-    const io = testIo(w.root);
+    const io = testIo(w.root, { kind: 'owner' });
     let reads = 0;
     let firstId = '';
     const sources = {
@@ -173,9 +175,9 @@ describe('the client follows its thread', () => {
 
   test('--follow refuses --ack and stops with the read\'s own refusal', async () => {
     const w = world(true);
-    const io = testIo(w.root);
+    const io = testIo(w.root, { kind: 'owner' });
     expect(await runMessages(['--client', w.grantPath, '--key', w.keyPath, '--follow', '--ack', 'x'], io, { home: w.home, now: () => NOW })).toBe(2);
-    const bad = testIo(w.root);
+    const bad = testIo(w.root, { kind: 'owner' });
     const code = await runMessages(['--client', join(w.root, 'missing.json'), '--key', w.keyPath, '--follow'], bad, { home: w.home, now: () => NOW, followReads: 3, followWait: async () => {} });
     expect(code).not.toBe(0);
     expect(bad.err).toContain('follow stopped');
@@ -183,6 +185,40 @@ describe('the client follows its thread', () => {
 });
 
 describe('the reply is scoped by the grant; nothing widens it', () => {
+  test('a client read from a seat is still refused before grant or key access', async () => {
+    const w = world(true);
+    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'fixture:lead', session: 'acme' });
+    const code = await runMessages(['--client', join(w.base, 'missing-grant'), '--key', join(w.base, 'missing-key'), '--json'], io, { home: w.home, now: () => NOW });
+    expect(code).toBe(1);
+    expect(JSON.parse(io.out).error.code).toBe('messages.client-pane');
+    expect(io.out).not.toContain('client-grant');
+    expect(existsSync(clientInboxFolder(w.root, 'acme', 'grok-bot'))).toBe(false);
+  });
+
+  test('revocation between the initial check and publication prevents the reply', async () => {
+    const w = world(true);
+    const sent = await clientSend(w, 'synthetic publication freshness check');
+    expect(sent.code).toBe(0);
+    const io = testIo(w.root, { kind: 'seat', name: 'orchestrator', pane: 'fixture:lead', session: 'acme' });
+    let replyId = '';
+    const code = await runReply([sent.id, 'must not be published', '--json'], io, {
+      home: w.home,
+      now: () => new Date(NOW.getTime() + 60_000),
+      newId: () => {
+        const revoked = appendClientRevocation(w.home, w.grantId, { now: new Date(NOW.getTime() + 60_000), key: keyOf(w.home) });
+        expect(revoked.ok).toBe(true);
+        replyId = nextId();
+        return replyId;
+      },
+    });
+    expect(replyId).not.toBe('');
+    expect(code).toBe(1);
+    expect(io.out + io.err).toContain('nothing was written');
+    const inbox = clientInboxFolder(w.root, 'acme', 'grok-bot');
+    expect(existsSync(inbox) ? readdirSync(inbox) : []).not.toContain(replyId);
+    expect(io.out).not.toContain('must not be published');
+  });
+
   test('a send-only grant opens no conversation: the reply is refused and no inbox is written', async () => {
     const w = world(false);
     const sent = await clientSend(w, 'send only');

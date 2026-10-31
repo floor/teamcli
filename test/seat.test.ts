@@ -30,7 +30,7 @@ delivery_order: [mcp-inbox, typed]
 seats:
   - role: coordinator
     name: lead
-    nickname: Atlas
+    nickname: Reviewer
     effort: high
     label: lead
     cli: claude-code
@@ -58,7 +58,7 @@ const START = {
   team: 'acme',
   project: 'acme',
   seat: 'lead',
-  nickname: 'Atlas',
+  nickname: 'Reviewer',
   cli: 'claude-code',
   lab: 'anthropic',
   model: 'Claude Opus',
@@ -170,7 +170,7 @@ describe('a seat with a conversation and a turn', () => {
       '  KEY             VALUE             SOURCE      APPLIES\n'
       + '  model           Claude Opus       team file   restart that resumes\n'
       + '  effort          high              team file   restart that resumes\n'
-      + '  nickname        Atlas             team file   at once\n'
+      + '  nickname        Reviewer          team file   at once\n'
       + '  delivery_order  mcp-inbox, typed  team order  at once\n'
       + '  human           false             default     at once\n'
       + '\n'
@@ -247,13 +247,13 @@ describe('--json', () => {
       settings: [
         { key: 'model', value: 'Claude Opus', source: 'team file', applies: 'restart-resume' },
         { key: 'effort', value: 'high', source: 'team file', applies: 'restart-resume' },
-        { key: 'nickname', value: 'Atlas', source: 'team file', applies: 'at-once' },
+        { key: 'nickname', value: 'Reviewer', source: 'team file', applies: 'at-once' },
         { key: 'delivery_order', value: ['mcp-inbox', 'typed'], source: 'team default', applies: 'at-once' },
         { key: 'human', value: false, source: 'default', applies: 'at-once' },
       ],
       status: {
         name: 'lead',
-        nickname: 'Atlas',
+        nickname: 'Reviewer',
         id: null,
         role: 'coordinator',
         cli: 'claude-code',
@@ -353,7 +353,7 @@ describe('a signed seat record', () => {
     });
     expect(doc.settings.find((entry) => entry.key === 'nickname')).toEqual({
       key: 'nickname',
-      value: 'Atlas',
+      value: 'Reviewer',
       source: 'team file',
       applies: 'at-once',
     });

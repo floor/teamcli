@@ -2527,12 +2527,12 @@ function tamperedSeatSetting(place: Place): void {
   scene('settings.set', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'settings: set nickname=Atlas at seat (lead)');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']), 'settings: set nickname=Reviewer at seat (lead)');
   });
   scene('settings.unset', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    const set = await settingsRun(place, ['set', 'lead', 'nickname=Atlas']);
+    const set = await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']);
     if (set.code !== 0) throw new Error(`the set before the unset failed: ${set.err}`);
     return show(await settingsRun(place, ['unset', 'lead', 'nickname']), 'settings: unset nickname at seat (lead)');
   });
@@ -2540,8 +2540,8 @@ function tamperedSeatSetting(place: Place): void {
     write(place, TEAM);
     registeredSeat(place);
     return show(
-      await settingsRun(place, ['set', 'lead', 'nickname=Atlas', '--dry-run']),
-      'settings: would set nickname=Atlas at seat (lead)',
+      await settingsRun(place, ['set', 'lead', 'nickname=Reviewer', '--dry-run']),
+      'settings: would set nickname=Reviewer at seat (lead)',
     );
   });
   scene('settings.key', async (place) => {
@@ -2565,7 +2565,7 @@ function tamperedSeatSetting(place: Place): void {
   scene('settings.not-owner', async (place) => {
     write(place, TEAM);
     registeredSeat(place);
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas'], other), 'only the owner sets a seat');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer'], other), 'only the owner sets a seat');
   });
   scene('settings.no-agent', async (place) => {
     write(place, TEAM);
@@ -2573,7 +2573,7 @@ function tamperedSeatSetting(place: Place): void {
     // where the agent registry belongs cannot hold it, and the refusal names that instead.
     mkdirSync(join(place.home, '.config', 'team'), { recursive: true });
     writeFileSync(join(place.home, '.config', 'team', 'agents'), 'not a directory');
-    return show(await settingsRun(place, ['set', 'lead', 'nickname=Atlas']), 'has no registered agent record');
+    return show(await settingsRun(place, ['set', 'lead', 'nickname=Reviewer']), 'has no registered agent record');
   });
   scene('settings.not-set', async (place) => {
     write(place, TEAM);

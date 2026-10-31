@@ -1,7 +1,7 @@
 // Independent S4 coverage: signed lead-drop aggregation and drain retry semantics
 // through the production `reportUnreadDrops(scene, { unreadAfter })` entrypoint.
 //
-// Author: operator-3 (Atalanta · operator 3)
+// Author: operator-3 (Seat Thirteen · operator 3)
 // All fixtures (team file, scratch checkout root, isolated home/store, signing keys,
 // registered agents, and signed unread drops) are authored in this file.
 

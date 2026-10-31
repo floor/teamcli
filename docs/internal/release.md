@@ -306,6 +306,6 @@ the message resolves — and a file that isn't there is the configuration refusa
 
 ```console
 $ team release check material@3.0.2 --file policy/team.yaml ; echo "exit $?"
-team release: /Users/you/Code/beacon/policy/team.yaml: no team file at policy/team.yaml
+team release: /home/you/Code/beacon/policy/team.yaml: no team file at policy/team.yaml
 exit 64
 ```

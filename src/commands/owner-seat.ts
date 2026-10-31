@@ -1,4 +1,4 @@
-// `team owner-seat`: the owner seat, run by an agent (Iris) on the owner's behalf. The owner never
+// `team owner-seat`: the owner seat, run by an agent (the orchestrator) on the owner's behalf. The owner never
 // types a command: every step that needs the owner ends in a native prompt on the owner's own
 // device (Touch ID from the Secure Enclave helper, or a passkey on the owner page), and that
 // signature is the authority, not the caller.

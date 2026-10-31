@@ -51,9 +51,10 @@ import {
 } from '../store/keys.ts';
 import {
   isRead,
+  recordAuthOfSealed,
   recordFile,
+  sealedRecordOf,
   signedRecordOf,
-  verifyRecord,
   type RecordPayload,
   type SignedRecord,
 } from '../send/record.ts';
@@ -307,12 +308,14 @@ export function listUnackedMessages(root: string, session: string, home: string)
       continue;
     }
     if (recordReadHeld(candidate, root, session, state.key)) continue;
-    const record = signedRecordOf(readJson(candidate.path));
-    if (record === null) continue;
-    const payload = record.payload;
+    const sealed = sealedRecordOf(readJson(candidate.path));
+    if (sealed === null) continue;
+    // The complete raw payload authenticates before any field this list would report is read.
+    const auth = recordAuthOfSealed(sealed, state.key);
+    if (auth.kind !== 'ok') continue;
+    const payload = auth.value.payload;
     if (payload.id !== candidate.id || payload.to !== candidate.seat) continue;
     if (payload.session !== (candidate.session ?? session) || !samePath(payload.root, root)) continue;
-    if (!verifyRecord(record, state.key)) continue;
     out.push({
       id: candidate.id,
       to: candidate.seat,
@@ -381,15 +384,25 @@ export function plantRecord(
   return path;
 }
 
-type Problem = { kind: 'shape' | 'id' | 'seat' | 'root' | 'session' | 'signature'; text: string };
+type Problem = { kind: 'shape' | 'id' | 'seat' | 'root' | 'session' | 'signature' | 'unsupported'; text: string };
 
 type Verified = { from: string; from_id: string | null; to: string; at: string; body: string };
 
 function recordProblem(candidate: Candidate, root: string, session: string, key: KeyObject): Problem | Verified {
   const where = `${candidate.seat}/${candidate.id}`;
-  const record = signedRecordOf(readJson(candidate.path));
-  if (record === null) return { kind: 'shape', text: `${where} does not verify: the record is not a message record` };
-  const payload = record.payload;
+  const sealed = sealedRecordOf(readJson(candidate.path));
+  if (sealed === null) return { kind: 'shape', text: `${where} does not verify: the record is not a message record` };
+  // Authentication covers the complete raw payload before a single field decides attribution:
+  // a record whose bytes were changed after signing is a signature refusal whatever its fields
+  // now claim, and a signed record carrying fields this version does not read is refused on
+  // that ground, never reported as a signature failure and never interpreted.
+  const auth = recordAuthOfSealed(sealed, key);
+  if (auth.kind === 'shape') return { kind: 'shape', text: `${where} does not verify: the record is not a message record` };
+  if (auth.kind === 'tampered') return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
+  if (auth.kind === 'unsupported') {
+    return { kind: 'unsupported', text: `${where} does not verify: it is signed, and this version cannot read it: ${auth.reason}` };
+  }
+  const payload = auth.value.payload;
   if (payload.id !== candidate.id) {
     return { kind: 'id', text: `${where} does not verify: its id is ${payload.id}, and the filename is the id` };
   }
@@ -401,9 +414,6 @@ function recordProblem(candidate: Candidate, root: string, session: string, key:
   }
   if (payload.session !== (candidate.session ?? session)) {
     return { kind: 'session', text: `${where} does not verify: it is bound to session ${JSON.stringify(payload.session)}` };
-  }
-  if (!verifyRecord(record, key)) {
-    return { kind: 'signature', text: `${where} does not verify: the signature is not the message key's` };
   }
   return { from: payload.from, from_id: payload.from_id, to: payload.to, at: payload.at, body: payload.body };
 }
@@ -589,6 +599,8 @@ function repairOf(candidate: Candidate, problem: Problem, payload: MessagePayloa
       return `remove ${path}: it is bound to another session`;
     case 'signature':
       return `remove ${path}, or have the sender re-send it`;
+    case 'unsupported':
+      return `upgrade team to read ${path}, or remove it and have the sender re-send it in this version's fields`;
     default:
       return `remove ${path}, or restore it from the sender`;
   }
