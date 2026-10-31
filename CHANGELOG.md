@@ -152,6 +152,12 @@ not a message) are unchanged.
   it is marked retired, its terminal is cleared, and its roster line goes, while its signed
   settings stay readable. `--keep`, which only stops the seat, keeps the record and its roster
   line for the seat to run again as the same agent.
+- **`team config set` and `unset` keep the record's comments.** Only the changed key's lines
+  are rewritten: an unset that empties a list leaves `[]` rather than regenerating the record, a
+  comment beside or inside a removed value stays where its line was, and a set that replaces a
+  whole section keeps the comments written inside it. A change the editor cannot address that
+  way rewrites the record whole, and the command says so on stderr, with `comments_kept: false`
+  in `--json`.
 
 ### Fixed
 
