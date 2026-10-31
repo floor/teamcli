@@ -288,6 +288,14 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   seconds for the run already holding it, so a restart that arrives while the watch is restoring
   is no longer turned away at the first reading. When the wait is spent it refuses with the
   holder's pid named and nothing stopped, rather than leaving a seat half-stopped.
+- **A restart or a refresh binds a seat's record only on proven continuity.** A restart's
+  relaunch binds the record to the seat state it just wrote. A refresh rewrites an existing
+  handle only when the pane's live processes are the ones the record's launch started — the
+  recorded shell with a recorded CLI pid in front; a pane holding another process is refused
+  (`register.replaced`), and an id another live seat's record of the team carries is refused
+  (`register.handle-held`). Both refusals name what they found and leave the record unchanged,
+  and a record that predates the process identity is not rebound at all: the refresh fills only
+  a handle it never had.
 
 ## [0.5.5] - 2026-10-26
 
