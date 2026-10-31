@@ -454,6 +454,9 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       return agent ? [[seat.name, agent.signing] as const] : [];
     })),
     continuityIds,
+    // The reach column reads the same gate the send walks: the seats' launch-effective settings
+    // and held-frame marks live under the state folder, relative launch paths under the root.
+    { dir, root },
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;

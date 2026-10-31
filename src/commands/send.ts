@@ -63,7 +63,8 @@ import { FRAME_LIMIT, SOCKET_SEND, sendFrame, type SendOutcome } from '../send/u
 import { frameFor, frameReplyFor, type FrameReply } from '../send/frame.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, recordHeldSocket,
-  socketEligible, socketHeldReason, socketSkipReason, type CrossSessionInbound, type InboundDeclaration,
+  socketEligible, socketHeldReason, socketIneligibleReason, socketSkipReason,
+  type CrossSessionInbound, type InboundDeclaration,
 } from '../send/inbound.ts';
 import type { DeliveryLeg, SettingLevel } from '../settings/inherit.ts';
 import { deliveryOrder } from '../settings/resolve.ts';
@@ -1948,21 +1949,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   }
   appendHistory(to.project, to.root, host.home, { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, ...historySender(report), body, id: msgId, thread: record.thread, outcome: 'unreachable', ms: host.now().getTime() - startedAt, ...(failures.length > 0 ? { failed: [...failures] } : {}) });
   return unreachable(io, dir, who, to.seat, why, host, report);
-}
-
-/** Why this run would not dial the socket leg, or null when it would. The checks are the walk's
- *  own, in its order, so a dry run never promises a socket the walk would refuse. */
-function socketIneligibleReason(
-  cli: string,
-  teamWord: CrossSessionInbound | undefined,
-  declaration: InboundDeclaration,
-  heldStanding: string | null,
-): string | null {
-  if (cli !== 'claude-code') return `${cli} sessions have no cross-session socket`;
-  if (!SOCKET_SEND) return 'this build does not carry the cross-session socket';
-  if (!socketEligible(teamWord, declaration)) return socketSkipReason(teamWord, declaration);
-  if (heldStanding !== null) return heldStanding;
-  return null;
 }
 
 /** Why the native leg cannot be walked for this receiver and sender, or null when it can. A

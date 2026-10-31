@@ -1,16 +1,21 @@
-// How a send would reach each seat, as `team status` shows it: the word is `socket` while the
-// seat's pane carries a live session socket, `typed` otherwise — for every seat that is not a
-// Claude Code one, for a pane that is gone, and for one herdr could not read. The plain table
-// prints it as its last column; the JSON row keeps the published shape it always had.
+// How a send would reach each seat, as `team status` shows it: the word is `socket` only while the
+// send's own gate admits the seat's socket — the receiving session's launch-effective settings
+// declare `crossSessionInbound: accept`, the team file authorizes the route, its box holds no
+// unconfirmed frame, and the pane carries a live session socket — and `typed` otherwise: another
+// CLI, a launch that does not admit the frame, a pane that is gone or one the terminal host could
+// not read. The plain table prints it as its last column; the JSON row keeps the published shape
+// it always had.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { verifiedOf } from '../src/approve/approval.ts';
 import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import type { Standing } from '../src/store/store.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { compare, type Live } from '../src/status/compare.ts';
@@ -69,11 +74,36 @@ function live(processes?: Record<string, PaneProcesses | null>): Live {
   };
 }
 
+// The comparison's own route input: the state folder and root `team status` reads the seat's
+// launch-effective settings and held-frame marks under.
+const route = () => ({ dir: join(dir, '.agents'), root: dir });
+
 function rows(live: Live, sockets: string | readonly string[] = socks) {
-  return compare(team, 'acme-web', emptySession(), live, NOW, team.watch, sockets).rows;
+  return compare(team, 'acme-web', emptySession(), live, NOW, team.watch, sockets, false, undefined, undefined, route()).rows;
 }
 
-test('a claude-code seat whose pane carries a live socket file reads socket', () => {
+/** The live world with the coordinator's own pane processes, keyed by the pane the fixture's own
+ *  agent names: a scene never writes a pane id of its own. */
+function coordinatorLive(): Live {
+  const world = live();
+  const pane = world.agents.find((one) => one.name === 'claude-coordinator-acme')?.pane ?? '';
+  return live({ [pane]: processes(SESSION_PID) });
+}
+
+/** This build's generated settings file for the seat, declaring `crossSessionInbound` as given.
+ *  Backdated so a socket written after it stands as the newer file (`inboundIsLive`). */
+function declareSeat(seat: string, policy: string | null = 'accept'): string {
+  const path = cliHookSettingsPath(join(dir, '.agents'), 'acme-web', seat);
+  if (path === null) throw new Error(`the fixture declares no settings path for ${seat}`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ crossSessionInbound: policy }));
+  const past = new Date(NOW.getTime() - 60_000);
+  utimesSync(path, past, past);
+  return path;
+}
+
+test('a claude-code seat whose launch admits a socket, and whose pane carries one, reads socket', () => {
+  declareSeat('claude-coordinator-acme');
   writeFileSync(join(socks, `${String(SESSION_PID)}.sock`), '');
   const found = rows(live({ 'w1:p1': processes(SESSION_PID) })).find((row) => row.name === 'claude-coordinator-acme');
   expect(found?.reach).toBe('socket');
@@ -82,6 +112,7 @@ test('a claude-code seat whose pane carries a live socket file reads socket', ()
 // The two folders discovery walks: the temp folder's own and `/tmp/cc-socks`, where this Mac's
 // sessions were seen to write while `tmpdir()` answered the per-user folder.
 test('a socket that sits only in the fallback folder also reads socket', () => {
+  declareSeat('claude-coordinator-acme');
   writeFileSync(join(altSocks, `${String(SESSION_PID)}.sock`), '');
   const found = rows(live({ 'w1:p1': processes(SESSION_PID) }), [socks, altSocks]).find((row) => row.name === 'claude-coordinator-acme');
   expect(found?.reach).toBe('socket');
@@ -89,6 +120,36 @@ test('a socket that sits only in the fallback folder also reads socket', () => {
 
 test('a claude-code seat with no socket file in its pane reads typed', () => {
   const found = rows(live({ 'w1:p1': processes(SESSION_PID) })).find((row) => row.name === 'claude-coordinator-acme');
+  expect(found?.reach).toBe('typed');
+});
+
+test('a socket with no accepting declaration behind it reads typed: the word is the send\'s own gate', () => {
+  // The pane carries a live socket, but the seat's effective settings declare nothing, so the send
+  // would never dial it. Status must not promise the route the walk refuses.
+  writeFileSync(join(socks, `${String(SESSION_PID)}.sock`), '');
+  const found = rows(coordinatorLive()).find((row) => row.name === 'claude-coordinator-acme');
+  expect(found?.reach).toBe('typed');
+});
+
+test('a seat whose settings declare hold reads typed though its pane carries a socket', () => {
+  declareSeat('claude-coordinator-acme', 'hold');
+  writeFileSync(join(socks, `${String(SESSION_PID)}.sock`), '');
+  const found = rows(coordinatorLive()).find((row) => row.name === 'claude-coordinator-acme');
+  expect(found?.reach).toBe('typed');
+});
+
+test('a seat whose box held a frame reads typed until its declaration is re-confirmed', () => {
+  // The send would not dial again on the same word, so the row says `typed`; rewriting the
+  // declaration (or restarting the host) is what puts the socket back in reach.
+  const settings = declareSeat('claude-coordinator-acme');
+  const seatRoute = route();
+  const seat = 'claude-coordinator-acme';
+  const launch = team.seats.find((one) => one.name === seat)?.launch ?? '';
+  const declaration = declaredInboundOf({ ...seatRoute, session: 'acme-web', seat, launch });
+  expect(declaration.source).toBe(settings);
+  recordHeldSocket(heldSocketPath(seatRoute.dir, 'acme-web', seat), declaration, NOW);
+  writeFileSync(join(socks, `${String(SESSION_PID)}.sock`), '');
+  const found = rows(coordinatorLive()).find((row) => row.name === seat);
   expect(found?.reach).toBe('typed');
 });
 

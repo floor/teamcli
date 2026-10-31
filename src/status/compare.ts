@@ -8,6 +8,9 @@ import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
 import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
+import {
+  declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketHeldReason, socketIneligibleReason,
+} from '../send/inbound.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { pluralCount, type DifferenceWho } from '../output/text.ts';
@@ -35,9 +38,16 @@ export type Row = {
   pane: string;
   stored?: string;
   start_cwd?: string;
-  /** How a send would reach this seat: over the session's socket in its pane, else typed. */
+  /** How a send would reach this seat: over the session's socket in its pane, else typed. Set
+   *  only when the caller named the route's files (`ReachRoute`); a caller with no readings to
+   *  make leaves it off rather than guessing one. */
   reach?: 'socket' | 'typed';
 };
+
+/** What reading a row's reach needs beyond the comparison: the receiving team's state folder and
+ *  root, for the seat's launch-effective `crossSessionInbound` declaration and the mark a held
+ *  frame leaves. */
+export type ReachRoute = { dir: string; root: string };
 
 /** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -184,6 +194,7 @@ export function compare(
   trust = false,
   signing?: ReadonlyMap<string, { model: string; version: string }>,
   continuityIds?: ReadonlyMap<string, string | null>,
+  route?: ReachRoute,
 ): Comparison {
   const rows: Row[] = [];
   const differences: Difference[] = [];
@@ -600,14 +611,33 @@ export function compare(
     }
   }
 
-  // How a send would reach each seat, read over the processes herdr already reported: `socket`
-  // while the pane's own processes carry a session socket (the rule the launch records with,
-  // address.ts), `typed` otherwise — a seat that is not a Claude Code one, a pane that is gone,
-  // or one herdr could not read. No extra herdr call: the reading is the row's own pane.
-  for (const row of rows) {
-    const declared = team.seats.find((seat) => seat.name === row.name);
-    const processes = live.processes?.[row.pane] ?? null;
-    row.reach = declared?.cli === 'claude-code' && socketOfProcesses(processes, sockets) ? 'socket' : 'typed';
+  // How a send would reach each seat, read by the send's OWN gate (`socketIneligibleReason` in
+  // src/send/inbound.ts): `socket` only while the receiving session's launch-effective settings
+  // declare `crossSessionInbound: accept`, the team file authorizes that route (its `inbound:
+  // accept`, or this build's generated settings file on the line), its box holds no unconfirmed
+  // frame, and its pane carries a socket the session accepts now (the rule address.ts records
+  // with, and `inboundIsLive`'s age check). `typed` for every other seat: a seat that is not a
+  // Claude Code one, one whose files do not admit the frame, a pane that is gone, or one the
+  // terminal host could not read. Reading only the CLI and a pane socket promised the socket leg
+  // on launches the walk never dialed — a line whose own `--settings` file declares accept with no
+  // team-file word — and the two readers must agree. No extra terminal-host call: the reading is
+  // the row's own pane.
+  if (route !== undefined) {
+    for (const row of rows) {
+      const declared = team.seats.find((seat) => seat.name === row.name);
+      if (declared === undefined) continue;
+      const declaration = declaredInboundOf({
+        dir: route.dir,
+        root: route.root,
+        session,
+        seat: declared.name,
+        launch: declared.launch,
+      });
+      const held = socketHeldReason(readHeldSocket(heldSocketPath(route.dir, session, declared.name)), declaration);
+      const socket = socketOfProcesses(live.processes?.[row.pane] ?? null, sockets);
+      const gate = socketIneligibleReason(declared.cli, declared.inbound, declaration, held);
+      row.reach = gate === null && socket !== null && inboundIsLive(declaration, socket) ? 'socket' : 'typed';
+    }
   }
 
   return { rows, differences, notes };

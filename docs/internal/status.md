@@ -61,11 +61,17 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
       claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 
 The columns are the seat, its state, the model, the pane, and the word for the channel a send would
-take to reach the seat: `socket` when the file declares it `cli: claude-code` and the pane's own
-processes carry a live session socket, `typed` otherwise — another CLI, a pane that is gone, one
-herdr could not read. No path opens a cross-session socket directly; `--wait` writes the signed
+take to reach the seat. The word is the send's own gate (`socketIneligibleReason` in
+`src/send/inbound.ts`), not a separate reading: `socket` only while the seat is a `cli: claude-code`
+one, the receiving session's launch-effective settings declare `crossSessionInbound: accept`, the
+team file authorizes the route (its `inbound: accept`, or the generated settings file this build
+writes onto a launch it started), its box holds no frame the declaration has not since re-confirmed,
+and the pane's own processes carry a session socket no older than that declaration; `typed`
+otherwise — another CLI, a launch that does not admit the frame, a pane that is gone, one the
+terminal host could not read. The two readers cannot disagree: a row never promises a socket the
+walk would refuse. No path opens a cross-session socket directly; `--wait` writes the signed
 record through the receiving seat's delivery walk and awaits a reply record on the thread. The word is
-read from the processes the comparison already holds, so no extra herdr call is
+read from the processes the comparison already holds, so no extra terminal-host call is
 made. The state is what herdr says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
 the file parks and `, temporary`
 for a temporary one; or `<state> (unsent text)` when an idle or done seat — the two states `team`
