@@ -103,7 +103,7 @@ import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
 import { leftoverName } from './remove.ts';
 import { launchConcurrency, launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
-import { canShowModel, modelDiffers, runningModel, seatModel } from '../status/statusline.ts';
+import { canShowModel, modelDiffers, seatModel, signedSeatModel } from '../status/statusline.ts';
 import { watchSitting } from '../watch/liveness.ts';
 import { busLabel, watchIdentity, watchLabel } from '../watch/pane.ts';
 import { busAnswers } from '../bus/follow.ts';
@@ -465,9 +465,12 @@ function modelDrift(
   const text = screenOf(recorded.pane);
   if (text == null || text === '') return { kind: 'skip' };
   // Registry signing governs even a model that the team file says a different CLI hosts (for
-  // example DeepSeek via Claude Code). `seatModel` intentionally hides that case for legacy
-  // team-file comparisons; the signed registry comparison must read the CLI's status directly.
-  const running = expected === seat ? seatModel(seat, text) : runningModel(seat.cli, text);
+  // example DeepSeek via Claude Code), so it stands in as the declaration the comparison reads
+  // against: a provider wrapper's own banner id, or the signing where it prints none, instead of
+  // the wrapper CLI's default family. The file's own comparison keeps the display read.
+  const running = expected === seat
+    ? seatModel(seat, text)
+    : signedSeatModel({ ...seat, model: expected.model, version: expected.version }, text);
   if (!running || !modelDiffers(running, expected)) return { kind: 'skip' };
   const kind = readScreen(seat.cli, text).kind;
   const way = driftWay(owner, seat.name);
