@@ -58,6 +58,17 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   prints a one-request link to the owner page, and the owner page lists pending grants. Owner
   prompts and owner-page strings come from one English message catalog, with a short French
   owner-seat prompt available.
+- **Development mode.** One machine-wide, owner-signed switch (`team development-mode`), off by
+  default: `local-fast` lifts the caller gates of `up`, `down`, `remove`, `register`, `add`,
+  `restart`, `init`, `reload` and `rename`; the team-file approval the delegate and grant gates
+  (`up`, `add`, `remove`, `down`, `register`, `reload`) and the `add`, `remove` and `down`
+  standing check ask; and named owner-only gates for a placed orchestrator, or the main
+  orchestrator above it — `grant`, `delegate`, `revoke`, `policy set`
+  and `unset`, `check --repair`, `remove` and `down --abandon`, `broker`, `tempo`, `daemon
+  install`, `uninstall` and `fault-watch` — and admits the file's designated installer while its
+  designation is not approved. It lifts nothing else: the client pane guard, the load guard, the
+  swap gate and every public action keep their refusals. Each lifted gate says so with a
+  `dev mode continues` warning.
 - **General grants.** One owner signature covers every entity or a listed set. The `team up
   --general` form admits a launch with no request. `team init --general` creates a team for an
   entity whose declared roots hold the folder: the grant must verify to the owner key, be

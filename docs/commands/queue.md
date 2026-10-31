@@ -44,16 +44,21 @@ nothing, writes nothing, and asks no caller.
 | --- | --- |
 | the owner | add, install |
 | a declared seat of this team, on the pane the state records for that seat | add; `ready`, for a task it holds the live lease of |
-| the seat the approved team file names in `installer:`, on its recorded pane | install |
+| the seat the team file names in `installer:`, on its recorded pane | install, while the designation is part of the approval in force or dev mode is on |
 | any caller | list |
 | a seat of another team, a seat the state cannot place, or a name that is not a seat | nothing on `add`: `team queue: only the owner or a seat of this team adds to the queue; this call is <caller>` |
 | the owner, or a caller that is not a declared seat of this team | nothing on `ready`: `team queue: only a seat of this team records a green slice ready; this call is <caller>` |
 | a seat that is not the approved designated installer | nothing on `install`: `team queue: the team file designates no installer: only the owner records an install`, or the sentence naming the designated seat |
 
 A team that has never been started has no recorded pane, so a seat cannot add or record until
-`team up` has recorded one. The installer designation counts only while it is part of the
-approval in force: a hand edit after the last approval admits nobody but the owner until the
-owner approves the file again.
+`team up` has recorded one. The installer designation counts while it is part of the approval in
+force: a hand edit after the last approval admits nobody but the owner until the owner approves
+the file again — unless dev mode is on at the team's place, where the live file's validated
+designation stands. The run then prints `warning: the installer designation is not the approved
+one: only the owner records an install until the owner approves the file; dev mode continues`,
+with the setting's level appended when a policy or the machine record set it, and the log records
+the seat `admitted as installer`. The declared seat, its recorded pane and the exact `installer:`
+name are checked either way, so no other seat gains anything.
 
 ## Output and exit codes
 

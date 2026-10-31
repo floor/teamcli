@@ -4,12 +4,15 @@ One name, one machine-wide setting, above every team and project. `team developm
 the setting; `team development-mode set <local-fast|pr-per-change|off>` writes it. The value is
 the whole machine's: it governs the everyday caller gates and the owner-gate admission together,
 and while the record is present the legacy per-team `dev-mode` word is ignored. An absent record
-leaves everything as it was.
+leaves everything as it was, and the setting is off by default: with no record, nothing is set
+and only the legacy per-team `dev-mode` declaration, or the migration variable while no
+declaration governs, can lift; `off` beats them; and of the three machine modes, only
+`local-fast` lifts anything.
 
 | Mode | What it does |
 | --- | --- |
-| `local-fast` | lifts the caller gates of the development operations |
-| `pr-per-change` | keeps the process half and lifts no caller gate |
+| `local-fast` | lifts the caller gates of nine operations, the team file's approval precondition, named owner-only gates for a placed orchestrator, and the designated installer's |
+| `pr-per-change` | keeps the process half and lifts no gate at all |
 | `off` | lifts nothing, and beats every legacy source |
 
 The write is the owner's, and it is signed: the record is written with the owner's existing
@@ -31,8 +34,76 @@ A record the machine cannot trust is not applied: an unreadable or malformed rec
 field, a mode or scope this build does not know, an unreadable signing date or generation, a
 missing signature, a signature that does not verify under this machine's owner key, a missing
 generation counter, a counter that disagrees with the record, or a record that is missing while
-its counter exists — all are refused, and no caller gate is lifted on any of them. The owner's
-next switch is the repair.
+its counter exists — all are refused, and nothing is lifted on any of them. The owner's next
+switch is the repair.
+
+## What dev mode lifts
+
+With dev mode on, four kinds of gate move, and nothing else.
+
+**The caller gates of nine operations.** The caller gate of `up`, `down`, `remove` of an ordinary
+seat, `register`, `add`, `restart`, `init`, `reload` and `rename` folds. The run prints
+`warning: <the refusal>; dev mode continues` — with the level appended when a policy or the
+machine record set it: `(dev-mode on at <level> level)`, or `(dev-mode on at machine level)` for
+the machine record — and goes on; the act it carries out is logged with the command and the
+caller.
+
+**The team-file approval precondition.** Where a run asks for the team's approved file — the
+delegate gate of `up`, `add`, `remove`, `down` and `register`, the grant gate of `up`, `remove`,
+`down` and `reload`, and the standing check `add`, `remove` and `down` make — dev mode on lets
+the live team file count as approved, with
+`warning: <the refusal>; the live team file <path> counts as approved; dev mode continues`, the
+level appended as above when a policy or the machine record set it. Only that precondition
+moves: the delegated entry, the caller's placement, the grant's seat and scope, the target and
+the file itself stay checks.
+
+**Named owner-only gates, for a placed orchestrator.** A team's orchestrator — the lead its file
+resolves to, whether it was spelled `coordinator:` or by `leads: true` — continues past these
+gates when it stands on the pane the team's own state records for it, in the team's session. The
+main orchestrator is admitted the same way for a team under it: a team the registry holds whose
+folder strictly holds the target's, whose file names the caller its orchestrator under the
+target file's entity, and whose session places it on the pane its state records. The owner's own
+path is untouched, and no other seat is admitted — the admission is the one name the file
+resolves as its lead, so a separate operator seat gains nothing.
+
+- `team grant`, `team delegate`, `team revoke`
+- `team policy set`, `team policy unset`
+- `team check --repair`
+- `team remove --abandon`, `team down --abandon`
+- `team broker`, `team tempo`
+- `team daemon install`, `team daemon uninstall`, `team daemon fault-watch` — `team daemon run`
+  is not this gate, and no mode admits a seat to it
+
+**The installer designation.** `team queue install` normally records an install only while the
+file's `installer:` section is part of the approval in force. With dev mode on at the team's
+place, the live file's validated designation stands: the seat it names, on the pane the team's
+state records for it, records the install, with `warning: <the refusal>; dev mode continues` and
+the level appended as above, and the log records the seat as admitted as `installer`. Only the
+approval of the designation moves: the declared seat, its recorded pane and the exact
+`installer:` name stay checks.
+
+Each admitted run prints the same warning, and the log names the role it proved.
+
+## What it never lifts
+
+- **The client pane guard.** It is a machine guard: a client key is never used from inside a team
+  pane, whatever mode is on. Every `--client` form and `team client keygen` keep the refusal — a
+  lift would hand a seat's own process the key the guard exists to keep out of it.
+- **The load guard.** After a caller gate folds, `up`, `restart` and `add` still pass the
+  launcher's own admission: load per core, free memory, free disk, memory pressure and swap
+  growth against the team file's `machine:` limits, and the seat ceiling. A launch over them is
+  refused or the seat is left out.
+- **The swap gate.** `team swap` answers exactly as it does with dev mode off: the charter, the
+  owner's `now`, the caller judgement for a queued change and the team-read check do not read
+  dev mode.
+- **Every public action.** `team pr check`, the pull request body check, answers exactly as with
+  dev mode off. Dev mode never authorizes anything that leaves the machine — publishing a
+  package or a release, tagging, pushing to a shared remote — and TeamCLI does not do those on a
+  seat's behalf anyway.
+- **The switch itself.** `set` stays the owner's, or the matching owner-authorization token's; no
+  mode turns dev mode on or off by itself.
+- **Every gate not listed above.** The list is the whole of the widening: a gate that does not
+  ask the admission keeps its refusal.
 
 ## Synopsis
 
