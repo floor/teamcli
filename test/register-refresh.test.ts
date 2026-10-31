@@ -14,7 +14,7 @@ import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import type { Caller } from '../src/caller.ts';
 import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
-import { findAgent, readAgents, updateAgent } from '../src/registry/agents.ts';
+import { findAgent, readAgents, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
 import { get as getProject, projectIdOf, readProjects } from '../src/registry/projects.ts';
 import { getTeam, setRoster, teamIdOf, teamsFile } from '../src/registry/teams.ts';
@@ -175,6 +175,91 @@ describe('registering a seat the pane already holds ready', () => {
     }).kind).toBe('bound');
   });
 
+  // Ready on the same pane is not proof that the process in front is the one this record's launch
+  // started. The refresh writes the file's fields and, with them, the handle the native route
+  // binds: it may rewrite the handle only under proven continuity, and it never hands the seat an
+  // id another seat already holds.
+  test('refuses to refresh a record whose pane holds a process its launch did not start', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const held = recordOf(w);
+    const seat = readState(w.dir).sessions.acme?.seats.lead;
+    expect(held).toBeDefined();
+    expect(seat?.launched).toEqual({ shell: 400, cli: [401] });
+    // A signing the refresh would rewrite: its survival is the proof nothing was written.
+    updateAgent(w.home, held!.id, { signing: { model: 'Claude Sonnet', version: '4.9', role: 'coordinator' } });
+
+    // The pane's front process is another program: the shell that launched this seat is gone.
+    const run = await register(w, ['lead'], { processInfo: () => ({ shell: 900, foreground: [901] }) });
+
+    expect(run.code).toBe(1);
+    expect(run.out).toBe('');
+    expect(run.err).toContain(`team register: lead: pane ${PANE} holds a process other than the one its record's launch started; the record was not refreshed\n`);
+    expect(recordOf(w)?.signing).toEqual({ model: 'Claude Sonnet', version: '4.9', role: 'coordinator' });
+  });
+
+  // Only a live record holds a seat: a retired one holds nothing, so the handle it kept is free
+  // to name the seat standing on the pane.
+  test('a retired record left holding the id does not block the refresh', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const seat = readState(w.dir).sessions.acme?.seats.lead;
+    const helper = registerAgent(w.home, {
+      name: 'helper',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamId(w), seat: 'helper', session: 'acme', pane: 'pane-helper', address: null },
+      seat_handle: seat!.id,
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'synthetic',
+    });
+    updateAgent(w.home, helper.id, { lifecycle: 'retired' });
+
+    const run = await register(w, ['lead']);
+
+    expect(run.code).toBe(0);
+    expect(run.out).toContain('the record was refreshed from the file, nothing relaunched');
+    expect(recordOf(w)?.seat_handle).toBe(seat?.id);
+  });
+
+  test('refuses to refresh when another seat\'s agent record holds the id its record carries', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const held = recordOf(w);
+    const seat = readState(w.dir).sessions.acme?.seats.lead;
+    updateAgent(w.home, held!.id, { signing: { model: 'Claude Sonnet', version: '4.9', role: 'coordinator' } });
+    // The holder is another seat's agent record, not the session's own copy of the state.
+    registerAgent(w.home, {
+      name: 'helper',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude',
+      reach: { team: teamId(w), seat: 'helper', session: 'acme', pane: 'pane-helper', address: null, agent_session: 'helper-session' },
+      seat_handle: seat!.id,
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'synthetic',
+    });
+
+    const run = await register(w, ['lead']);
+
+    expect(run.code).toBe(1);
+    expect(run.err).toContain(`team register: lead: the id its record holds (${seat?.id}) is helper's handle; the record was not refreshed\n`);
+    expect(recordOf(w)?.signing).toEqual({ model: 'Claude Sonnet', version: '4.9', role: 'coordinator' });
+    expect(findAgent(w.home, { team: teamId(w), seat: 'helper' })?.seat_handle).toBe(seat?.id);
+  });
+
+  // The refresh stands the seat on the id it read, and the native route binds the agent on it. A
+  // registry that cannot be written leaves the seat reachable only by pull: the run says so
+  // instead of reporting the refresh as done.
   test('writes the project pointers a file gained after the launch', async () => {
     const w = world();
     expect((await register(w, ['lead'])).code).toBe(0);

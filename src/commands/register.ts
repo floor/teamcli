@@ -33,7 +33,7 @@ import { reportedLiveAgent } from '../launch/agent.ts';
 import { deliverRules } from '../launch/deliver.ts';
 import { currentBriefClaim, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { GENERAL_BRIEF_SHA256 } from '../launch/general-brief-text.ts';
-import { launchedIdentity } from '../launch/identity.ts';
+import { launchedIdentity, seatProcessVerdict } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
@@ -44,7 +44,9 @@ import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote } from '../profiles/profile.ts';
+import { readAgents } from '../registry/agents.ts';
 import { registerLaunch } from '../registry/sync.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
@@ -330,6 +332,42 @@ function cliRefused(out: Io, json: boolean, name: string, pane: string, cli: str
   return 1;
 }
 
+function replacedProcessRefused(out: Io, json: boolean, name: string, pane: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.replaced',
+    message: `${plainLine(name)}: pane ${plainLine(pane)} holds a process other than the one its record's launch started; the record was not refreshed`,
+    repair: null,
+  });
+  // exit: register.replaced
+  return 1;
+}
+
+function handleHeldRefused(out: Io, json: boolean, name: string, id: string, holder: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.handle-held',
+    message: `${plainLine(name)}: the id its record holds (${plainLine(id)}) is ${plainLine(holder)}'s handle; the record was not refreshed`,
+    repair: null,
+  });
+  // exit: register.handle-held
+  return 1;
+}
+
+/** The seat whose live agent record already holds `id`, or null. Only the registry can hold one
+ *  handle twice: the state's read door de-duplicates seat ids in a session (a later seat that
+ *  repeats an id is read without it), while the registry is written by every launch and stop and
+ *  has no such door. This seat's own records are not holders — the handle being rebound is the
+ *  one its record may already carry under an earlier incarnation. A retired record holds nothing:
+ *  `findAgent` never binds a seat to one. */
+function handleHolder(home: string, root: string, name: string, id: string): string | null {
+  const team = teamIdOf(root);
+  for (const agent of readAgents(home)) {
+    if (agent.lifecycle === 'retired') continue;
+    if (agent.reach.team !== team || agent.reach.seat === name) continue;
+    if (agent.seat_handle === id) return agent.reach.seat;
+  }
+  return null;
+}
+
 function screenRefused(out: Io, json: boolean, name: string, kind: string): number {
   refuse(out, json, 'register', {
     id: 'register.screen',
@@ -612,6 +650,24 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // signing since the launch reaches the registry. The session's own record is left exactly as
   // it is, save for a launch's id and process identity it is missing, which this run completes.
   if (held !== undefined && held.pane === pane && held.stage === 'ready' && held.waiting === undefined) {
+    // What this refresh may bind. The record it writes carries the handle the native route binds
+    // the agent by, so the live pane must first prove it is the launch this record made: the
+    // recorded process identity is compared with the pane's, and only a match — the recorded
+    // shell with one of its recorded CLI pids in front — is continuity. A record that predates
+    // the identity has none to compare, and the refresh completes it below. Ready on the same
+    // pane is not proof.
+    const continuity = seatProcessVerdict(held.launched, procs);
+    if (held.launched !== undefined && continuity !== 'same') {
+      return replacedProcessRefused(io, json, name, pane);
+    }
+    // The id the record would carry is this seat's, and only this seat's: the session's read
+    // door already gives one seat per id, so the holder left to refuse is a live agent record of
+    // this team carrying it under another seat's name. It is never written onto this seat.
+    const carriedId = held.id ?? recorded.retained_seats?.[name]?.id;
+    const holder = carriedId === undefined ? null : handleHolder(sources.home, root, name, carriedId);
+    if (carriedId !== undefined && holder !== null) {
+      return handleHeldRefused(io, json, name, carriedId, holder);
+    }
     // One more repair from the same run, and a dry run paints nothing for it either: the seat's
     // two sidebar lines are re-applied from the file, so a label or display that drifted is put
     // back where the seat stands.
@@ -638,7 +694,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // holds both is left byte for byte as it is — unless herdr reports a session id the record
       // does not hold. That reading is measured now, and the registry write below keeps the same
       // id, so the record takes it too rather than keeping a reading the registry no longer has.
-      const seatId = held.id ?? recorded.retained_seats?.[name]?.id ?? mintSeatId();
+      const seatId = carriedId ?? mintSeatId();
       const liveSession = listed?.session;
       const sessionMoved = liveSession !== undefined && held.agent_session !== liveSession;
       if (held.id === undefined || held.launched === undefined || sessionMoved) {
@@ -665,10 +721,13 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       const wrote = registerLaunch(
         {
           home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner',
-          // This refresh stands the seat where it stands on the id it just read (or completed in
-          // the state): a record holding another incarnation's handle is bound to the live seat,
-          // not only the file's fields, so the native route binds the agent again.
-          rebindSeatHandle: true,
+          // An existing handle is rewritten only under the continuity proven above: the live
+          // process is the one this record's launch started. Then a record holding another
+          // incarnation's handle is bound to the live seat, not only the file's fields, and the
+          // native route binds the agent again. A record that predates the identity is not
+          // rebound from here: ready on the same pane is not proof, and the id below only fills
+          // the handle such a record never had (the repair `team doctor` names).
+          ...(continuity === 'same' ? { rebindSeatHandle: true } : {}),
         },
         seat,
         pane,

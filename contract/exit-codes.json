@@ -3399,6 +3399,13 @@
     {
       "code": 1,
       "command": "register",
+      "id": "register.handle-held",
+      "meaning": "the id its record holds is another seat's handle",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
       "id": "register.herdr",
       "meaning": "herdr doesn't answer",
       "trigger": "team register worker"
@@ -3478,6 +3485,13 @@
       "command": "register",
       "id": "register.recorded",
       "meaning": "the state records another pane for that seat",
+      "trigger": "team register worker"
+    },
+    {
+      "code": 1,
+      "command": "register",
+      "id": "register.replaced",
+      "meaning": "the pane holds a process its record's launch did not start",
       "trigger": "team register worker"
     },
     {

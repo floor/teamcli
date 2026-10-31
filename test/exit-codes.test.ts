@@ -6008,6 +6008,31 @@ scene('register.grant-flag', async (place) => {
   recordLead(place);
   return show(await registered(place, ['lead', '--session', 'other'], leadSeat, { agents: () => [agent('lead')] }), 'the granted seat cannot use it');
 });
+scene('register.handle-held', async (place) => {
+  write(place, TWO);
+  // The seat stands where its launch put it, and its id is already on another seat's live
+  // record: the refresh may not write one handle onto two seats.
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = {
+      stage: 'ready', pane: agent('lead').pane, id: 'seat_0123456789ab', launched: { shell: 400, cli: [401] },
+    };
+  });
+  registerAgent(place.home, {
+    name: 'worker',
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-code --model test',
+    reach: { team: teamIdOf(place.root), seat: 'worker', session: 'acme', pane: 'pane-worker', address: null },
+    seat_handle: 'seat_0123456789ab',
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), "the id its record holds (seat_0123456789ab) is worker's handle");
+});
 scene('register.no-seat', async (place) => {
   write(place, TEAM);
   return show(await registered(place, ['missing']), 'no seat "missing"');
@@ -6045,6 +6070,17 @@ scene('register.recorded', async (place) => {
     (state.sessions.acme ??= emptySession()).seats.lead = { stage: 'ready', pane: 'w9:p1' };
   });
   return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), 'is already recorded on pane w9:p1');
+});
+scene('register.replaced', async (place) => {
+  write(place, TEAM);
+  // The record says which processes its launch started; the pane in front of the seat holds
+  // neither, so the refresh has no continuity to stand the handle on.
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats.lead = {
+      stage: 'ready', pane: agent('lead').pane, launched: { shell: 500, cli: [501] },
+    };
+  });
+  return show(await registered(place, ['lead'], owner, { agents: () => [agent('lead')] }), "holds a process other than the one its record's launch started");
 });
 scene('register.no-cli', async (place) => {
   write(place, TEAM);

@@ -77,6 +77,16 @@ save for a launch's id and process identity it is missing: a record a launch tha
 left short is completed where the seat stands — the id `team seats` shows, and the identity
 `team doctor`'s "launched before team recorded its process" note names — and nothing is launched.
 
+The record a refresh writes carries the seat's stable handle, the id the native route binds the
+agent by, so the refresh rebinds one only on proof: the pane's live processes must be the ones the
+record's `launched` identity names — the same shell with one of its recorded CLI pids in front.
+Ready on the same pane is not proof. A pane holding any other process is refused, and a record
+that predates the identity keeps its handle as it is; the completion above only fills a handle it
+never had. The handle must also be the seat's own: a live agent record of this team that already
+carries that id under another seat's name refuses the refresh, and the run says whose handle it
+is. A seat whose record has left its handle in doubt is rebound by a launch — `team restart`, or
+`team down` then `team up` — which writes the record itself.
+
 A team the registry holds no record of — a team started before this version kept registry
 records — is written by the repair too: the team record, the seat's agent record and its roster
 line, exactly as a launch writes them, and the run says so. Where the registry holds a record of
@@ -142,6 +152,8 @@ its `id` is the contract row for that refusal (`register.caller`, `register.no-s
 | ``team register: <name> is already recorded on pane <pane>, not on <pane>; a lead stops the team and starts it again (`team down`, then `team up`); the seat's own team registers it`` | 1 |
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
+| `team register: <name>: pane <pane> holds a process other than the one its record's launch started; the record was not refreshed` — the refresh has no proven continuity to rebind the record's handle on | 1 |
+| `team register: <name>: the id its record holds (<id>) is <seat>'s handle; the record was not refreshed` — another seat's live agent record already carries it | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |
 | `team register: pane <pane> is named <other agent> in session "<session>"; --pane names a pane herdr never named, nothing was registered` — `--pane` named a pane herdr already names as another agent | 1 |
 | `team register: pane <pane> is <other seat>'s in session "<session>"; nothing was registered` — the pane this run would record is one another seat's record already holds | 1 |
