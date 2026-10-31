@@ -39,6 +39,10 @@
         }
       ]
     },
+    "delivery": {
+      "enum": ["push", "between-turns", "pull-on-turn", "none"],
+      "description": "the measured way an idle seat of this CLI is reached: an event adapter that wakes it (channel, cross-session socket), its own runtime queue between turns, an MCP inbox read on a turn, or nothing; the launch refines it (src/launch/delivery-class.ts)"
+    },
     "standing_rules": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },

@@ -26,6 +26,9 @@ unattended:
 # No flag appends to the system prompt, so the rules are the first message.
 rules:
   launch_prompt: positional
+# The delivery class a run measured: no MCP inbox is registered for this CLI and it has no event
+# adapter, so an idle seat cannot be woken; a message waits in its bus inbox.
+delivery: none
 # herdr 0.7.1 reports a muse pane as no agent, or `unknown`, while the CLI runs: `agent list`
 # carried the 1.4.11 pane with no `agent` type and `agent_status: "unknown"` while Muse sat at
 # its ready box. The profile's own screen reading is the seat's state there: a recognised idle

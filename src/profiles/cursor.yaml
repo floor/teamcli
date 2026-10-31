@@ -18,6 +18,9 @@ unattended:
   - disabled
 rules:
   launch_prompt: positional
+# The delivery class a run measured: the seat reads its registered MCP inbox when it takes a
+# turn; this CLI has no event adapter that reaches it while idle.
+delivery: pull-on-turn
 login:
   check:
     - status
