@@ -10,6 +10,7 @@ import { readEvents } from '../src/bus/log.ts';
 import { runMcp } from '../src/commands/mcp.ts';
 import { listenerPath, receiptPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, verifyReceipt, type SignedReceipt } from '../src/send/record.ts';
 import { messageKeyState } from '../src/store/keys.ts';
 import { recordBody, testIo } from './helpers.ts';
@@ -49,11 +50,20 @@ function place(seats: readonly string[] = ['lead', 'worker']): Place {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-')));
   mkdirSync(join(root, '.agents'));
   // The message key lives under this home, never the one of the machine running the suite.
-  mkdirSync(join(root, 'home'), { mode: 0o700 });
+  const home = join(root, 'home');
+  mkdirSync(home, { mode: 0o700 });
   writeFileSync(join(root, '.agents', 'team.yaml'), teamText(seats));
+  // A server started with no --file resolves its team from the registry record that holds the
+  // seat, so the fixture registers it the way the team's own registration does.
+  upsertTeam(home, teamIdOf(root), {
+    project: 'acme',
+    session: SESSION,
+    root,
+    roster: seats.map((name, at) => ({ agent: `agt_${String(at + 1).padStart(12, '0')}`, seat: name, role: at === 0 ? 'coordinator' : 'worker' })),
+  });
   return {
     root,
-    home: join(root, 'home'),
+    home,
     dropDir: (name) => join(root, '.agents', 'send-drops', SESSION, name),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
@@ -239,8 +249,31 @@ describe('team mcp serve', () => {
     }
   });
 
-  test('a lobby folder with no team file and no launch file refuses', async () => {
+  test('a lobby folder with no team file and no launch file serves the registered team', async () => {
     const at = place();
+    const lobby = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-lobby-')));
+    try {
+      signed(at, 'lead', LEAD_ID, 'for lead');
+      const io = testIo(lobby);
+      const replies: string[] = [];
+      const code = await runMcpServe({ seat: 'lead', session: SESSION }, io, {
+        lines: (async function* () {
+          yield call('1', 'inbox_check');
+        })(),
+        write: (line) => replies.push(line),
+      }, { home: at.home });
+      expect(code).toBe(0);
+      expect(io.err).toBe('');
+      const reply = JSON.parse(replies[0]!) as Record<string, any>;
+      const listed = JSON.parse(reply.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+    } finally {
+      at.cleanup();
+      rmSync(lobby, { recursive: true, force: true });
+    }
+  });
+
+  test('a lobby folder with no team file and no registered team refuses, naming --file', async () => {
     const lobby = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-lobby-')));
     try {
       const io = testIo(lobby);
@@ -249,11 +282,86 @@ describe('team mcp serve', () => {
           // no lines
         })(),
         write: () => {},
-      }, { home: at.home });
+      }, { home: join(lobby, 'home') });
       expect(code).toBe(2);
-      expect(io.err).toContain('pass --file');
+      expect(io.err).toBe('team mcp serve: no registered team holds seat "lead"; pass --file\n');
+    } finally {
+      rmSync(lobby, { recursive: true, force: true });
+    }
+  });
+
+  test('a team file in the folder is not read: the registry record holding the seat is the team', async () => {
+    const at = place();
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-folder-')));
+    try {
+      mkdirSync(join(elsewhere, '.agents'));
+      // The folder's own team declares no lead, so reading it would refuse this seat.
+      writeFileSync(join(elsewhere, '.agents', 'team.yaml'), teamText(['worker']));
+      signed(at, 'lead', LEAD_ID, 'for lead');
+      const io = testIo(elsewhere);
+      const replies: string[] = [];
+      const code = await runMcpServe({ seat: 'lead', session: SESSION }, io, {
+        lines: (async function* () {
+          yield call('1', 'inbox_check');
+        })(),
+        write: (line) => replies.push(line),
+      }, { home: at.home });
+      expect(code).toBe(0);
+      expect(io.err).toBe('');
+      const reply = JSON.parse(replies[0]!) as Record<string, any>;
+      const listed = JSON.parse(reply.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
     } finally {
       at.cleanup();
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  test('a seat on two registered teams refuses, and --session names one', async () => {
+    const at = place();
+    const other = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-other-')));
+    const lobby = realpathSync(mkdtempSync(join(tmpdir(), 'team-inbox-lobby-')));
+    try {
+      mkdirSync(join(other, '.agents'));
+      writeFileSync(join(other, '.agents', 'team.yaml'), teamText(['lead', 'worker'], 'other'));
+      const otherId = teamIdOf(other);
+      upsertTeam(at.home, otherId, {
+        project: 'beta',
+        session: 'other',
+        root: other,
+        roster: [{ agent: 'agt_0000000000a1', seat: 'lead', role: 'coordinator' }],
+      });
+      const ambiguous = testIo(lobby);
+      const refused = await runMcpServe({ seat: 'lead', session: undefined }, ambiguous, {
+        lines: (async function* () {
+          // no lines
+        })(),
+        write: () => {},
+      }, { home: at.home });
+      expect(refused).toBe(2);
+      expect(ambiguous.err).toContain('seat "lead" is on 2 registered teams');
+      expect(ambiguous.err).toContain(teamIdOf(at.root));
+      expect(ambiguous.err).toContain(otherId);
+      expect(ambiguous.err).toContain('pass --file to say which');
+
+      // --session narrows the two holders to the one that serves this session.
+      signed(at, 'lead', LEAD_ID, 'for lead');
+      const narrowed = testIo(lobby);
+      const replies: string[] = [];
+      const served = await runMcpServe({ seat: 'lead', session: SESSION }, narrowed, {
+        lines: (async function* () {
+          yield call('1', 'inbox_check');
+        })(),
+        write: (line) => replies.push(line),
+      }, { home: at.home });
+      expect(served).toBe(0);
+      expect(narrowed.err).toBe('');
+      const reply = JSON.parse(replies[0]!) as Record<string, any>;
+      const listed = JSON.parse(reply.result.content[0].text) as { unread: { id: string }[] };
+      expect(listed.unread.map((one) => one.id)).toEqual([LEAD_ID]);
+    } finally {
+      at.cleanup();
+      rmSync(other, { recursive: true, force: true });
       rmSync(lobby, { recursive: true, force: true });
     }
   });
@@ -328,7 +436,9 @@ describe('team mcp serve', () => {
         [undefined, SESSION, '--seat <seat> is required'],
       ] as const) {
         const io = testIo(at.root);
-        const code = await runMcpServe({ seat, session }, io, {
+        // The launch's own file: an undeclared seat and a wrong session are the file's refusals.
+        const file = join(at.root, '.agents', 'team.yaml');
+        const code = await runMcpServe({ seat, session, file }, io, {
           lines: (async function* () {
             // no lines
           })(),
@@ -434,7 +544,9 @@ describe('team mcp serve', () => {
     const at = place();
     try {
       const cliEntry = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
-      const proc = Bun.spawn([process.execPath, cliEntry, 'mcp', 'serve', '--seat', 'lead'], {
+      // The launch's own registration names the file; the child inherits the machine's home, so
+      // only that file can place it without reading a real registry.
+      const proc = Bun.spawn([process.execPath, cliEntry, 'mcp', 'serve', '--seat', 'lead', '--file', join(at.root, '.agents', 'team.yaml')], {
         cwd: at.root,
         // The child does not see the suite preload's setting unless it is passed on.
         env: { ...process.env, TEAM_CONFIG_SOURCE: 'file' },

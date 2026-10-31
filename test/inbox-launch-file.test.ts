@@ -302,9 +302,11 @@ describe('team mcp serve reads the selected file, never the folder team', () => 
     // A seat only the chosen file declares can be served; the folder's roster is not consulted.
     const extra = await serve(cwd.root, cwd.root, { seat: 'extra', file: chosen.teamFile }, [initialize]);
     expect(extra.code).toBe(0);
+    // With no file, the folder's team is not the team: the seat is looked for in the registry,
+    // and the fixture's home holds no record, so the refusal says so and names --file.
     const missing = await serve(cwd.root, cwd.root, { seat: 'extra' }, []);
     expect(missing.code).toBe(2);
-    expect(missing.err).toBe('team mcp serve: the team file declares no seat "extra"\n');
+    expect(missing.err).toBe('team mcp serve: no registered team holds seat "extra"; pass --file\n');
   });
 
   test('a session taken from the folder team is refused: the chosen file\'s is the team\'s', async () => {

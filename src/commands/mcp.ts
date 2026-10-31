@@ -53,8 +53,11 @@ Its stdout carries JSON-RPC lines only. --seat is required; --session
 defaults to the team's session and must match it. --file is the team file
 the seat's launch read: a seat that starts in a lobby has none in its
 folder, so its registration names the launch's file and the server reads
-that. --epoch is the runtime epoch the launch registered the seat under: a
-server that has one serves only a brief delivered under that same epoch.
+that. Without --file the server reads the registry record that holds the
+seat (--session picks between teams that share a seat name), never a team
+file from the folder it starts in. --epoch is the runtime epoch the launch
+registered the seat under: a server that has one serves only a brief
+delivered under that same epoch.
 It exits 0 when stdin closes and 2 when the invocation or the team
 placement can't be read.
 

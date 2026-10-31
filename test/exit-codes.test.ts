@@ -5492,28 +5492,38 @@ scene('mcp.not-set-up', async (place) => show(await mcpRan(place, ['status'], { 
 scene('mcp.clear', async (place) => show(await mcpRan(place, ['doctor']), 'nothing missing'));
 scene('mcp.missing', async (place) => show(await mcpRan(place, ['doctor'], { listDir: () => [] }), 'no bridge configuration'));
 scene('mcp.invocation', async (place) => show(await mcpRan(place, []), 'a subcommand is required'));
-// The server ends cleanly when its client closes stdin: no lines in, no lines out, exit 0.
+// The server ends cleanly when its client closes stdin: no lines in, no lines out, exit 0. It
+// starts in a lobby, which is no checkout's work tree, so the registry record that holds the seat
+// is the team it serves.
 scene('mcp.serve-ended', async (place) => {
   write(place, TEAM);
-  const io = testIo(place.root, owner);
+  upsertTeam(place.home, teamIdOf(place.root), {
+    project: 'acme',
+    session: 'acme',
+    root: place.root,
+    roster: [{ agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' }],
+  });
+  const lobby = join(place.base, 'lobby');
+  mkdirSync(lobby, { recursive: true });
+  const io = testIo(lobby, owner);
   const code = await runMcpServe({ seat: 'lead', session: undefined }, io, {
     lines: (async function* () {
       // stdin is already closed
     })(),
     write: () => {},
-  });
+  }, { home: place.home });
   return { code, out: io.out, err: io.err };
 });
 // A seat the team file does not declare is refused before the server serves anything.
 scene('mcp.serve-refused', async (place) => {
   write(place, TEAM);
   const io = testIo(place.root, owner);
-  const code = await runMcpServe({ seat: 'ghost', session: undefined }, io, {
+  const code = await runMcpServe({ seat: 'ghost', session: undefined, file: place.file }, io, {
     lines: (async function* () {
       // the refusal leaves before any line is read
     })(),
     write: () => {},
-  });
+  }, { home: place.home });
   return show({ code, out: io.out, err: io.err }, 'declares no seat');
 });
 

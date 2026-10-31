@@ -44,7 +44,9 @@ file the command writes is the CLI's own project settings (`.gemini/settings.jso
 for it. The server names the seat it launched for;
 the session it serves is the team file's the launch read — the file the launch resolved and passed
 to the registration, which names it to the server too, so a seat whose folder is a lobby (it holds
-no team file of its own) serves the same team as every other seat.
+no team file of its own) serves the same team as every other seat. A server started without a
+file resolves the team from the registry record that holds its seat, narrowed by `--session`, so
+the folder it starts in is never read as the team.
 Where the seat's folder is a git work tree that does not ignore a file the registration would
 write, team refuses to register: the seat stays on its drop and typed legs, and its line
 carries the reason.
@@ -62,7 +64,7 @@ carries the reason.
 | `--json` | — | the report as one `team.mcp` document (`format: 1`) instead of the lines; a run whose invocation can't be read writes the structured error document; `serve` takes no `--json` |
 | `--seat` | a seat the team file declares | `serve` only, required: the seat whose inbox is served. The server is started by that seat's launch line, and this argument must name the seat it was started for |
 | `--session` | the team's session | `serve` only: stamped on the listener and on every receipt; must be the team file's own session |
-| `--file` | a team file | `serve` only: the team file the seat's launch read. A seat that starts in a lobby has no team file in its folder, so its registration names the launch's file and the server reads that instead |
+| `--file` | a team file | `serve` only: the team file the seat's launch read. A seat that starts in a lobby has no team file in its folder, so its registration names the launch's file and the server reads that instead. Without `--file` the server reads the registry record that holds the seat (`--session` picks between teams that share a seat name), never a team file from the folder it starts in |
 | `--help`, `-h` | — | the usage, and exit 0 |
 
 ## Who may run it

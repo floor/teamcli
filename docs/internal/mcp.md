@@ -28,8 +28,10 @@ notices a message when its client calls `inbox_check`; nothing in this process w
 The seat, the session and the project root are fixed at launch. `--seat` must name a seat the team
 file declares, `--session` (when given) must be the team's own session, and the folder served is
 `<root>/.agents/send-drops/<session>/<seat>` for that team. `--file` names the team file the
-launch read; with no `--file` the server reads the team file of the folder it starts in, which a
-seat launched into a lobby does not have. No tool argument can name another
+launch read; with no `--file` the server resolves the team from the registry record that holds
+the seat, narrowed by `--session` when two teams share a seat name, so the folder it starts in is
+never read as the team — a seat launched into a lobby serves the same team as every other seat.
+No tool argument can name another
 seat's folder or a path: a message id must be a lowercase UUID (or the `unread-<uuid>` name a
 build before 0.5.3 wrote for a lead's runtime report), and a string that is anything else never
 reaches the filesystem.
@@ -299,6 +301,9 @@ can't be read (the reason is the team file's own when it can't be read):
 
 | Message | Exit |
 | --- | --- |
+| `team mcp serve: no registered team holds seat "ghost"; pass --file` (no `--file`, and the registry holds no team with that seat) | 2 |
+| `team mcp serve: seat "lead" is on 2 registered teams (aaaaaaaaaaaa, bbbbbbbbbbbb); pass --file to say which` (no `--file` and `--session` names neither) | 2 |
+| `team mcp serve: the team registry cannot be read: <reason>` (no `--file`, and the registry file does not parse) | 2 |
 | `team mcp serve: the team file declares no seat "ghost"` | 2 |
 | `team mcp serve: the team's session is "acme", not "other"` | 2 |
 | `team mcp serve: the inbox folder is not a real folder: a link, a file or a failed write stands in its path` | 2 |
