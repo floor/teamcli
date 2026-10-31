@@ -148,6 +148,10 @@ not a message) are unchanged.
   how many on stderr and in the log. A terminal a process still holds, or one that cannot be
   read, is left alone; with no hosted watch owning the route nothing is closed, and a dry run
   only says what it would close.
+- **`team remove` retires the removed seat's agent record.** The record is kept, never deleted:
+  it is marked retired, its terminal is cleared, and its roster line goes, while its signed
+  settings stay readable. `--keep`, which only stops the seat, keeps the record and its roster
+  line for the seat to run again as the same agent.
 
 ### Fixed
 
