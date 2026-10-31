@@ -662,7 +662,19 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // The record names the caller the run admitted, not the process the walk saw: a seat under
       // a pane override walks as unplaced and is judged as the seat its pane proves it is, and
       // `registered_by` must say the seat.
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId, listed?.session);
+      const wrote = registerLaunch(
+        {
+          home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner',
+          // This refresh stands the seat where it stands on the id it just read (or completed in
+          // the state): a record holding another incarnation's handle is bound to the live seat,
+          // not only the file's fields, so the native route binds the agent again.
+          rebindSeatHandle: true,
+        },
+        seat,
+        pane,
+        seatId,
+        listed?.session,
+      );
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;

@@ -13,10 +13,12 @@ import type { Launch } from '../src/commands/up.ts';
 import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
+import { acquireRunLock } from '../src/launch/run-lock.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
-import { findAgent, readAgents, recordAgentSession, registerAgent } from '../src/registry/agents.ts';
+import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
+import { recordedSeatSession } from '../src/registry/resume.ts';
 import { setRoster, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalStanding } from '../src/store/store.ts';
@@ -833,6 +835,75 @@ describe('team restart <seat>', () => {
     expect(ioLocked.err).toContain('another session-mutating run is holding');
   });
 
+  // The stop is a session mutation, so a restart stands aside while another run mutates the
+  // session rather than refusing at the first reading or, worse, beginning the stop anyway. It
+  // waits in counted steps — the run's own sleep — up to its bound; when the bound runs out it
+  // refuses with the holder named and the seat exactly as it was.
+  test('waits for the session lock up to its bound, then refuses with the holder named and nothing stopped', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+      };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const held = acquireRunLock(fixture.dir, 'acme');
+    if ('held' in held) throw new Error('the scene could not take the session lock');
+    try {
+      let steps = 0;
+      sources.upLaunch.sleep = async () => {
+        steps += 1;
+      };
+      const before = readState(fixture.dir);
+      const io = testIo(fixture.root, { kind: 'owner' });
+
+      expect(await runRestart(['worker'], io, sources)).toBe(1);
+      // It stood aside first: the refusal is not the first reading's.
+      expect(steps).toBeGreaterThan(0);
+      expect(io.err).toBe(
+        `team restart: another session-mutating run is holding session acme (pid ${process.pid}); try again when it is done\n`,
+      );
+      // Nothing was stopped, closed, typed into or launched, and the state is untouched.
+      expect(did.typed).toEqual([]);
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+      expect(readState(fixture.dir)).toEqual(before);
+    } finally {
+      held.release();
+    }
+  });
+
+  test('takes the session lock when it is released inside the wait, and restarts the seat', async () => {
+    const fixture = makeFixture();
+    updateState(fixture.dir, (state) => {
+      (state.sessions.acme ??= emptySession()).seats.worker = {
+        stage: 'ready',
+        pane: 'pane-old',
+        workspace: 'ws-old',
+        id: 'seat_0123456789ab',
+      };
+    });
+    const { sources, did } = makeHarness(fixture);
+    const held = acquireRunLock(fixture.dir, 'acme');
+    if ('held' in held) throw new Error('the scene could not take the session lock');
+    let steps = 0;
+    sources.upLaunch.sleep = async () => {
+      steps += 1;
+      if (steps === 3) held.release();
+    };
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, sources)).toBe(0);
+    // The restart waited for the holder to let go, then did the whole stop and relaunch.
+    expect(steps).toBeGreaterThanOrEqual(3);
+    expect(did.closed).toEqual(['ws-old']);
+    expect(did.created).toBe(1);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.pane).toBe('pane-new');
+  });
+
   test('an unread screen on a seat herdr calls idle does not block a lead: closed without typing, then restarted', async () => {
     const fixture = makeFixture();
     updateState(fixture.dir, (state) => {
@@ -1102,6 +1173,55 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // The relaunch's herdr reading carried no id here: the registry keeps the one it held rather
     // than clearing it, so the next restart can still bind the conversation.
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_keep');
+  });
+
+  // The incident's shape, on the CLI whose native route binds through the registry: the record
+  // holds the stable handle of an earlier incarnation while the seat state names its own id. The
+  // resume read refuses — correctly — and the relaunch starts fresh. The launch's own registry
+  // write is the authority that repairs the record: the live seat id becomes its handle, so the
+  // two records agree again and the native route binds (a send after the restart is native, not
+  // a drop). An ordinary write, or a state mint alone, still never rewrites a handle.
+  test('a relaunch repairs a record left with another incarnation\'s handle, and the native binding returns', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_keep', state: 'ses_keep', declaredCli: 'codex' });
+    const OTHER = 'seat_fedcba987654';
+    updateAgent(fixture.home, agentId!, { seat_handle: OTHER });
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: readState(fixture.dir).sessions.acme?.seats.worker,
+    })).toEqual({ kind: 'refused', why: 'the record is another agent for this seat' });
+
+    // The relaunched pane reports the conversation it actually started, as herdr does live.
+    const agents = run.sources.upLaunch.agents;
+    run.sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => (
+      agent.pane.startsWith('pane-new') ? { ...agent, agent: 'codex', session: 'ses_new' } : agent
+    ));
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    // The old pane draws Codex's own screens around the one exit text the stop types.
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
+    expect(run.did.runs.join('\n')).not.toContain('resume');
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.id).toBe('seat_0123456789ab');
+    expect(seat?.agent_session).toBe('ses_new');
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.id).toBe(agentId);
+    expect(record?.seat_handle).toBe('seat_0123456789ab');
+    expect(record?.reach.agent_session).toBe('ses_new');
+    // The read the Codex native route makes: the record and the state now bind this seat.
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: seat,
+    }).kind).toBe('bound');
   });
 
   test('a host-restored process on the recorded pane can be replaced when its registry session agrees', async () => {

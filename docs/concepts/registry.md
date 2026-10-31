@@ -21,7 +21,7 @@ the team's own configuration is a registry record too (`team-config/<team id>.js
 | `lab`, `cli` | the vendor and the CLI the seat runs |
 | `launch` | the raw launch line, recorded as it was started; `launcher` is a reference, later |
 | `reach` | the namespaces the agent answers to: team, seat, session, pane, and a cross-session address when it has one |
-| `seat_handle` | when the launch supplies one, the stable `seat_<12 hex>` handle `team seats` shows; set once, never changed |
+| `seat_handle` | when the launch supplies one, the stable `seat_<12 hex>` handle `team seats` shows; set when the record has none, and rewritten only by the launch or refresh that finds the live state naming another id — a record left with an earlier incarnation's handle is bound to the live seat, never by an ordinary write |
 | `mcp`, `skills` | declared now, filled later |
 | `lifecycle` | `registered`, `running`, `stopped` or `retired` |
 | `orphaned_at` | when the team file stopped declaring the seat, as first seen by a reconcile pass or a retiring stop; the record and every signed setting are kept |

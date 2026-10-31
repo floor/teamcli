@@ -68,7 +68,7 @@ import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
-import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { acquireRunLockWithin, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
@@ -768,7 +768,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     };
   }
 
-  const runLock = acquireRunLock(dir, session);
+  // The stop below is this run's first effect, so the session mutator lock is taken before it —
+  // standing aside while another run (the watch's restore, a launch) holds it, and refusing with
+  // the holder named and nothing stopped once the wait is spent.
+  const runLock = await acquireRunLockWithin(dir, session, { sleep: (ms) => sources.upLaunch.sleep(ms) });
   if ('held' in runLock) {
     return { kind: 'run-lock', held: runLock.held };
   }
@@ -1685,7 +1688,12 @@ function hostOf(input: {
           // the same agent session, never a second derivation of either.
           const kept = readState(dir).sessions[session]?.seats[name];
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
+            {
+              home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner,
+              // This run launched the seat standing on the state id it just wrote: a record left
+              // holding another incarnation's handle is bound to the live seat here.
+              rebindSeatHandle: true,
+            },
             seat,
             patch.pane,
             kept?.id,

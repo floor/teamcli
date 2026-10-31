@@ -15,6 +15,7 @@ import type { Caller } from '../src/caller.ts';
 import { setHerdrRun, type HerdrAgent } from '../src/herdr.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { findAgent, readAgents, updateAgent } from '../src/registry/agents.ts';
+import { recordedSeatSession } from '../src/registry/resume.ts';
 import { get as getProject, projectIdOf, readProjects } from '../src/registry/projects.ts';
 import { getTeam, setRoster, teamIdOf, teamsFile } from '../src/registry/teams.ts';
 import { emptySession, LOG_FILE, readState, SEAT_ID_PATTERN, STATE_FILE, updateState } from '../src/state.ts';
@@ -134,6 +135,44 @@ describe('registering a seat the pane already holds ready', () => {
     expect(readAgents(w.home)).toHaveLength(1);
     // The session's own record is the launch's; the refresh does not rewrite it.
     expect(readState(w.dir).sessions.acme?.seats.lead?.stage).toBe('ready');
+  });
+
+  // The record the refresh writes is the live seat's, not just the file's fields: a stable handle
+  // a launch that predates the state's id left names another incarnation, and the refresh binds
+  // the agent to the seat standing on the pane, so the native route binds it again. A write that
+  // does not stand on the live seat never rewrites a handle (`registry-writers.test.ts`).
+  test('rebinds a record left with another incarnation\'s handle to the live seat', async () => {
+    const w = world();
+    expect((await register(w, ['lead'])).code).toBe(0);
+    const held = recordOf(w);
+    const seat = readState(w.dir).sessions.acme?.seats.lead;
+    expect(held).toBeDefined();
+    expect(seat?.id).toMatch(SEAT_ID_PATTERN);
+    // The handle an earlier launch wrote, while the live state names its own id: the read every
+    // native route makes refuses the record as another agent's.
+    updateAgent(w.home, held!.id, { seat_handle: 'seat_fedcba987654' });
+    const refused = recordedSeatSession({
+      home: w.home,
+      root: w.root,
+      herdrSession: 'acme',
+      seat: { name: 'lead', cli: 'claude-code' },
+      state: seat,
+    });
+    expect(refused).toEqual({ kind: 'refused', why: 'the record is another agent for this seat' });
+
+    const second = await register(w, ['lead']);
+
+    expect(second.code).toBe(0);
+    expect(second.out).toContain('the record was refreshed from the file, nothing relaunched');
+    expect(recordOf(w)?.id).toBe(held?.id);
+    expect(recordOf(w)?.seat_handle).toBe(seat?.id);
+    expect(recordedSeatSession({
+      home: w.home,
+      root: w.root,
+      herdrSession: 'acme',
+      seat: { name: 'lead', cli: 'claude-code' },
+      state: readState(w.dir).sessions.acme?.seats.lead,
+    }).kind).toBe('bound');
   });
 
   test('writes the project pointers a file gained after the launch', async () => {
