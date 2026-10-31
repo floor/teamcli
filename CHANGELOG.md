@@ -34,9 +34,10 @@ not a message) are unchanged.
   Codex runtime queue while the codex-daemon policy is on — is woken through it instead.
 - **Rules ride the launch line.** A first-message CLI's profile names how its launch line takes
   an initial prompt; the rules file is written before the command runs, and the line pointing
-  at it goes last on the launch line. A seat already running whose rules were never delivered
-  is not typed to: it gets its rules file and is left out with `team restart <seat>` as the way
-  to carry them. A launch whose line does not carry the rules is refused.
+  at it goes last on the launch line. A seat whose launch did not carry its rules is not typed
+  to: it gets its rules file and is left out. Where the profile has an initial-prompt form,
+  `team restart <seat>` carries them; where it has none, no launch ever carries them, and the
+  report says so instead of advising a restart.
 - **A declared `typed` delivery order names the seat's own adapters.** For a Claude seat it
   means its live channel and then the socket its launch accepts; for a Codex seat, its runtime
   queue while the codex-daemon policy is on. It no longer names a typed message.
@@ -138,9 +139,10 @@ not a message) are unchanged.
   heartbeat.
 - **Rules ride the launch line; nothing is typed.** `team up` writes the rules file before the
   command and puts the line that points at it last on the launch line. A seat this run did not
-  launch gets the file and is left out with the restart that carries the rules. A single-seat
-  restart drops the launch brief to that seat alone, and a registration briefs only the
-  registered seat.
+  launch gets the file and is left out: where its profile has an initial-prompt form, a
+  restart carries the rules, and where it has none, no launch carries them and the report says
+  so. A single-seat restart drops the launch brief to that seat alone, and a registration
+  briefs only the registered seat.
 - **A resume line the CLI cannot find is launched fresh.** Before the launch runs, the
   conversation is checked on disk and a missing one is launched fresh with a note. If the CLI
   still refuses the resume at runtime, the idle wait reads that refusal and relaunches fresh
