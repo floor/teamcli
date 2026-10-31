@@ -252,14 +252,14 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // next up or restart runs the line the team now declares, not the one the record kept.
   const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats) : [];
   if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
-  const stale = checked.ok ? (approvalDifferences(checked.team, root, home) ?? []) : [];
+  const stale = checked.ok ? (approvalDifferences(checked.team, root, home, { text: next }) ?? []) : [];
   if (!commentsKept) io.stderr(`team config: the record was rewritten whole to change ${rawPath}; its comments were not kept\n`);
   if (json) {
     writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, comments_kept: commentsKept, approval_differences: stale });
   } else {
     io.stdout(`${verb === 'edit' ? 'edited' : verb === 'set' ? `set ${rawPath}` : `unset ${rawPath}`} in ${where}; validated\n`);
     if (stale.length > 0) {
-      io.stdout(`the approval no longer covers: ${stale.join('; ')}; approve the team again with the owner seat\n`);
+      io.stdout(`the approval no longer covers: ${stale.join('; ')}; the change was applied, and the stored team approval still describes an earlier record; this version has no command to refresh that snapshot\n`);
     }
   }
   // exit: config.written

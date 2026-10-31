@@ -32,7 +32,14 @@ on the legacy `file` source the team file is written instead.
 Writes are the owner's, from a terminal outside herdr, as editing the file was; `get` is any
 caller's. A change to an owner section leaves the approval stale exactly as a hand edit of the
 file did — the approval is compared by canonical record — and the run names what the approval no
-longer covers: `the approval no longer covers: …; approve the team again with the owner seat`.
+longer covers, then says that this version cannot refresh the stored snapshot:
+`the approval no longer covers: …; the change was applied, and the stored team approval still
+describes an earlier record; this version has no command to refresh that snapshot`. The list
+names a seat the approval still holds and the record no longer does (`seat X is missing since the
+last approval`), and a default seat ceiling that moved only because the roster did is named as
+its move (`the default seat ceiling follows the roster (N seats)`), never as a bare `limits`
+change; an explicit `limits.seats`, or a moved `limits.temporary` or `limits.vendors`, keeps the
+`limits` line.
 
 | Outcome | Exit |
 | --- | --- |
