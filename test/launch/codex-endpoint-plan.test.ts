@@ -81,9 +81,9 @@ describe('the managed Codex endpoint intent', () => {
   });
 
   test('a shell running a pass-through script before codex is still a Codex launch, and is marked', () => {
-    // `zsh ~/tools/as-floor.sh codex resume …` execs codex with the remaining words, so the
+    // `zsh ~/tools/as-floor.sh codex …` execs codex with the remaining words, so the
     // `--remote` the launch appends reaches codex and the seat's thread loads on its endpoint.
-    const launch = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh codex resume 01a1 -m gpt' })));
+    const launch = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh codex -m gpt' })));
     expect(launch.do).toHaveProperty('codexEndpoint');
     // A script that names --remote itself is still left alone.
     const own = launchOp(upPlan(input({}, { launch: 'zsh ./tools/as-floor.sh codex --remote unix:///tmp/own.sock' })));
@@ -108,6 +108,14 @@ describe('the managed Codex endpoint intent', () => {
     const seatOver = { name: 'codex-acme', codexDaemon: undefined };
     expect(launchOp(upPlan(input(over, seatOver))).do).not.toHaveProperty('codexEndpoint');
     expect(launchOp(upPlan(input({ ...over, team: loaded.team }, seatOver))).do).toHaveProperty('codexEndpoint');
+  });
+
+  test('a resume carrying permission overrides keeps its own thread', () => {
+    // codex-cli 0.161.0 refuses -a/-s on a remote resume and exits to the shell.
+    const launch = launchOp(upPlan(input({}, { launch: 'codex resume 01a1 -a never -s danger-full-access' })));
+    expect(launch.do).not.toHaveProperty('codexEndpoint');
+    const fresh = launchOp(upPlan(input({}, { launch: 'codex -a never -s danger-full-access' })));
+    expect(fresh.do).toHaveProperty('codexEndpoint');
   });
 
   test('a non-Codex seat is never marked, whatever the policy value', () => {

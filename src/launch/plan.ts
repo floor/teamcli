@@ -455,6 +455,9 @@ function watcherNote(watcher: CliWatcher): string {
 }
 
 /** Every step of `team up`, in order. Nothing here runs anything. */
+/** The Codex permission overrides a remote resume refuses. */
+const CODEX_PERMISSION_FLAG = /(^|\s)(-a|-s|--ask-for-approval|--sandbox|--full-auto|--dangerously-bypass-approvals-and-sandbox)(=|\s|$)/;
+
 export function upPlan(input: UpInput): Step[] {
   const { session } = input;
   const steps: Step[] = [];
@@ -803,7 +806,11 @@ export function upPlan(input: UpInput): Step[] {
       && input.stateDir !== undefined
       && launchedCliBinary(seat.launch) === profile.binary
       && !/(^|\s)--remote(=|\s|$)/.test(command)
-      && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
+      && !/(^|\s)--no-daemon(=|\s|$)/.test(command)
+      // Measured on codex-cli 0.161.0: `codex resume <id> --remote …` with `-a`/`-s` (or their
+      // long forms) exits at once with "Permission overrides are not supported when resuming a
+      // remote task", leaving the seat at its shell. Such a line keeps its own thread.
+      && !(/(^|\s)resume(\s|$)/.test(command) && CODEX_PERMISSION_FLAG.test(command));
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {

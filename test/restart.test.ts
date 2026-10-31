@@ -1280,10 +1280,10 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).not.toContain('--resume');
   });
 
-  test('a restarted Codex seat behind a pass-through wrapper is attached to its managed endpoint', async () => {
-    // The plan reads the seat's codex-daemon policy from the home, as `team up` does: a restart
-    // that did not pass it left the seat on its own in-process thread, out of the native queue's
-    // reach, so no event wake could arrive.
+  test('a restarted Codex seat that resumes with permission overrides keeps its own thread', async () => {
+    // The plan reads the seat's codex-daemon policy from the home, as `team up` does, and would
+    // attach the managed endpoint; but the resume line carries -a/-s, which codex-cli 0.161.0
+    // refuses on a remote resume (the seat would exit to its shell), so no --remote is added.
     const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol';
     const { fixture, run } = seeded({
       registry: 'ses_codex',
@@ -1304,7 +1304,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
     expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${launch} resume ses_codex`);
-    expect(run.did.runs.join('\n')).toContain('--remote unix:///tmp/worker.sock');
+    expect(run.did.runs.join('\n')).toContain(' -a never -s danger-full-access');
+    expect(run.did.runs.join('\n')).not.toContain('--remote');
   });
 
   test('a recorded launcher that selects another conversation is refused before the stop', async () => {
