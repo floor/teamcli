@@ -188,7 +188,47 @@ describe('the class a send reports for its target', () => {
     expect(host.frames).toEqual([]);
   });
 
-  test('a codex seat with a bound managed endpoint is woken through its runtime queue', async () => {
+  test('a codex seat with a bound managed endpoint and its recorded conversation is woken through its runtime queue', async () => {
+    made = sendWorld();
+    // The queue takes a pointer for one thread: the launch records that conversation beside the
+    // endpoint, and the class reads both. An endpoint on its own is the next scene's shape.
+    recordSeat(made, 'codex-seat', {
+      id: 'seat_0123456789ab',
+      cli: 'codex',
+      watcher: 'inbox',
+      agent_session: 'ses_thread',
+      presence_binding: BINDING,
+      codex_endpoint: {
+        url: `unix://${join(made.base, 'codex.sock')}`,
+        binding: BINDING,
+        pid: 4321,
+        started_at: '2026-10-01T00:00:00Z',
+      },
+    });
+    registerAgent(made.home, {
+      name: 'codex-seat',
+      signing: { model: 'Test', version: '1', role: 'implementer' },
+      lab: 'test-lab',
+      cli: 'codex',
+      launcher: null,
+      launch: 'codex -m test',
+      reach: {
+        team: teamIdOf(made.root), seat: 'codex-seat', session: 'acme',
+        pane: 'fixture-pane-codex-seat', address: null, agent_session: 'ses_thread',
+      },
+      seat_handle: 'seat_0123456789ab',
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'up',
+    });
+    const io = testIo(made.root, { kind: 'owner' });
+    const code = await runSend(['codex-seat', 'hello'], io, sendHost(made));
+    expect(code).toBe(0);
+    expect(io.out).toContain('codex-seat: sent (unconfirmed) (drop, 0 ms); woken through its runtime queue');
+  });
+
+  test('a codex seat whose endpoint names no conversation is read at its next turn, and the line says so', async () => {
     made = sendWorld();
     recordSeat(made, 'codex-seat', {
       cli: 'codex',
@@ -204,7 +244,7 @@ describe('the class a send reports for its target', () => {
     const io = testIo(made.root, { kind: 'owner' });
     const code = await runSend(['codex-seat', 'hello'], io, sendHost(made));
     expect(code).toBe(0);
-    expect(io.out).toContain('codex-seat: sent (unconfirmed) (drop, 0 ms); woken through its runtime queue');
+    expect(io.out).toContain('codex-seat: sent (unconfirmed) (drop, 0 ms); queued; codex-seat reads it at its next turn (pull-only)');
   });
 
   test('a codex seat with no managed endpoint has only its next turn, and the line says so', async () => {

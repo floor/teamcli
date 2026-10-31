@@ -14,6 +14,7 @@ import { noteLaunchedPane } from '../src/file/launched-file.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
+import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
@@ -1302,6 +1303,81 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       seat: { name: 'worker', cli: 'codex' },
       state: seat,
     }).kind).toBe('bound');
+  });
+
+  // The incident's other ending, and the live shape: the relaunched pane never reports the thread
+  // it started, so the state ends naming no conversation while the managed launch has recorded a
+  // fresh endpoint and a fresh presence incarnation for it. The restart says exactly that
+  // (pull-only), and the class a send prints must say the same: the runtime queue is addressed by
+  // the conversation the records bind, and an endpoint alone never wakes anybody.
+  test('a restart whose new pane reports no thread ends pull-only, and the class claims no wake', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const BOUND = 'prs_fedcba987654';
+    // What the real managed launch leaves: the endpoint, recorded under a fresh incarnation.
+    run.sources.upLaunch.codexEndpoint = {
+      managed: async () => {
+        updateState(fixture.dir, (state) => {
+          const held = (state.sessions.acme ??= emptySession()).seats.worker;
+          if (held !== undefined) {
+            held.presence_binding = BOUND;
+            held.codex_endpoint = {
+              url: 'unix:///tmp/worker.sock',
+              binding: BOUND,
+              pid: 4242,
+              started_at: '2026-10-31T00:00:00.000Z',
+              config: [],
+            };
+          }
+        });
+        return { kind: 'up' as const, url: 'unix:///tmp/worker.sock', started: true };
+      },
+      stop: () => ({ stopped: true }),
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    // The old pane draws Codex's own screens around the one exit text the stop types; the new
+    // pane draws the idle prompt, but herdr lists no session for it.
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    // The resume read refuses the record that is another agent's, and the relaunch starts fresh.
+    expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
+    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // The managed launch did its part: endpoint and incarnation are recorded, bound to each other.
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.presence_binding).toBe(BOUND);
+    expect(seat?.codex_endpoint?.binding).toBe(BOUND);
+    // The conversation did not come with them: the pane reported no thread, so the state names
+    // none, and the record keeps the one it held before the restart. Nothing addresses the queue.
+    expect(seat?.agent_session).toBeUndefined();
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.seat_handle).toBe('seat_0123456789ab');
+    expect(record?.reach.agent_session).toBe('ses_old');
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: seat,
+    }).kind).toBe('none');
+
+    // The class a send prints for this seat: the endpoint is there, but with no bound
+    // conversation it is no wake, and the words say what will actually happen.
+    const delivery = seatDeliveryClass({
+      home: fixture.home,
+      dir: fixture.dir,
+      root: fixture.root,
+      session: 'acme',
+      seat: 'worker',
+      declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
+      state: seat,
+    });
+    expect(delivery.class).toBe('pull-on-turn');
+    expect(delivery.words).toBe('queued; worker reads it at its next turn (pull-only)');
+    expect(delivery.evidence.endpoint).toBe(false);
+    expect(delivery.evidence.conversation).toBe(false);
   });
 
   test('a host-restored process on the recorded pane can be replaced when its registry session agrees', async () => {

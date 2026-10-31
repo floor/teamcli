@@ -13,15 +13,17 @@
 // the recorded watcher (or the one its launch line implies), the development channel on the
 // line, the cross-session socket the send itself would dial (its declaration, the team file's
 // own word, and the address the registry recorded), and the managed app-server endpoint bound to
-// its current presence incarnation — and answers one class plus the evidence it read, so a
-// caller that skips a seat can say why. The words a console prints come from the same class
-// (`deliveryWords`), so the report and the gating can never disagree.
+// its current presence incarnation, together with the conversation that endpoint's queue is
+// addressed by — and answers one class plus the evidence it read, so a caller that skips a seat
+// can say why. The words a console prints come from the same class (`deliveryWords`), so the
+// report and the gating can never disagree.
 import { existsSync } from 'node:fs';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import type { Seat } from '../file/types.ts';
 import { channelLaunchEnabled } from '../mcp/channel.ts';
 import { DELIVERY_CLASSES, profileFor, type DeliveryClass } from '../profiles/profile.ts';
 import { findAgent } from '../registry/agents.ts';
+import { recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { declaredInboundOf, inboundIsLive, socketEligible } from '../send/inbound.ts';
 import type { SeatState } from '../state.ts';
@@ -48,7 +50,8 @@ export type DeliveryFacts = {
    *  caller that read the pane may pass `false` for a socket the session no longer holds. */
   socket: boolean;
   /** Whether the seat's managed app-server endpoint is recorded and bound to its current
-   *  presence incarnation: its runtime's own queue holds a message between turns. */
+   *  presence incarnation, and the seat's own records name the conversation that queue is
+   *  addressed by: only then does its runtime's own queue hold a message between turns. */
   endpoint: boolean;
 };
 
@@ -112,6 +115,11 @@ export type DeliveryEvidence = {
   watcherFrom: 'recorded' | 'derived';
   channel: boolean;
   socket: boolean;
+  /** Whether the seat's records bind the conversation its runtime queue is addressed by
+   *  (`recordedSeatSession`), so a pointer can actually be handed over. Read only while an
+   *  endpoint is recorded and bound; `false` there is what keeps the class off `between-turns`. */
+  conversation: boolean;
+  /** The endpoint record bound to the current presence incarnation, and a bound conversation. */
   endpoint: boolean;
   human: boolean;
 };
@@ -139,8 +147,9 @@ export type SeatDeliveryInput = {
    *  temporary seat has none. */
   declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound'>;
   /** The seat's runtime record, when the seat is launched. Its `launch_line` is what the
-   *  launch actually ran, and its `watcher` is what the launch actually installed. */
-  state?: Pick<SeatState, 'cli' | 'launch_line' | 'watcher' | 'codex_endpoint' | 'presence_binding'>;
+   *  launch actually ran, its `watcher` is what the launch actually installed, and its `id` and
+   *  `agent_session` are the two facts a conversation binding is compared by. */
+  state?: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'>;
   /** The registry home: where the seat's agent record keeps the cross-session address its
    *  launch recorded. A caller that cannot name it proves no recorded address, and the socket
    *  is then no evidence — the conservative reading, never a guess. */
@@ -160,6 +169,28 @@ function recordedSocketAddress(input: SeatDeliveryInput): string | null {
 }
 
 /**
+ * Whether the seat's runtime queue can be handed a pointer at all: the conversation binding the
+ * push adapter resolves before it calls `codex queue --thread <id>` (`recordedSeatSession`). An
+ * endpoint alone is no evidence — a managed launch records its endpoint before its pane has
+ * reported the thread it started, and a restart can rebind a record's handle while the
+ * conversation stays behind — so a seat whose own records do not bind a conversation is never
+ * read as woken. Without a registry home the record cannot be compared, and the state's own copy
+ * is the one necessary reading left: a state naming no agent session proves no conversation.
+ */
+function conversationBound(input: SeatDeliveryInput): boolean {
+  const state = input.state;
+  if (state === undefined) return false;
+  if (input.home === undefined) return (state.agent_session ?? '') !== '';
+  return recordedSeatSession({
+    home: input.home,
+    root: input.root,
+    herdrSession: input.session,
+    seat: { name: input.seat, cli: state.cli ?? input.declared?.cli ?? '' },
+    state,
+  }).kind === 'bound';
+}
+
+/**
  * One seat's effective delivery class, read from the records the launch left.
  *
  * The class is measured, not assumed: the CLI and launch line come from the runtime record
@@ -168,8 +199,9 @@ function recordedSocketAddress(input: SeatDeliveryInput): string | null {
  * line's own flag; the socket is the route the send itself admits — the effective settings'
  * `crossSessionInbound`, the team file's own word, and the address the launch recorded; and
  * the endpoint is the recorded app-server URL only while it is bound to the seat's current
- * presence incarnation. A record that cannot be read falls to the conservative class, never to
- * a guess.
+ * presence incarnation and the seat's records bind the conversation its queue is addressed by
+ * (`recordedSeatSession`, the read the push adapter makes). A record that cannot be read falls
+ * to the conservative class, never to a guess.
  */
 export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
   const cli = input.state?.cli ?? input.declared?.cli ?? '';
@@ -185,10 +217,15 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     seat: input.seat,
     ...(input.declared?.launch !== undefined ? { launch: input.declared.launch } : {}),
   });
-  const endpoint = inspectRecordedCodexEndpoint(
+  const endpointRecorded = inspectRecordedCodexEndpoint(
     input.state?.codex_endpoint,
     input.state?.presence_binding,
   ).kind === 'ok';
+  // The endpoint is a running app-server; `between-turns` also needs the thread its queue takes
+  // a pointer for. The two are written by different moments of a launch, so the second is read
+  // here rather than assumed from the first.
+  const conversation = endpointRecorded && conversationBound(input);
+  const endpoint = endpointRecorded && conversation;
   const human = input.declared?.human === true;
   // The socket is the route the send itself admits: the effective settings' accept, the team
   // file's own `inbound` word, and the address the launch recorded still standing. A
@@ -220,6 +257,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
       watcherFrom: recorded === undefined ? 'derived' : 'recorded',
       channel,
       socket: facts.socket,
+      conversation,
       endpoint,
       human,
     },
