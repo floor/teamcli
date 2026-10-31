@@ -53,7 +53,20 @@ function workerLine(extra = ''): string {
 ${extra}`;
 }
 
-function teamText(workerExtra = ''): string {
+/** The same seat on a CLI whose launch is the one that manages a Codex endpoint. */
+function workerCodexLine(): string {
+  return `  - role: implementer
+    name: worker
+    label: worker
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "5.5"
+    launch: codex -m gpt-6-sol
+`;
+}
+
+function teamText(worker: string): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -61,7 +74,7 @@ operator: lead
 workspace:
   mode: shared
 seats:
-${LEAD}${workerLine(workerExtra)}`;
+${LEAD}${worker}`;
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -70,7 +83,7 @@ function git(cwd: string, ...args: string[]): string {
   });
 }
 
-function layout(workerExtra = ''): Place {
+function layout(worker = workerLine()): Place {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-remove-endpoint-')));
   const root = join(base, 'acme');
   const home = join(base, 'home');
@@ -81,7 +94,7 @@ function layout(workerExtra = ''): Place {
   git(root, 'add', 'README.md');
   git(root, 'commit', '-q', '-m', 'first');
   const file = join(root, '.agents', 'team.yaml');
-  const text = teamText(workerExtra);
+  const text = teamText(worker);
   writeFileSync(file, text);
   const loaded = loadTeamFile(root, { file, home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
@@ -101,8 +114,8 @@ function seedEndpoint(place: Place, record = ENDPOINT): void {
   });
 }
 
-const agent = (name: string, status = 'idle'): HerdrAgent => ({
-  name, agent: 'claude', pane: 'w1:p1', workspace: 'w1', status, cwd: null,
+const agent = (name: string, status = 'idle', cli = 'claude'): HerdrAgent => ({
+  name, agent: cli, pane: 'w1:p1', workspace: 'w1', status, cwd: null,
 });
 
 function launchOf(over: Partial<DownLaunch> = {}): DownLaunch {
@@ -163,7 +176,12 @@ function stateSeat(place: Place) {
 
 let places: Place[] = [];
 function place(workerExtra = ''): Place {
-  const made = layout(workerExtra);
+  const made = layout(workerLine(workerExtra));
+  places.push(made);
+  return made;
+}
+function placeCodex(): Place {
+  const made = layout(workerCodexLine());
   places.push(made);
   return made;
 }
@@ -243,6 +261,47 @@ describe('a removal that stops the seat’s CLI', () => {
     expect(await runRemove(['worker'], io, sources)).toBe(0);
     expect(calls).toHaveLength(1);
     expect(stateSeat(at)).toBeUndefined();
+  });
+});
+
+describe('a removal that abandons the seat', () => {
+  test('--abandon stops the recorded endpoint before the state record goes', async () => {
+    const at = placeCodex();
+    seedEndpoint(at);
+    const { sources, calls } = sourcesOf(at, {
+      sessionRunning: () => true,
+      agents: () => [agent('worker', 'idle', 'codex')],
+      screen: () => ({ kind: 'unknown' }),
+      foreground: () => ['codex'],
+      launch: launchOf(),
+    }, () => ({ stopped: true }));
+    const io = testIo(at.root, owner);
+    expect(await runRemove(['worker', '--abandon'], io, sources)).toBe(0);
+    expect(calls).toEqual([{ dir: at.dir, session: 'acme', seat: 'worker', recordPresent: true }]);
+    expect(stateSeat(at)).toBeUndefined();
+    expect(readFileSync(at.file, 'utf8')).not.toContain('name: worker');
+  });
+
+  test('--abandon with an endpoint that cannot be proven leaves it and says so', async () => {
+    const at = placeCodex();
+    seedEndpoint(at);
+    const { sources, calls } = sourcesOf(at, {
+      sessionRunning: () => true,
+      agents: () => [agent('worker', 'idle', 'codex')],
+      screen: () => ({ kind: 'unknown' }),
+      foreground: () => ['codex'],
+      launch: launchOf(),
+    }, () => ({
+      stopped: false,
+      why: 'the recorded process cannot be proven to serve this endpoint; it was not signalled',
+    }));
+    const io = testIo(at.root, owner);
+    expect(await runRemove(['worker', '--abandon'], io, sources)).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(io.err).toContain('the recorded process cannot be proven');
+    expect(io.err).toContain('left as it is');
+    expect(stateSeat(at)?.codex_endpoint).toMatchObject({ pid: ENDPOINT.pid });
+    expect(readFileSync(at.file, 'utf8')).toContain('name: worker');
   });
 });
 

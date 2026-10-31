@@ -5,7 +5,11 @@ closes its workspace, and edits the file so the seat is not started again. `--ke
 in the file as `stopped: true`; a seat that is busy — working, blocked at a prompt, at its own exit
 question, on a screen the profile does not recognise, or holding unsent text — is left as it is,
 unless its owner abandons it. A seat the file marks `human: true` leaves the file without its pane
-being touched: nothing is typed into it; left running.
+being touched: nothing is typed into it; left running. A seat whose launch started a managed
+Codex endpoint has that endpoint stopped through the process the state records, with the same
+ownership proof `team down` uses, before the record that names it goes — for a seat that exits
+when asked and for one its owner abandons. A stop that cannot prove the recorded process is
+refused, and the seat, its file entry and the server are left as they are.
 
 ## Synopsis
 
