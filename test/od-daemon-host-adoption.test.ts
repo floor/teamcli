@@ -264,16 +264,24 @@ describe('the drop is staged before the route, and the write is create-or-match'
 });
 
 describe('admission, queue, history and the socket path stay the daemon’s', () => {
-  test('a seat that is not the orchestrator is refused before any drop or route', async () => {
+  test('a sender that is no seat of the team is refused before any drop or route', async () => {
     const world = setupWorld();
     const host = makeHost(world);
     const handle = await serve(world, host);
-    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'native');
-    const refused = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'seat-send', from: 'native', to: 'lead', body: 'hello' });
+    const drops = daemonDropDir('acme', world.root, world.home, 'acme', 'stranger');
+    const refused = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'seat-send', from: 'stranger', to: 'lead', body: 'hello' });
     expect(outcomeOf(refused)).toBe('refused');
-    expect(detailOf(refused)).toBe('a seat may not send (native): only the owner, or the orchestrator from its own seat, can send');
+    expect(detailOf(refused)).toBe('a sender that is not a seat of this team may not send (stranger): only the owner or a declared seat sends through this endpoint');
     expect(host.typed).toEqual([]);
     expect(existsSync(join(drops, 'seat-send'))).toBe(false);
+  });
+
+  test('a declared seat that is not the orchestrator is not refused by the endpoint (its admission is the CLI\'s)', async () => {
+    const world = setupWorld();
+    const host = makeHost(world);
+    const handle = await serve(world, host);
+    const sent = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'seat-send-2', from: 'native', to: 'lead', body: 'hello' });
+    expect(detailOf(sent) ?? '').not.toContain('may not send');
   });
 
   test('two sends through the one dispatcher are each queued and delivered, and history keeps both', async () => {

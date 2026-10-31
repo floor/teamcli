@@ -641,6 +641,8 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     ...(parsed.watch ? { watch: true } : {}),
     // Only the paths the door verified for this run (io.general), never a path read elsewhere.
     ...(io.general !== undefined ? { general: io.general } : {}),
+    // The installing shell's PATH, so the service finds herdr where the owner's shell does.
+    ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
   };
   const plan = manager.plan(home, fullProgram);
   if (parsed.dryRun) {

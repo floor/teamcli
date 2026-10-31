@@ -25,6 +25,11 @@ export type ServiceProgram = {
    *  verifies the grant again at every start and refuses (exit 1) once it is expired or invalid.
    *  Absent: the unit carries no grant, as before. */
   general?: { grant: string; key: string };
+  /** The PATH the installing shell had (0.5.9). launchd starts a unit with only
+   *  /usr/bin:/bin:/usr/sbin:/sbin, where herdr (often ~/.local/bin or /opt/homebrew/bin) is not
+   *  found: every session read then failed and every hosted send answered "the session could not
+   *  be read". The unit carries the installer's PATH so the service finds the same herdr. */
+  path?: string;
 };
 
 export type ServicePlan = {

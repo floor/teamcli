@@ -635,14 +635,20 @@ export async function startSendDaemon(input: StartSendDaemonInput): Promise<Star
         detail: `${seatName}: session "${request.session}" does not belong to this project's session "${input.team.session}"; nothing was sent`,
       });
     }
-    if (request.from !== 'owner' && request.from !== input.team.orchestrator) {
+    // The send's admission is the CLI's (`admitSend` over the registry's rules, run before this
+    // dial): a builder replying to its lead, a reviewer to the orchestrator, a seat to another seat
+    // its rules admit. This endpoint only refuses a sender that is no one of this team (0.5.9:
+    // through 0.5.8 it refused every seat but the orchestrator, so with the daemon up no builder
+    // or reviewer could send at all, whatever the rules admitted).
+    const sender = typeof request.from === 'string' ? request.from : '';
+    if (sender !== 'owner' && sender !== input.team.orchestrator && !input.team.seats.some((s) => s.name === sender)) {
       return Promise.resolve({
         v: 1,
         ok: false,
         id: null,
         seat: seatName,
         outcome: 'refused',
-        detail: `a seat may not send (${String(request.from)}): only the owner, or the orchestrator from its own seat, can send`,
+        detail: `a sender that is not a seat of this team may not send (${String(request.from)}): only the owner or a declared seat sends through this endpoint`,
       });
     }
     const configured = input.team.seats.find((s) => s.name === seatName);

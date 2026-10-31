@@ -327,7 +327,15 @@ type EndpointWatch = {
   /** The checkout whose bus this heartbeat may restart. Null until the team file loads. */
   busRoot: string | null;
   busState: BusWatch;
+  /** Consecutive send probes that went unanswered (0.5.9). The endpoint runs on this same event
+   *  loop, so one probe can miss while a synchronous herdr read holds the loop; only
+   *  SEND_PROBE_MISSES misses in a row mark it failed, and an answer afterwards restores it. */
+  sendMisses: number;
+  /** What the send endpoint was before probes marked it failed, to restore on the next answer. */
+  sendWas: 'serving' | 'already-running' | null;
 };
+const SEND_PROBE_MISSES = 3;
+const SEND_PROBE_TIMEOUT_MS = 2_000;
 
 /** A bus socket has no ping op, so one successful connect is the whole liveness answer. */
 function probeBusSocket(socketPath: string, timeoutMs = 400): Promise<boolean> {
@@ -710,7 +718,7 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
   for (const rootArg of input.roots) {
     const status: MachineRootStatus = { root: rootArg, team: null, send: 'failed', bus: 'failed', why: null };
     // A root with no hosted endpoint keeps both sockets null and the refresh skips it.
-    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null, busRoot: null, busState: freshBusWatch() };
+    const watch: EndpointWatch = { status, sendSocket: null, busSocket: null, busRoot: null, busState: freshBusWatch(), sendMisses: 0, sendWas: null };
     watched.push(watch);
     const loaded = readTeamConfig(rootArg, { home });
     if (!loaded.ok) {
@@ -1446,14 +1454,27 @@ export async function startMachineDaemon(input: StartMachineDaemonInput): Promis
       await Promise.all(
         watched.map(async (watch) => {
           const { status } = watch;
-          if ((status.send === 'serving' || status.send === 'already-running') && watch.sendSocket !== null) {
-            if (!(await probeDaemonSocket(watch.sendSocket))) {
-              status.why ??=
-                status.send === 'serving'
-                  ? 'the hosted send endpoint stopped answering'
-                  : 'the send server that was already running stopped answering';
-              status.send = 'failed';
-              appendDaemonLog(home, `root ${status.root}: send endpoint stopped answering`, now());
+          const probing = status.send === 'serving' || status.send === 'already-running' || (status.send === 'failed' && watch.sendWas !== null);
+          if (probing && watch.sendSocket !== null) {
+            if (await probeDaemonSocket(watch.sendSocket, SEND_PROBE_TIMEOUT_MS)) {
+              watch.sendMisses = 0;
+              if (status.send === 'failed' && watch.sendWas !== null) {
+                status.send = watch.sendWas;
+                watch.sendWas = null;
+                if (status.why === 'the hosted send endpoint stopped answering' || status.why === 'the send server that was already running stopped answering') status.why = null;
+                appendDaemonLog(home, `root ${status.root}: send endpoint answering again`, now());
+              }
+            } else if (status.send !== 'failed') {
+              watch.sendMisses += 1;
+              if (watch.sendMisses >= SEND_PROBE_MISSES) {
+                status.why ??=
+                  status.send === 'serving'
+                    ? 'the hosted send endpoint stopped answering'
+                    : 'the send server that was already running stopped answering';
+                watch.sendWas = status.send;
+                status.send = 'failed';
+                appendDaemonLog(home, `root ${status.root}: send endpoint stopped answering (${String(SEND_PROBE_MISSES)} probes in a row)`, now());
+              }
             }
           }
           if (watch.busRoot !== null) {
