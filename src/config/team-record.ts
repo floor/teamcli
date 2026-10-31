@@ -7,9 +7,11 @@
 // to be trusted to be right — only to be readable.
 //
 // A set or unset rewrites only the lines it changes: the key's line keeps the comment beside it,
-// and every other line, the comments above and below included, is kept byte for byte. A record
-// shape the line editor cannot address falls back to the regenerated text, whose value is the
-// same; `team config edit` edits the text itself.
+// a comment beside or inside a value the change removes stays as a comment line where it was, and
+// every other line is kept byte for byte. A record shape the line editor cannot address falls back
+// to the regenerated text, whose value is the same but whose comments are not kept;
+// `editedRecordText` says which text it returned, and the command warns when it is the regenerated
+// one. `team config edit` edits the text itself.
 
 import { parseYaml, stripComment, toValue, type YamlEntry, type YamlNode, type YamlValue } from '../yaml.ts';
 
@@ -264,17 +266,39 @@ function entryLineParts(raw: RawLine[], entry: YamlEntry): { pad: string; prefix
   return { pad: ' '.repeat(indent), prefix: visible.slice(0, colon), tail: rest.slice(visible.length) };
 }
 
+/** The comment a line carries, from its `#` on; `null` when it has none. */
+function commentOf(body: string, n: number): { indent: number; comment: string } | null {
+  const visible = stripComment(body, n);
+  if (visible.length === body.length) return null;
+  return { indent: indentOf(body), comment: body.slice(visible.length) };
+}
+
+/** The comments written on lines `start`..`end`, each as a standalone comment line at the
+ *  indentation of the line it came from. A set or unset that removes lines leaves the owner's
+ *  comments where those lines were, so the bytes survive the change that took the values. */
+function keptCommentLines(raw: RawLine[], start: number, end: number): string[] {
+  const out: string[] = [];
+  for (let n = start; n <= end; n += 1) {
+    const body = raw[n - 1]?.body;
+    if (body === undefined) continue;
+    const found = commentOf(body, n);
+    if (found !== null) out.push(' '.repeat(found.indent) + found.comment);
+  }
+  return out;
+}
+
 function replaceEntryOp(raw: RawLine[], entry: YamlEntry, value: YamlValue): Op | null {
   const parts = entryLineParts(raw, entry);
   if (parts === null) return null;
   const end = lastLine(entry.value);
+  const kept = keptCommentLines(raw, entry.line + 1, end);
   const inline = emptyOrScalar(value);
   if (inline !== null) {
-    return { kind: 'replace', start: entry.line, end, lines: [`${parts.pad}${parts.prefix} ${inline}${parts.tail}`] };
+    return { kind: 'replace', start: entry.line, end, lines: [`${parts.pad}${parts.prefix} ${inline}${parts.tail}`, ...kept] };
   }
   const block: string[] = [];
   emit(value, parts.pad.length + 2, block);
-  return { kind: 'replace', start: entry.line, end, lines: [`${parts.pad}${parts.prefix}${parts.tail}`, ...block] };
+  return { kind: 'replace', start: entry.line, end, lines: [`${parts.pad}${parts.prefix}${parts.tail}`, ...block, ...kept] };
 }
 
 /** The line holding a list item's `-` marker: its node's own line when the item starts there,
@@ -312,11 +336,12 @@ function replaceItemOp(raw: RawLine[], item: YamlNode, start: number, value: Yam
   const tail = rest.slice(visible.length);
   const pad = ' '.repeat(indent);
   const end = lastLine(item);
+  const kept = keptCommentLines(raw, start + 1, end);
   const inline = emptyOrScalar(value);
-  if (inline !== null) return { kind: 'replace', start, end, lines: [`${pad}- ${inline}${tail}`] };
+  if (inline !== null) return { kind: 'replace', start, end, lines: [`${pad}- ${inline}${tail}`, ...kept] };
   const block: string[] = [];
   emit(value, indent + 2, block);
-  return { kind: 'replace', start, end, lines: [`${pad}-${tail}`, ...block] };
+  return { kind: 'replace', start, end, lines: [`${pad}-${tail}`, ...block, ...kept] };
 }
 
 /** The index a path segment names in a list: the item whose `name` is that segment, else a
@@ -356,24 +381,26 @@ function insertEntryOp(raw: RawLine[], map: YamlNode, key: string, value: YamlVa
   return { kind: 'insert', at, lines };
 }
 
-/** An entry's key line made to hold `{}`; the entry's own `-` prefix and comment keep their
- *  place. Used when removing the last key of a section leaves an empty map behind. */
-function emptyEntryLine(raw: RawLine[], entry: YamlEntry): string | null {
+/** An entry's key line made to hold `{}` or `[]`; the entry's own `-` prefix and comment keep
+ *  their place. Used when removing the last key (or item) of a section leaves it empty. */
+function emptyEntryLine(raw: RawLine[], entry: YamlEntry, empty: '{}' | '[]'): string | null {
   const parts = entryLineParts(raw, entry);
   if (parts === null) return null;
-  return `${parts.pad}${parts.prefix} {}${parts.tail}`;
+  return `${parts.pad}${parts.prefix} ${empty}${parts.tail}`;
 }
 
 /** Removing the only entry (or item) of a section: the section's holder is made to hold an
- *  empty `{}` or `[]` rather than nothing, which would parse as null. */
+ *  empty `{}` or `[]` rather than nothing, which would parse as null; it is `[]` when the
+ *  section was a list. The removed lines' comments stay as comment lines where they were. */
 function emptiedOps(raw: RawLine[], holder: Holder, span: { start: number; end: number }): Op[] | null {
   if (holder.kind === 'root') return null;
   if (holder.kind === 'entry') {
-    const line = emptyEntryLine(raw, holder.entry);
+    const empty = holder.entry.value.kind === 'seq' ? '[]' : '{}';
+    const line = emptyEntryLine(raw, holder.entry, empty);
     if (line === null) return null;
     return [
       { kind: 'replace', start: holder.entry.line, end: holder.entry.line, lines: [line] },
-      { kind: 'replace', start: span.start, end: span.end, lines: [] },
+      { kind: 'replace', start: span.start, end: span.end, lines: keptCommentLines(raw, span.start, span.end) },
     ];
   }
   const start = itemStartLine(raw, holder.item);
@@ -383,11 +410,14 @@ function emptiedOps(raw: RawLine[], holder: Holder, span: { start: number; end: 
   const rest = body.slice(indent);
   const visible = stripComment(rest, start).trimEnd();
   const tail = rest.slice(visible.length);
-  const line = `${' '.repeat(indent)}- {}${tail}`;
-  if (start === span.start) return [{ kind: 'replace', start, end: span.end, lines: [line] }];
+  const empty = holder.item.kind === 'seq' ? '[]' : '{}';
+  const line = `${' '.repeat(indent)}- ${empty}${tail}`;
+  if (start === span.start) {
+    return [{ kind: 'replace', start, end: span.end, lines: [line, ...keptCommentLines(raw, span.start + 1, span.end)] }];
+  }
   return [
     { kind: 'replace', start, end: start, lines: [line] },
-    { kind: 'replace', start: span.start, end: span.end, lines: [] },
+    { kind: 'replace', start: span.start, end: span.end, lines: keptCommentLines(raw, span.start, span.end) },
   ];
 }
 
@@ -401,9 +431,9 @@ function removeEntryOps(raw: RawLine[], container: YamlNode, holder: Holder, ent
   if (rest === '-' || rest.startsWith('- ')) {
     // The map's first key shares its list item's `-` line: the dash stays, the key goes.
     const visible = stripComment(rest, entry.line).trimEnd();
-    return [{ kind: 'replace', start: entry.line, end, lines: [`${' '.repeat(indent)}-${rest.slice(visible.length)}`] }];
+    return [{ kind: 'replace', start: entry.line, end, lines: [`${' '.repeat(indent)}-${rest.slice(visible.length)}`, ...keptCommentLines(raw, entry.line + 1, end)] }];
   }
-  return [{ kind: 'replace', start: entry.line, end, lines: [] }];
+  return [{ kind: 'replace', start: entry.line, end, lines: keptCommentLines(raw, entry.line, end) }];
 }
 
 function nest(path: RecordPath, value: YamlValue): YamlValue {
@@ -518,18 +548,44 @@ function applyOps(text: string, ops: Op[]): string {
   return bom + lines.map((line) => line.body + line.term).join('');
 }
 
-/** The record's text with the value at `path` set (or, with `value` undefined, removed), keeping
- *  every line the change does not have to touch. A shape the line editor cannot address falls
- *  back to the regenerated text; either way the text parses to `root`. */
-export function editedRecordText(text: string, path: RecordPath, value: YamlValue | undefined, root: YamlValue): string {
+/** Every comment a text carries, from each `#` to the end of its line, in the order carried. */
+function commentsOf(text: string): string[] {
+  const source = text.startsWith('﻿') ? text.slice(1) : text;
+  const raw = rawLines(source);
+  const out: string[] = [];
+  for (let n = 1; n <= raw.length; n += 1) {
+    const found = commentOf((raw[n - 1] as RawLine).body, n);
+    if (found !== null) out.push(found.comment);
+  }
+  return out;
+}
+
+/** Whether `after` still carries every comment `before` carried, as many times. */
+function keepsComments(before: string[], after: string[]): boolean {
+  const left = new Map<string, number>();
+  for (const comment of after) left.set(comment, (left.get(comment) ?? 0) + 1);
+  for (const comment of before) {
+    const count = left.get(comment) ?? 0;
+    if (count === 0) return false;
+    left.set(comment, count - 1);
+  }
+  return true;
+}
+
+/** The record's text with the value at `path` set (or, with `value` undefined, removed).
+ *  `kept` is true when the change was made line by line and every comment the text carried is
+ *  still there; false when the text was regenerated whole — the same value, its comments lost. */
+export function editedRecordText(text: string, path: RecordPath, value: YamlValue | undefined, root: YamlValue): { text: string; kept: boolean } {
   try {
     const ops = planEdit(text, path, value, root);
     if (ops !== null) {
       const next = applyOps(text, ops);
-      if (JSON.stringify(toValue(parseYaml(next))) === JSON.stringify(root)) return next;
+      if (JSON.stringify(toValue(parseYaml(next))) === JSON.stringify(root) && keepsComments(commentsOf(text), commentsOf(next))) {
+        return { text: next, kept: true };
+      }
     }
   } catch {
     // A record this editor cannot read line by line: regenerate it below.
   }
-  return recordText(root);
+  return { text: recordText(root), kept: false };
 }

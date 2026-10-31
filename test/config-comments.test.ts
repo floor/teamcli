@@ -1,12 +1,14 @@
 // `team config set` and `unset` edit the record's text: only the lines of the key they change
 // are rewritten, and every comment the record carries — above the key, beside it, below it, and
-// between sections — stays byte for byte. Hermetic: a temporary HOME and project root, the file
-// source, never ~/.config/team.
+// on a value the change removes — stays byte for byte. A record whose shape a line edit cannot
+// reach is rewritten whole, and the command says so. Hermetic: a temporary HOME and project root,
+// the file source, never ~/.config/team.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runConfig } from '../src/commands/config.ts';
+import { editedRecordText } from '../src/config/team-record.ts';
 import { testIo } from './helpers.ts';
 import { realRegistryTouched } from './helpers/registry-team.ts';
 
@@ -45,8 +47,15 @@ afterEach(() => {
   expect(realRegistryTouched()).toBe(false);
 });
 
+// A list with one item and a comment beside it: an unset of its last item empties the section
+// in place, and the comment stays where the item was.
+const ONE_RULE = TEAM.replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\nrules:\n  - a rule # rule comment\n');
+
+// The same list on one line: an item of it cannot be changed line by line.
+const FLOW_RULES = TEAM.replace('workspace:\n  mode: shared\n', 'workspace:\n  mode: shared\nrules: [alpha, beta]\n');
+
 type Place = { home: string; root: string; file: string };
-function place(): Place {
+function place(text = TEAM): Place {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'team-config-comments-')));
   made.push(base);
   const home = join(base, 'home');
@@ -54,7 +63,7 @@ function place(): Place {
   mkdirSync(home, { recursive: true });
   mkdirSync(join(root, '.agents'), { recursive: true });
   const file = join(root, '.agents', 'team.yaml');
-  writeFileSync(file, TEAM);
+  writeFileSync(file, text);
   return { home, root, file };
 }
 
@@ -84,4 +93,45 @@ test('an unset removes its key line and keeps the comments beside it', async () 
   const ran = await config(at, ['unset', 'watch.nudge_wait']);
   expect(ran.code, ran.err + ran.out).toBe(0);
   expect(readFileSync(at.file, 'utf8')).toBe(TEAM.replace('  nudge_wait: 5m\n', ''));
+});
+
+test('an unset of a list\'s last item leaves [] in place and keeps every comment', async () => {
+  const at = place(ONE_RULE);
+  const ran = await config(at, ['unset', 'rules.0']);
+  expect(ran.code, ran.err + ran.out).toBe(0);
+  expect(ran.err).toBe('');
+  expect(readFileSync(at.file, 'utf8')).toBe(ONE_RULE.replace('rules:\n  - a rule # rule comment\n', 'rules: []\n  # rule comment\n'));
+});
+
+test('an unset keeps the comment beside the removed key, as a line where the key was', async () => {
+  const at = place();
+  const ran = await config(at, ['unset', 'watch.unread_after']);
+  expect(ran.code, ran.err + ran.out).toBe(0);
+  expect(readFileSync(at.file, 'utf8')).toBe(TEAM.replace('  unread_after: 30m # Beside the changed key.\n', '  # Beside the changed key.\n'));
+});
+
+test('a set that replaces a whole section keeps the comments written inside it', async () => {
+  const at = place();
+  const ran = await config(at, ['set', 'watch', '{interval: 20s, unread_after: 30m, nudge_wait: 5m}']);
+  expect(ran.code, ran.err + ran.out).toBe(0);
+  const section = 'watch:\n  # Above the changed key.\n  interval: 10s\n  unread_after: 30m # Beside the changed key.\n  # Below the changed key.\n  nudge_wait: 5m\n';
+  const replaced = 'watch:\n  interval: 20s\n  unread_after: 30m\n  nudge_wait: 5m\n  # Above the changed key.\n  # Beside the changed key.\n  # Below the changed key.\n';
+  expect(readFileSync(at.file, 'utf8')).toBe(TEAM.replace(section, replaced));
+});
+
+test('a change of a one-line list is still a line edit and keeps every comment', async () => {
+  const at = place(FLOW_RULES);
+  const ran = await config(at, ['set', 'rules.0', 'gamma']);
+  expect(ran.code, ran.err + ran.out).toBe(0);
+  expect(ran.err).toBe('');
+  expect(readFileSync(at.file, 'utf8')).toBe(FLOW_RULES.replace('rules: [alpha, beta]\n', 'rules:\n  - gamma\n  - beta\n'));
+});
+
+test('the editor says when it cannot keep the record and returns the regenerated text', () => {
+  // A text that is not a map is a shape the line editor cannot address: the metadata says the
+  // record was regenerated, and the text is the regenerated one, comments and all.
+  const before = '# a comment\n- alpha\n- beta\n';
+  const after = editedRecordText(before, ['0'], 'gamma', ['gamma', 'beta']);
+  expect(after.kept).toBe(false);
+  expect(after.text).toBe('- gamma\n- beta\n');
 });

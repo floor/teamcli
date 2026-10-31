@@ -171,6 +171,9 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   }
   let next: string;
   let kept: string | null = null;
+  // Whether the change was made line by line, keeping the record's comments. An `edit` keeps
+  // whatever the editor wrote, so it is not measured here.
+  let commentsKept = true;
   if (verb === 'edit') {
     const dir = mkdtempSync(join(tmpdir(), 'team-config-'));
     const draft = join(dir, 'team.yaml');
@@ -194,10 +197,16 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       // exit: config.path
       return 1;
     }
-    next = changed.changed ? editedRecordText(text, path, value, changed.root) : text;
+    if (!changed.changed) {
+      next = text;
+    } else {
+      const edited = editedRecordText(text, path, value, changed.root);
+      next = edited.text;
+      commentsKept = edited.kept;
+    }
   }
   if (next === text) {
-    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: false, source: target.kind, approval_differences: [] });
+    if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: false, source: target.kind, comments_kept: true, approval_differences: [] });
     else io.stdout(`nothing changed in ${where}\n`);
     // exit: config.unchanged
     return 0;
@@ -221,8 +230,9 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats) : [];
   if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
   const stale = checked.ok ? (approvalDifferences(checked.team, root, home) ?? []) : [];
+  if (!commentsKept) io.stderr(`team config: the record was rewritten whole to change ${rawPath}; its comments were not kept\n`);
   if (json) {
-    writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, approval_differences: stale });
+    writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, comments_kept: commentsKept, approval_differences: stale });
   } else {
     io.stdout(`${verb === 'edit' ? 'edited' : verb === 'set' ? `set ${rawPath}` : `unset ${rawPath}`} in ${where}; validated\n`);
     if (stale.length > 0) {
