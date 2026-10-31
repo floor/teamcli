@@ -123,6 +123,15 @@ not a message) are unchanged.
   record keeps every field, its signed settings among them, and the lookups that place a live
   seat skip it. `--apply` is the owner's, from a terminal rather than a seat's pane, and a
   scoped grant reaches only its own entities.
+- **`team brief prune` retires a seat's own launch-brief retry sidecars.** A held launch
+  delivery leaves a try marker behind; prune lists and, with `--apply`, removes the ones whose
+  retry can no longer be right: a marker whose delivery the seat's current claim superseded,
+  and one a signed receipt bound to that claim says the seat read. The current claim's unread
+  marker is exactly what a retry still owes and is never touched, and neither is any other
+  file in the folder. The dry run is the default, one row per file; `--apply` verifies each
+  removal and reports one that failed. Only the seat itself, on the terminal its state records,
+  prunes its own folder; a claim it cannot read, or one that changes while the run reads,
+  retires nothing.
 
 ### Changed
 
