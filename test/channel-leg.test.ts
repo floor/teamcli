@@ -672,7 +672,7 @@ describe('the channel redelivery', () => {
     ]);
     expect(entries(made)).toEqual([]);
     expect(said).toEqual([
-      'lead: a channel send from owner was not confirmed; the socket was not taken (the receiving seat does not declare crossSessionInbound accept), typing the trigger',
+      'lead: a channel send from owner was not confirmed; the socket was not taken (the receiving seat does not declare crossSessionInbound accept); the message waits in the bus inbox',
     ]);
   });
 });
