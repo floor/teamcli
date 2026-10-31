@@ -106,6 +106,8 @@ unchanged.
   nothing. The generated settings carry the team file's inbound accept when the launch scripts
   declare no word of their own.
 - **`team config set` writes a value with its unit as plain text.**
+- **The watch pushes idle work only to a seat's own records**, and holds direct work when it
+  holds no verified watch authority.
 
 ### Fixed
 
