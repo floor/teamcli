@@ -17,19 +17,21 @@ every command, the end of typed messaging, and the managed Codex endpoint.
 
 **Nothing is ever typed into a seat.** No message, wake, reminder, watch nudge, rules line or
 restart handover is sent by typing into a seat's terminal or prompt. Every message ends in the
-seat's bus inbox and wakes the seat through its own adapter: a live development channel, an
-MCP inbox, a socket its launch accepts, or a Codex runtime queue. A seat with no push adapter
-reads its inbox on its own turn, and the sender is told `queued, no event adapter`. Starting a
-CLI in a terminal, its exit keys and `team answer` (a permission dialog, not a message) are
-unchanged.
+seat's bus inbox and wakes the seat through its own push adapter: the development channel its
+launch loads, a socket its launch accepts, or a Codex runtime queue under the managed
+endpoint. A seat with no push adapter reads its inbox on its own turn — an ordinary MCP inbox
+is one, read when its model calls the tool — and the sender is told `queued, no event
+adapter`. Starting a CLI in a terminal, its exit keys and `team answer` (a permission dialog,
+not a message) are unchanged.
 
 ### Upgrade notes
 
 - **A pull-only seat reads its own inbox.** Nothing is typed into its terminal. The launch's
   turn-start reader serves the waiting records on the seat's own turn, each with its signed
-  read receipt; `team messages` serves them to a reader in the checkout. A seat whose launch
-  gives it an adapter — a live development channel, an MCP inbox, a socket, or a Codex runtime
-  queue while the codex-daemon policy is on — is woken through it instead.
+  read receipt; `team messages` serves them to a reader in the checkout. An ordinary MCP inbox
+  is pull-only too: it serves `inbox_check` and `inbox_read`, and pushes nothing. A seat whose
+  launch gives it a push adapter — the development channel, a socket its launch accepts, or a
+  Codex runtime queue while the codex-daemon policy is on — is woken through it instead.
 - **Rules ride the launch line.** A first-message CLI's profile names how its launch line takes
   an initial prompt; the rules file is written before the command runs, and the line pointing
   at it goes last on the launch line. A seat already running whose rules were never delivered
@@ -71,11 +73,13 @@ unchanged.
   and `--key` on every command and subcommand.
 - **A team charter and the registry record.** Team setup takes one owner signature as its
   charter, and the team definition is read from the registry record.
-- **Event delivery.** A send reaches a seat through its own adapter: the Claude development
-  channel, with one redelivery; the MCP inbox, which pushes new records and `message.arrived`
-  from the bus; or a socket the launch accepts. `team up` starts the bus in its own workspace,
-  `team down` closes it, and a dropped follower is redialed with a doubling wait.
-  `team messages --client --follow` prints each reply on a client thread as it lands.
+- **Event delivery.** A send reaches a seat through its own push adapter: the Claude
+  development channel its launch loads, which pushes each new record as one notification and
+  is redelivered once by the watch when no signed read receipt arrives; or a socket the launch
+  accepts. An ordinary MCP inbox pushes nothing: the seat reads it when its model calls the
+  tool. `team up` starts the bus in its own workspace, `team down` closes it, and a dropped
+  follower is redialed with a doubling wait. `team messages --client --follow` prints each
+  reply on a client thread as it lands.
 - **`team down --abandon`** answers known prompts and saves unsent text before stopping a seat.
 - **Conversation record and resume.** Launches record the conversation id they carry, and
   `team config set` syncs the agent launch. A Grok seat resumes with `grok -r <id>` and an
