@@ -135,6 +135,19 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   removal and reports one that failed. Only the seat itself, on the terminal its state records,
   prunes its own folder; a claim it cannot read, or one that changes while the run reads,
   retires nothing.
+- **A seat's delivery class is read from its launch, not from its CLI's declaration.** Each
+  shipped CLI profile declares one of `push`, `between-turns`, `pull-on-turn` or `none` — the
+  loader requires the word and refuses one outside the set — and the launch refines it from
+  what it left behind: the development channel on the launch line, a cross-session socket the
+  send itself admits (its declaration, the team file's own `inbound` word, and an address the
+  seat's record names that still stands and is live), the managed endpoint bound to the seat's
+  current presence binding, and the recorded watcher. A declared `push` seat whose launch turned
+  nothing on falls to its watcher; a person's seat is `none`. A send that ends without a
+  delivery appends the class to its `sent (unconfirmed)`, `sent (channel)` and `queued
+  (receiver busy)` lines, and to `action_summary` in `--json`, in plain words: `woken through
+  its event adapter`, `woken through its runtime queue`, `queued; <seat> reads it at its next
+  turn (pull-only)`, or `queued; <seat> has no way to be woken while idle`. A delivered line
+  carries none: the delivery itself is the answer.
 
 ### Changed
 
