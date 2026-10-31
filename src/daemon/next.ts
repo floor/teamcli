@@ -77,6 +77,11 @@ export type NextHandlerInput = {
   /** The host's clock, not a request field: a caller must not choose the instant a lease is
    *  judged at. */
   now: number;
+  /** The registry home the host knows: where the seat's agent record keeps the cross-session
+   *  address its launch recorded. The host supplies its own resolved home; a caller that names
+   *  none proves no recorded address, and the classifier is then right to call a socket no
+   *  evidence — the conservative reading, never a guess. */
+  home?: string;
 };
 
 export type NextHandlerDeps = {
@@ -151,6 +156,7 @@ export async function handleNext(input: NextHandlerInput, deps: NextHandlerDeps 
     seat: caller.seat,
     ...(declaredSeat === undefined ? {} : { declared: declaredSeat }),
     ...(stateSeat === undefined ? {} : { state: stateSeat }),
+    ...(input.home === undefined ? {} : { home: input.home }),
   }).class;
   const tasks = team.tasks ?? LOCAL_TASKS;
   if (tasks.source === 'linear') return nextFromBroker(input, tasks, deps, delivery);

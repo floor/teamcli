@@ -7,6 +7,7 @@
 // and this build does not write to a tracker. `team plan` prints the takeable queue and claims
 // nothing. `--wait` re-reads the source at `tasks.cadence` while a pass finds nothing takeable;
 // without the key it refuses, and a stop ends the wait with one line.
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
@@ -120,6 +121,12 @@ export async function runNext(argv: string[], io: Io, sources: NextSources = {})
   if (args.error || args.rest.length) {
     return invocation(io, args.error ?? `unexpected "${args.rest[0]}"`, true, json);
   }
+  // The registry home is resolved the way the configuration read resolves it: the caller's when
+  // one names it, the machine's `homedir()` otherwise. A real CLI run supplies none, and the
+  // delivery class below reads the seat's agent record from the same home the team was read in —
+  // without that, a socket-only seat would read pull-on-turn forever and never be offered
+  // time-bound work.
+  sources = { ...sources, home: sources.home ?? homedir() };
   // The folder is resolved the way every command resolves it: the checkout git names, or, in a
   // folder that is not a repository, the plain team root this folder holds (`.agents/team.yaml`
   // beside it). A folder that is neither is the no-repository refusal — `team next` takes no

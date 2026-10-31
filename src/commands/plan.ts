@@ -5,6 +5,7 @@
 // record is still takeable and is never dropped, blocked, reordered or released by lateness. A
 // record with a deadline planned by a seat nothing can wake while it is idle carries the reason
 // after its title: dispatch hands that seat no time-bound record.
+import { homedir } from 'node:os';
 import { dirname } from 'node:path';
 import { readArgs } from '../args.ts';
 import { askBroker, DEADLINE, NOT_RUNNING, WRONG_ANSWER } from '../broker/client.ts';
@@ -133,6 +134,10 @@ function planTask(record: TaskRecord, step: number, at: number): PlanTaskJson {
 export async function runPlan(argv: string[], io: Io, sources: PlanSources = {}): Promise<number> {
   const out = cleanedIo(io);
   const args = readArgs(argv, [], ['json']);
+  // The registry home is resolved the way the configuration read resolves it: the caller's when
+  // one names it, the machine's `homedir()` otherwise. A real CLI run supplies none, and the
+  // seat's delivery class below reads its agent record from the same home the team was read in.
+  sources = { ...sources, home: sources.home ?? homedir() };
   // The raw argv, not the parser's flags: an unknown option before `--json`, or `--json=<value>`,
   // must still route the refusal through the `team.plan` error document on stdout.
   const json = hasJsonFlag(argv);
