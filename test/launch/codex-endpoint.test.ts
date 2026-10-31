@@ -251,6 +251,7 @@ describe('ensuring the endpoint', () => {
         binding: BINDING,
         pid: 9001,
         started_at: '2026-10-01T10:00:05.000Z',
+        config: [],
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -311,14 +312,15 @@ describe('ensuring the endpoint', () => {
     }
   });
 
-  test('reuses the recorded server only while the full ownership proof holds', async () => {
+  test('reuses the recorded server only while the full ownership proof and start config hold', async () => {
     const dir = scratch();
     try {
-      seedRecord(dir, ownedRecord(dir));
-      const prior = ownedRecord(dir);
+      const config = ['-c', 'mcp_servers.team_inbox.command="team"'];
+      const prior = ownedRecord(dir, { config });
+      seedRecord(dir, prior);
       let spawned = 0;
       const answer = await ensureCodexEndpoint({
-        dir, session: SESSION, seat: SEAT,
+        dir, session: SESSION, seat: SEAT, config,
         deps: {
           spawn: () => { spawned++; return { pid: 9002 }; },
           alive: () => true,
@@ -332,6 +334,79 @@ describe('ensuring the endpoint', () => {
       });
       expect(answer).toEqual({ kind: 'up', url: prior.url, started: false });
       expect(spawned).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a recorded endpoint started without the team inbox pairs is stopped, and the fresh spawn carries them', async () => {
+    const dir = scratch();
+    try {
+      // The recorded server is this launch's to replace: its config lacks the inbox server the
+      // seat's line installs, and an attached TUI loads the app-server's config, not its own.
+      const prior = ownedRecord(dir, { config: ['-c', 'sandbox_mode="workspace-write"'] });
+      seedRecord(dir, prior);
+      const config = ['-c', 'sandbox_mode="workspace-write"', '-c', 'mcp_servers.team_inbox.command="team"'];
+      const spawned: (string[] | undefined)[] = [];
+      let terminated = 0;
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, config,
+        deps: {
+          spawn: (input) => { spawned.push(input.config); return { pid: 9050 }; },
+          alive: () => true,
+          commandOf: () => `codex app-server --listen ${prior.url}`,
+          startOf: () => T0_MS + 500,
+          terminate: () => { terminated++; },
+          isPlainDir: () => true,
+          isSocket: () => true,
+          drop: () => {},
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(terminated).toBe(1);
+      expect(answer).toEqual({ kind: 'up', url: prior.url, started: true });
+      expect(spawned).toEqual([config]);
+      expect(recordedAt(dir)).toEqual({
+        url: prior.url,
+        binding: BINDING,
+        pid: 9050,
+        started_at: '2026-10-01T10:00:05.000Z',
+        config,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a record that names no start config is never reused: it is stopped, not attached to', async () => {
+    const dir = scratch();
+    try {
+      // A record an older build wrote names no configuration, so nothing proves the live server
+      // would run this launch's line; it is stopped under the same proof and replaced.
+      const prior = ownedRecord(dir);
+      seedRecord(dir, prior);
+      let spawned = 0;
+      let terminated = 0;
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          spawn: () => { spawned++; return { pid: 9051 }; },
+          alive: () => true,
+          commandOf: () => `codex app-server --listen ${prior.url}`,
+          startOf: () => T0_MS + 500,
+          terminate: () => { terminated++; },
+          isPlainDir: () => true,
+          isSocket: () => true,
+          drop: () => {},
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(terminated).toBe(1);
+      expect(spawned).toBe(1);
+      expect(answer).toEqual({ kind: 'up', url: prior.url, started: true });
+      expect(recordedAt(dir)?.config).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

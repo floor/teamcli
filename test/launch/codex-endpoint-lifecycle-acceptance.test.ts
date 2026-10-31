@@ -11,6 +11,9 @@
 //   the OS reused is never signalled;
 // - an unprovable predecessor is preserved and reported, never signalled; a predecessor whose
 //   own path this one takes over makes the launch unmanaged;
+// - a live endpoint is reused only when its record names the configuration this launch needs; a
+//   record naming none, or another line's, is stopped under the same proof and a fresh one
+//   started, never attached to;
 // - a start that never produced its socket, or whose seat binding moved while it started, is
 //   cleaned up by the call that started it and records nothing;
 // - the seat stop clears the record only after a proven stop, and only for the record it stopped.
@@ -71,7 +74,9 @@ function socketOf(dir: string, binding = BINDING): string {
 }
 
 function recordOf(dir: string, binding = BINDING, pid = 500): CodexEndpointRecord {
-  return { url: `unix://${socketOf(dir, binding)}`, binding, pid, started_at: STARTED_AT };
+  // A managed launch always records the configuration its server was started with; these scenes
+  // start it with none.
+  return { url: `unix://${socketOf(dir, binding)}`, binding, pid, started_at: STARTED_AT, config: [] };
 }
 
 function seed(dir: string, input: { binding?: string; record?: CodexEndpointRecord } = {}): void {
@@ -178,7 +183,7 @@ describe('the endpoint path and the recorded start', () => {
     expect(await ensure(w)).toEqual({ kind: 'up', url, started: true });
     expect(w.calls).toEqual([`spawn ${url}`]);
     expect(w.sockets.has(socketOf(w.dir))).toBe(true);
-    expect(seat(w.dir)?.codex_endpoint).toEqual({ url, binding: BINDING, pid: 501, started_at: NOW.toISOString() });
+    expect(seat(w.dir)?.codex_endpoint).toEqual({ url, binding: BINDING, pid: 501, started_at: NOW.toISOString(), config: [] });
   });
 
   test('an unreadable state or no valid binding starts nothing', async () => {

@@ -10,7 +10,11 @@
 // The endpoint is binding-scoped: the path carries the seat's current `presence_binding`, and the
 // record repeats the binding. A predecessor incarnation's server therefore can never serve a
 // successor's TUI or presence source, and a consumer that finds the two bindings disagree treats
-// the endpoint as unknown rather than reusing it (`daemon/presence/endpoint-record.ts`).
+// the endpoint as unknown rather than reusing it (`daemon/presence/endpoint-record.ts`). The
+// record also names the configuration the server was started with. The measurement recorded at
+// `codexEndpointConfig` is why: an attached TUI runs its turns under the app-server's
+// configuration, so a live endpoint is reused only when it was started with the configuration
+// this launch needs — another line's server is stopped and replaced, never attached to.
 //
 // The launch owns the process: it starts it detached, records the pid, and stops the previous
 // pid before starting a new one. Stopping is never done on a bare pid: the process at that pid
@@ -281,6 +285,15 @@ function provenOwner(
   return started <= recordedAt + START_SKEW_MS && started >= recordedAt - START_WINDOW_MS;
 }
 
+/** Whether the configuration recorded beside an endpoint is the one this launch needs. A record
+ *  that names none — one an older build wrote — is never this launch's, so its endpoint is
+ *  stopped rather than reused. The words are compared as the launch passed them, order and
+ *  quoting included, because that is what the server was started with. */
+function sameEndpointConfig(recorded: readonly string[] | undefined, needed: readonly string[]): boolean {
+  if (recorded === undefined || recorded.length !== needed.length) return false;
+  return recorded.every((word, at) => word === needed[at]);
+}
+
 /** Stops the process a record names, only after proving it is the app-server the launch started:
  *  a live `codex` command line carrying the exact `app-server --listen <url>` of this record, a
  *  plain (non-symlink) seat folder, and a socket file (not a symlink) at the owned path. An
@@ -415,10 +428,16 @@ export async function ensureCodexEndpoint(
   // A predecessor incarnation's record is read by shape (its binding is not the current one, by
   // definition); consumers read the current binding's record through the strict door.
   const prior = readCodexEndpointRecord(seatState?.codex_endpoint);
-  // The same incarnation, still ours and still listening: reuse it rather than start a second
-  // server on the same path. The proof is the same one a stop requires.
+  const config = input.config ?? [];
+  // The same incarnation, still ours, still listening, and started with this launch's
+  // configuration: reuse it rather than start a second server on the same path. The process
+  // proof is the same one a stop requires, and the config is the second half: the endpoint's
+  // configuration governs the attached TUI's turns (`codexEndpointConfig`), so a server started
+  // for another line would leave this seat without its own `-c` pairs and permissions. A record
+  // that names no config is never reused; the endpoint is stopped and a fresh one started.
   if (prior !== null && prior.binding === binding && prior.url === socketPath.url
-    && socket(socketPath.path) && provenOwner(prior, { alive, commandOf, startOf })) {
+    && socket(socketPath.path) && provenOwner(prior, { alive, commandOf, startOf })
+    && sameEndpointConfig(prior.config, config)) {
     return { kind: 'up', url: socketPath.url, started: false };
   }
 
@@ -464,7 +483,7 @@ export async function ensureCodexEndpoint(
   }
   const hookEnv = input.pane === undefined ? null : (deps.herdrEnv ?? herdrHookEnv)(input.session, input.pane);
   if (input.pane !== undefined && hookEnv === null) notes.push('herdr did not name the session\'s socket, so its turn hooks cannot report this seat');
-  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }), ...(input.config === undefined ? {} : { config: input.config }), ...(hookEnv === null ? {} : { env: hookEnv }) });
+  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }), config, ...(hookEnv === null ? {} : { env: hookEnv }) });
   if (started === null) {
     return { kind: 'unmanaged', why: 'the Codex app-server did not start' };
   }
@@ -491,6 +510,9 @@ export async function ensureCodexEndpoint(
         binding,
         pid: started.pid,
         started_at: now().toISOString(),
+        // What this server was started with, so a later launch can tell whether this very
+        // incarnation can serve its line or must be replaced.
+        config,
       };
       return true;
     },
