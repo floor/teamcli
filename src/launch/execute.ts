@@ -908,12 +908,13 @@ export async function executePlan(
       if (problem) return leftOut(op.seat, problem.reason, problem.detail);
       const kind = host.classify(session, op.pane, op.cli);
       const back = host.shellBack?.(session, op.pane) ?? null;
-      if (kind === 'idle' || (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, op.pane)))) {
+      const cliSeen = reportedLiveAgent(host.foreground?.(session, op.pane) ?? null, profileFor(op.cli)?.processNames ?? []);
+      if (back !== true && cliSeen && (kind === 'idle' || (kind === 'unknown' && unreadIdle(host.agentStatus?.(session, op.pane))))) {
         // The owner answered in the pane between runs: the seat carries on and finishes.
         host.clearWaiting?.(op.seat);
         return 'idle';
       }
-      classification = kind === 'working' ? op.record.classification : classificationOf(kind);
+      classification = kind === 'working' || kind === 'idle' ? op.record.classification : classificationOf(kind);
       if (dialog.mode === 'keep') {
         host.recordWaiting?.(op.seat, { state: 'waiting-owner', classification }, op.pane, op.workspace);
         dropped.add(op.seat);
@@ -1272,6 +1273,11 @@ export async function executePlan(
         // process read sits after it and before the comparison: a model the CLI is not running
         // still leaves a `launched` identity, and the read stays ahead of the process read.
         const idleOnwards = (): void => {
+          if ((host.shellBack?.(session, here.pane) ?? null) === true
+            || !reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames)) {
+            leftOut(op.seat, 'its CLI is not in the foreground; left at launched');
+            return;
+          }
           // What this run leaves watching for a drop is recorded before the screen is read, so
           // a seat whose identity cannot be read still carries the truth beside it.
           if (op.watcher) host.record(op.seat, { stage: 'launched', watcher: op.watcher });
@@ -1457,7 +1463,14 @@ export async function executePlan(
               herdrIdleBefore = true;
             } else herdrIdleBefore = false;
           } else herdrIdleBefore = false;
-          if (kind === 'idle' || kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
+          // A terminal retains its last frame after the CLI exits. Its idle text is evidence
+          // only while the profile's own process is still in front of the pane.
+          if (kind === 'idle' && back !== true
+            && reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames)) {
+            outcome = 'idle';
+            break;
+          }
+          if (kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
             outcome = kind;
             break;
           }

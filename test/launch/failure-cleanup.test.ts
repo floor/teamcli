@@ -62,6 +62,37 @@ test('a reused endpoint is not stopped or forgotten by a failed launch', async (
   expect(run.retained()).toBe(true);
 });
 
+test.each([
+  { name: 'exited CLI', back: true, foreground: ['synthetic-shell'] },
+  { name: 'wrapper', back: false, foreground: ['synthetic-wrapper'] },
+  { name: 'unreadable process', back: false, foreground: null },
+])('a retained idle screen cannot prove readiness over $name', async ({ back, foreground }) => {
+  const run = scene({ kind: 'idle', alive: false });
+  run.host.shellBack = () => back;
+  run.host.foreground = () => foreground === null ? null : [...foreground];
+  await executePlan(run.plan, 'scratch', run.host);
+  expect(run.records).not.toContainEqual({ kind: 'ready' });
+  expect(run.records).toContainEqual({ kind: 'left out', reason: 'timeout' });
+  expect(run.events).toEqual(['start', 'run']);
+  expect(run.retained()).toBe(true);
+});
+
+test('a live CLI at its idle screen stays ready with its endpoint', async () => {
+  const run = scene({ kind: 'idle' });
+  await executePlan(run.plan, 'scratch', run.host);
+  expect(run.records).toContainEqual({ kind: 'ready' });
+  expect(run.events).toEqual(['start', 'run']);
+});
+
+test('an owner-charter notice cannot make a retained idle screen ready after exit', async () => {
+  const run = scene({ kind: 'idle', alive: false });
+  run.host.dialog = { mode: 'notice' };
+  await executePlan(run.plan, 'scratch', run.host);
+  expect(run.records).not.toContainEqual({ kind: 'ready' });
+  expect(run.records).toContainEqual({ kind: 'left out', reason: 'its CLI is not in the foreground; left at launched' });
+  expect(run.retained()).toBe(true);
+});
+
 test.each([true, false])('a dialog outside execute also guards the record drop: stopped=%s', async (stopped) => {
   const run = scene({ stopped });
   const wrapped = endpointCleanupHost(run.host);

@@ -353,7 +353,7 @@ describe('a three-seat launch', () => {
       {
         kind: 'wait',
         text: `until ${name} shows its idle prompt`,
-        do: { do: 'idle', seat: name, label: name, cli, seconds, command: cli, pane: `${name}-pane`, repairLine: `\`team remove ${name} --keep\` then \`team add ${name}\`` },
+        do: { do: 'idle', seat: name, label: name, cli: cli === 'claude' ? 'claude-code' : cli, seconds, command: cli, pane: `${name}-pane`, repairLine: `\`team remove ${name} --keep\` then \`team add ${name}\`` },
       },
     ];
     // alpha's launch carries its rules line: rules are never typed into a pane.
@@ -401,6 +401,7 @@ describe('a three-seat launch', () => {
       stopSession: () => true,
       kill: () => true,
       agentPanes: () => ['alpha-pane'],
+      foreground: () => ['claude'],
       classify: (_session, pane): ScreenKind =>
         pane === 'beta-pane' ? 'vendor notice' : pane === 'alpha-pane' ? 'idle' : 'unknown',
       sleep: async () => { slept.push(t); t += 1000; },
