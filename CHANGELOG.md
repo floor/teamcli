@@ -67,8 +67,9 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   and `down --abandon`, `broker`, `tempo`, `daemon install`, `uninstall` and `fault-watch`; the
   file's designated installer while its designation is not approved; and one untested Antigravity
   release, `agy` `1.4.3`, in `team reload`. Beyond the lifts this entry lists, the client pane
-  guard, the load guard, the swap gate and every public action keep their refusals. Each lifted
-  gate says so with a `dev mode continues` warning.
+  guard, the load guard, the swap gate and every public action keep their refusals. Each lift
+  logs a `dev mode continues` warning — printed for the caller gates, file approval, owner gates
+  and reload range, and in the audit log alone for the installer admission.
 - **General grants.** One owner signature covers every entity or a listed set. The `team up
   --general` form admits a launch with no request. `team init --general` creates a team for an
   entity whose declared roots hold the folder: the grant must verify to the owner key, be

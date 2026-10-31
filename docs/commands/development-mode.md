@@ -77,10 +77,10 @@ resolves as its lead, so a separate operator seat gains nothing.
 **The installer designation.** `team queue install` normally records an install only while the
 file's `installer:` section is part of the approval in force. With dev mode on at the team's
 place, the live file's validated designation stands: the seat it names, on the pane the team's
-state records for it, records the install, with `warning: <the refusal>; dev mode continues` and
-the level appended as above, and the log records the seat as admitted as `installer`. Only the
-approval of the designation moves: the declared seat, its recorded pane and the exact
-`installer:` name stay checks.
+state records for it, records the install. The audit log then carries `warning: <the refusal>;
+dev mode continues`, with the level appended as above, and the seat as admitted as `installer`;
+the run itself prints only the install summary. Only the approval of the designation moves: the
+declared seat, its recorded pane and the exact `installer:` name stay checks.
 
 **One untested release in `team reload`.** Before it closes anything, `team reload` reads the
 CLI's printed version against its profile's tested range and refuses `reload.untested` outside
@@ -90,7 +90,9 @@ profile's tested `1.2.16` to `1.4.2`, closes and relaunches anyway, with `team r
 tested range never widens; every other CLI and version, and every run with dev mode off, keeps
 the refusal.
 
-Each admitted run prints the same warning, and the log names the role it proved.
+Every lift logs a `dev mode continues` warning with the command and the caller; the owner and
+installer admissions add the role they proved. The caller-gate, file-approval, owner-gate and
+reload warnings also print to stderr, while the installer admission's is in the audit log alone.
 
 ## What it never lifts
 
