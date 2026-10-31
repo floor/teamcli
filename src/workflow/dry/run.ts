@@ -109,7 +109,7 @@ export function dryRun(input: DryRunInput): DryRunResult {
     outcome: { kind: 'script-exhausted' },
   };
 
-  // A reachable `uses:` is refused before the core is reached (Zeus U8, slice 1). The message
+  // A reachable `uses:` is refused before the core is reached (owner's U8, slice 1). The message
   // names the library slice that brings nesting; the journal records the stop and no step.
   const deferred = reachableUses(definition, initial);
   if (deferred !== undefined) {

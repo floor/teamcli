@@ -32,6 +32,16 @@ const WARNING = 'team status: warning, line 5: `coordinator:` is now `leads: tru
 
 const claudeScreen = (model: string) => `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
 const codexScreen = (name: string) => readFileSync(new URL(`./fixtures/codex/0.157.0/${name}.txt`, import.meta.url), 'utf8');
+const codexRateLimitSwitch = `Approaching rate limits
+Switch to gpt-6-luna for lower credit usage?
+
+
+› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders about switching models
+
+  enter select · esc back
+`;
 
 function agent(name: string | null, workspace: string, status = 'idle', kind = 'claude'): HerdrAgent {
   return { name, agent: kind, pane: `${workspace}:p1`, workspace, status, cwd: null };
@@ -458,9 +468,9 @@ describe('team status', () => {
   });
 
   test('--session reads another session, with its own state', async () => {
-    const { out } = await status('--session', 'team-test');
-    expect(out).toContain('session "team-test"');
-    expect(out).toContain('no watch has run for this session\n  repair: team watch --session team-test');
+    const { out } = await status('--session', 'sandbox');
+    expect(out).toContain('session "sandbox"');
+    expect(out).toContain('no watch has run for this session\n  repair: team watch --session sandbox');
   });
 
   test('a broken file: status falls back to the last valid copy and says so first', async () => {
@@ -964,6 +974,13 @@ describe('team status', () => {
     });
     const temp = await status();
     expect(temp.out).toMatch(/deepseek-acme-tmp-1\s+blocked: quota, resets at 11:00, temporary/);
+  });
+
+  test('a Codex model-switch dialog makes the registry row blocked with the reason', async () => {
+    const codexPane = built().agents.find((one) => one.name === 'codex-acme')?.pane ?? '';
+    live = { ...built(), screens: { ...built().screens, [codexPane]: codexRateLimitSwitch } };
+    const result = await status();
+    expect(result.out).toMatch(/codex-acme\s+blocked \(needs a choice: rate-limit model switch\)/);
   });
 
   test('a permission prompt is the lead\'s difference, a trust prompt the owner\'s', async () => {

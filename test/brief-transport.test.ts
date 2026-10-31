@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NativePane } from '../src/send/native.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
-import { listenerPath, writeListener } from '../src/mcp/inbox.ts';
+import { listenerPath, readMessage, writeListener } from '../src/mcp/inbox.ts';
 import {
   MEMORY_TRANSPORT_UNSUPPORTED,
   currentBriefClaim,
@@ -26,8 +26,9 @@ import { acquireSeatLock } from '../src/launch/seat-lock.ts';
 import { briefTransportOf } from '../src/policy/brief-transport.ts';
 import { POLICY_CATALOGUE } from '../src/policy/types.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
-import { emptySession, readState } from '../src/state.ts';
+import { emptySession, readState, updateState } from '../src/state.ts';
 import { messageKeyPath } from '../src/store/keys.ts';
+import { clearPending } from '../src/send/pending.ts';
 import type { SendHost } from '../src/commands/send.ts';
 
 const NOW = new Date('2026-10-19T09:00:00Z');
@@ -209,6 +210,72 @@ describe('the message walk', () => {
       const last = history.entries.at(-1);
       expect(last).toMatchObject({ to: SEAT, id: delivery.id, via: 'mcp-inbox', outcome: 'sent (unconfirmed)' });
     }
+  });
+
+  test('a re-broadcast of a claim the seat already holds or has read walks nothing and writes no new sidecar', async () => {
+    const w = world();
+    setTransport(w, 'message');
+    // A live seat: the rollout targets the seats the state records as running.
+    updateState(w.dir, (state) => {
+      const session = (state.sessions[SESSION] ??= emptySession());
+      session.seats[SEAT] = { stage: 'ready' };
+    });
+    // The rollout's own shape: no attributed seat, every live seat broadcast to.
+    const broadcast = () => deliverBriefForAttribution({
+      dir: w.dir,
+      root: w.root,
+      session: SESSION,
+      home: w.home,
+      now: NOW,
+      team: { seats: [{ name: SEAT, cli: 'codex' }] },
+      state: readState(w.dir).sessions[SESSION] ?? emptySession(),
+      attributed: [],
+      broadcast: true,
+    });
+    const first = broadcast();
+    const delivery = first.deliveries[0];
+    if (delivery === undefined || !delivery.ok) throw new Error(JSON.stringify(first));
+    expect(first.walks).toHaveLength(1);
+    writeListener(dropDir(w), {
+      v: 1,
+      seat: SEAT,
+      session: SESSION,
+      root: w.root,
+      cli: 'codex',
+      pid: process.pid,
+      ts: NOW_ISO,
+    });
+    await walkBriefDeliveries(first, { dir: w.dir, home: w.home, sendHost: fake(w) });
+    const sidecars = () => readdirSync(dropDir(w)).filter((name) => name.endsWith('.pending')).sort();
+    expect(sidecars()).toEqual([`${delivery.id}.pending`]);
+
+    // The claim and its record already stand: this broadcast is the same delivery, not a new
+    // notification, so no leg is walked and the sidecar the first walk left is not rewritten.
+    const held = broadcast();
+    expect(held.deliveries[0]).toMatchObject({ ok: true, existing: true, id: delivery.id });
+    expect(held.walks ?? []).toEqual([]);
+    await walkBriefDeliveries(held, { dir: w.dir, home: w.home, sendHost: fake(w) });
+    expect(sidecars()).toEqual([`${delivery.id}.pending`]);
+
+    // The seat reads the brief (a signed read receipt bound to the claim) and the watch's
+    // promote clears the sidecar. A broadcast after that read still walks nothing: a delivery
+    // the seat has read is not a reason to write its retry record again.
+    const claim = claimOf(w);
+    if (claim === null) throw new Error('the delivery left no claim');
+    const read = readMessage(
+      { dropDir: dropDir(w), root: w.root, seat: SEAT, session: SESSION },
+      delivery.id,
+      w.home,
+      { claim: () => claim },
+    );
+    expect(read.ok).toBe(true);
+    clearPending(dropDir(w), delivery.id);
+    expect(sidecars()).toEqual([]);
+
+    const afterRead = broadcast();
+    expect(afterRead.walks ?? []).toEqual([]);
+    await walkBriefDeliveries(afterRead, { dir: w.dir, home: w.home, sendHost: fake(w) });
+    expect(sidecars()).toEqual([]);
   });
 
   test('a human seat is walked by the drop leg alone, and writes no receipt marker', async () => {

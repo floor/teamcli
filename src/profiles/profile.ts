@@ -230,6 +230,37 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
     .replaceAll('{epoch_args}', place.epoch === undefined ? '' : `,"--epoch",${JSON.stringify(place.epoch)}`);
 }
 
+/** Add defaults as complete options: a line's own flag keeps its value, including when the
+ *  flag uses an alias or the value is joined with `=`. Quoted arguments are kept whole so a
+ *  flag appearing inside a prompt or config value does not suppress a default. */
+function unattendedOptions(profile: Profile, launch: string): string[] {
+  const aliases: Record<string, string> = profile.cli === 'codex'
+    ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
+    : {};
+  const key = (word: string): string => {
+    const flag = word.split('=', 1)[0]!;
+    return aliases[flag] ?? flag;
+  };
+  const words = launch.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  const flags = new Set<string>();
+  for (const word of words) {
+    if (word === '--') break;
+    if (word.startsWith('-')) flags.add(key(word));
+  }
+  const options: string[] = [];
+  for (let i = 0; i < profile.unattended.length; i++) {
+    const flag = profile.unattended[i]!;
+    const next = profile.unattended[i + 1];
+    const value = !flag.includes('=') && next !== undefined && !next.startsWith('-') ? next : undefined;
+    if (!flags.has(key(flag))) {
+      options.push(flag);
+      if (value !== undefined) options.push(value);
+    }
+    if (value !== undefined) i++;
+  }
+  return options;
+}
+
 /**
  * The command a seat's pane runs: the unattended flag in its environment, the
  * file's launch line, then the profile's options and, where the CLI takes
@@ -248,7 +279,7 @@ export function launchCommand(
   rulesLine?: string,
 ): string {
   const words = new Set(launch.trim().split(/\s+/));
-  const options = profile.unattended.filter((option) => !words.has(option));
+  const options = unattendedOptions(profile, launch);
   if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !words.has('--no-daemon')) {
     const altIdx = options.indexOf('--no-alt-screen');
     if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');

@@ -11,14 +11,14 @@ import { boxHoldsText, deliverRules, refusalReport, type Delivery, type Refusal 
 import { readScreen } from '../../src/watch/screen.ts';
 
 const fixture = (path: string) => readFileSync(new URL(`../fixtures/${path}`, import.meta.url), 'utf8');
-const RULES = '/Users/jvial/.config/team/teamcli-5e46a02374b3/rules';
+const RULES = '/home/example/.config/team/teamcli-5e46a02374b3/rules';
 const lineFor = (seat: string, hash: string) =>
   `Read ${RULES}/${seat}.md (sha256 ${hash}): your standing rules for this session; reply ready and wait for your brief.`;
 
 const SCREENS = [
   { cli: 'codex', file: 'codex/0.161.0/rules-unsent-orchestrator.txt', line: lineFor('orchestrator', '92ae1ae483d5') },
   { cli: 'codex', file: 'codex/0.161.0/rules-unsent-builder-3.txt', line: lineFor('builder-3', '8cf214db695d') },
-  { cli: 'cursor', file: 'cursor/2026.10.22/rules-unsent-reviewer-cursor.txt', line: lineFor('reviewer-cursor', 'b18ac61a29b2') },
+  { cli: 'cursor', file: 'cursor/2026.10.22/rules-unsent-reviewer-agent.txt', line: lineFor('reviewer-agent', 'b18ac61a29b2') },
 ] as const;
 
 /** A seat whose box already holds the captured line. `busyFor` ms of herdr `working` follow the

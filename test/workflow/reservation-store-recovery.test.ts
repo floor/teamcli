@@ -54,7 +54,7 @@ function entryOf(store: RunStore, item: ItemIdentity): ItemRecord | null {
   return store.entry(key);
 }
 
-function reserveFor(store: ReservationStore, item: ItemIdentity, runId: string, seat = 'work', pane = 'w2:p1') {
+function reserveFor(store: ReservationStore, item: ItemIdentity, runId: string, seat = 'work', pane = 'fixture2:pane1') {
   return reserve(store, {
     item,
     runId,
@@ -67,7 +67,7 @@ function reserveFor(store: ReservationStore, item: ItemIdentity, runId: string, 
 }
 
 function claimBy(store: ReservationStore, at: number) {
-  return claimNext(store, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: at, expiresAt: at + 60_000 });
+  return claimNext(store, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', now: at, expiresAt: at + 60_000 });
 }
 
 describe('an index-only hold whose run has no journal', () => {
@@ -90,7 +90,7 @@ describe('an index-only hold whose run has no journal', () => {
     expect(entryOf(store, ITEM)?.hold).toEqual(held);
 
     expect(expire(store, T)).toEqual([
-      { kind: 'reservation', item: ITEM, owner: `${ghost}/1`, run: ghost, attempt: 1, thread: 'th-ghost-1', seat: 'work', receiver: 'work', pane: 'w2:p1' },
+      { kind: 'reservation', item: ITEM, owner: `${ghost}/1`, run: ghost, attempt: 1, thread: 'th-ghost-1', seat: 'work', receiver: 'work', pane: 'fixture2:pane1' },
     ]);
     expect(expire(store, T)).toEqual([]);
     expect(entryOf(store, ITEM)?.hold).toBeUndefined();

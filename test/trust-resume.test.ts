@@ -330,7 +330,7 @@ describe('trust dialog resume and pane naming', () => {
     expect(recorded?.pane).toBe('w46:p1');
   });
 
-  test('(1b) register finds a waiting-for-trust seat by its recorded pane without --pane, and finishes rename, metadata, and rules delivery', async () => {
+  test('(1b) register finds a waiting-for-trust seat by its recorded pane without --pane, finishes rename and metadata, and writes the rules file without typing', async () => {
     const w = makeWorld();
     await approve(w.root, w.home);
 
@@ -350,19 +350,9 @@ describe('trust dialog resume and pane naming', () => {
       };
     });
 
-    let status: 'idle' | 'working' = 'idle';
-    let typedLine = '';
-    let pasted = false;
     const renames: string[] = [];
     const titles: string[] = [];
     const displays: string[] = [];
-    const sent: string[] = [];
-
-    const boxed = () => {
-      const [first = '', ...rest] = typedLine.split('\n');
-      const body = [`> ${first}`, ...rest.map((line) => `  ${line}`)].join('\n');
-      return AGY_IDLE.replace('\n>\n', `\n${body}\n`);
-    };
 
     const regSources: RegisterSources = {
       home: w.home,
@@ -370,12 +360,12 @@ describe('trust dialog resume and pane naming', () => {
       standing: (r) => approvalStanding(r, w.home),
       sessionState: () => 'running',
       agents: () => [
-        { name: null, agent: 'agy', pane: 'w46:p1', workspace: 'w46', status, cwd: null },
+        { name: null, agent: 'agy', pane: 'w46:p1', workspace: 'w46', status: 'idle', cwd: null },
       ],
       processInfo: () => ({ shell: 200, foreground: [201] }),
       foreground: () => ['agy'],
-      paneText: () => (pasted ? boxed() : status === 'working' ? AGY_WORKING : AGY_IDLE),
-      agentStatus: () => status,
+      paneText: () => AGY_IDLE,
+      agentStatus: () => 'idle',
       renameAgent: (session, pane, name) => {
         renames.push(`${session}:${pane}:${name}`);
         return true;
@@ -388,43 +378,28 @@ describe('trust dialog resume and pane naming', () => {
         displays.push(`${session}:${pane}:${text}`);
         return true;
       },
-      typeText: (_session, pane, text) => {
-        typedLine = text;
-        pasted = true;
-        sent.push(`${pane}:${text}`);
-        return true;
-      },
-      pressEnter: (_session, pane) => {
-        sent.push(`${pane}:Enter`);
-        pasted = false;
-        status = 'working';
-        return true;
-      },
-      sleep: async () => {},
     };
 
     const io = testIo(w.root, { kind: 'owner' });
     const code = await runRegister(['operator-1'], io, regSources);
-    // No pane messaging: the seat is already in its pane, so its rules cannot be handed to it
-    // there; it is left out until a relaunch carries the rules line.
-    expect(code).toBe(1);
-    expect(io.out + io.err).toContain('nothing was registered');
-    return;
+    // The pane this run adopts is never typed into: register writes the rules file and says
+    // the seat's next launch carries the line.
+    expect(code).toBe(0);
+    expect(io.out).toContain(
+      'operator-1: its rules file is written; nothing is typed: its rules ride its next launch (run team restart operator-1 to carry them)\n',
+    );
     expect(io.out).toContain('operator-1: registered — pane w46:p1; nothing was launched\n');
     expect(renames).toEqual(['acme:w46:p1:operator-1']);
     expect(titles).toEqual([`acme:w46:${workspaceLabel(operatorSeat)}`]);
     expect(displays).toEqual([`acme:w46:p1:${displayAgent(operatorSeat)}`]);
-    expect(sent).toHaveLength(2);
-    expect(sent[0]).toContain('w46:p1:Read ');
-    expect(sent[0]).toContain('rules/operator-1.md');
-    expect(sent[1]).toBe('w46:p1:Enter');
 
     const recorded = readState(w.dir).sessions.acme?.seats['operator-1'];
     expect(recorded?.stage).toBe('ready');
     expect(recorded?.waiting).toBeUndefined();
-    expect(recorded?.rules).toBe('message');
+    expect(recorded?.rules).toBe('undelivered');
     expect(recorded?.pane).toBe('w46:p1');
     expect(existsSync(rulesFilePath('acme', w.root, w.home, 'operator-1')!)).toBe(true);
+    expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('operator-1: its rules file is written; nothing is typed');
   });
 
   test("(1b2) a stale waiting record never types the rules line into a human's pane", async () => {
@@ -450,7 +425,6 @@ describe('trust dialog resume and pane naming', () => {
     });
 
     const renames: string[] = [];
-    const sent: string[] = [];
     const regSources: RegisterSources = {
       home: w.home,
       now: () => NOW,
@@ -469,15 +443,6 @@ describe('trust dialog resume and pane naming', () => {
       },
       renameWorkspace: () => true,
       reportDisplayAgent: () => true,
-      typeText: (_session, pane, text) => {
-        sent.push(`${pane}:${text}`);
-        return true;
-      },
-      pressEnter: (_session, pane) => {
-        sent.push(`${pane}:Enter`);
-        return true;
-      },
-      sleep: async () => {},
     };
 
     const io = testIo(w.root, { kind: 'owner' });
@@ -486,12 +451,11 @@ describe('trust dialog resume and pane naming', () => {
     expect(io.out).toContain("operator-1: the pane is a human's; no rules line was typed; left as it is\n");
     expect(io.out).toContain('operator-1: registered — pane w46:p1; nothing was launched\n');
     expect(renames).toEqual(['acme:w46:p1:operator-1']);
-    // The mark spares the pane: no typed line and no Enter, and no rules file to point at.
-    expect(sent).toEqual([]);
     const recorded = readState(w.dir).sessions.acme?.seats['operator-1'];
     expect(recorded?.stage).toBe('ready');
     expect(recorded?.waiting).toBeUndefined();
     expect(recorded?.rules).toBeUndefined();
+    // The mark spares the pane: no typed line and no rules file to point at.
     expect(existsSync(rulesFilePath('acme', w.root, w.home, 'operator-1')!)).toBe(false);
     expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain("operator-1: no rules line; the pane is a human's");
   });

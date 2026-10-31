@@ -77,6 +77,7 @@ export const commands: Record<string, () => Promise<{ default: Command; USAGE: s
   settings: () => import('./commands/settings.ts'),
   swap: () => import('./commands/swap.ts'),
   workflow: () => import('./commands/workflow.ts'),
+  agents: () => import('./commands/agents.ts'),
 };
 
 /** Commands an earlier line carried and this one does not, each with the one line a typed one

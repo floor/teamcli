@@ -27,17 +27,16 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat } from '../file/types.ts';
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
-import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, pressEnter, reportDisplayAgent, sendKey as herdrSendKey, sessionState, typeText, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
+import { agentList, agentRename, agentStatus, paneForeground, paneProcesses, paneRead, reportDisplayAgent, sessionState, workspaceRename, type HerdrAgent, type PaneProcesses, type SessionState } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
-import { deliverRules } from '../launch/deliver.ts';
 import { currentBriefClaim, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { GENERAL_BRIEF_SHA256 } from '../launch/general-brief-text.ts';
 import { launchedIdentity } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
-import { rulesDeliveryOf, rulesFileHash, rulesFileHolds, writeRulesFile } from '../launch/rules-file.ts';
+import { rulesDeliveryOf, rulesFileHash, writeRulesFile } from '../launch/rules-file.ts';
 import { unreadIdle } from '../launch/unread.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
@@ -89,13 +88,9 @@ export type RegisterSources = {
   /** Names the pane as the seat — the herdr rename a launch runs at its `rename` step. Left out,
    *  the real `herdr agent rename` runs. */
   renameAgent?: (session: string, pane: string, name: string) => boolean;
-  /** Optional rules delivery channels used when finishing a waiting-for-trust seat. */
+  /** The approval standing a waiting-for-trust seat's rules file is written under. */
   standing?: (root: string) => Standing;
-  typeText?: (session: string, pane: string, text: string) => boolean;
-  pressEnter?: (session: string, pane: string) => boolean;
-  sendKey?: (session: string, pane: string, key: string) => boolean;
   agentStatus?: (session: string, pane: string) => string | null;
-  sleep?: (ms: number) => Promise<void>;
   now: () => Date;
 };
 
@@ -111,11 +106,7 @@ const realSources: RegisterSources = {
   paneText: (session, pane) => paneRead(pane, 200, session),
   renameAgent: realRename,
   standing: (root) => approvalStanding(root, homedir()),
-  typeText: (session, pane, text) => typeText(pane, text, session),
-  pressEnter: (session, pane) => pressEnter(pane, session),
-  sendKey: (session, pane, key) => herdrSendKey(pane, key, session),
   agentStatus: (session, pane) => agentStatus(pane, session),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => new Date(),
 };
 
@@ -807,7 +798,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     logLine(dir, 'register', callerLabel(walked), `the pane was not named ${name}: herdr did not take the rename`, now);
   }
 
-  let finishedRules: 'option' | 'message' | undefined;
+  let finishedRules: 'option' | 'message' | 'undelivered' | undefined;
   if (waitingTrust) {
     // A record a launch wrote before the file marked this seat a human's may still say a trust
     // dialog is waiting. The mark is the last word: nothing is typed into a human's pane, so no
@@ -827,23 +818,16 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       if (!written.ok) {
         return screenRefused(io, json, name, screen.kind);
       }
-      if (sources.typeText && sources.pressEnter) {
-        const delivered = await deliverRules(seat.cli, delivery.line, profile.idleTimeout, {
-          screen: () => sources.paneText(session, pane) ?? undefined,
-          status: () => (sources.agentStatus ? sources.agentStatus(session, pane) : listed?.status ?? null),
-          type: (value) => sources.typeText!(session, pane, value),
-          enter: () => sources.pressEnter!(session, pane),
-          ...(sources.sendKey ? { key: (key: string) => sources.sendKey!(session, pane, key) } : {}),
-          file: () => rulesFileHolds(delivery.path, rulesFileHash(delivery.text)),
-          foreground: () => (sources.foreground ? sources.foreground(session, pane) : listed?.agent ? [listed.agent] : null),
-          now: () => sources.now().getTime(),
-          sleep: (ms) => (sources.sleep ? sources.sleep(ms) : Promise.resolve()),
-        });
-        if (delivered !== true) {
-          return screenRefused(io, json, name, screen.kind);
-        }
-      }
-      finishedRules = 'message';
+      // The rules are never typed into the pane this run adopts: the file is all it writes, and
+      // the seat reads it with the next launch that carries the line. A CLI whose launch line
+      // takes no rules prompt has no such launch, and the run says that rather than naming a
+      // restart that would change nothing.
+      const said = profile.rulesPrompt !== null
+        ? `its rules file is written; nothing is typed: its rules ride its next launch (run team restart ${name} to carry them)`
+        : "its rules file is written; this CLI's launch line carries no rules line, so no launch can carry them";
+      out.stdout(`${plainLine(name)}: ${said}\n`);
+      logLine(dir, 'register', callerLabel(walked), `${name}: ${said}`, now);
+      finishedRules = 'undelivered';
     }
   }
 

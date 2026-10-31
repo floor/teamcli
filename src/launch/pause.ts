@@ -71,7 +71,7 @@ export type PauseHost = {
   /** Removes the waiting field alone: the seat reached its prompt and continues. */
   clear(): void;
   /** Removes the seat's whole launch state: its workspace has been closed. */
-  drop(): void;
+  drop(): boolean | void;
   /** A fresh screen read of the pane. */
   screen(): ScreenReading;
   /** The pane's process identity now; null when herdr can't tell. */
@@ -488,7 +488,9 @@ async function skip(input: PauseInput, host: PauseHost, at: string): Promise<Out
     if (!host.close(target.workspace)) {
       return { kind: 'done', result: { kind: 'left out', reason: `${at}; its workspace did not close; left as it is`, detail: '' } };
     }
-    host.drop();
+    if (host.drop() === false) {
+      return leftOut({ reason: 'its endpoint was not stopped; its launch record was kept', detail: '' });
+    }
     return { kind: 'done', result: { kind: 'skipped' } };
   } finally {
     lock.release();

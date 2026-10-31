@@ -1,6 +1,6 @@
 // Independent coverage for the whole-graph workflow checker (src/workflow/check.ts, PR #610).
 // Authored from the reviewed contract — wf0-spec-slices-0-1.md §1 (state, wait, transition and
-// effect rules; the reference rules; the findings families and the exit rule) and the Zeus ruling
+// effect rules; the reference rules; the findings families and the exit rule) and the owner's ruling
 // of 2026-10-21 (U5 bare guard names, U6 a note per provisional operation use, U7 roles, U13 the
 // tag sketch's act-as effect with no capability) — against the merged shared module
 // (src/workflow/{types,registry,schema}.ts at main). The checker's public shape and code names

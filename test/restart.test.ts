@@ -1178,7 +1178,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Antigravity wrapper keeps --conversation=<id> on the forwarded launch line', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh agy --model gemini-3.8-flash';
+    const launch = 'zsh /home/owner/as-floor.sh agy --model gemini-3.8-flash';
     const { fixture, run } = seeded({
       registry: AGY_CONVERSATION,
       cli: 'antigravity',
@@ -1233,7 +1233,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh grok --model grok-4.7';
+    const launch = 'zsh /home/owner/as-floor.sh grok --model grok-4.7';
     const { fixture, run } = seeded({
       registry: GROK_SESSION,
       cli: 'grok',
@@ -1259,7 +1259,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Codex wrapper keeps resume <id> after the flags the seat already names', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
+    const launch = 'zsh /home/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
     const { fixture, run } = seeded({
       registry: 'ses_codex',
       declaredCli: 'codex',
@@ -1280,12 +1280,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(run.did.runs.join('\n')).not.toContain('--resume');
   });
 
-  test('a restarted Codex seat with permission overrides attaches its endpoint on a fresh thread', async () => {
-    // The plan reads the seat's codex-daemon policy from the home, as `team up` does, and
-    // attaches the managed endpoint; codex-cli 0.161.0 refuses -a/-s on a remote resume (the
-    // seat would exit to its shell), so the attached line sheds them and the thread keeps the
-    // permissions it was recorded with.
-    const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol';
+  test('a restarted Codex seat resumes its recorded thread on an endpoint carrying its permissions', async () => {
+    const launch = 'zsh /home/owner/as-floor.sh codex -m gpt-6.1-sol';
     const { fixture, run } = seeded({
       registry: 'ses_codex',
       declaredCli: 'codex',
@@ -1295,6 +1291,16 @@ describe('team restart resumes the seat\'s own recorded session', () => {
       launch,
     });
     run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    // The successor reports the thread its command actually selected. A fresh command
+    // cannot pass by leaving the old id in the state or registry.
+    const agents = run.sources.upLaunch.agents;
+    run.sources.upLaunch.agents = (session) => (agents(session) ?? []).map((agent) => ({
+      ...agent,
+      ...(agent.pane.startsWith('pane-new') ? {
+        agent: 'codex',
+        session: /(?:^|\s)resume\s+(\S+)/.exec(run.did.runs.at(-1) ?? '')?.[1] ?? 'ses_fresh',
+      } : {}),
+    }));
     const endpointConfigs: (string[] | undefined)[] = [];
     run.sources.upLaunch.codexEndpoint = {
       managed: async (endpoint: { config?: string[] }) => {
@@ -1308,15 +1314,48 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources)).toBe(0);
-    // The plan resumed ses_codex; the attach starts a fresh thread so the overrides can ride it.
-    expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${launch} -a never`);
-    expect(run.did.runs.join('\n')).not.toContain('resume ses_codex');
-    expect(run.did.runs.join('\n')).toContain(`${launch} -a never -s danger-full-access --no-alt-screen`);
-    expect(run.did.runs.join('\n')).toContain(' --remote unix:///tmp/worker.sock');
+    const command = run.did.runs.join('\n');
+    expect(command).toContain(`AGENT_UNATTENDED=1 ${launch} resume ses_codex`);
+    expect(command.match(/(?:^|\s)resume(?=\s|$)/g)).toHaveLength(1);
+    expect(command).not.toMatch(/(?:^|\s)(?:-a|-s)(?=\s|$)/);
+    expect(command).toContain('--no-alt-screen');
+    expect(command).toContain(' --remote unix:///tmp/worker.sock');
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.agent_session).toBe('ses_codex');
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_codex');
+    expect(io.err).not.toContain('starts a fresh Codex thread');
     // The endpoint carries what the attached line shed: its turns run under the endpoint's config.
     expect(endpointConfigs).toHaveLength(1);
     expect(endpointConfigs[0]).toEqual(expect.arrayContaining(['approval_policy="never"', 'sandbox_mode="danger-full-access"']));
     expect(endpointConfigs[0]!.some((word) => word.startsWith('mcp_servers.team_inbox.args='))).toBe(true);
+  });
+
+  test.each([
+    { cli: 'codex', live: 'ses_other', why: 'its live agent session is not the recorded one' },
+    { cli: 'claude-code', live: 'ses_codex', why: 'the record ran claude-code, the seat now declares codex' },
+  ])('a managed Codex restart refuses an unbound conversation: $why', async ({ cli, live, why }) => {
+    const { fixture, run } = seeded({
+      registry: 'ses_codex', state: 'ses_codex', declaredCli: 'codex',
+      workerSession: live, launched: true, cli,
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+    let endpointStarts = 0;
+    run.sources.upLaunch.codexEndpoint = {
+      managed: async () => {
+        endpointStarts++;
+        return { kind: 'up', url: 'unix:///tmp/worker.sock', started: true };
+      },
+      stop: () => ({ stopped: true }),
+    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources)).toBe(1);
+    expect(io.err).toContain(`not resuming its recorded session (${why})`);
+    expect(run.did.runs).toEqual([]);
+    expect(run.did.closed).toEqual([]);
+    expect(run.did.typed).toEqual([]);
+    expect(endpointStarts).toBe(0);
+    expect(readState(fixture.dir).sessions.acme?.seats.worker?.agent_session).toBe('ses_codex');
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_codex');
   });
 
   test('a recorded launcher that selects another conversation is refused before the stop', async () => {
@@ -1484,7 +1523,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker', '--abandon'], io, run.sources)).toBe(0);
     expect(run.did.closed).toContain('ws-old');
-    expect(run.did.runs.join('\n')).not.toContain('resume');
+    expect(run.did.runs.join('\n')).not.toMatch(/(?:^|\s)resume(?=\s|$)/);
     expect(run.did.runs.join('\n')).toContain('codex -m gpt-6.1-sol');
   });
 

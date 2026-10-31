@@ -297,8 +297,8 @@ describe('the jules compose walk', () => {
   });
 });
 
-describe('the send glue names the seat\'s own origin as the repo', () => {
-  test('a folder whose origin is example/sandbox delivers there and nowhere else', async () => {
+describe('a compose delivery is refused before the module runs, and a git remote url names its repo', () => {
+  test('a folder whose origin is example/sandbox is named by its url, and nothing is typed', async () => {
     const base = mkdtempSync(join(tmpdir(), 'jules-seat-'));
     made.push(base);
     execFileSync('git', ['init', '-q', base], { stdio: 'ignore' });
@@ -338,7 +338,7 @@ describe('the send glue names the seat\'s own origin as the repo', () => {
     expect(pane.deleted).toBe(false);
   });
 
-  test('a non-lead seat started in the lobby still sends to its project\'s repo', async () => {
+  test('a non-lead seat started in the lobby is refused the same way, and nothing is typed', async () => {
     // `team up` starts a non-lead seat in the lobby, and the TUI never leaves that folder, so
     // the pane's foreground cwd has no git origin. The seat's record carries the project, and
     // its origin is the repo the brief is created on.

@@ -1,6 +1,6 @@
 # team owner-seat
 
-The owner seat is the human owner's own seat. An agent (Iris) runs this command on the owner's
+The owner seat is the human owner's own seat. An agent (the orchestrator) runs this command on the owner's
 behalf; the owner never types it. Every step that needs the owner ends in a native prompt on the
 owner's own device, Touch ID from the Secure Enclave helper or a passkey on the owner page, and
 that signature is the authority, not the caller or a terminal.

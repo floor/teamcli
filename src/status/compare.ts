@@ -296,7 +296,8 @@ export function compare(
       // screen's, and herdr's `unknown` is not a state to show or a note to print. A screen no
       // profile reads leaves herdr's word standing, and the note with it.
       const theirWord = herdrUnreliable(seat.cli);
-      const word = theirWord ? screenWord(screen) : agent.status;
+      const switchReason = screen.kind === 'rate limit' ? screen.reason : undefined;
+      const word = switchReason !== undefined ? 'blocked' : theirWord ? screenWord(screen) : agent.status;
       // `done` is as free as `idle`: delivery types into either one (`deliver.ts`), and the
       // watch's unsent check covers both (`pass.ts`). The report reads them the same way.
       const quiet = word === 'idle' || word === 'done';
@@ -305,8 +306,8 @@ export function compare(
       // watch reports the same reading, pass.ts). The row says what herdr could not, and nothing
       // else about the seat moves — no verdict, no difference.
       const unread = quiet && screen.kind === 'unknown';
-      const quotaOut = quiet ? quotaOutText(screen) : null;
-      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : '';
+      const quotaOut = quiet && switchReason === undefined ? quotaOutText(screen) : null;
+      const mark = isUnsent ? ' (unsent text)' : unread ? ' (screen not recognised)' : switchReason !== undefined ? ` (${switchReason})` : '';
       const stateText = quotaOut !== null
         ? `${quotaOut}${seat.parked ? ', parked' : ''}`
         : `${word}${mark}${seat.parked ? ', parked' : ''}`;

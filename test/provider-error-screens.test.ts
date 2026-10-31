@@ -4,11 +4,21 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { claudeBox } from './helpers.ts';
-import { classifyComposer, readScreen } from '../src/watch/screen.ts';
+import { classifyComposer, readScreen, screenWord } from '../src/watch/screen.ts';
 
 const lost = `API Error: Connection lost mid-response. The response above may be incomplete.\n${claudeBox('')}`;
 const limit = `API Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${claudeBox('')}`;
 const geminiDialog = readFileSync(new URL('./fixtures/gemini/0.64.0/rate-limit.txt', import.meta.url), 'utf8');
+const codexModelSwitch = `Approaching rate limits
+Switch to gpt-6-luna for lower credit usage?
+
+
+› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders about switching models
+
+  enter select · esc back
+`;
 
 describe('Claude Code provider errors', () => {
   test('connection lost above an idle box is a provider error, and the box alone is not a prompt', () => {
@@ -35,5 +45,18 @@ describe('Claude Code provider errors', () => {
 describe('Gemini quota dialogs', () => {
   test('the captured exhausted-quota dialog is a rate limit, and the reset time it prints is read', () => {
     expect(readScreen('gemini', geminiDialog)).toEqual({ kind: 'rate limit', reset: { kind: 'at', value: '2:10 PM GMT+2' } });
+  });
+});
+
+describe('Codex rate-limit model switch', () => {
+  test('the complete numbered choice is a blocked rate limit with its action reason', () => {
+    const reading = readScreen('codex', codexModelSwitch);
+    expect(reading).toEqual({ kind: 'rate limit', reset: null, reason: 'needs a choice: rate-limit model switch' });
+    expect(classifyComposer('codex', codexModelSwitch.split('\n')).kind).toBe('unknown');
+    expect(screenWord(reading)).toBe('blocked');
+  });
+
+  test('an incomplete or altered choice is not named as the model-switch dialog', () => {
+    expect(readScreen('codex', codexModelSwitch.replace('3. Keep current model (never show again)', '3. Keep current model')).kind).toBe('unknown');
   });
 });

@@ -13,7 +13,9 @@
 // names the seat and session, the newest waiting records are verified and receipted through the
 // inbox's own read (`readMessage`), and only then are their bodies printed. A file an earlier
 // build wrote is plain text no key can verify: it is skipped and counted, never served, and the
-// signed records around it are read as usual. The hook takes no placed caller.
+// signed records around it are read as usual. A waiting message whose receipt name is uncertain
+// is named on stderr, one line per message, whether or not another body was served. The hook
+// takes no placed caller.
 import { type KeyObject } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -146,8 +148,9 @@ export const DROP_READ_BATCH = 10;
 
 /** Whether every step down to the seat's drop folder is a real folder of this user's. A step
  *  that is missing is no fault — no send has written yet, and the read is empty; anything else
- *  at a step (a link, a file) refuses the read rather than reading through it. */
-function dropFolderReadable(dir: string, session: string, seat: string): boolean {
+ *  at a step (a link, a file) refuses the read rather than reading through it. `team brief
+ *  prune` guards its own folder with the same steps. */
+export function dropFolderReadable(dir: string, session: string, seat: string): boolean {
   const ours = (held: { uid: number }): boolean => process.getuid === undefined || held.uid === process.getuid();
   const agents = heldAt(dir);
   if (agents.kind !== 'folder' || !ours(agents)) return false;
@@ -314,10 +317,11 @@ function readOk(): number {
   return 0;
 }
 
-/** The refusal every caller that is not a placed seat of this team gets. */
-function refuse(io: Io, json: boolean, message: string): number {
-  if (json) writeJsonError(io, 'drops.refused', message, null);
-  else io.stderr(`team drops: ${message}\n`);
+/** The refusal every caller that is not a placed seat of this team gets, and a read that served
+ *  nothing: one line per message it names, so several uncertain records each keep their own. */
+function refuse(io: Io, json: boolean, ...messages: string[]): number {
+  if (json) writeJsonError(io, 'drops.refused', messages.join('\n'), null);
+  else for (const message of messages) io.stderr(`team drops: ${message}\n`);
   // exit: drops.refused
   return 1;
 }
@@ -422,7 +426,14 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
     const bodies: string[] = [];
     let superseded = 0;
     let legacy = 0;
+    // A refused record: the owner hears its rule and object through the event below, and the turn
+    // hears it only when nothing at all was served.
     let refusal: string | null = null;
+    // A message whose record verified but whose receipt name is uncertain — an occupied read or
+    // replied name, a receipt an earlier key signed. That raises no record event, so the turn is
+    // told here, one entry per message: the inbox's own reason, which names the message, and never
+    // its content, whether or not another body was served.
+    const receiptRefusals: string[] = [];
     // Newest first: the turn reads what has just landed, and the tail of a backlog waits for the
     // next turn. A file that is not a signed record never uses one of the ten: a plain-text drop
     // an earlier build wrote is counted and skipped, and the signed records around it are read.
@@ -457,8 +468,10 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
             rule: got.refusal.rule,
             object: { id: got.refusal.id, seat: got.refusal.seat, path: got.refusal.path },
           });
+          refusal ??= got.reason;
+        } else {
+          receiptRefusals.push(got.reason);
         }
-        refusal ??= got.reason;
       }
     }
     if (bodies.length > 0) io.stdout(`${bodies.join('\n\n')}\n`);
@@ -467,12 +480,14 @@ export async function runDrops(argv: string[], io: Io, sources: DropsSources = r
       // content never reaches the turn.
       io.stderr(`team drops: ${String(legacy)} drop(s) are not signed records and are not served\n`);
     }
-    if (bodies.length === 0 && refusal !== null) {
-      // A message is waiting and none could be verified and receipted: the read leaves no
-      // unproven body behind, and says why. With at least one body printed the run served the
-      // turn; the rest wait for the next. The refusal is the folder's own: the same exit the
-      // listing answers with, marked once by `refuse`.
-      return refuse(io, json, refusal);
+    // A run that served the turn still names every message it could not take, once each and in
+    // the inbox's own words. A run that served nothing says them through the refusal exit below,
+    // so a lone refusal keeps exactly the line the read always gave and none is said twice.
+    if (bodies.length > 0) for (const reason of receiptRefusals) io.stderr(`team drops: ${reason}\n`);
+    if (bodies.length === 0 && (receiptRefusals.length > 0 || refusal !== null)) {
+      // Nothing was served: the folder's own refusal exit, with one line per message — every
+      // receipt-name uncertainty, and a record refusal that is not one beside them.
+      return refuse(io, json, ...receiptRefusals, ...(refusal === null ? [] : [refusal]));
     }
     if (bodies.length === 0 && superseded > 0) {
       // Nothing this run can serve: every waiting launch record is an earlier delivery. The read

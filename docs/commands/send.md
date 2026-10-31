@@ -429,7 +429,7 @@ no caller check.
 | an orchestrator | an orchestrator of its own team or entity |
 | a team's orchestrator or operator | any seat of its own team |
 | a seat whose line writes `role: operator` | another such seat of its own team |
-| an assistant seat | its entity's main coordinator |
+| an assistant seat | its entity's lead coordinator |
 | any seat | its own team's orchestrator |
 | a caller an owner-signed grant names for `send` | what the grant names |
 

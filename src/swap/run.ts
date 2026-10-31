@@ -46,12 +46,6 @@ export type SwapObservation = {
   nativeHeld?: boolean;
 };
 
-/** The bounded wait the old conversation is given to write its handover. The design names a
- *  bound and no setting: the seats are idle when this is asked (the swap waits for the
- *  boundary), so one turn is enough, and a conversation that does not answer must not hold the
- *  launch forever. */
-export const HANDOVER_WAIT_MS = 120_000;
-
 /** No dev mode: a swap's run has no caller gate to lift — a rule-driven or owner swap carries
  *  the owner's authorization, and a `config` swap already passed the queue's gate. */
 const NO_DEV = { on: false, by: null, governed: false, ignored: false, expired: null, refusals: [] };
@@ -269,20 +263,18 @@ export async function runOneSwap(input: SwapRunOptions, name: string, swap: Queu
   }
 
   // Resume the recorded conversation when the CLI stays the same and keeps sessions. Otherwise
-  // ask the old conversation for a handover: the CLI changed, or a fresh conversation would lose
-  // the context anyway. The path is the record's own when it named one, so a retry after a busy
-  // turn offers the same file and a handover already written is used without asking again. A
-  // broken screen is never asked: it cannot answer, and typing there would burn the bounded wait
-  // on a dead pane. The swap runs at once with no handover, as the design's broken-seat clause
-  // says it must.
+  // the new conversation reads a handover: the path the record names, or one recorded now so a
+  // retry after a busy turn offers the same file. Only a file already written there is read —
+  // nothing is typed into the old conversation to ask for one. A broken screen runs at once with
+  // no handover, as the design's broken-seat clause says it must.
   const resume = resumeIdFor(input, declared, swap);
-  let handover: { path: string; waitMs: number } | undefined;
+  let handover: { path: string } | undefined;
   if (resume === undefined && observed.broken) {
     logLine(dir, 'swap', input.by, `${name}: no handover is asked; the screen is at a rate limit or provider error`, current);
   } else if (resume === undefined) {
     const path = swap.handover ?? handoverPath(dir, name, current);
     if (swap.handover === undefined) noteHandover(dir, name, swap.queuedAt, path);
-    handover = { path, waitMs: HANDOVER_WAIT_MS };
+    handover = { path };
   }
 
   const fields = recipeOf(swap);

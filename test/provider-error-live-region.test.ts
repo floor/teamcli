@@ -48,7 +48,7 @@ const oldError = [
 ].join('\n');
 
 // The error's own turn ended: the completion the CLI drew after it closes that turn, and the
-// box below is a new ready prompt. This is the shape Atlas observed on an idle, ready seat.
+// box below is a new ready prompt. This is the shape Reviewer observed on an idle, ready seat.
 const completedTurn = `${LOST}\n${DONE}\n${claudeBox('')}`;
 
 // No completion after the error: the box under it is not a free prompt.

@@ -59,7 +59,7 @@ function entryOf(store: RunStore, item: ItemIdentity): ItemRecord | null {
   return store.entry(key);
 }
 
-function reserveFor(store: ReservationStore, item: ItemIdentity, runId: string, seat = 'work', pane = 'w2:p1') {
+function reserveFor(store: ReservationStore, item: ItemIdentity, runId: string, seat = 'work', pane = 'fixture2:pane1') {
   return reserve(store, {
     item,
     runId,
@@ -82,9 +82,9 @@ describe('the store key formatter over real holds', () => {
     expect(new Set(keys).size).toBe(3);
 
     const reservationStore: ReservationStore = store;
-    expect(reserveFor(reservationStore, a, 'run-a', 's1', 'w1:p1').kind).toBe('reserved');
-    expect(reserveFor(reservationStore, b, 'run-b', 's2', 'w2:p1').kind).toBe('reserved');
-    expect(reserveFor(reservationStore, c, 'run-c', 's3', 'w3:p1').kind).toBe('reserved');
+    expect(reserveFor(reservationStore, a, 'run-a', 's1', 'fixture1:pane1').kind).toBe('reserved');
+    expect(reserveFor(reservationStore, b, 'run-b', 's2', 'fixture2:pane1').kind).toBe('reserved');
+    expect(reserveFor(reservationStore, c, 'run-c', 's3', 'fixture3:pane1').kind).toBe('reserved');
 
     for (const [item, runId] of [[a, 'run-a'], [b, 'run-b'], [c, 'run-c']] as const) {
       const entry = entryOf(store, item);
@@ -101,11 +101,11 @@ describe('a converted holder', () => {
     expect(reserveFor(reservationStore, ITEM, 'run-1').kind).toBe('reserved');
     const answer = acknowledge(reservationStore, {
       item: ITEM, runId: 'run-1', attempt: 1, thread: 'th-run-1',
-      seat: 'work', pane: 'w2:p1', messageId: 'msg-1', at: T - 1000,
+      seat: 'work', pane: 'fixture2:pane1', messageId: 'msg-1', at: T - 1000,
     });
     expect(answer.kind).toBe('acknowledged');
     const holder = entryOf(store, ITEM)?.hold;
-    expect(holder).toMatchObject({ phase: 'holder', holder: { seat: 'work', pane: 'w2:p1' }, messageId: 'msg-1' });
+    expect(holder).toMatchObject({ phase: 'holder', holder: { seat: 'work', pane: 'fixture2:pane1' }, messageId: 'msg-1' });
     expect(holder?.expiresAt).toBeUndefined();
 
     clock.at = T + 86_400_000;
@@ -117,7 +117,7 @@ describe('a converted holder', () => {
         expiresAt: new Date(clock.at).toISOString(), at: new Date(clock.at).toISOString(), run: 'run-2', attempt: 1,
       }),
     )).toMatchObject({ ok: false, reason: 'hold-live' });
-    expect(claimNext(reservationStore, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: clock.at, expiresAt: clock.at + 60_000 })).toMatchObject({
+    expect(claimNext(reservationStore, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', now: clock.at, expiresAt: clock.at + 60_000 })).toMatchObject({
       kind: 'refused',
       reason: 'hold-live',
     });
@@ -155,11 +155,11 @@ describe('the deadline instant', () => {
     const reservationStore: ReservationStore = store;
     expect(reserveFor(reservationStore, ITEM, 'run-1').kind).toBe('reserved');
     expect(expire(reservationStore, T)).toEqual([
-      { kind: 'reservation', item: ITEM, owner: 'run-1/1', run: 'run-1', attempt: 1, thread: 'th-run-1', seat: 'work', receiver: 'work', pane: 'w2:p1' },
+      { kind: 'reservation', item: ITEM, owner: 'run-1/1', run: 'run-1', attempt: 1, thread: 'th-run-1', seat: 'work', receiver: 'work', pane: 'fixture2:pane1' },
     ]);
     expect(entryOf(store, ITEM)?.hold).toBeUndefined();
     expect(acknowledge(reservationStore, {
-      item: ITEM, runId: 'run-1', attempt: 1, thread: 'th-run-1', seat: 'work', pane: 'w2:p1', messageId: 'msg-1', at: T - 1000,
+      item: ITEM, runId: 'run-1', attempt: 1, thread: 'th-run-1', seat: 'work', pane: 'fixture2:pane1', messageId: 'msg-1', at: T - 1000,
     })).toEqual({ kind: 'ignored', why: 'no-reservation' });
   });
 
@@ -168,9 +168,9 @@ describe('the deadline instant', () => {
     const reservationStore: ReservationStore = store;
     expect(reserveFor(reservationStore, ITEM, 'run-1').kind).toBe('reserved');
     clock.at = T;
-    const claim = claimNext(reservationStore, { item: ITEM, seat: 'lead', pane: 'w1:p1', now: T, expiresAt: T + 60_000 });
+    const claim = claimNext(reservationStore, { item: ITEM, seat: 'lead', pane: 'fixture1:pane1', now: T, expiresAt: T + 60_000 });
     expect(claim.kind).toBe('claimed');
-    expect(entryOf(store, ITEM)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:lead:w1:p1' });
+    expect(entryOf(store, ITEM)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:lead:fixture1:pane1' });
   });
 });
 
@@ -184,14 +184,14 @@ describe('a reply that is not the reservation\'s', () => {
 
     const base: AckInput = {
       item: ITEM, runId: 'run-1', attempt: 1, thread: 'th-run-1',
-      seat: 'work', pane: 'w2:p1', messageId: 'msg-1', at: T - 1000,
+      seat: 'work', pane: 'fixture2:pane1', messageId: 'msg-1', at: T - 1000,
     };
     const mismatches: Array<[Partial<AckInput>, AckIgnored]> = [
       [{ runId: 'run-2' }, 'wrong-run'],
       [{ attempt: 2 }, 'stale-attempt'],
       [{ thread: 'th-2' }, 'wrong-thread'],
       [{ seat: 'other' }, 'wrong-receiver'],
-      [{ pane: 'w2:p2' }, 'wrong-receiver'],
+      [{ pane: 'fixture2:pane2' }, 'wrong-receiver'],
       [{ item: { ...ITEM, id: 'm2' } }, 'no-reservation'],
       [{ at: T }, 'expired'],
     ];
@@ -242,7 +242,7 @@ describe('runs: a live run refuses other holds, and its outcome releases its own
     expect(reopened.item.terminal).toBeUndefined();
     clock.at = T + 2000;
     const next = reserve(reservationStore, {
-      item: ITEM, runId: run, attempt: 2, thread: 'th-run-1', receiver: { seat: 'work', pane: 'w2:p1' },
+      item: ITEM, runId: run, attempt: 2, thread: 'th-run-1', receiver: { seat: 'work', pane: 'fixture2:pane1' },
       expiresAt: T + 60_000, at: T + 2000,
     });
     expect(next.kind).toBe('reserved');

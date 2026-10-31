@@ -1,7 +1,7 @@
 # Cursor Agent 2026.10.01 terminal captures
 
 Captured from the installed macOS `cursor-agent` CLI on 2026-10-03 with herdr 0.7.1,
-`pane read --source visible --lines 80`, in the scratch session `team-test-cursor`.
+`pane read --source visible --lines 80`, in the scratch session `sandbox-cursor`.
 There was at most one Cursor seat at a time. The session was stopped and deleted;
 the default session had eight agents before and after.
 
@@ -62,7 +62,7 @@ No trust, login, settings, permission, or question dialog was answered, and no v
 
 Captured from the same installed CLI on 2026-10-04 with herdr 0.7.1,
 `pane read --source visible --lines 80` (plain and ansi), in the scratch session
-`team-test-pc-cursor`; the pane was 53 columns by 23 rows. One Cursor seat at a
+`sandbox-pc-cursor`; the pane was 53 columns by 23 rows. One Cursor seat at a
 time; it was launched as a seat is launched:
 
 `AGENT_UNATTENDED=1 cursor-agent --model grok-4.7-high --force --sandbox disabled`

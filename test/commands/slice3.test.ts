@@ -30,6 +30,8 @@ const OWNER: Caller = { kind: 'owner' };
 const COORDINATOR: Caller = { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: 'acme-web' };
 const WORKER: Caller = { kind: 'seat', name: 'deepseek-acme', pane: 'w3:p1' };
 const NOW = new Date('2026-10-03T14:02:00Z');
+// This install's own CLI entry, as the watch proof resolves it: a watch started here runs it.
+const SELF_ENTRY = realpathSync(join(import.meta.dir, '../../src/cli.ts'));
 
 let base: string;
 let root: string;
@@ -636,7 +638,7 @@ describe('team doctor', () => {
 
   test('--session names another session', async () => {
     await approve([], OWNER);
-    expect((await doctor({}, ['--session', 'team-test'])).out).toContain('note  session team-test is not running\n');
+    expect((await doctor({}, ['--session', 'sandbox'])).out).toContain('note  session sandbox is not running\n');
   });
 });
 
@@ -717,12 +719,12 @@ describe('team up', () => {
   test('--dry-run names an edited file and a silent herdr', async () => {
     await approve([], OWNER);
     edit((text) => text.replace('launch: team-deepseek', 'launch: team-deepseek --yolo'));
-    const run = await up(['--dry-run', '--session', 'team-test'], OWNER, { sessionRunning: () => null });
+    const run = await up(['--dry-run', '--session', 'sandbox'], OWNER, { sessionRunning: () => null });
     expect(run.out).not.toContain('not the approved one');
     // The plan's rules line still says never to run the command. That is not a refusal.
     expect(run.out).not.toContain('run `team approve`');
     expect(run.out).toContain("! up would refuse: herdr doesn't answer\n");
-    expect(run.out).toContain('+ herdr --session team-test workspace create');
+    expect(run.out).toContain('+ herdr --session sandbox workspace create');
   });
 
   test('a resumed session passes when the state records its agents', async () => {
@@ -809,7 +811,7 @@ describe('team down', () => {
     );
   });
 
-  test('--dry-run never closes an agent the file does not name, and stops the watch it knows', async () => {
+  test('--dry-run never closes an agent the file does not name, and stops a watch under the full proof', async () => {
     writeFileSync(
       join(root, '.agents/team.state.json'),
       JSON.stringify({
@@ -820,7 +822,7 @@ describe('team down', () => {
               'deepseek-acme-tmp-1': { stage: 'ready', temporary: { like: 'deepseek-acme', until: 'result:out.md' } },
             },
             worktrees: {},
-            watch: { pid: 4242, heartbeat: '2026-10-03T14:00:00Z' },
+            watch: { pid: 4242, heartbeat: '2026-10-03T14:00:00Z', started_at: '2026-10-03T13:59:00Z' },
           },
         },
       }),
@@ -828,6 +830,10 @@ describe('team down', () => {
     const state = readFileSync(join(root, '.agents/team.state.json'), 'utf8');
     const run = await down(['--dry-run'], OWNER, {
       agents: () => [agent('deepseek-acme-tmp-1'), agent('stranger'), agent(null), agent('codex-acme', 'blocked')],
+      // The watch proof: the live pid runs this install's entry as this session's watch, started
+      // when the record says.
+      commandOf: () => `node ${SELF_ENTRY} watch --session acme-web`,
+      startOf: () => Date.parse('2026-10-03T13:59:00Z'),
     });
     // None of these panes is recorded, so the plan must not claim a close. The first head
     // printed the unnamed pane's leave-line in front of this text and closed nothing.
@@ -836,13 +842,13 @@ describe('team down', () => {
         'pane x:p1: not recorded for a seat of this team; left as it is',
         'deepseek-acme-tmp-1: its record is not an approved seat; left running (the owner cleans it: team remove deepseek-acme-tmp-1 --abandon)',
         'stranger: its record is not an approved seat; left running (the owner cleans it: team remove stranger --abandon)',
-        'watch: its pid is only in the state; left running',
         '  skip codex-acme: is blocked at a prompt, which `team` never answers; left running',
+        '+ kill 4242',
+        '    (the watch)',
         '  skip session acme-web: not stopped, 4 agents left in it',
       ].join('\n'),
     );
     expect(run.out).not.toContain('workspace close');
-    expect(run.out).not.toContain('+ kill');
     expect(run.out).toContain('dry run: nothing was run\n');
     expect(readFileSync(join(root, '.agents/team.state.json'), 'utf8')).toBe(state);
   });

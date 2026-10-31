@@ -29,7 +29,6 @@ import { downPlan, type DownSeat } from '../launch/plan.ts';
 import { logLine } from '../log.ts';
 import { profileFor } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
-import { readCodexEndpointRecord } from '../daemon/presence/endpoint-record.ts';
 import { emptySession, readState, updateState, withLock } from '../state.ts';
 import { registerEnd } from '../registry/sync.ts';
 import { keyExit, paneStillRunning, realSources as downSources, stateOf, stateOfPane, typeExit, type DownSources } from './down.ts';
@@ -100,12 +99,14 @@ const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
   exited: 'its CLI had exited; closed without typing',
 };
 
-/** Whether the seat's state carries a readable managed Codex endpoint record. Shape alone is
- *  enough here: the record names an ownership claim, and this command either proves the claim
- *  before stopping the process or refuses to go on. */
+/** Whether the seat's state carries a managed Codex endpoint record at all, readable or not. A
+ *  record present but unreadable is not absent: it may name a live app-server, so this answers
+ *  true and the stop is attempted, which refuses with the reason it cannot prove the process.
+ *  Reading the value as no record would drop the seat's record while its server keeps running. */
 function recordedEndpointOf(dir: string, session: string, seat: string): boolean {
   try {
-    return readCodexEndpointRecord(readState(dir).sessions[session]?.seats[seat]?.codex_endpoint) !== null;
+    const value = readState(dir).sessions[session]?.seats[seat]?.codex_endpoint;
+    return value !== undefined && value !== null;
   } catch {
     return false;
   }

@@ -15,6 +15,8 @@ export type BlockStep =
   | { oneOf: BlockStep[][] };
 
 export type Rule = {
+  /** A reason attached to this rate-limit rule when it matches. */
+  reason?: string;
   any?: LinePattern[];
   all?: LinePattern[];
   footer?: string;
@@ -53,7 +55,7 @@ export type Rule = {
 /** The versions a captured record was taken on, as the profile's `tested:` range reads. */
 export type VersionRange = { from: string; to: string };
 
-export type Stage = { rules: Rule[]; tested?: VersionRange };
+export type Stage = { rules: Rule[]; tested?: VersionRange; reason?: string };
 
 export type Placeholder = { equals: string } | { prefix: string };
 

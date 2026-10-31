@@ -163,11 +163,15 @@ function buildGates(): Record<string, Gate> {
     },
     brief: {
       kind: 'team-read',
-      why: 'the rollout plan reads the team\'s seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner\'s alone, and --apply delivers the general seat brief to the team\'s live seats',
+      why: 'the rollout plan reads the team\'s seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner\'s alone, and --apply delivers the general seat brief to the team\'s live seats. The prune verb is seat-only, and its own row says so',
     },
     'brief:rollout': {
       kind: 'team-read',
-      why: 'the command\'s only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat\'s claim and its signed drop',
+      why: 'the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat\'s claim and its signed drop',
+    },
+    'brief:prune': {
+      kind: 'seat-only',
+      why: 'a retry marker is one seat\'s mailbox: the seat the team declares, on the pane the state records for it, and never the owner; the dry run changes nothing, and --apply removes only that seat\'s launch-brief retry markers',
     },
     bus: {
       kind: 'owner-or-leads',
@@ -451,6 +455,14 @@ function buildGates(): Record<string, Gate> {
       kind: 'owner-only',
       why: 'removing a team registry record is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that forget; it does not stop panes or delete the team file',
       terminal: { who: 'the owner', where: 'a terminal outside herdr' },
+    },
+    agents: {
+      kind: 'any-caller',
+      why: 'the listing reads the machine agent registry and the team registry and changes nothing, so any caller reads it; --apply retires a record no roster names, and that write is the owner\'s, from a terminal outside herdr',
+    },
+    'agents:prune': {
+      kind: 'any-caller',
+      why: 'the only verb: the listing changes nothing and is any caller\'s, and --apply retires the records it lists and is the owner\'s, from a terminal outside herdr',
     },
     batch: {
       kind: 'any-caller',

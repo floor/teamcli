@@ -255,6 +255,8 @@ function makeWorld(
       held.screen = screenFor(command);
       held.session = sessionFor(command);
       held.status = 'idle';
+      // The CLI the line started is in front of the pane, beside its shell.
+      held.process = { shell: held.process.shell, foreground: [1000 + trace.runs.length] };
       return true;
     },
     renameAgent(_session, pane, name) {
@@ -279,7 +281,12 @@ function makeWorld(
     },
     pressEnter: () => true,
     agentStatus: (_session, pane) => panes.get(pane)?.status ?? null,
-    foreground: () => ['claude'],
+    // The pane's argv0 names: whatever pids are in front run the CLI this fixture launches, and
+    // a scene that empties the foreground names none.
+    foreground: (_session, pane) => {
+      const held = panes.get(pane);
+      return held === undefined ? null : held.process.foreground.map(() => 'claude');
+    },
     shellBack: () => false,
     processInfo: (_session, pane) => panes.get(pane)?.process ?? null,
     sleep: async () => {},
@@ -434,6 +441,9 @@ test('a resume the CLI refuses at runtime is launched again fresh in the same pa
       held.screen = `${command}\nNo conversation found with session ID: ${SES_A}\n❯ `;
       held.session = null;
       held.status = 'unknown';
+      // The CLI printed the error and exited: the pane's processes name no CLI, so the shell is
+      // back and the relaunch may type.
+      held.process = { shell: 100, foreground: [] };
     }
     return ok;
   };

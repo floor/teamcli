@@ -1,4 +1,4 @@
-❯ /Users/example/.local/bin/muse --no-session-log
+❯ /home/example/.local/bin/muse --no-session-log
 
   Muse Code 1.4.9
 

@@ -6,7 +6,7 @@
 │  BILLING        Subscription · Muse Code Power U… │
 └───────────────────────────────────────────────────┘
 
-❯ /Users/example/.local/bin/muse --no-session-log --tru
+❯ /home/example/.local/bin/muse --no-session-log --tru
 st-workspace --provider echo --echo-delay-ms 6000
 
   Muse Code 1.4.9

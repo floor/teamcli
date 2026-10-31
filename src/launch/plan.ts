@@ -37,6 +37,13 @@ export type Op =
    *  on a hand-built op: every planned launch names them. */
   | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
       /**
+       * True when the command this step runs carries the seat's rules line: decided here, where
+       * the line is given to `launchCommand`, never re-derived from the built command — the line
+       * is shell-quoted on it, and a profile with no launch prompt carries none at all. Absent on
+       * a hand-built op: no rules ride its launch.
+       */
+      rulesCarried?: boolean;
+      /**
        * This launch starts (or reuses) the managed Codex app-server endpoint recorded on the
        * seat's current presence binding, and attaches the TUI to it with `--remote`. Set only
        * for a Codex seat with the signed `codex-daemon` policy on, a plain Codex launch line,
@@ -112,7 +119,13 @@ export type Op =
   /** A seat already running, painted from the file without typing into it or launching it again.
    *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
   | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
-  | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
+  | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string;
+      /**
+       * Whether a launch line for this seat can carry the rules at all: its profile names a
+       * launch prompt. False means no launch ever carries them, so the left-out report says that
+       * and never advises a restart.
+       */
+      launchCanCarryRules?: boolean }
   | { do: 'ready'; seat: string; rules: 'option' | 'message' | 'prepend'; notice?: string }
   | {
       do: 'repair';
@@ -518,29 +531,57 @@ export function codexEndpointConfig(command: string): string[] {
 }
 
 /**
- * The line a managed Codex seat runs once it attaches to its endpoint. Measured on codex-cli
- * 0.161.0: an attached TUI sends its own permissions with each turn, and `codex resume <id>
- * --remote …` refuses `-a`/`-s` (and their long forms, and the same keys as `-c`) with
- * "Permission overrides are not supported when resuming a remote task", leaving the seat at its
- * shell. Without them the resumed turns ran under the TUI's own default (workspace-write in the
- * rollout's turn context), whatever the thread or the endpoint was started with, so the seat
- * could not write its own inbox receipts. A fresh `codex --remote … -s danger-full-access -a
- * never` turn ran danger-full-access. So a resume line that carries permission overrides starts
- * a fresh thread when attached: its `resume <id>` words go, its overrides stay. A resume line with
- * no overrides keeps its thread, and a fresh line is unchanged.
+ * The line a managed Codex seat runs once it attaches to its endpoint. Keep the selected
+ * conversation; permission overrides belong to `codexEndpointConfig` on a remote resume.
+ * Other configuration and quoted arguments stay on the line. A fresh launch is unchanged.
+ *
+ * Measured 2026-10-31 on codex-cli 0.161.0 with a synthetic home, local response fixture and
+ * scratch terminal session: start the endpoint with `-c approval_policy="never" -c
+ * sandbox_mode="danger-full-access"`, launch a fresh thread with `-a never -s danger-full-access`,
+ * then detach and run `codex resume <id> --remote <endpoint>` without permission overrides.
+ * Repeat after stopping that endpoint and starting another with the same config. All three
+ * completed turns recorded `approval_policy: "never"` and `sandbox_policy.type:
+ * "danger-full-access"` in the synthetic rollout's `turn_context`, on the same thread.
+ * Evidence: ~/Code/floor/briefs/teamcli-notes/briefs-0.5.10/a7-measurement/measurement.json
+ * and provider.py. This measurement used an endpoint carrying the line's config words.
  */
 export function remoteCodexCommand(command: string): string {
   // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
   // argument (the rules line, a `-c` value) that happens to hold `resume` is never touched.
-  const words: string[] = command.match(/(?:[^\s'"]+|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
-  const at = words.indexOf('resume');
-  if (at < 0) return command;
-  const overrides = words.some((word) => ['-a', '-s', '--ask-for-approval', '--sandbox', '--full-auto', '--dangerously-bypass-approvals-and-sandbox'].includes(word)
-    || /^--(ask-for-approval|sandbox)=/.test(word));
-  if (!overrides) return command;
-  const next = words[at + 1];
-  const drop = next !== undefined && (next === '--last' || !next.startsWith('-')) ? 2 : 1;
-  return [...words.slice(0, at), ...words.slice(at + drop)].join(' ');
+  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  if (!words.includes('resume')) return command;
+  const kept: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === '--') {
+      kept.push(...words.slice(i));
+      break;
+    }
+    if (['--full-auto', '--dangerously-bypass-approvals-and-sandbox'].includes(word)
+      || /^--(ask-for-approval|sandbox)=/.test(word)) continue;
+    if (['-a', '-s', '--ask-for-approval', '--sandbox'].includes(word)) {
+      if (words[i + 1] !== undefined && !words[i + 1]!.startsWith('-')) i++;
+      continue;
+    }
+    const config = word === '-c' || word === '--config';
+    const inline = word.startsWith('--config=');
+    const value = config ? words[i + 1] : inline ? word.slice('--config='.length) : undefined;
+    if (value !== undefined) {
+      // A config value is one shell word even when quotes or spaces occur inside it.
+      const key = unquoteWord(value).split('=', 1)[0]!.trim();
+      if (/^(approval_policy|sandbox_mode|sandbox_workspace_write)(\.|$)/.test(key)) {
+        if (config) i++;
+        continue;
+      }
+      if (config) {
+        kept.push(word, value);
+        i++;
+        continue;
+      }
+    }
+    kept.push(word);
+  }
+  return kept.length === words.length ? command : kept.join(' ');
 }
 
 export function upPlan(input: UpInput): Step[] {
@@ -874,14 +915,19 @@ export function upPlan(input: UpInput): Step[] {
     const resumeGap = carried?.kind === 'refuse'
       ? `its recorded conversation cannot be resumed: ${carried.why}`
       : undefined;
+    // The rules line this launch gives `launchCommand`, and whether that call appends it: only a
+    // message-mode profile with a launch prompt carries one. `execute.ts` writes the rules file
+    // before the command runs from this decision, never by searching the built command for the
+    // line, which is shell-quoted there.
+    const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
+    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null;
     const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon },
-      profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined);
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -907,7 +953,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }
     const rules = profile.rulesMode;
@@ -975,12 +1021,15 @@ export function upPlan(input: UpInput): Step[] {
       }
       const said = takeNotice();
       const file = seat.rulesFile;
+      // Where no launch prompt exists, restart builds the same line the launch did: the note
+      // says no launch carries them rather than advising a restart that cannot.
+      const carryNote = profile.rulesPrompt === null
+        ? 'the rules go to a per-seat file in the project state folder; its CLI takes no initial prompt at launch, so no launch carries them, and a seat is never typed into: it is left out'
+        : 'the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them';
       steps.push({
         kind: 'run',
         argv: ['team', 'rules', '--with-launch', file.line],
-        note: said
-          ? `${said}; the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them`
-          : 'the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them',
+        note: said ? `${said}; ${carryNote}` : carryNote,
         do: {
           do: 'deliver',
           seat: seat.name,
@@ -990,6 +1039,7 @@ export function upPlan(input: UpInput): Step[] {
           path: file.path,
           line: file.line,
           seconds: profile.idleTimeout,
+          launchCanCarryRules: profile.rulesPrompt !== null,
           pane: seat.pane,
           ...(said ? { notice: said } : {}),
         },

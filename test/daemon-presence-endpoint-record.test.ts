@@ -35,6 +35,21 @@ describe('the endpoint record reader', () => {
     expect(codexEndpointPath(one)).toBe('/private/tmp/team/presence/teamcli/seat/builder-4/app.sock');
   });
 
+  test('reads the start config a managed launch recorded, word for word', () => {
+    const config = ['-c', 'mcp_servers.team_inbox.command="team"', '-c', 'sandbox_mode="workspace-write"'];
+    expect(ok(record({ config }))).toEqual({ url: URL, binding: BINDING, pid: 4242, started_at: T0, config });
+    // An empty config is a server started with none, and reads back as one.
+    expect(ok(record({ config: [] })).config).toEqual([]);
+    // A record an older build wrote names none; it is still a record, and a stop can act on it.
+    expect(ok(record()).config).toBeUndefined();
+  });
+
+  test('a config a launch could not have written reads as none, and the record stays stoppable', () => {
+    for (const config of ['-c x', 42, { '-c': 'x' }, ['-c', 42], [null]]) {
+      expect(ok(record({ config }))).toEqual({ url: URL, binding: BINDING, pid: 4242, started_at: T0 });
+    }
+  });
+
   test('tells an absent record from an invalid one', () => {
     expect(inspectRecordedCodexEndpoint(undefined, BINDING)).toEqual({ kind: 'absent' });
     expect(inspectRecordedCodexEndpoint(null, BINDING)).toEqual({ kind: 'absent' });

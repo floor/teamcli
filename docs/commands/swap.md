@@ -73,9 +73,10 @@ when the state is read, so it is never printed by any reader.
 A run — `--run`, or the sweep `now` starts — writes the recipe into the seat's own declaration,
 ends the recorded session with reason `swap`, stops the old pane and launches the seat in a fresh
 workspace from the new declaration. The conversation resumes when the CLI stays the same and keeps
-sessions and a session id is recorded; otherwise the old conversation is asked, at its boundary,
-to write a handover the new one reads. Once the pane is ready the run reads the model back: the
-profile's own reading first, then the launch wrapper's `· API Usage Billing` banner. A screen that
+sessions and a session id is recorded; otherwise the new conversation reads the handover already
+written at the path the record names — nothing is typed into the old conversation to ask for one.
+Once the pane is ready the run reads the model back: the profile's own reading first, then the
+launch wrapper's `· API Usage Billing` banner. A screen that
 shows neither is reported as `read-back: unread`, and unread never claims a match. The record is
 removed once the pane is ready, the file's declaration was written and the read-back agrees or is
 unread; a declaration write that failed or a different model is reported as a failed swap, and the

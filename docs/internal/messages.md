@@ -32,6 +32,14 @@ says the record was not rewritten after it was signed. It does not say which sea
 is a name the writer put on the record. The receipt says a process was shown the body, not that
 the recipient acted on it.
 
+The signature covers the complete payload exactly as it was parsed, and it is checked before any
+field is read: a field inserted, altered or removed after signing is a signature refusal whatever
+the fields now claim, and a record carrying a signed field this version does not read is refused
+as unsupported — authenticated, never interpreted, and never reported as a bad signature. A
+receipt also carries the signed writer provenance: the build's version, the signing process's id,
+and the runtime epoch it was started under when it had one. That names the process that signed;
+it is never the key's generation, and a receipt written before the field existed still verifies.
+
 The message key is a second file, `~/.config/team-key/messages.json`, beside the approval key.
 It is created the first time a message or a receipt is signed. An empty mailbox creates nothing.
 The approval key never signs a message.
@@ -125,6 +133,15 @@ repair names the file the table already shows:
     difference: <seat>/<id> does not verify: the signature is not the message key's
       repair: remove .agents/send-drops/<session>/<seat>/<id>, or have the sender re-send it
       who: any seat
+
+    difference: <seat>/<id> does not verify: it is signed, and this version cannot read it: <reason>
+      repair: upgrade team to read .agents/send-drops/<session>/<seat>/<id>, or remove it and have the sender re-send it in this version's fields
+      who: any seat
+
+The unsupported difference is a record the message key signed that this version cannot read: its
+signed fields are not all ones this version knows (`the signed record carries fields this version
+does not read: <names>`), or a known field is not the shape it writes. The signature holds, so it
+is refused on the schema's ground, not the key's — and its fields are never acted on.
 
 A file in the older store prints the same differences with `.agents/messages/<seat>/<id>.json` in
 place of the record's path, and its shape refusal reads `the record is not a message`.

@@ -73,6 +73,8 @@ export type DaemonHealthSnapshot = {
   since: string;
   startedBy: string;
   version: string;
+  /** The commit the answering build was packaged from; absent or null in a source checkout. */
+  gitHead?: string | null;
   heartbeatAt: string;
   stuck: DaemonStuckRequest[];
   features: DaemonFeatures;

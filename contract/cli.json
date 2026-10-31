@@ -193,6 +193,97 @@
       "flags": [
         {
           "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "agents",
+      "positionals": [],
+      "subcommands": [
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--apply",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "prune",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team agents prune [--apply] [--json]"
+          ],
+          "who": {
+            "gate": "any-caller",
+            "why": "the only verb: the listing changes nothing and is any caller's, and --apply retires the records it lists and is the owner's, from a terminal outside herdr"
+          }
+        }
+      ],
+      "usage": [
+        "team agents prune [--apply] [--json]"
+      ],
+      "who": {
+        "gate": "any-caller",
+        "why": "the listing reads the machine agent registry and the team registry and changes nothing, so any caller reads it; --apply retires a record no roster names, and that write is the owner's, from a terminal outside herdr"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
           "name": "--file",
           "repeatable": false,
           "takesValue": true
@@ -667,6 +758,57 @@
             },
             {
               "hidden": false,
+              "name": "--general",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": false,
+              "name": "--help",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--json",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
+              "name": "--key",
+              "repeatable": false,
+              "takesValue": true
+            },
+            {
+              "hidden": true,
+              "name": "-h",
+              "repeatable": false,
+              "takesValue": false
+            }
+          ],
+          "hidden": false,
+          "name": "prune",
+          "positionals": [],
+          "subcommands": [],
+          "usage": [
+            "team brief prune [--apply] [--json]"
+          ],
+          "who": {
+            "gate": "seat-only",
+            "why": "a retry marker is one seat's mailbox: the seat the team declares, on the pane the state records for it, and never the owner; the dry run changes nothing, and --apply removes only that seat's launch-brief retry markers"
+          }
+        },
+        {
+          "flags": [
+            {
+              "hidden": false,
+              "name": "--apply",
+              "repeatable": false,
+              "takesValue": false
+            },
+            {
+              "hidden": false,
               "name": "--file",
               "repeatable": false,
               "takesValue": true
@@ -723,16 +865,17 @@
           ],
           "who": {
             "gate": "team-read",
-            "why": "the command's only verb: the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat's claim and its signed drop"
+            "why": "the plan is read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane, and --apply writes only the seat's claim and its signed drop"
           }
         }
       ],
       "usage": [
-        "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]"
+        "team brief rollout [--apply] [--seat <seat>] [--session <session>] [--file <path>] [--json]",
+        "team brief prune [--apply] [--json]"
       ],
       "who": {
         "gate": "team-read",
-        "why": "the rollout plan reads the team's seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner's alone, and --apply delivers the general seat brief to the team's live seats"
+        "why": "the rollout plan reads the team's seats and their delivery claims: the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; --file and --session are the owner's alone, and --apply delivers the general seat brief to the team's live seats. The prune verb is seat-only, and its own row says so"
       }
     },
     {

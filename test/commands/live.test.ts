@@ -5979,7 +5979,7 @@ describe('team down, live', () => {
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
         foregroundCwd: () => null,
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/home/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));
@@ -5993,8 +5993,8 @@ describe('team down, live', () => {
       const run = harness({ kind: 'idle' });
       const io = testIo(root, { kind: 'owner' });
       const code = await runDown(FILE, io, run.sourcesOf({
-        foregroundCwd: () => '/Users/example/start/dir',
-        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/Users/example' }),
+        foregroundCwd: () => '/home/example/start/dir',
+        screen: (_session, _pane, cli, cwd) => readScreen(cli, wrappedPane, { cwd: cwd ?? undefined, home: '/home/example' }),
         screenText: () => wrappedPane,
         agents: () => [{ ...agent('deepseek-acme', 'w3:p1', 'idle'), agent: 'cursor' }],
       }));
@@ -6278,9 +6278,9 @@ describe('team down, live', () => {
   });
 });
 
-const SCRATCH = 'team-test-up';
-const TRUSTED = join(homedir(), 'team-test-up-trusted');
-const TRUSTED_SHOWN = '~/team-test-up-trusted';
+const SCRATCH = 'sandbox-up';
+const TRUSTED = join(homedir(), 'sandbox-up-trusted');
+const TRUSTED_SHOWN = '~/sandbox-up-trusted';
 
 // Read only. A test never writes ~/.claude.json; the owner trusts the fixed folder by hand.
 function folderTrusted(): boolean {
@@ -6371,7 +6371,7 @@ function stopScratch() {
 }
 
 describe('scratch session', () => {
-  // Opt-in: CI has no herdr. Never team-test, which is another seat's session.
+  // Opt-in: CI has no herdr. Never sandbox, which is another seat's session.
   // A fresh folder shows Claude's trust question. up leaves the seat out and types nothing.
   test.skipIf(process.env.TEAM_LIVE_UP !== '1')(
     'a fresh folder leaves the seat out: trust question',

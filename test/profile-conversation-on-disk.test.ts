@@ -8,13 +8,13 @@ test('a Claude Code conversation is found under its project folder, named from t
   const config = mkdtempSync(join(tmpdir(), 'claude-config-'));
   try {
     const env = { CLAUDE_CONFIG_DIR: config };
-    const cwd = '/Users/someone/.config/team/lobby-material';
+    const cwd = '/home/someone/.config/team/lobby-material';
     expect(conversationOnDisk('claude-code', cwd, 'abc-1', env)).toBe(false);
-    mkdirSync(join(config, 'projects', '-Users-someone--config-team-lobby-material'), { recursive: true });
-    writeFileSync(join(config, 'projects', '-Users-someone--config-team-lobby-material', 'abc-1.jsonl'), '{}\n');
+    mkdirSync(join(config, 'projects', '-home-someone--config-team-lobby-material'), { recursive: true });
+    writeFileSync(join(config, 'projects', '-home-someone--config-team-lobby-material', 'abc-1.jsonl'), '{}\n');
     expect(conversationOnDisk('claude-code', cwd, 'abc-1', env)).toBe(true);
     // Another folder's project is not this one: Claude resumes by the folder it runs in.
-    expect(conversationOnDisk('claude-code', '/Users/someone/elsewhere', 'abc-1', env)).toBe(false);
+    expect(conversationOnDisk('claude-code', '/home/someone/elsewhere', 'abc-1', env)).toBe(false);
   } finally {
     rmSync(config, { recursive: true, force: true });
   }

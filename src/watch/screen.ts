@@ -31,8 +31,9 @@ export type Screen =
                                      // only by a captured, versioned record, and never answered
   | { kind: 'provider error' }       // the CLI's provider failed mid-response and the prompt is
                                      // back: a transient error, never typed into
-  | { kind: 'rate limit'; reset: Reset | null } // a usage limit, with the reset the screen
-                                     // names and how it words it, or null when it names none
+  | { kind: 'rate limit'; reset: Reset | null; reason?: string } // a usage limit, with the reset the
+                                     // screen names and how it words it, or null when it names none;
+                                     // a matched rule may also name an action the screen requires
   | { kind: 'unknown'; matched?: string } // no shape this CLI's profile reads. `matched` is the
                                      // safety floor's own line when one is on the screen — the
                                      // one piece of an unrecognised prompt a reader may quote

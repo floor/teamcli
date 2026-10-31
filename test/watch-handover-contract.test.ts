@@ -89,6 +89,7 @@ function health(over: Partial<DaemonHealth>): DaemonHealth {
     since: '2026-10-14T08:00:00Z',
     startedBy: 'service-manager',
     version: '0.5.4',
+    gitHead: null,
     heartbeatAt: '2026-10-14T09:29:58Z',
     features: null,
     stuck: [],

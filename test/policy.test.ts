@@ -1579,3 +1579,24 @@ describe('under the registry source', () => {
     }
   });
 });
+
+test('owner setup policies remain signed and readable by policy view for either entity', async () => {
+  const fx = makeFixture();
+  try {
+    for (const target of ['floor', 'teamcli']) {
+      for (const [name, value] of [['grant-emission', 'conversational'], ['owner-signers', ['mac']]] as const) {
+        expect(writePolicySet(fx.home, { level: 'entity', target, name, value }, { now: NOW }).ok).toBe(true);
+      }
+      const source = readEntityPolicySource(fx.home, target);
+      expect(source.ok).toBe(true);
+      if (source.ok) expect(source.policies.map(p => p.name)).toEqual(['grant-emission', 'owner-signers']);
+    }
+    const before = readFileSync(entitiesPath(fx.home), 'utf8');
+    const io = testIo(fx.root, { kind: 'owner' });
+    expect(await runPolicy(['--file', join(fx.root, '.agents/team.yaml'), '--json'], io, { home: fx.home, now: NOW })).toBe(0);
+    expect(io.out).toContain('conversational');
+    expect(readFileSync(entitiesPath(fx.home), 'utf8')).toBe(before);
+  } finally {
+    fx.cleanup();
+  }
+});

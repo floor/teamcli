@@ -275,7 +275,7 @@
         "question": { "$ref": "#/$defs/stage" },
         "vendor_notice": { "$ref": "#/$defs/vendorNotice" },
         "provider_error": { "$ref": "#/$defs/stage" },
-        "rate_limit": { "$ref": "#/$defs/stage" },
+        "rate_limit": { "$ref": "#/$defs/rateLimitStage" },
         "working": { "$ref": "#/$defs/stage" },
         "composer": { "$ref": "#/$defs/composer" },
         "screen_module": { "$ref": "#/$defs/screenModule" }
@@ -292,6 +292,26 @@
             "ignore_case": {
               "type": "boolean",
               "description": "Ignore ASCII case only: each letter matches its other case; no other character folds (a long s or a Kelvin sign reads as itself). The flag reaches every rule of the stage, the exceptions written beside a match included."
+            },
+            "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 }
+          }
+        }
+      ]
+    },
+    "rateLimitStage": {
+      "oneOf": [
+        { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rules"],
+          "properties": {
+            "ignore_case": { "type": "boolean" },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "Optional rate-limit action reason carried into blocked status and watch reports."
             },
             "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 }
           }
@@ -377,6 +397,7 @@
         }
       ],
       "properties": {
+        "reason": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "Optional action reason carried into blocked status and watch reports when this rate-limit rule matches." },
         "any": { "$ref": "#/$defs/patterns" },
         "all": { "$ref": "#/$defs/patterns" },
         "footer": { "type": "string" },

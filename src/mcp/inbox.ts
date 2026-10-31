@@ -25,6 +25,7 @@ import {
   currentBriefClaim,
   GENERAL_BRIEF_FROM,
   GENERAL_BRIEF_RULE,
+  isGeneralBriefRecord,
   type CurrentBriefClaim,
 } from '../launch/general-brief.ts';
 import type { BriefBinding } from '../launch/brief-id.ts';
@@ -35,7 +36,9 @@ import { readState } from '../state.ts';
 import {
   isRead,
   readRecord,
+  readSealedRecord,
   receiptFile,
+  recordAuthOfSealed,
   signReceiptPayload,
   verifyRecord,
   type ReceiptPayload,
@@ -359,13 +362,41 @@ export function currentClaimIn(root: string, session: string, seat: string): Cur
   }
 }
 
+/** Whether a verified launch brief in this inbox is the one the current claim can serve. The
+ *  bounded `superseded` list is only a convenience for recent ids: a fresh launch starts a new
+ *  list, while the reader still refuses every earlier brief by comparing it with the current
+ *  claim. Keep the waiting list on that same rule so the watch never rings for mail its read
+ *  cannot serve. */
+function generalBriefStatusAt(
+  path: string,
+  id: string,
+  context: StatusContext,
+  claim: CurrentBriefClaim | null,
+  key: KeyObject,
+): 'current' | 'superseded' | 'other' {
+  const looked = readRecord(path, id);
+  if (!looked.ok || looked.record === null || !verifyRecord(looked.record, key)) return 'other';
+  const payload = looked.record.payload;
+  if (!isGeneralBriefRecord(payload)
+    || payload.to !== context.to
+    || payload.session !== context.session
+    || !sameRoot(payload.root, context.root)) return 'other';
+  return claim !== null
+    && claim.id === id
+    && payload.incarnation === claim.incarnation
+    && payload.brief_sha256 === claim.sha256
+    ? 'current'
+    : 'superseded';
+}
+
 /**
  * Every message waiting in this seat's own folder: a record-named regular file (a message id, or
  * the `unread-<uuid>` name an earlier build wrote for a lead's runtime report) with no signed read
  * receipt beside it. Oldest first. Anything else in the folder — a link, a marker, a directory —
  * is not a message and is skipped; a receipt the message key did not sign proves nothing, so the
  * message still waits. An earlier delivery of the seat's general seat brief is not waiting mail:
- * the claim names the ids it replaced, and a read could only refuse them as superseded. A receipt
+ * the reader only serves the record named by the current claim, even when an old id has fallen
+ * out of the claim's bounded `superseded` list. A receipt
  * at the current claim's own id counts only when it binds that claim, so a read of an earlier
  * delivery — or an ordinary one — never hides the delivery the claim names: the drop is listed,
  * and the read refuses the occupied name with no body.
@@ -390,6 +421,7 @@ export function listUnread(dropDir: string, context: StatusContext, home: string
     if (superseded.has(name)) continue;
     const at = join(dropDir, name);
     if (heldAt(at).kind !== 'file') continue;
+    if (key.kind === 'key' && generalBriefStatusAt(at, name, context, claim, key.key) === 'superseded') continue;
     const binding = claim !== null && name === claim.id ? briefBindingOf(claim) : undefined;
     if (key.kind === 'key' && isRead(dropDir, name, context, key.key, binding)) continue;
     let size = 0;
@@ -452,7 +484,7 @@ export function legacyDropAt(path: string): boolean {
  *  of the checks the read makes; the object is the record's id, the seat whose inbox it holds,
  *  and its path. A missing file or a bad id is not a refusal of a record and carries none. */
 export type InboxRefusal = {
-  rule: 'shape' | 'seat' | 'session' | 'root' | 'key' | 'signature';
+  rule: 'shape' | 'seat' | 'session' | 'root' | 'key' | 'signature' | 'unsupported';
   id: string;
   seat: string;
   path: string;
@@ -521,12 +553,36 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
     reason,
     refusal: { rule, id, seat: target.seat, path: at },
   });
-  const looked = readRecord(at, id);
+  const looked = readSealedRecord(at);
   if (!looked.ok) {
     return refused('shape', `message ${JSON.stringify(id)} is not a signed record: ${looked.reason}`);
   }
-  if (looked.record === null) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
-  const payload = looked.record.payload;
+  if (looked.sealed === null) return { ok: false, reason: `no message ${JSON.stringify(id)} in this inbox` };
+  const key = messageKeyState(home);
+  if (key.kind !== 'key') {
+    return refused(
+      'key',
+      key.kind === 'unreadable' ? `the message key is unreadable: ${key.why}` : 'no message key; nothing was shown',
+    );
+  }
+  // The signature covers the complete raw payload before any field is projected or read: an
+  // unsigned field inserted after signing is `tampered`, and a signed field this version does
+  // not read is `unsupported`. Both refuse with no body and no receipt; the unsupported refusal
+  // is on its own ground, never reported as a signature failure.
+  const auth = recordAuthOfSealed(looked.sealed, key.key);
+  if (auth.kind === 'shape') {
+    return refused('shape', `message ${JSON.stringify(id)} is not a signed record`);
+  }
+  if (auth.kind === 'tampered') {
+    return refused('signature', `message ${JSON.stringify(id)} does not verify against this message key`);
+  }
+  if (auth.kind === 'unsupported') {
+    return refused('unsupported', `message ${JSON.stringify(id)} is signed, and this version cannot read it: ${auth.reason}`);
+  }
+  const payload = auth.value.payload;
+  if (payload.id !== id) {
+    return refused('shape', `message ${JSON.stringify(id)} is not the record at that name`);
+  }
   if (payload.to !== target.seat) {
     return refused('seat', `message ${JSON.stringify(id)} is not addressed to this inbox`);
   }
@@ -535,16 +591,6 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
   }
   if (!sameRoot(payload.root, target.root)) {
     return refused('root', `message ${JSON.stringify(id)} is bound to another checkout`);
-  }
-  const key = messageKeyState(home);
-  if (key.kind !== 'key') {
-    return refused(
-      'key',
-      key.kind === 'unreadable' ? `the message key is unreadable: ${key.why}` : 'no message key; nothing was shown',
-    );
-  }
-  if (!verifyRecord(looked.record, key.key)) {
-    return refused('signature', `message ${JSON.stringify(id)} does not verify against this message key`);
   }
   // The launch's own record is served only as the seat's current brief. The claim is resolved
   // again directly before the receipt so a delivery that landed during this read is noticed.
@@ -634,7 +680,11 @@ export function readMessage(target: InboxTarget, id: string, home: string, brief
       ...(servedClaim?.pane_root_pid === undefined ? {} : { brief_pane_root_pid: servedClaim.pane_root_pid }),
     }),
   };
-  const published = publishReadReceipt(readName, `${JSON.stringify(signReceiptPayload(receipt, home), null, 2)}\n`);
+  // The signed writer provenance names the runtime this reader ran under: the launch's epoch,
+  // or — for a manual read — the claim it served. It is never the key's own generation.
+  const writerEpoch = brief?.epoch ?? binding?.epoch;
+  const signedReceipt = signReceiptPayload(receipt, home, writerEpoch === undefined ? undefined : { epoch: writerEpoch });
+  const published = publishReadReceipt(readName, `${JSON.stringify(signedReceipt, null, 2)}\n`);
   if (published === 'exists') {
     // A rival won the name between the check and this link. Its receipt is the single serving of
     // this id: verify it, and never replace it. If it does not verify, the name is uncertain and

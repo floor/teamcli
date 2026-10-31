@@ -1,5 +1,5 @@
 // The end-to-end run, local only: CI has no herdr. It creates its own herdr session
-// ("team-test-e2e"), drives the real commands against fake seats it starts
+// ("sandbox-e2e"), drives the real commands against fake seats it starts
 // (scripts/fake-seat.ts), checks the log lines and the state file after each, and stops and
 // deletes the session on every path. Nothing here touches a live session or the owner's home:
 // the project and the approval store are fresh folders under the system's temporary directory.
@@ -29,7 +29,7 @@ import { parseMemoryPressure, parseSwapUsage } from '../src/watch/machine.ts';
 import { NUDGE_TEXT } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
 
-export const SESSION = 'team-test-e2e';
+export const SESSION = 'sandbox-e2e';
 export const PROJECT = 'e2e';
 
 /** How long the gate watches the swap before it decides, as the live tests do. */
