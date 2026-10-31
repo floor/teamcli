@@ -1215,14 +1215,15 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
 
   // A watch whose pid the state records and no pane does — a watch started outside a herdr pane
   // of this team — is stopped only under the full ownership proof: the live process's command
-  // line is this team's `team watch` for this session, and its start instant is the one the
-  // watch recorded. A pid alone is never signalled: after the watch exited the OS can hand its
-  // pid to an unrelated process, and a record an older build wrote names no start instant to
-  // check. An unproven pid is left alone, named, and its record is kept. A record carrying a
-  // well-formed epoch is the session host's own process, never a watch to signal: killing it
-  // would stop the host. A record with a pane is left alone here — `up` verifies through that
-  // pane — and stopping the session takes it with the session. A record whose process is dead,
-  // or whose pane's first pass has not written a pid yet, has nothing to stop.
+  // line proves this install's own CLI entry running this team's `team watch` for this session,
+  // and its start instant is the one the watch recorded. A pid alone is never signalled: after
+  // the watch exited the OS can hand its pid to an unrelated process, and a record an older build
+  // wrote names no start instant to check. An unproven pid is left alone, named, and its record
+  // is kept. A record carrying a well-formed epoch is the session host's own process, never a
+  // watch to signal: killing it would stop the host. A record with a pane is left alone here —
+  // `up` verifies through that pane — and stopping the session takes it with the session. A
+  // record whose process is dead, or whose pane's first pass has not written a pid yet, has
+  // nothing to stop.
   const watchStop = watchStopRead(state?.watch, session, {
     alive: (pid) => sources.alive(pid),
     commandOf: (pid) => sources.commandOf?.(pid) ?? null,

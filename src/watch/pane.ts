@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { paneProcesses, workspaceList, workspacePanes, type PaneProcesses } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { isWatchEpoch } from './epoch.ts';
@@ -146,15 +149,63 @@ function shellWords(line: string): string[] {
   return words;
 }
 
-/** Whether a live process's command line is this session's `team watch`: an interpreter word,
- *  the CLI entry (`cli.ts`, `cli.js`, or the installed `team` name) directly followed by
- *  `watch`, and the session named by `--session` — absent only for the `default` session. */
-export function watchCommandLine(command: string, session: string): boolean {
+/** The CLI entries this install runs as, each resolved to its real path: the script this process
+ *  loaded (`process.argv[1]`), and the CLI entry beside this module in the same install
+ *  (`src/cli.ts`, or `dist/cli.js` in a built install). A path that does not resolve is left out:
+ *  it names no entry this install runs as. */
+export function installCliEntries(): string[] {
+  const here = fileURLToPath(import.meta.url);
+  const beside = join(dirname(here), '..', here.endsWith('.ts') ? 'cli.ts' : 'cli.js');
+  const entries: string[] = [];
+  for (const candidate of [process.argv[1], beside]) {
+    if (typeof candidate !== 'string' || candidate === '') continue;
+    try {
+      const real = realpathSync(candidate);
+      if (!entries.includes(real)) entries.push(real);
+    } catch {
+      // No file there (or no path at all): not an entry this install runs as.
+    }
+  }
+  return entries;
+}
+
+/** Where a command line names this CLI, if the shape could: the installed executable (or a CLI
+ *  entry script) at position 0 with `watch` next, or a node/bun runtime with the entry exactly at
+ *  position 1 and `watch` at position 2. The position is fixed before the word is resolved, so a
+ *  watch word inside another program's arguments never becomes the entry. */
+function entryPosition(words: readonly string[]): { entryAt: number; watchAt: number } | null {
+  const first = words[0];
+  if (first === undefined) return null;
+  const name = basename(first);
+  if (name === 'team' || name === 'cli.ts' || name === 'cli.js') return { entryAt: 0, watchAt: 1 };
+  if (name === 'node' || name === 'bun') return { entryAt: 1, watchAt: 2 };
+  return null;
+}
+
+/** Whether a live process's command line is this session's `team watch`. The entry is proved, not
+ *  searched for: its position is fixed (`entryPosition`), and its real path must be one of this
+ *  install's own CLI entries (`installCliEntries`) — a different install's `cli.js`, or an entry
+ *  named later in some other program's arguments, is that other program, not this team's watch.
+ *  The next word is `watch`, and the session is named by `--session` — absent only for the
+ *  `default` session. */
+export function watchCommandLine(
+  command: string,
+  session: string,
+  entries: readonly string[] = installCliEntries(),
+): boolean {
   const words = shellWords(command);
-  const entry = words.findIndex((word) => /(^|\/)(cli\.(ts|js)|team)$/.test(word));
-  if (entry < 0 || words[entry + 1] !== 'watch') return false;
+  const place = entryPosition(words);
+  if (place === null) return false;
+  let entry: string;
+  try {
+    entry = realpathSync(words[place.entryAt]!);
+  } catch {
+    return false;
+  }
+  if (!entries.includes(entry)) return false;
+  if (words[place.watchAt] !== 'watch') return false;
   let named: string | undefined;
-  for (let i = entry + 2; i < words.length; i++) {
+  for (let i = place.watchAt + 1; i < words.length; i++) {
     const word = words[i]!;
     if (word === '--session') {
       named = words[++i];
@@ -198,10 +249,11 @@ export function processStartOf(pid: number): number | null {
 /** What `team down` may do with the watch the state records. A record with a pane is `up`'s to
  *  verify, a record fenced by the session's epoch is the session host's own process, and a pid
  *  that is no longer alive has nothing to stop: all three are `nothing`. A pane-less, live pid is
- *  `proven` only under the full ownership proof: the live process's command line is this team's
- *  `team watch` for this session, and its start instant matches the one the watch recorded. A
- *  pid alone is never proof — the OS can hand it to an unrelated process after the watch exited —
- *  so anything less is `unproven` and is never signalled. */
+ *  `proven` only under the full ownership proof: the live process's command line proves this
+ *  install's own CLI entry running this team's `team watch` for this session, and its start
+ *  instant matches the one the watch recorded. A pid alone is never proof — the OS can hand it
+ *  to an unrelated process after the watch exited — so anything less is `unproven` and is never
+ *  signalled. */
 export type WatchStopRead =
   | { kind: 'nothing' }
   | { kind: 'proven'; pid: number }

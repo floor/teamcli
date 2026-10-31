@@ -3,12 +3,13 @@
 // through the same proof `remove` uses, before the record that names it goes; a seat that
 // records none — every seat whose launch managed no endpoint — is never mentioned. A watch whose
 // pid the state records and whose pane is not is stopped only when the live process's command
-// line is this session's watch and its start instant matches the one the watch recorded; a
-// reused pid, a record with no start instant, a record carrying a well-formed epoch (the session
-// host's own process) and a record with a pane are never signalled here.
+// line proves this install's own CLI entry running this session's watch and its start instant is
+// the one the watch recorded; a reused pid, another install's entry, a watch word inside some
+// other program's arguments, a record with no start instant, a record carrying a well-formed
+// epoch (the session host's own process) and a record with a pane are never signalled here.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
@@ -34,7 +35,11 @@ const ENDPOINT = {
 const EPOCH = `watch_${'a'.repeat(32)}`;
 // The instant the watch process recorded when it started; the scenes' `ps` reads agree with it.
 const WATCH_STARTED = '2026-10-15T11:29:50Z';
-const WATCH_COMMAND = 'node /opt/team/dist/cli.js watch --session acme';
+// This install's own CLI entry, resolved as the watch proof resolves it: a watch spawned from
+// this checkout runs it. Another install's cli.js, or this path named later in some other
+// program's arguments, is never this install's watch.
+const SELF_ENTRY = realpathSync(join(import.meta.dir, '../../src/cli.ts'));
+const WATCH_COMMAND = `node ${SELF_ENTRY} watch --session acme`;
 
 type Place = { base: string; root: string; home: string; file: string; dir: string };
 
@@ -287,6 +292,45 @@ describe('a watch whose pid is only in the state', () => {
     expect(run0.out).toContain('watch: the stop signal was sent');
   });
 
+  test('a bun runtime running this install\'s entry is proven too', async () => {
+    const run0 = await run({ commandOf: () => `bun ${SELF_ENTRY} watch --session acme` });
+    expect(run0.code).toBe(0);
+    expect(run0.kills).toEqual([4242]);
+    expect(run0.out).toContain('watch: the stop signal was sent');
+  });
+
+  test('an executable named team that resolves to this install\'s entry is proven', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'team-entry-')));
+    try {
+      const team = join(dir, 'team');
+      symlinkSync(SELF_ENTRY, team);
+      const run0 = await run({ commandOf: () => `${team} watch --session acme` });
+      expect(run0.code).toBe(0);
+      expect(run0.kills).toEqual([4242]);
+      expect(run0.out).toContain('watch: the stop signal was sent');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a watch word later in another program\'s arguments is that program\'s, and is left alone', async () => {
+    const run0 = await run({
+      commandOf: () => `node /srv/unrelated-worker.js ${SELF_ENTRY} watch --session acme`,
+    });
+    expect(run0.code).toBe(0);
+    expect(run0.kills).toEqual([]);
+    expect(run0.out).toContain("watch: pid 4242 is not running this team's watch for session acme; it was not signalled and the record is kept");
+    expect(run0.watchLeft).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED });
+  });
+
+  test('a watch from another install\'s cli.js is left alone, said, and kept', async () => {
+    const run0 = await run({ commandOf: () => 'node /opt/other/dist/cli.js watch --session acme' });
+    expect(run0.code).toBe(0);
+    expect(run0.kills).toEqual([]);
+    expect(run0.out).toContain("watch: pid 4242 is not running this team's watch for session acme; it was not signalled and the record is kept");
+    expect(run0.watchLeft).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED });
+  });
+
   test('a reused pid whose command line is not the watch is left alone, said, and kept', async () => {
     const run0 = await run({ commandOf: () => 'node /srv/worker.js' });
     expect(run0.code).toBe(0);
@@ -296,7 +340,7 @@ describe('a watch whose pid is only in the state', () => {
   });
 
   test('a command line for another session is not this team\'s watch', async () => {
-    const run0 = await run({ commandOf: () => 'node /opt/team/dist/cli.js watch --session other' });
+    const run0 = await run({ commandOf: () => `node ${SELF_ENTRY} watch --session other` });
     expect(run0.code).toBe(0);
     expect(run0.kills).toEqual([]);
     expect(run0.out).toContain('is not running this team\'s watch for session acme');

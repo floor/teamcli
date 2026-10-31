@@ -30,6 +30,8 @@ const OWNER: Caller = { kind: 'owner' };
 const COORDINATOR: Caller = { kind: 'seat', name: 'claude-coordinator-acme', pane: 'w1:p1', session: 'acme-web' };
 const WORKER: Caller = { kind: 'seat', name: 'deepseek-acme', pane: 'w3:p1' };
 const NOW = new Date('2026-10-03T14:02:00Z');
+// This install's own CLI entry, as the watch proof resolves it: a watch started here runs it.
+const SELF_ENTRY = realpathSync(join(import.meta.dir, '../../src/cli.ts'));
 
 let base: string;
 let root: string;
@@ -828,8 +830,9 @@ describe('team down', () => {
     const state = readFileSync(join(root, '.agents/team.state.json'), 'utf8');
     const run = await down(['--dry-run'], OWNER, {
       agents: () => [agent('deepseek-acme-tmp-1'), agent('stranger'), agent(null), agent('codex-acme', 'blocked')],
-      // The watch proof: the live pid is this session's watch, started when the record says.
-      commandOf: () => 'node /opt/team/dist/cli.js watch --session acme-web',
+      // The watch proof: the live pid runs this install's entry as this session's watch, started
+      // when the record says.
+      commandOf: () => `node ${SELF_ENTRY} watch --session acme-web`,
       startOf: () => Date.parse('2026-10-03T13:59:00Z'),
     });
     // None of these panes is recorded, so the plan must not claim a close. The first head

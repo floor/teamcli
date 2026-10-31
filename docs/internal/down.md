@@ -12,11 +12,14 @@ stops the herdr session. A pane herdr names with something that copy does not ca
 the state records that pane and that workspace for one seat, and left running when no seat record
 accounts for it. A pane with no name is closed on that same record. The watch is stopped by its
 pid only when the state records that pid and no pane, and the live process proves it is that
-watch: its command line is this session's `team watch`, and its start instant is the one the watch
-recorded as `started_at`. A pid alone is never signalled — after a watch exits the OS can hand its
-pid to an unrelated process — so a reused pid, a command line that cannot be read or does not name
-this session's watch, and a legacy record with no start instant are left alone, named, and their
-record kept. A watch recorded in a pane is not signalled here — its pane is how it is verified, and
+watch: its command line runs one of this install's own CLI entries — at the executable position,
+or exactly at position 1 under a node/bun runtime — as this session's `team watch`, and its start
+instant is the one the watch recorded as `started_at`. A pid alone is never signalled — after a
+watch exits the OS can hand its pid to an unrelated process — so a reused pid, a command line
+that cannot be read or does not prove this install's entry running this session's watch (another
+install's `cli.js`, or a watch word inside some other program's arguments included), and a
+legacy record with no start instant are left alone, named, and their record kept. A watch
+recorded in a pane is not signalled here — its pane is how it is verified, and
 `up` stops one it can prove — and a record fenced by the session's epoch names the session
 host's own process, which is never signalled. The event bus
 `team up` started goes with the team: the workspace its record names is closed after the seats
@@ -130,8 +133,8 @@ and the line names the title. Neither close happens for the orchestrator's or th
 seat when a seat calls: that seat is left running, whatever herdr calls its pane, and the skip
 line is the one in the table below. A name no seat record accounts for is left running. A watch
 whose pid the state records and no pane does, and which is alive, is stopped only when the live
-process proves it is this session's watch — its command line and its start instant against
-`started_at` — and prints `watch: the stop signal was sent`; one that does not stop prints
+process proves it is this session's watch — its own CLI entry, its command line and its start
+instant against `started_at` — and prints `watch: the stop signal was sent`; one that does not stop prints
 `watch: pid <pid> did not stop` and holds the run. A pid that cannot be proved is left alone and
 prints `watch: <why>; it was not signalled and the record is kept`, and the run goes on. A watch
 recorded in a pane is not signalled here, and a record fenced by the session's epoch is the

@@ -13,8 +13,9 @@ typed into it; left running. A seat whose profile
 says herdr cannot report it (`herdr_status: unreliable`) is free when the profile's own screen
 reads idle, whatever herdr's status says, and it is stopped on its own exit key at that screen.
 A watch the state records by pid alone — one started outside a pane of the team — is stopped only
-when the live process proves it is that watch: its command line is this session's `team watch`, and
-its start instant is the one the watch recorded. A pid alone is never signalled; an unprovable one
+when the live process proves it is that watch: its command line runs this install's own `team` CLI
+entry as this session's `team watch`, and its start instant is the one the watch recorded. A pid
+alone is never signalled; an unprovable one
 is left alone, said, and its record is kept. A watch recorded in a pane is not signalled here, its
 pane being how it is verified, and a record that belongs to the session's own host process is never
 signalled. A seat whose launch
