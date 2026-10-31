@@ -28,7 +28,7 @@ import { liveLeases } from '../tasks/lease.ts';
 import { fileSourceOf } from '../tasks/queue.ts';
 import { captureIdleClaim, endIdleClaims, idleClaimOf, settleIdleClaim } from './claim.ts';
 import { isIdleClaim, type IdleClaim } from './claim-record.ts';
-import { idleWorkReport } from './idle-work.ts';
+import { idleWorkReading } from './idle-work.ts';
 import { prefetchPresence } from './presence.ts';
 
 /** The direct route's request: the seat, the pane and CLI the pass read for it, and the body
@@ -189,7 +189,8 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
         seatNames: input.team.seats.map((seat) => seat.name),
       })
     : input.presence;
-  let report = idleWorkReport({ ...input, presence });
+  let reading = idleWorkReading({ ...input, presence });
+  let report = reading.report;
   // A declared tracker has no count until its reader answers. Ask once per pass, for the first
   // seat this pass proved idle and the pane its state record holds; the reader judges the pair.
   // No reader, no route to push over, an untrustworthy reading, no idle seat, no recorded pane, a
@@ -215,7 +216,8 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
         };
       }
     }
-    report = idleWorkReport({ ...input, presence, broker: snapshot });
+    reading = idleWorkReading({ ...input, presence, broker: snapshot });
+    report = reading.report;
   }
   // A reading that cannot be trusted dispatches nothing, announces nothing and resets nothing:
   // the dispatcher cannot tell a seat that left its episode from a reading it could not take.
@@ -243,14 +245,20 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
   }
 
   // Takeable work exists: any empty stretch is over, and a seat no longer counted leaves its
-  // claim behind.
+  // claim behind. A seat is offered work only when its own picker offers it some — the union
+  // count says work exists, never that this seat could claim it — so an idle seat the reading
+  // gives nothing (a self-pull seat with no task of its own, a seat whose only candidates are
+  // leased) keeps no episode, is told nothing, and is not reported as having missed a wake.
   emptyNotices.delete(scope);
-  const eligible = report.idle.map((item) => item.seat);
+  const bySeat = reading.bySeat;
+  const eligible = bySeat === null
+    ? []
+    : report.idle.map((item) => item.seat).filter((seat) => (bySeat.get(seat) ?? 0) > 0);
   result.suppressed = [...eligible];
   if (eligible.length === 0) return result;
   const ended = endIdleClaims(input.dir, {
     session: input.team.session,
-    current: report.idle.map((item) => ({ seat: item.seat, idle_since: item.since ?? 'watch-start' })),
+    current: eligible.map((seat) => ({ seat, idle_since: sinceOf(report, seat) })),
   });
   if (ended.kind !== 'ended') {
     // The claims could not be read or pruned under the lock: no push is made from a ledger this
