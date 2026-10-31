@@ -47,6 +47,10 @@ const RULE = '─'.repeat(40);
 const STATUS = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
 const idleScreen = `● Done.\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
+// The seat a pass may wake while it is idle: a dispatch hands time-bound work only to a seat
+// its delivery class says can hear it, which is a push or between-turns seat. The worker
+// declares the development channel, so its class is push and the pass spends its attempt.
+const PUSH_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
 
 const CREW = `format: 1
 project: acme-web
@@ -76,7 +80,7 @@ seats:
     vendor: anthropic
     model: Claude Opus
     version: "${WIN}"
-    launch: claude
+    launch: ${PUSH_LAUNCH}
 `;
 
 function iso(at: number): string {
