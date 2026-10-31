@@ -54,13 +54,12 @@ function runKeygen(args: Args, rawIo: Io, io: Io, home: string): number {
     return 2; // exit: client.keygen.invocation
   }
   // The pane guard, before any directory is checked or written: a seat never mints a client key.
-  const pane = clientPaneGuard(rawIo, 'client keygen', home);
+  const pane = clientPaneGuard(rawIo);
   if (!pane.ok) {
     if (json) writeJsonError(rawIo, 'client.keygen.pane', plainText(pane.why), null);
     else io.stderr(`team client keygen: refused: ${pane.why}\n`);
     return 1; // exit: client.keygen.pane
   }
-  if (pane.warning !== undefined) io.stderr(`${pane.warning}\n`);
   const dir = resolve(io.cwd, args.values.out as string);
   const placement = clientKeyPlacementProblem(home, dir);
   if (placement !== null) {

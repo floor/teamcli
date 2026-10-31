@@ -223,15 +223,14 @@ export async function runClientSend(
   if (body.trim() === '') return usage('a message is required');
 
   // The pane guard, judged before the grant or the key is opened: a caller inside a team pane
-  // never signs as the client. Dev mode, the owner's switch, lifts it with a warning.
-  const pane = clientPaneGuard(io, 'send', host.home);
+  // never signs as the client. It is a machine guard: no dev-mode setting lifts it (OD-20261019-49).
+  const pane = clientPaneGuard(io);
   if (!pane.ok) {
     if (json) io.stdout(`${document({ error: { code: 'send.client-pane', message: pane.why } })}\n`);
     else io.stderr(`team send: refused: ${pane.why}\n`);
     // exit: send.client-pane
     return 1;
   }
-  if (pane.warning !== undefined) io.stderr(`${pane.warning}\n`);
 
   let outcome:
     | {
