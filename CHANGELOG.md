@@ -7,67 +7,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.9] - 2026-10-31
+## [0.5.10] - 2026-10-31
 
-### Changed (breaking)
+0.5.10 is one release for everything since 0.5.5. The work prepared as 0.5.6 through 0.5.9 is
+folded in here: the owner seat and grants, the registry, quiet starts, the general grant on
+every command, the end of pane messaging, and the managed Codex endpoint.
 
-- **No pane messaging.** No message, wake, reminder, watch nudge, rules line or restart handover
-  is ever typed into a seat's pane or prompt (`src/send/no-pane-messaging.ts`). The `typed` and
-  `native` delivery legs are never walked; the chokepoints that typed (`deliverTrigger`,
-  `submitTrigger`, `deliverCompose`, `deliverRules`, the watch's nudge writer, the send
-  endpoint's and `team send`'s pane bindings, the restart handover) refuse before touching the
-  pane. Delivery goes through the bus and a vendor's event adapter (Claude development channel,
-  MCP inbox, socket, a CLI's runtime queue); a seat with none keeps the message in its bus inbox
-  (the drop file) and the sender is told `queued, no event adapter`. Starting a CLI in a pane, its
-  exit keys and `team answer` (a permission dialog, not a message) are unchanged.
+### Breaking change
 
-### Fixed
+**Nothing is ever typed into a seat.** No message, wake, reminder, watch nudge, rules line or
+restart handover is sent by typing into a seat's pane or prompt. Every message ends in the
+seat's bus inbox and wakes the seat through its own adapter: a live development channel, an
+MCP inbox, a socket its launch accepts, or a Codex runtime queue. A seat with no push adapter
+reads its inbox on its own turn, and the sender is told `queued, no event adapter`. Starting a
+CLI in a pane, its exit keys and `team answer` (a permission dialog, not a message) are
+unchanged.
 
-- **The machine daemon under launchd finds herdr.** The unit carries the installing shell's PATH;
-  without it every session read failed and every hosted send answered "the session could not be
-  read".
-- **A slow heartbeat probe no longer kills the hosted send endpoint.** Three 2 s misses in a row
-  mark it failed, and an answer restores it; one 400 ms miss used to mark it failed for good.
-- **Seats may send while the daemon is up.** The send endpoint refused every sender but the owner
-  and the orchestrator; it now refuses only a sender that is no seat of the team, and the CLI's
-  admission decides the rest.
+### Upgrade notes
 
-## [0.5.8-hotfix.1] - 2026-10-30
-
-The 0.5.8.1 fix (published under the SemVer name 0.5.8-hotfix.1, the line's hotfix form).
-
-### Fixed
-
-- **`team daemon install --general <grant.json> --key <client.key>` installs a unit that starts.**
-  Under the system service manager the run's parent processes cannot be read, so it was
-  `unplaced` and refused at every start ("only the owner or the system service manager runs the
-  machine daemon"). An install admitted by the general door now writes the grant and key paths
-  it was verified with into the unit's run command; each service start passes the same door,
-  which verifies the grant again (op `daemon`) and refuses, exit 1, once it is expired, revoked
-  by a missing file, another key, or no longer covers `daemon`. Only the paths the door verified
-  for that install are recorded; a plain install writes no grant, as before.
-
-## [0.5.8] - 2026-10-30
-
-0.5.8 makes the general grant reach every command. Through 0.5.7 only `config`, `up` and `init`
-read `--general`; `send`, `messages`, `reply`, `restart`, `down`/`--abandon`, `status` and the
-rest refused a no-terminal run even under a wildcard grant.
+- **A pull-only seat reads its own inbox.** Nothing is typed into its pane. The launch's
+  turn-start reader serves the waiting records on the seat's own turn, each with its signed
+  read receipt; `team messages` serves them to a reader in the checkout. A seat whose launch
+  gives it an adapter — a live development channel, an MCP inbox, a socket, or a Codex runtime
+  queue while the codex-daemon policy is on — is woken through it instead.
+- **Rules ride the launch line.** A first-message CLI's profile names how its launch line takes
+  an initial prompt; the rules file is written before the command runs, and the line pointing
+  at it goes last on the launch line. A seat already running whose rules were never delivered
+  is not typed to: it gets its rules file and is left out with `team restart <seat>` as the way
+  to carry them. A launch whose line does not carry the rules is refused.
+- **A declared `typed` delivery order names the seat's own adapters.** For a Claude seat it
+  means its live channel and then the socket its launch accepts; for a Codex seat, its runtime
+  queue while the codex-daemon policy is on. It no longer names a typed message.
+- No team migration is needed: a 0.5.5 team keeps working, and approvals made on 0.5.5 stay in
+  force. Grants signed before this release keep the ops they list; only a grant whose ops are
+  `*` covers ops added later. The client bundle formerly named `developer` is the `default`
+  bundle (`developer` remains its alias), and it may run `team down --abandon`.
 
 ### Added
 
-- **The general door.** Every command but `team client general-grant` takes
-  `--general <grant.json> --key <client.key>`. The dispatcher verifies it once
-  (`src/client/general-door.ts`, `admitGeneral`) for the command's own op and the entity of the
-  team in the folder, takes the two options off the line, and runs the command as the owner: no
-  detached or terminal refusal, the caller is the owner (for `reply`, in place of the walked
-  caller). A command added later is covered with no wiring of its own. `up`, `init` and `config`
-  keep their own admission. The grant-issuing command refuses `--general` (a holder issues with
-  `--via`).
-- Every command name is a general-grant op (`status` among them); the wildcard `*` covers them
-  all, and later ones.
-- Exit ids `team.general-usage` (2: `--general` without `--key`, or on the grant-issuing command)
-  and `team.general-refused` (1: expired, another key, an op or entity the grant does not cover).
-  The command contract lists `--general` and `--key` on every command and subcommand.
+- **The owner seat.** The owner approves several actions as one request with no owner terminal:
+  import, add, up, migrate, send, down and bus, each shown to Touch ID and applied in one run.
+  `team config set|unset --request` lets the owner seat approve a team-record change.
+  `team grant --request` reports whether the owner was notified, presents a Touch ID card,
+  prints a one-request link to the owner page, and the owner page lists pending grants. Owner
+  prompts and owner-page strings come from one English message catalog, with a short French
+  owner-seat prompt available.
+- **General grants.** One owner signature covers every entity or a listed set. The `team up
+  --general` form admits a launch with no request. `team init --general` creates a team for an
+  entity whose declared roots hold the folder: the grant must verify to the owner key, be
+  unexpired, match the key and cover the entity; it is never self-issued and never wider than
+  its parent. A refusal exits `init.general-refused`. A grant's ops may be the wildcard `*`,
+  signed like any list, and `team client general-grant` defaults to `--ops '*'`.
+- **The general door.** Every command but `team client general-grant` takes `--general
+  <grant.json>` and `--key <client.key>`. The dispatcher verifies it once for the command's own
+  op and the entity of the team in the folder, takes the two options off the line, and runs the
+  command as the owner: no detached or terminal refusal, with the owner as the caller (for
+  `reply`, in place of the walked caller). A command added later is covered with no wiring of
+  its own; `up`, `init` and `config` keep their own admission, and the grant-issuing command
+  refuses `--general` (a holder issues with `--via`). Every command name is a general-grant op,
+  and the wildcard covers them all and later ones. Exit ids `team.general-usage` (2: `--general`
+  without `--key`, or on the grant-issuing command) and `team.general-refused` (1: expired,
+  another key, an op or entity the grant does not cover); the command contract lists `--general`
+  and `--key` on every command and subcommand.
+- **A team charter and the registry record.** Team setup takes one owner signature as its
+  charter, and the team definition is read from the registry record.
+- **Event delivery.** A send reaches a seat through its own adapter: the Claude development
+  channel, with one redelivery; the MCP inbox, which pushes new records and `message.arrived`
+  from the bus; or a socket the launch accepts. `team up` starts the bus in its own workspace,
+  `team down` closes it, and a dropped follower is redialed with a doubling wait.
+  `team messages --client --follow` prints each reply on a client thread as it lands.
+- **`team down --abandon`** answers known prompts and saves unsent text before stopping a seat.
+- **Conversation record and resume.** Launches record the conversation id they carry, and
+  `team config set` syncs the agent launch. A Grok seat resumes with `grok -r <id>` and an
+  Antigravity seat with `agy --conversation=<id>`. After `team down`, `team up` resumes the
+  conversation the registry records when no seat state record exists, exactly when the registry
+  and the retained handle agree.
+- **Quiet start.** `team up --no-launch` gives seats their rules only, with no general seat
+  brief; the stop instruction travels in the rules file, a busy seat is waited out, and the
+  start is quiet.
+- **The managed Codex endpoint.** A Codex seat's launch starts a managed app-server endpoint
+  under the seat's presence binding and attaches the TUI to it by remote. The seat's native
+  turns, inbox server, permissions and tool calls then run under that endpoint. A seat launched
+  through a shell script is seen through to the CLI it runs; a restarted seat reattaches to the
+  endpoint; the endpoint accepts the app-server's linked socket. A Codex seat's tools and MCP
+  servers under its managed endpoint are placed as that seat under the full ownership proof:
+  the listen URL of its current binding, the recorded pid and a start inside the record's
+  window, and, for a session, the pane the session records.
+
+### Changed
+
+- **The typed delivery leg is retired; the native leg is a runtime queue.** The native leg
+  hands a pointer to a Codex seat's own runtime queue, or a Claude sender's message, and types
+  nothing. The generated settings carry the team file's inbound accept when the launch scripts
+  declare no word of their own.
+- **`team config set` writes a value with its unit as plain text.**
+
+### Fixed
+
+- **The machine daemon under launchd finds herdr.** The unit carries the installing shell's
+  PATH; without it every session read failed and every hosted send answered "the session could
+  not be read".
+- **A slow heartbeat probe no longer kills the hosted send endpoint.** Three 2 s misses in a
+  row mark it failed, and an answer restores it; one 400 ms miss used to mark it failed for
+  good.
+- **Seats may send while the daemon is up.** The send endpoint refused every sender but the
+  owner and the orchestrator; it now refuses only a sender that is no seat of the team, and the
+  CLI's admission decides the rest.
+- **`team daemon install --general <grant.json> --key <client.key>` installs a unit that
+  starts.** Under the service manager the run's parent processes cannot be read, so it was
+  `unplaced` and refused at every start. An install admitted by the general door writes the
+  grant and key paths it was verified with into the unit's run command; each service start
+  passes the same door, which verifies the grant again (op `daemon`) and refuses, exit 1, once
+  it is expired, revoked by a missing file, another key, or no longer covers `daemon`. Only the
+  paths the door verified for that install are recorded; a plain install writes no grant, as
+  before.
+- **The daemon's fallback sweep passes over settled episodes without locking them.** A marker
+  with no pending intent that is delivered, still trying, already escalated or not yet due is
+  counted and skipped before its lock, so a large delivered backlog no longer stalls the
+  heartbeat.
+- **Rules ride the launch line; nothing is typed.** `team up` writes the rules file before the
+  command and puts the line that points at it last on the launch line. A seat this run did not
+  launch gets the file and is left out with the restart that carries the rules. A single-seat
+  restart drops the launch brief to that seat alone, and a registration briefs only the
+  registered seat.
+- **A resume line the CLI cannot find is launched fresh.** Before the launch runs, the
+  conversation is checked on disk and a missing one is launched fresh with a note. If the CLI
+  still refuses the resume at runtime, the idle wait reads that refusal and relaunches fresh
+  once in the same pane.
+- A launch record can no longer re-run a disallowed launch line.
+- **herdr's idle never makes a seat ready once its CLI has exited.** herdr's word counts only
+  while a CLI is in front of the pane and on a second reading in a row; a pane back at its
+  shell waits into the ended reading, the missing-conversation fallback or the timeout.
+- **A Codex seat's managed endpoint keeps its inbox server and its permissions.** A TUI attached
+  by remote loads the app-server's `-c` pairs, so the seat keeps its team inbox server, and the
+  endpoint carries its approval policy and sandbox mode. Measured on codex-cli 0.161.0: a
+  resume line that carries permission overrides starts a fresh thread when attached — its
+  `resume <id>` words go and its overrides stay — while a resume line without them keeps its
+  thread, and the launch says which.
+- **A list inside a seat no longer ends the seat** when the team file is read.
+- **The registry's session is kept when the config omits it**, and wording names the registry
+  config when no team file is read.
+- **A receipt publisher's temp file is ignored during a read race**, and an unwritten bus
+  section leaves the canonical record unchanged.
+- **Several watch and MCP channel-push races are closed**, including push name reservation and
+  a stale inbox server reload.
+- **The Codex daemon dialog closes on `team down`**, and a detached agent is named by `caller`.
+- **Team-made state folders are 0700.** The log, the state lock, the restart handover and the
+  launch's own files make their folders 0700, so the rules file written before launch is not
+  refused.
+- **A client drop no event adapter took is recorded as the drop leg**, sent unconfirmed, and
+  the log says `queued, no event adapter` rather than `unreachable`.
+- **A bundle-grant send walks the same delivery legs as any other send**, and a walk that fails
+  logs the reason and prints one warning on stderr.
 
 ## [0.5.5] - 2026-10-26
 
