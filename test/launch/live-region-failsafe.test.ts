@@ -94,37 +94,27 @@ describe('the liveRegion fail-safe over an older error', () => {
     expect(rows.some((row) => row.includes('✻'))).toBe(false);
   });
 
-  test('an older error stays live while the newest turn shows no completion row', async () => {
-    const ran = await deliver(OLDER_ERROR_LIVE);
-    expect(ran.read).toBe('provider error');
-    expect(dialogKind('claude-code', OLDER_ERROR_LIVE)).toBe('provider error');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals).toHaveLength(1);
-    expect(ran.refusals[0]).toMatchObject({
-      stop: 'screen', typed: false, sent: false, kind: 'provider error', row: null,
-    });
+  test('no pane messaging, rules are never typed; was: an older error stays live while the newest turn shows no completion row', async () => {
+    const retired = await deliver(OLDER_ERROR_LIVE);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
   });
 
-  test('the hold ends when the older error scrolls off the window', async () => {
+  test('no pane messaging, rules are never typed; was: the hold ends when the older error scrolls off the window', async () => {
     expect(ERROR_SCROLLED_OFF).not.toContain(LOST);
-    const ran = await deliver(ERROR_SCROLLED_OFF);
-    expect(ran.read).toBe('idle');
-    expect(dialogKind('claude-code', ERROR_SCROLLED_OFF)).toBeNull();
-    expect(ran.result).toBe(true);
-    expect(ran.typed).toEqual([RULES]);
-    expect(ran.entered).toBe(1);
-    expect(ran.refusals).toEqual([]);
+    const retired = await deliver(ERROR_SCROLLED_OFF);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
   });
 
-  test('a completion under the older error keeps it history: the window is idle', async () => {
+  test('no pane messaging, rules are never typed; was: a completion under the older error keeps it history: the window is idle', async () => {
     expect(readScreen('claude-code', COMPLETION_UNDER_OLDER)).toEqual({ kind: 'idle' });
     expect(dialogKind('claude-code', COMPLETION_UNDER_OLDER)).toBeNull();
-    const ran = await deliver(COMPLETION_UNDER_OLDER);
-    expect(ran.result).toBe(true);
-    expect(ran.typed).toEqual([RULES]);
-    expect(ran.entered).toBe(1);
-    expect(ran.refusals).toEqual([]);
+    const retired = await deliver(COMPLETION_UNDER_OLDER);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
   });
 });

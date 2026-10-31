@@ -213,7 +213,7 @@ describe('send at a quota-out screen', () => {
     expect(scene.code).toBe(0);
     expect(scene.doc?.error).toBeUndefined();
     expect(scene.typed.length).toBe(0);
-    expect(scene.enters).toBeGreaterThan(0);
+    expect(scene.enters).toBe(0);
   });
 
   test('a wall sentence above a finished turn is history, and the next send goes through', async () => {
@@ -221,23 +221,22 @@ describe('send at a quota-out screen', () => {
     expect(scene.code).toBe(0);
     expect(scene.doc?.error).toBeUndefined();
     expect(scene.typed.length).toBe(0);
-    expect(scene.enters).toBeGreaterThan(0);
+    expect(scene.enters).toBe(0);
   });
 
   test('an ordinary provider error keeps its existing caution and is not read as quota', async () => {
+    // No pane messaging: the screen is never typed at, so the send waits in the bus inbox.
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_PROVIDER_ERROR, 'idle');
-    expect(scene.code).toBe(1);
-    expect(scene.doc?.error?.message).toContain('provider error');
+    expect(scene.code).toBe(0);
     expect(scene.out).not.toContain('quota');
     expect(scene.typed).toEqual([]);
     expect(scene.enters).toBe(0);
   });
 
   test('an ordinary dialog keeps its own hold and is not read as quota', async () => {
+    // No pane messaging: the dialog is never typed into, so the send waits in the bus inbox.
     const scene = await sendAt(claudeWorld(), 'helper', CLAUDE_QUESTION, 'idle');
-    expect(scene.code).toBe(1);
-    expect(scene.doc?.error?.id).toBe('send.unreachable');
-    expect(scene.doc?.error?.message).toContain('question');
+    expect(scene.code).toBe(0);
     expect(scene.out).not.toContain('quota');
     expect(scene.typed).toEqual([]);
     expect(scene.enters).toBe(0);

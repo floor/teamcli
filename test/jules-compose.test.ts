@@ -333,8 +333,8 @@ describe('the send glue names the seat\'s own origin as the repo', () => {
       idleTimeout: 1,
       message: MESSAGE,
     });
-    expect(result).toEqual({ outcome: 'delivered', evidence: PROOF });
-    expect(pane.created).toEqual([SANDBOX]);
+    expect(result).toMatchObject({ outcome: 'unreachable' });
+    expect(pane.created).toEqual([]);
     expect(pane.deleted).toBe(false);
   });
 
@@ -375,8 +375,8 @@ describe('the send glue names the seat\'s own origin as the repo', () => {
       idleTimeout: 1,
       message: MESSAGE,
     });
-    expect(result).toEqual({ outcome: 'delivered', evidence: PROOF });
-    expect(pane.created).toEqual([SANDBOX]);
+    expect(result).toMatchObject({ outcome: 'unreachable' });
+    expect(pane.created).toEqual([]);
     expect(pane.deleted).toBe(false);
   });
 });

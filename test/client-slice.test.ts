@@ -1112,7 +1112,7 @@ describe('the client send walk', () => {
     // The frame was never taken, so no read receipt exists for it.
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
     const last = walkHistory(w).at(-1);
-    expect(last).toMatchObject({ via: 'typed', outcome: 'sent (unconfirmed)' });
+    expect(last).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
     expect(last?.failed).toContain('socket: the session closed the connection before it took the frame');
   });
 
@@ -1126,7 +1126,7 @@ describe('the client send walk', () => {
     expect(host.typed).toEqual([]);
     expect(host.enters).toEqual([]);
     expect(existsSync(join(w.dropDir, 'drop-1.read.json'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed', outcome: 'sent (unconfirmed)' });
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'drop', outcome: 'sent (unconfirmed)' });
   });
 
   test('a declared order is walked as written, and a live channel is not reached ahead of it', async () => {
@@ -1135,11 +1135,11 @@ describe('the client send walk', () => {
     const host = walkHost(w, { delivery: { seat: ['typed', 'mcp-inbox'] } });
     const io = capture(w);
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
-    // The typed leg is first in the receiver's own word and took the send; the channel never ran,
-    // so no pending marker was written for it.
+    // The typed leg is first in the receiver's own word and is refused (no pane messaging); the
+    // walk goes on in the declared order to the live inbox, which takes it.
     expect(host.typed).toEqual([]);
-    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(false);
-    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'typed' });
+    expect(existsSync(join(w.dropDir, 'drop-1.pending'))).toBe(true);
+    expect(walkHistory(w).at(-1)).toMatchObject({ via: 'mcp-inbox' });
   });
 
   test('a declared order naming a leg a client grant cannot walk keeps only the client legs', async () => {

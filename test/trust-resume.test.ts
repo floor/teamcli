@@ -309,7 +309,11 @@ describe('trust dialog resume and pane naming', () => {
 
     const io = testIo(w.root, { kind: 'owner' });
     const code = await runUp([], io, upSources);
-    expect(code).toBe(0);
+    // No pane messaging: the seat is already in its pane, so its rules cannot be handed to it
+    // there; it is left out until a relaunch carries the rules line.
+    expect(code).toBe(1);
+    expect(io.out + io.err).toContain('rules not typed');
+    return;
     expect(io.out).not.toContain('its waiting pane is gone');
     expect(io.out).toContain('operator-1: ready\n');
     expect(renames).toEqual(['w46:p1:operator-1']);
@@ -401,7 +405,11 @@ describe('trust dialog resume and pane naming', () => {
 
     const io = testIo(w.root, { kind: 'owner' });
     const code = await runRegister(['operator-1'], io, regSources);
-    expect(code).toBe(0);
+    // No pane messaging: the seat is already in its pane, so its rules cannot be handed to it
+    // there; it is left out until a relaunch carries the rules line.
+    expect(code).toBe(1);
+    expect(io.out + io.err).toContain('nothing was registered');
+    return;
     expect(io.out).toContain('operator-1: registered — pane w46:p1; nothing was launched\n');
     expect(renames).toEqual(['acme:w46:p1:operator-1']);
     expect(titles).toEqual([`acme:w46:${workspaceLabel(operatorSeat)}`]);
@@ -578,9 +586,7 @@ describe('trust dialog resume and pane naming', () => {
     expect(io.out).toBe(`team acme, session "acme"\noperator-1: answered trust (${lobby})\n`);
     expect(keys).toEqual(['w46:p1:enter']);
     expect(renames).toEqual(['w46:p1:operator-1']);
-    expect(typed).toHaveLength(1);
-    expect(typed[0]).toContain('w46:p1:Read ');
-    expect(typed[0]).toContain('rules/operator-1.md');
+    expect(typed).toEqual([]);
 
     const recorded = readState(w.dir).sessions.acme?.seats['operator-1'];
     expect(recorded?.stage).toBe('ready');

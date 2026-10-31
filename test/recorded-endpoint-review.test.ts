@@ -422,7 +422,7 @@ function expectHeld(
   witnesses: AppServer[],
 ): void {
   expect(sent.code).toBe(0);
-  expect(sent.err).toBe('');
+  expect(sent.err).toContain('queued, no event adapter');
   expect(sent.out).toBe(dropLine());
   expect(sent.calls).toEqual([]);
   for (const witness of witnesses) {

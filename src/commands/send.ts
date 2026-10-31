@@ -1,4 +1,4 @@
-import { isTypingLeg, NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, queuedLine, refuseTyping } from '../send/no-pane-messaging.ts';
+import { isTypingLeg, NO_EVENT_ADAPTER_TOOK_IT, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, queuedLine, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -3886,7 +3886,9 @@ async function deliverClientRecord(
     await deliverComposeSeat(quiet, dir, root, from, from, project, session, seatName, cli, found.pane, dropDir, record, resolve(root, seat.cwd), host, report, startedAt, failures);
     return;
   }
-  const why = `no leg of its delivery order took the client drop${failures.length === 0 ? '' : ` (${failures.join('; ')})`}`;
+  // The client drop is already the seat's bus inbox: no event adapter took it, so it waits there
+  // (src/send/no-pane-messaging.ts), recorded as the drop leg, never as unreachable.
+  const why = `${QUEUED_NO_EVENT_ADAPTER}${failures.length === 0 ? '' : ` (${failures.join('; ')})`}; the client drop waits in its bus inbox`;
   logLine(dir, 'send', from, `${seatName}: ${why}`, host.now());
   appendHistory(project, root, host.home, {
     ts: host.now().toISOString(),
@@ -3895,7 +3897,8 @@ async function deliverClientRecord(
     body: record.body,
     id: record.id,
     thread: record.thread,
-    outcome: 'unreachable',
+    via: 'drop',
+    outcome: 'sent (unconfirmed)',
     ms: host.now().getTime() - startedAt,
     ...(failures.length > 0 ? { failed: [...failures] } : {}),
   });
