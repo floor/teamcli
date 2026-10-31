@@ -1,18 +1,20 @@
 // The managed Codex endpoint and the pane-less watch a stop may meet: what `team down` stops,
-// what it leaves alone, how a live endpoint is reused under a launch's configuration, and what
-// a failed presence-binding mint does to a launch. Command-level scenes drive the shipped `down`
-// with injected measurements; launch-level scenes drive `ensureCodexEndpoint` and
-// `launchCodexEndpoint` the same way. No process is read, started or signalled.
+// what it leaves alone, what a removal must stop before it drops a record, how a live endpoint is
+// reused under a launch's configuration, and what a failed presence-binding mint does to a launch.
+// Command-level scenes drive the shipped `down` and `remove` with injected measurements;
+// launch-level scenes drive `ensureCodexEndpoint` and `launchCodexEndpoint` the same way. No
+// process is read, started or signalled.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { approvalOf } from '../../src/approve/approval.ts';
-import { runDown, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
+import { realSources as downSources, runDown, type DownLaunch, type DownSources } from '../../src/commands/down.ts';
+import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
 import { loadTeamFile } from '../../src/file/load.ts';
-import { codexEndpointSocket, ensureCodexEndpoint, launchCodexEndpoint } from '../../src/launch/codex-endpoint.ts';
+import { codexEndpointSocket, ensureCodexEndpoint, launchCodexEndpoint, stopSeatCodexEndpoint } from '../../src/launch/codex-endpoint.ts';
 import { emptySession, LOCK_FILE, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
@@ -307,6 +309,19 @@ describe('down and a watch whose pid is only in the state', () => {
     expect(run.kills).toEqual([4242]);
   });
 
+  test('a watch word further inside another program\'s arguments never proves that program', async () => {
+    // The entry is the program at its fixed position, not any word that looks like a CLI later in
+    // the line: this process runs an unrelated program whose argument happens to be a cli.js path
+    // and the word `watch`.
+    const run = await watchRun({
+      commandOf: () => 'node /srv/unrelated-worker.js /opt/other/dist/cli.js watch --session acme',
+    });
+    expect(run.code).toBe(0);
+    expect(run.kills).toEqual([]);
+    expect(run.out).toContain("is not running this team's watch for session acme");
+    expect(run.watchLeft).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED });
+  });
+
   test('a reused pid with another command is left alone and the record kept', async () => {
     const run = await watchRun({ commandOf: () => 'python3 /srv/watchdog.py' });
     expect(run.code).toBe(0);
@@ -351,6 +366,90 @@ describe('down and a watch whose pid is only in the state', () => {
     const run = await watchRun({ alive: () => false });
     expect(run.kills).toEqual([]);
     expect(run.out).not.toContain('watch: the stop signal was sent');
+  });
+});
+
+describe('removing a seat whose endpoint record is present but unproven', () => {
+  function endpointRecord(at: Place): Record<string, unknown> {
+    const socket = codexEndpointSocket(at.dir, 'acme', 'worker', BINDING);
+    if (socket === null) throw new Error('the scene names no endpoint socket');
+    return {
+      url: socket.url,
+      binding: BINDING,
+      pid: 4242,
+      started_at: '2026-10-15T11:00:00Z',
+      config: ['-c', 'approval_policy="never"'],
+    };
+  }
+
+  function removeSources(
+    at: Place,
+    real: { terminations: number[]; socket?: boolean },
+    over: Partial<RemoveSources> = {},
+  ): RemoveSources {
+    const url = endpointRecord(at).url as string;
+    const stop = (seen: { dir: string; session: string; seat: string }): EndpointStopRead =>
+      stopSeatCodexEndpoint(seen, {
+        alive: (pid) => pid === 4242,
+        commandOf: (pid) => (pid === 4242 ? `codex app-server --listen ${url}` : null),
+        startOf: (pid) => (pid === 4242 ? Date.parse('2026-10-15T11:00:00Z') + 500 : null),
+        isPlainDir: () => true,
+        isSocket: () => real.socket ?? true,
+        drop: () => {},
+        terminate: (pid) => { real.terminations.push(pid); },
+        sleep: async () => {},
+      });
+    return {
+      ...downSources,
+      home: at.home,
+      sessionRunning: () => false,
+      agents: () => [],
+      screen: () => ({ kind: 'idle' }),
+      screenText: () => undefined,
+      status: () => 'idle',
+      foreground: () => [],
+      foregroundCwd: () => null,
+      now: () => NOW,
+      sleep: async () => {},
+      codexEndpoint: { stop },
+      ...over,
+    };
+  }
+
+  async function remove(
+    at: Place,
+    args: string[],
+    over: Partial<RemoveSources> = {},
+    realExtra: { socket?: boolean } = {},
+  ) {
+    const real = { terminations: [] as number[], ...realExtra };
+    const io = testIo(at.root, owner);
+    const code = await runRemove(args, io, removeSources(at, real, over));
+    return { code, out: io.out, err: io.err, terminations: real.terminations };
+  }
+
+  test('a record with no pid is unproven, not absent: the removal is refused and the record kept', async () => {
+    const at = place();
+    const record = endpointRecord(at);
+    delete record.pid;
+    seedSeat(at, { stage: 'ready', pane: 'w1:p1', presence_binding: BINDING, codex_endpoint: record });
+    const run = await remove(at, ['worker']);
+    expect(run.code).toBe(1);
+    expect(run.terminations).toEqual([]);
+    expect(run.err).toContain('endpoint record cannot be read');
+    expect(run.err).toContain('left as it is');
+    expect(stateSeat(at)?.codex_endpoint).toBeDefined();
+    expect(readFileSync(at.file, 'utf8')).toContain('name: worker');
+  });
+
+  test('a full record whose socket file is gone is stopped by pid, not read as already stopped', async () => {
+    const at = place();
+    seedSeat(at, { stage: 'ready', pane: 'w1:p1', presence_binding: BINDING, codex_endpoint: endpointRecord(at) });
+    const run = await remove(at, ['worker'], {}, { socket: false });
+    expect(run.code).toBe(0);
+    expect(run.terminations).toEqual([4242]);
+    expect(stateSeat(at)).toBeUndefined();
+    expect(readFileSync(at.file, 'utf8')).not.toContain('name: worker');
   });
 });
 
