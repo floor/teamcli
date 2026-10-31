@@ -259,7 +259,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   } else {
     io.stdout(`${verb === 'edit' ? 'edited' : verb === 'set' ? `set ${rawPath}` : `unset ${rawPath}`} in ${where}; validated\n`);
     if (stale.length > 0) {
-      io.stdout(`the approval no longer covers: ${stale.join('; ')}; approve the team again with the owner seat\n`);
+      io.stdout(`the approval no longer covers: ${stale.join('; ')}; the change was applied, and the stored team approval still describes an earlier record; this version has no command to refresh that snapshot\n`);
     }
   }
   // exit: config.written

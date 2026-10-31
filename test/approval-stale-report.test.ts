@@ -95,6 +95,11 @@ test('a removed seat is named, and the default ceiling says it followed the rost
   expect(removed.out).toContain('seat worker is missing since the last approval');
   expect(removed.out).toContain('the default seat ceiling follows the roster (3 seats)');
   expect(removed.out).not.toContain('`limits` changed');
+  // The repair names an outcome this build has, never a command it does not.
+  expect(removed.out).toContain('the change was applied');
+  expect(removed.out).toContain('the stored team approval still describes an earlier record');
+  expect(removed.out).toContain('this version has no command to refresh that snapshot');
+  expect(removed.out).not.toContain('approve the team again');
 });
 
 test('a seat change beside the removal is named too', async () => {
@@ -125,6 +130,7 @@ test('a limits edit of its own keeps its own line beside the removed seat', asyn
   expect(temporary.out).toContain('`limits` changed');
   expect(temporary.out).toContain('seat worker is missing since the last approval');
   expect(temporary.out).not.toContain('the default seat ceiling follows the roster');
+  expect(temporary.out).toContain('this version has no command to refresh that snapshot');
 });
 
 test('an explicit limits.seats keeps a removal out of the stale report', async () => {
