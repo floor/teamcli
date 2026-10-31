@@ -17,12 +17,15 @@ every command, the end of typed messaging, and the managed Codex endpoint.
 
 **Nothing is ever typed into a seat.** No message, wake, reminder, watch nudge, rules line or
 restart handover is sent by typing into a seat's terminal or prompt. Every message ends in the
-seat's bus inbox and wakes the seat through its own push adapter: the development channel its
-launch loads, a socket its launch accepts, or a Codex runtime queue under the managed
-endpoint. A seat with no push adapter reads its inbox on its own turn — an ordinary MCP inbox
-is one, read when its model calls the tool — and the sender is told `queued, no event
-adapter`. Starting a CLI in a terminal, its exit keys and `team answer` (a permission dialog,
-not a message) are unchanged.
+seat's bus inbox and reaches the seat by the route its own launch installed: an event adapter
+that wakes it — the development channel its launch loads, or a socket its launch accepts whose
+recorded address still stands — a Codex runtime queue under the managed endpoint that holds
+the message between turns, or an inbox the seat reads when it next takes a turn. The sender is
+told which, in plain words: woken through its event adapter, woken through its runtime queue,
+queued and read at its next turn (pull-only), or queued with no way to be woken while it is
+idle. A send that ends without a delivery never answers a bare "unconfirmed"; the bus-inbox
+drop's own line still says `queued, no event adapter` when it takes the send. Starting a CLI in
+a terminal, its exit keys and `team answer` (a permission dialog, not a message) are unchanged.
 
 ### Upgrade notes
 
