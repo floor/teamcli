@@ -3,7 +3,6 @@
 // writes the real ~/.config/team: every call names the temp home it was given.
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { existsSync, readdirSync, statSync } from 'node:fs';
 import { importTeamFile } from '../../src/file/team-import.ts';
 import { readStoredTeamConfig, type StoredTeamConfig } from '../../src/registry/team-config-store.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
@@ -32,26 +31,4 @@ export async function underRegistry<T>(body: () => Promise<T> | T): Promise<T> {
   }
 }
 
-const REAL_REGISTRY = join(homedir(), '.config', 'team', 'team-config');
-
-/** Every entry of the real registry folder with its size and modification time, or null when
- *  the folder is absent. */
-function registryFingerprint(): string | null {
-  if (!existsSync(REAL_REGISTRY)) return null;
-  return readdirSync(REAL_REGISTRY)
-    .sort()
-    .map((name) => {
-      const stat = statSync(join(REAL_REGISTRY, name));
-      return `${name}:${String(stat.size)}:${String(stat.mtimeMs)}`;
-    })
-    .join('\n');
-}
-
-/** The real registry as this test process found it. An owner's machine may already hold one. */
-const REAL_REGISTRY_AT_START = registryFingerprint();
-
-/** The real machine's registry folder: a scene that created it, or added, removed or wrote any
- *  record in it, is a broken scene. A registry the machine already held is not a touch. */
-export function realRegistryTouched(): boolean {
-  return registryFingerprint() !== REAL_REGISTRY_AT_START;
-}
+export { realRegistryTouched } from './real-registry.ts';

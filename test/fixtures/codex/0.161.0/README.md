@@ -54,6 +54,12 @@ Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
   `⚠ 1 warning · f2 to view` right-aligned on the same row and no chrome row under it. It
   read `unknown` until the warning tail counted as the row's own end.
 
+- `rules-unsent-orchestrator.txt`, `rules-unsent-builder-3.txt`: live seat panes of a team
+  on this machine, captured 2026-10-28 with herdr `pane read --source visible --format ansi`
+  while `team up` had put each seat's rules line in its box and the resumed seat was busy on
+  its queued drops; read `unsent`. They pin the busy-seat wait in `src/launch/deliver.ts`
+  (commit 9e68204b7) and are used by `test/launch/rules-busy-seat.test.ts`.
+
 ## Constructed
 
 Nothing in these files was read from a live pane. Each is `idle-hint.txt` with its last

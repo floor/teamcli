@@ -150,7 +150,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 16,
+        "real": 18,
         "constructed": 1,
         "undocumented": 0
       },
@@ -207,7 +207,7 @@
         "undocumented": 0
       },
       "unsent": {
-        "real": 25,
+        "real": 26,
         "constructed": 0,
         "undocumented": 0
       },
@@ -1143,7 +1143,7 @@
             "undocumented": 0
           },
           "unsent": {
-            "real": 2,
+            "real": 4,
             "constructed": 1,
             "undocumented": 0
           },
@@ -1380,6 +1380,63 @@
           },
           "unsent": {
             "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "permission": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "exit question": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "trust": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "vendor notice": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "provider error": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unknown": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          }
+        },
+        "2026.10.22": {
+          "idle": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "working": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "unsent": {
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1819,6 +1876,7 @@
       "exit question": "reason not stated"
     },
     "cursor": {
+      "idle": "reason not stated",
       "working": "reason not stated",
       "unsent": "reason not stated",
       "permission": "reason not stated",
@@ -2748,6 +2806,18 @@
       "provenance": "constructed"
     },
     {
+      "file": "codex/0.161.0/rules-unsent-builder-3.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/rules-unsent-orchestrator.txt",
+      "cli": "codex",
+      "kind": "unsent",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/trust.txt",
       "cli": "codex",
       "kind": "trust",
@@ -3141,6 +3211,12 @@
       "file": "cursor/2026.10.19/idle.txt",
       "cli": "cursor",
       "kind": "idle",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/rules-unsent-reviewer-cursor.txt",
+      "cli": "cursor",
+      "kind": "unsent",
       "provenance": "capture"
     },
     {
