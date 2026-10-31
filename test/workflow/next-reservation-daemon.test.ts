@@ -66,7 +66,7 @@ ${SEATS}tasks:
     keychainService: team.linear.acme
 `;
 
-const lead: NextClaim = { seat: 'lead', pane: 'w1:p1' };
+const lead: NextClaim = { seat: 'lead', pane: 'fixture1:pane1' };
 const now = Date.parse('2026-10-20T09:00:00.000Z');
 
 let base: string;
@@ -94,8 +94,8 @@ function project(text = FILE_TEAM, tasks = '- id: m1\n  title: one\n- id: m2\n  
   route = routeOf(realpathSync(root), team.project, team.session, team.seats.map((seat) => seat.name));
   updateState(join(root, '.agents'), (state) => {
     const session = (state.sessions.crew ??= emptySession());
-    session.seats.lead = { stage: 'ready', pane: 'w1:p1' };
-    session.seats.worker = { stage: 'ready', pane: 'w2:p1' };
+    session.seats.lead = { stage: 'ready', pane: 'fixture1:pane1' };
+    session.seats.worker = { stage: 'ready', pane: 'fixture2:pane1' };
   });
 }
 
@@ -145,7 +145,7 @@ function reservation(id: string, patch: Record<string, unknown> = {}): Record<st
     attempt: 1,
     thread: 'th-1',
     receiver: 'worker',
-    pane: 'w2:p1',
+    pane: 'fixture2:pane1',
     ...patch,
   };
 }
@@ -156,11 +156,11 @@ describe('handleNext with a reservation store injected, file source', () => {
     const store = new StandInStore();
     const answer = await call(lead, 'claim', false, { reservations: store });
     expect(answer).toEqual({ ok: true, kind: 'claimed', record: { id: 'm1', title: 'one' } });
-    expect(lease()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'w1:p1' });
+    expect(lease()).toMatchObject({ id: 'm1', seat: 'lead', pane: 'fixture1:pane1' });
     expect(Date.parse(String(lease().until))).toBe(now + LEASE_MS);
     expect(holdOf(store)).toMatchObject({
       kind: 'next-claim',
-      owner: 'next:lead:w1:p1',
+      owner: 'next:lead:fixture1:pane1',
       expiresAt: new Date(now + LEASE_MS).toISOString(),
     });
   });
@@ -202,7 +202,7 @@ describe('handleNext with a reservation store injected, file source', () => {
     const answer = await call(lead, 'claim', false, { reservations: store }, later);
     expect(answer).toMatchObject({ ok: true, kind: 'claimed', record: { id: 'm1' } });
     expect(Date.parse(String(lease().until))).toBe(later + LEASE_MS);
-    expect(holdOf(store)).toMatchObject({ owner: 'next:lead:w1:p1', expiresAt: new Date(later + LEASE_MS).toISOString() });
+    expect(holdOf(store)).toMatchObject({ owner: 'next:lead:fixture1:pane1', expiresAt: new Date(later + LEASE_MS).toISOString() });
     expect(store.calls.filter((call) => call.op === 'renewHold').length).toBe(1);
   });
 });
@@ -219,7 +219,7 @@ describe('handleNext with a reservation store injected, broker source', () => {
     const deps: NextHandlerDeps = { reservations: store, askBroker: async () => records([{ id: 'L1', title: 'tracker' }]) };
     const answer = await call(lead, 'claim', false, deps);
     expect(answer).toEqual({ ok: true, kind: 'claimed', record: { id: 'L1', title: 'tracker' } });
-    expect(holdOf(store, 'L1')).toMatchObject({ kind: 'next-claim', owner: 'next:lead:w1:p1' });
+    expect(holdOf(store, 'L1')).toMatchObject({ kind: 'next-claim', owner: 'next:lead:fixture1:pane1' });
     expect(holdOf(store, 'L1')?.expiresAt).toBe(new Date(now + LEASE_MS).toISOString());
     expect(await call(lead, 'release', false, deps)).toEqual({ ok: true, kind: 'released', id: 'L1' });
     expect(holdOf(store, 'L1')).toBeUndefined();
@@ -236,6 +236,6 @@ describe('handleNext with a reservation store injected, broker source', () => {
     const answer = await call(lead, 'claim', false, deps);
     expect(answer).toEqual({ ok: true, kind: 'claimed', record: { id: 'L2', title: 'tracker two' } });
     expect(holdOf(store, 'L1')?.owner).toBe('run-1/1');
-    expect(holdOf(store, 'L2')?.owner).toBe('next:lead:w1:p1');
+    expect(holdOf(store, 'L2')?.owner).toBe('next:lead:fixture1:pane1');
   });
 });

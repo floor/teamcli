@@ -51,7 +51,7 @@ seats:
 
 const LIST = '- id: m1\n  title: the task title\n';
 
-const lead: Caller = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' };
+const lead: Caller = { kind: 'seat', name: 'lead', pane: 'fixture1:pane1', session: 'acme' };
 const CTX = 'team acme, session "acme"\n';
 
 let base: string;
@@ -74,8 +74,8 @@ function ready(): void {
   writeFileSync(join(root, '.agents', 'tasks.yaml'), LIST);
   updateState(join(root, '.agents'), (state) => {
     const session = (state.sessions.acme ??= emptySession());
-    session.seats.lead = { stage: 'ready', pane: 'w1:p1' };
-    session.seats.worker = { stage: 'ready', pane: 'w2:p1' };
+    session.seats.lead = { stage: 'ready', pane: 'fixture1:pane1' };
+    session.seats.worker = { stage: 'ready', pane: 'fixture2:pane1' };
   });
 }
 
@@ -113,7 +113,7 @@ describe('team next with no reservation store injected', () => {
     expect(stateBytes()).toBe(stateBefore);
 
     const lease = JSON.parse(readFileSync(join(root, '.agents', 'leases', 'm1.json'), 'utf8')) as Record<string, unknown>;
-    expect(lease).toMatchObject({ format: 1, id: 'm1', seat: 'lead', pane: 'w1:p1' });
+    expect(lease).toMatchObject({ format: 1, id: 'm1', seat: 'lead', pane: 'fixture1:pane1' });
     expect(Date.parse(String(lease.until))).toBe(now + LEASE_MS);
   });
 

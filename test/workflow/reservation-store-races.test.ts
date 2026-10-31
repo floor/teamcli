@@ -89,8 +89,8 @@ describe('two seats reserving one item at once', () => {
     const store = root();
     const [a, b] = await runPair<ReserveAnswer>(
       DRIVER,
-      { command: 'reserve', args: reserveArgs(store, 'run-a', 'seat-a', 'w1:p1') },
-      { command: 'reserve', args: reserveArgs(store, 'run-b', 'seat-b', 'w2:p1') },
+      { command: 'reserve', args: reserveArgs(store, 'run-a', 'seat-a', 'fixture1:pane1') },
+      { command: 'reserve', args: reserveArgs(store, 'run-b', 'seat-b', 'fixture2:pane1') },
     );
     const answers = [resultOf(a), resultOf(b)];
     expect(answers.filter((answer) => answer.kind === 'reserved')).toHaveLength(1);
@@ -108,8 +108,8 @@ describe('two items and one receiver seat at once', () => {
     const store = root();
     const [a, b] = await runPair<ReserveAnswer>(
       DRIVER,
-      { command: 'reserve', args: reserveArgs(store, 'run-a', 'work', 'w2:p1', ITEM) },
-      { command: 'reserve', args: reserveArgs(store, 'run-b', 'work', 'w2:p1', ITEM2) },
+      { command: 'reserve', args: reserveArgs(store, 'run-a', 'work', 'fixture2:pane1', ITEM) },
+      { command: 'reserve', args: reserveArgs(store, 'run-b', 'work', 'fixture2:pane1', ITEM2) },
     );
     const answers = [resultOf(a), resultOf(b)];
     expect(answers.filter((answer) => answer.kind === 'reserved')).toHaveLength(1);
@@ -126,8 +126,8 @@ describe('a claim racing a reservation on one item', () => {
     const store = root();
     const [reserveRun, claimRun] = await runPair<ReserveAnswer | ClaimAnswer>(
       DRIVER,
-      { command: 'reserve', args: reserveArgs(store, 'run-a', 'seat-a', 'w1:p1') },
-      { command: 'claim', args: claimArgs(store, 'lead', 'w1:p1') },
+      { command: 'reserve', args: reserveArgs(store, 'run-a', 'seat-a', 'fixture1:pane1') },
+      { command: 'claim', args: claimArgs(store, 'lead', 'fixture1:pane1') },
     );
     const reserved = resultOf(reserveRun);
     const claimed = resultOf(claimRun);
@@ -137,7 +137,7 @@ describe('a claim racing a reservation on one item', () => {
     expect(refusal?.reason).toBe('hold-live');
 
     const { hold } = await holdOf(store);
-    expect(hold?.owner).toBe(reserved.kind === 'reserved' ? 'run-a/1' : 'next:lead:w1:p1');
+    expect(hold?.owner).toBe(reserved.kind === 'reserved' ? 'run-a/1' : 'next:lead:fixture1:pane1');
     expect(await holdsIn(store)).toBe(1);
   });
 });
@@ -146,14 +146,14 @@ describe('the expiry sweep racing an acknowledgement', () => {
   test('the reservation either expires or converts, never both, and the state agrees', async () => {
     const store = root();
     const reserved = resultOf(
-      await runDriver<ReserveAnswer>(DRIVER, 'reserve', reserveArgs(store, 'run-1', 'work', 'w2:p1')),
+      await runDriver<ReserveAnswer>(DRIVER, 'reserve', reserveArgs(store, 'run-1', 'work', 'fixture2:pane1')),
     );
     expect(reserved.kind).toBe('reserved');
 
     const [sweep, ack] = await runPair<unknown>(
       DRIVER,
       { command: 'expire', args: { root: store, now: T } },
-      { command: 'ack', args: ackArgs(store, 'work', 'w2:p1') },
+      { command: 'ack', args: ackArgs(store, 'work', 'fixture2:pane1') },
     );
     const swept = resultOf(sweep) as ExpiredAnswer;
     const converted = resultOf(ack) as AckAnswer;
@@ -175,13 +175,13 @@ describe('two replies to one reservation at once', () => {
   test('one conversion, the other reply finds the holder', async () => {
     const store = root();
     const reserved = resultOf(
-      await runDriver<ReserveAnswer>(DRIVER, 'reserve', reserveArgs(store, 'run-1', 'work', 'w2:p1')),
+      await runDriver<ReserveAnswer>(DRIVER, 'reserve', reserveArgs(store, 'run-1', 'work', 'fixture2:pane1')),
     );
     expect(reserved.kind).toBe('reserved');
     const [a, b] = await runPair<AckAnswer>(
       DRIVER,
-      { command: 'ack', args: ackArgs(store, 'work', 'w2:p1') },
-      { command: 'ack', args: ackArgs(store, 'work', 'w2:p1') },
+      { command: 'ack', args: ackArgs(store, 'work', 'fixture2:pane1') },
+      { command: 'ack', args: ackArgs(store, 'work', 'fixture2:pane1') },
     );
     const answers = [resultOf(a), resultOf(b)];
     expect(answers.filter((answer) => answer.kind === 'acknowledged')).toHaveLength(1);
@@ -196,7 +196,7 @@ describe('a restart in a second process', () => {
   test('the hold survives, keeps excluding a claim, and the sweep reports it once', async () => {
     const store = root();
     const reserved = resultOf(
-      await runDriver<ReserveAnswer>(DRIVER, 'reserve', reserveArgs(store, 'run-1', 'work', 'w2:p1')),
+      await runDriver<ReserveAnswer>(DRIVER, 'reserve', reserveArgs(store, 'run-1', 'work', 'fixture2:pane1')),
     );
     expect(reserved.kind).toBe('reserved');
 
@@ -206,7 +206,7 @@ describe('a restart in a second process', () => {
 
     const before = await holdOf(store);
     expect(before.hold).toMatchObject({ owner: 'run-1/1', phase: 'pending' });
-    const refused = resultOf(await runDriver<ClaimAnswer>(DRIVER, 'claim', claimArgs(store, 'lead', 'w1:p1')));
+    const refused = resultOf(await runDriver<ClaimAnswer>(DRIVER, 'claim', claimArgs(store, 'lead', 'fixture1:pane1')));
     expect(refused).toMatchObject({ kind: 'refused', reason: 'hold-live' });
 
     const swept = resultOf(await runDriver<ExpiredAnswer>(DRIVER, 'expire', { root: store, now: T }));
@@ -215,8 +215,8 @@ describe('a restart in a second process', () => {
     expect(second).toEqual([]);
     expect((await holdOf(store, T)).hold).toBeNull();
 
-    const claim = resultOf(await runDriver<ClaimAnswer>(DRIVER, 'claim', claimArgs(store, 'lead', 'w1:p1', T)));
+    const claim = resultOf(await runDriver<ClaimAnswer>(DRIVER, 'claim', claimArgs(store, 'lead', 'fixture1:pane1', T)));
     expect(claim.kind).toBe('claimed');
-    if (claim.kind === 'claimed') expect(claim.hold?.owner).toBe('next:lead:w1:p1');
+    if (claim.kind === 'claimed') expect(claim.hold?.owner).toBe('next:lead:fixture1:pane1');
   });
 });
