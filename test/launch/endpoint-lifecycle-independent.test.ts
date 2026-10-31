@@ -227,7 +227,7 @@ describe('down and a seat that records a managed endpoint', () => {
     expect(run.err).not.toContain('endpoint');
   });
 
-  test('a proof that refuses leaves the process alone and says why', async () => {
+  test('a proof that refuses leaves the process alone, says why, and holds the seat', async () => {
     const at = place();
     seedSeat(at, { stage: 'ready', pane: 'fixture-pane-1', workspace: 'w1', presence_binding: BINDING, codex_endpoint: { ...ENDPOINT } });
     const stops: { dir: string; session: string; seat: string; recordPresent: boolean }[] = [];
@@ -236,10 +236,15 @@ describe('down and a seat that records a managed endpoint', () => {
       stopped: false,
       why: 'the recorded process cannot be proven to serve this endpoint; it was not signalled',
     })));
-    expect(run.code).toBe(0);
+    // Nothing was signalled and the run holds: the whole seat record stays — the endpoint claim
+    // and the presence binding included — so a later cleanup can still account for the process.
+    expect(run.code).toBe(1);
     expect(stops).toHaveLength(1);
     expect(run.err).toContain('the recorded process cannot be proven');
+    expect(run.err).toContain('its launch record was kept');
     expect(kills).toEqual([]);
+    expect(stateSeat(at)?.codex_endpoint).toEqual(ENDPOINT);
+    expect(stateSeat(at)?.presence_binding).toBe(BINDING);
   });
 
   test('a seat that records no endpoint is closed and never mentioned', async () => {
