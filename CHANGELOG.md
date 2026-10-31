@@ -198,6 +198,11 @@ not a message) are unchanged.
   the log says `queued, no event adapter` rather than `unreachable`.
 - **A bundle-grant send walks the same delivery legs as any other send**, and a walk that fails
   logs the reason and prints one warning on stderr.
+- **A launch line that sets its own permission flags keeps them.** An option written on the
+  line keeps its value, and the profile's default for that option is not appended as stray
+  words: the whole default, its value included, is suppressed, and an option's short, long and
+  `=` spellings all count as the same option. A quoted config or prompt word is not read as a
+  flag, and neither is a word after `--`.
 
 ## [0.5.5] - 2026-10-26
 
