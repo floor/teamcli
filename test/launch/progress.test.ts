@@ -358,8 +358,9 @@ describe('a three-seat launch', () => {
     ];
     // alpha's launch carries its rules line: rules are never typed into a pane.
     const alpha = seat('alpha', 'claude', 5);
-    const launchStep = alpha[1]!.do as { command: string };
+    const launchStep = alpha[1]!.do as { command: string; rulesCarried?: boolean };
     launchStep.command = "claude 'Read /x/rules/alpha.md (sha256 000000000000): your standing rules.'";
+    launchStep.rulesCarried = true;
     return [
       ...alpha,
       {
@@ -549,6 +550,9 @@ describe('a screen the profile cannot read', () => {
 
   test('herdr reports the seat idle: the launch is ready though no profile read the screen', async () => {
     const { host, out, slept } = world('idle', null);
+    // The CLI itself is a foreground process of the pane: the profile's own name, not just
+    // "anything that is not the shell".
+    host.foreground = () => ['agy'];
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).toBe('alpha: ready\n');
     // herdr's word is taken on a second reading in a row, with the CLI still in front: one poll.
@@ -558,16 +562,20 @@ describe('a screen the profile cannot read', () => {
   test('herdr reports idle but only the shell is in front of the pane: the CLI exited, the seat is not ready', async () => {
     const { host, out } = world('idle', null);
     host.processInfo = () => ({ shell: 100, foreground: [100] });
+    host.foreground = () => ['zsh'];
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).not.toContain('alpha: ready');
     expect(out.join('')).toContain('alpha: left out');
   });
 
-  test('with no process information, herdr idle is taken only on a second reading in a row', async () => {
-    // The host cannot say what is in front of the pane. One idle reading, then a working one,
-    // then idle twice: the first idle is not enough — the rule is two readings in a row, and the
-    // working reading between resets the count.
+  test('with the CLI named in front and no pid information, herdr idle is taken only on a second reading in a row', async () => {
+    // The host gives no pids, only the foreground names, and the CLI is among them. One idle
+    // reading, then a working one, then idle twice: the first idle is not enough — the rule is
+    // two readings in a row, and the working reading between resets the count. With no
+    // foreground names at all, herdr's idle is never taken on an unknown screen (the wait falls
+    // back to the screen), and every live host supplies the names.
     const { host, out, slept } = world(null, null);
+    host.foreground = () => ['agy'];
     const statuses: (string | null)[] = ['idle', 'working', 'idle', 'idle'];
     let poll = 0;
     host.agentStatus = () => statuses[Math.min(poll++, statuses.length - 1)] ?? null;
@@ -586,22 +594,28 @@ describe('a screen the profile cannot read', () => {
     expect(slept).toEqual([0]);
   });
 
-  test('a launch wrapper in front of the pane: herdr idle is still taken', async () => {
-    // Measured on herdr 0.7.1 in a scratch pane: `pane run 'zsh wrapper-exec.sh'` listed the
-    // pane's shell (shell_pid) and, once the wrapper ran, its interpreter and the child it runs
-    // the CLI in as the foreground processes — the wrapper's shell is not the pane's shell. An
-    // identity is therefore recorded, the gate reads "a CLI in front", and herdr's word is taken
-    // on the second reading exactly as without a wrapper: the wait does not fall back to the
-    // screen.
-    const { host, out, slept } = world('idle', null);
-    host.processInfo = () => ({ shell: 100, foreground: [1082, 1081] });
+  test('a wrapper that did not exec its CLI is not one: herdr idle does not make the seat ready', async () => {
+    // A wrapper's interpreter is a foreground process of its own, beside the pane's shell. Its
+    // name is not the CLI's, so herdr's idle is not taken on it: the screen was never read, and
+    // nothing says the CLI drew a prompt.
+    const { host, out } = world('idle', null);
+    host.processInfo = () => ({ shell: 100, foreground: [1081, 1082] });
+    host.foreground = () => ['zsh', 'sleep'];
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: left out: timeout\n');
+  });
+
+  test('a wrapper that execs its CLI is: herdr idle is taken, and the seat is ready', async () => {
+    const { host, out } = world('idle', null);
+    host.processInfo = () => ({ shell: 100, foreground: [1081] });
+    host.foreground = () => ['agy'];
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).toBe('alpha: ready\n');
-    expect(slept).toEqual([0]);
   });
 
   test('herdr reports the seat done: the launch is ready there too', async () => {
     const { host, out } = world('done', null);
+    host.foreground = () => ['agy'];
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).toBe('alpha: ready\n');
   });

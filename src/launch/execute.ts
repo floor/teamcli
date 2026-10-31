@@ -1144,6 +1144,27 @@ export async function executePlan(
           if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
         }
         const here = place(op.seat, op.pane);
+        // The rules line rides this launch: its file is written before anything starts, so the
+        // CLI reads it on its first turn, and a file that cannot be written leaves the seat out
+        // before a managed endpoint is started for it. Whether the launch carries the line is the
+        // plan's own decision (`rulesCarried`), never a search of the built command: the line is
+        // shell-quoted on it, and a profile with no launch prompt carries none at all.
+        const rulesOp = steps
+          .map((step) => step.do)
+          .find((d): d is Extract<Op, { do: 'deliver' }> => d?.do === 'deliver' && d.seat === op.seat);
+        if (here && rulesOp && host.deliverRules && op.rulesCarried === true) {
+          const written = await host.deliverRules(
+            session, here.pane, rulesOp.cli,
+            { text: rulesOp.rules, path: rulesOp.path, line: rulesOp.line, seat: rulesOp.seat, writeOnly: true },
+            rulesOp.seconds,
+          );
+          if (written !== true) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: typeof written === 'object' ? refusalReport(written) : 'its rules file was not written; nothing was launched' });
+            break;
+          }
+          rulesAtLaunch.add(op.seat);
+        }
         // The managed Codex endpoint is started here, after the seat was allowed and its inbox
         // registered: the plan's command stays the deterministic line a dry run prints, and the
         // attach is added only once an endpoint exists to attach to. A start failure is said
@@ -1178,24 +1199,6 @@ export async function executePlan(
         const launch = withLaunchSession(op.cli ?? '', command);
         launchedCommands.set(op.seat, launch.command);
         launchedThisRun.add(op.seat);
-        // The rules line rides this launch: its file is written first, so the CLI reads it on its
-        // first turn. A file that cannot be written leaves the seat out before anything runs.
-        const rulesOp = steps
-          .map((step) => step.do)
-          .find((d): d is Extract<Op, { do: 'deliver' }> => d?.do === 'deliver' && d.seat === op.seat);
-        if (here && rulesOp && host.deliverRules && launch.command.includes(rulesOp.line)) {
-          const written = await host.deliverRules(
-            session, here.pane, rulesOp.cli,
-            { text: rulesOp.rules, path: rulesOp.path, line: rulesOp.line, seat: rulesOp.seat, writeOnly: true },
-            rulesOp.seconds,
-          );
-          if (written !== true) {
-            dropped.add(op.seat);
-            final(op.seat, { kind: 'left out', reason: typeof written === 'object' ? refusalReport(written) : 'its rules file was not written; nothing was launched' });
-            break;
-          }
-          rulesAtLaunch.add(op.seat);
-        }
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
           // A server this call started was never attached: it is this run's to stop, so a pane
           // that did not run leaves no endpoint behind.
@@ -1250,6 +1253,10 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'has no pane to read; left at launched' });
           break;
         }
+        // The names the seat's own CLI runs under. A foreground process is read as the CLI only
+        // when its argv0 is one of these: "anything that is not the pane's shell" also names a
+        // wrapper's interpreter, which is not a prompt and not a launch.
+        const processNames = op.cli ? profileFor(op.cli)?.processNames ?? [] : [];
         // What an idle screen means for the seat, wherever it was found: the screen, then the
         // process, then the model comparison. The model comes from that screen read, so the
         // process read sits after it and before the comparison: a model the CLI is not running
@@ -1367,12 +1374,25 @@ export async function executePlan(
           }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
+          // The pane's shell, read once this poll: the relaunch below types a line, and the ended
+          // read further down reads the same evidence.
+          const back = host.shellBack?.(session, here.pane) ?? null;
           // A resume the CLI refused at runtime ("No conversation found") is launched once more,
-          // fresh, in the same pane: the seat is never left at a bare shell for it.
+          // fresh, in the same pane: the seat is never left at a bare shell for it. The relaunch
+          // types a launch line, so it runs only once the CLI is gone — the same evidence
+          // 10139bc22 uses: the pane is back at its shell, or no foreground process is one the
+          // seat's profile runs as. The names are the profile's own, never "anything that is not
+          // the shell": a wrapper's interpreter is such a process, and it is not the CLI that
+          // printed the error.
           if (kind === 'unknown' && !freshAfterMissing) {
             const ran = launchedCommands.get(op.seat);
             const fresh = ran !== undefined && namedResumeTarget(op.cli ?? '', ran) ? withoutResume(op.cli ?? '', ran) : null;
-            const screen = fresh === null ? null : (host.paneText?.(session, here.pane) ?? null);
+            const shellBackNow = (): boolean => {
+              if (back === true) return true;
+              const front = host.foreground?.(session, here.pane) ?? null;
+              return front !== null && !reportedLiveAgent(front, processNames);
+            };
+            const screen = fresh === null || !shellBackNow() ? null : (host.paneText?.(session, here.pane) ?? null);
             if (fresh !== null && screen !== null && conversationMissingOnScreen(op.cli ?? '', plainPaneText(screen))) {
               freshAfterMissing = true;
               const relaunch = withLaunchSession(op.cli ?? '', fresh);
@@ -1390,7 +1410,6 @@ export async function executePlan(
               }
             }
           }
-          const back = host.shellBack?.(session, here.pane) ?? null;
           const at = host.now();
           if (kind === 'unknown' && back === true) {
             shellBackSince ??= at;
@@ -1411,14 +1430,16 @@ export async function executePlan(
           // at its shell shows no CLI prompt whatever herdr reports, and the ended read below is
           // left to say so. The rules delivery still waits for its own recognised idle screen, so
           // a ready taken on herdr's word never types into a screen this run could not read.
-          // herdr's word is taken only while the CLI is still in front of the pane, and only on a
-          // second reading in a row: a CLI that draws and exits at once (a resume it refused)
-          // left herdr's status at idle while the pane went back to its shell, and the seat was
-          // reported ready on a bare shell.
+          // herdr's word is taken only while a foreground process is one the seat's profile runs
+          // as, and only on a second reading in a row: a CLI that draws and exits at once (a
+          // resume it refused) left herdr's status at idle while the pane went back to its shell,
+          // and the seat was reported ready on a bare shell. The CLI is named, never "anything
+          // that is not the shell": a wrapper that has not exec'd its CLI, or one still starting
+          // on a reused pane whose status is stale, is a foreground process of its own, and the
+          // seat was reported ready over a CLI that had not drawn yet.
           if (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, here.pane))) {
-            const front = host.processInfo?.(session, here.pane);
-            const cliGone = front !== undefined && front !== null && launchedIdentity(front) === null;
-            if (!cliGone) {
+            const cliSeen = reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
+            if (cliSeen) {
               if (herdrIdleBefore) {
                 outcome = 'idle';
                 break;
@@ -1617,11 +1638,14 @@ export async function executePlan(
           const written = await host.deliverRules?.(session, here.pane, op.cli, { ...file, writeOnly: true }, op.seconds);
           if (stopped) break;
           dropped.add(op.seat);
+          // A profile that names no launch prompt can never carry the line, on this launch or on
+          // a restart that builds the same one: the report says so instead of advising a restart.
+          const held = written === true ? '; its rules file is written' : '';
           final(op.seat, {
             kind: 'left out',
-            reason: written === true
-              ? `rules not typed: its rules ride only a launch; its rules file is written: run team restart ${op.seat} to carry them`
-              : `rules not typed: its rules ride only a launch; run team restart ${op.seat} to carry them`,
+            reason: op.launchCanCarryRules === false
+              ? `rules not typed: its CLI takes no initial prompt at launch, so no launch carries them${held}`
+              : `rules not typed: its rules ride only a launch${held}: run team restart ${op.seat} to carry them`,
           });
           break;
         }
