@@ -455,8 +455,33 @@ function watcherNote(watcher: CliWatcher): string {
 }
 
 /** Every step of `team up`, in order. Nothing here runs anything. */
-/** The Codex permission overrides a remote resume refuses. */
-const CODEX_PERMISSION_FLAG = /(^|\s)(-a|-s|--ask-for-approval|--sandbox|--full-auto|--dangerously-bypass-approvals-and-sandbox)(=|\s|$)/;
+/**
+ * The line a managed Codex seat runs once it attaches to its endpoint. Measured on codex-cli
+ * 0.161.0: `codex resume <id> --remote …` with `-a`/`-s` (or their long forms) exits at once with
+ * "Permission overrides are not supported when resuming a remote task", leaving the seat at its
+ * shell; the same resume without them attaches, and the thread keeps the permissions it was
+ * recorded with (a thread started with `-s danger-full-access` reads "Full Access" after the
+ * remote resume; one started read-only stays read-only). So a resume line sheds its permission
+ * overrides when attached, and a fresh line keeps them: a new thread takes them from the line.
+ */
+export function remoteCodexCommand(command: string): string {
+  // Raw shell words, quotes kept: an override is only ever a whole unquoted word, so a quoted
+  // argument (the rules line, a `-c` value) that happens to contain ` -s ` is never touched.
+  const words: string[] = command.match(/(?:[^\s'"]+|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  if (!words.includes('resume')) return command;
+  const kept: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === '--full-auto' || word === '--dangerously-bypass-approvals-and-sandbox') continue;
+    if (/^--(ask-for-approval|sandbox)=/.test(word)) continue;
+    if (['-a', '-s', '--ask-for-approval', '--sandbox'].includes(word)) {
+      if (i + 1 < words.length && !words[i + 1]!.startsWith('-')) i++;
+      continue;
+    }
+    kept.push(word);
+  }
+  return kept.join(' ');
+}
 
 export function upPlan(input: UpInput): Step[] {
   const { session } = input;
@@ -806,11 +831,9 @@ export function upPlan(input: UpInput): Step[] {
       && input.stateDir !== undefined
       && launchedCliBinary(seat.launch) === profile.binary
       && !/(^|\s)--remote(=|\s|$)/.test(command)
-      && !/(^|\s)--no-daemon(=|\s|$)/.test(command)
-      // Measured on codex-cli 0.161.0: `codex resume <id> --remote …` with `-a`/`-s` (or their
-      // long forms) exits at once with "Permission overrides are not supported when resuming a
-      // remote task", leaving the seat at its shell. Such a line keeps its own thread.
-      && !(/(^|\s)resume(\s|$)/.test(command) && CODEX_PERMISSION_FLAG.test(command));
+      // A resume line attaches too: the attach sheds its permission overrides
+      // (`remoteCodexCommand`), which codex-cli 0.161.0 refuses on a remote resume.
+      && !/(^|\s)--no-daemon(=|\s|$)/.test(command);
     // The `waiting` guard is not this condition's alone: §5's seat is never launched again,
     // whatever its live-ness reads, so the wait above is the whole of its plan.
     if (!waiting && (fresh || (seat.stage === 'launched' && !seat.agentLive))) {

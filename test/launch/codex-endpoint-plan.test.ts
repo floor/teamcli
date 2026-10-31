@@ -9,7 +9,7 @@ import { copyFileSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readTeamConfig } from '../../src/file/team-config.ts';
-import { upPlan, type UpInput, type UpSeat } from '../../src/launch/plan.ts';
+import { remoteCodexCommand, upPlan, type UpInput, type UpSeat } from '../../src/launch/plan.ts';
 
 const REPAIR = '`team remove coder --keep` then `team add coder`';
 const STATE_DIR = '/tmp/acme/.agents';
@@ -110,12 +110,29 @@ describe('the managed Codex endpoint intent', () => {
     expect(launchOp(upPlan(input({ ...over, team: loaded.team }, seatOver))).do).toHaveProperty('codexEndpoint');
   });
 
-  test('a resume carrying permission overrides keeps its own thread', () => {
-    // codex-cli 0.161.0 refuses -a/-s on a remote resume and exits to the shell.
+  test('a resume carrying permission overrides is marked; the attach sheds the overrides', () => {
+    // codex-cli 0.161.0 refuses -a/-s on a remote resume and exits to the shell; without them the
+    // resumed thread keeps the permissions it was recorded with.
     const launch = launchOp(upPlan(input({}, { launch: 'codex resume 01a1 -a never -s danger-full-access' })));
-    expect(launch.do).not.toHaveProperty('codexEndpoint');
+    expect(launch.do).toHaveProperty('codexEndpoint');
     const fresh = launchOp(upPlan(input({}, { launch: 'codex -a never -s danger-full-access' })));
     expect(fresh.do).toHaveProperty('codexEndpoint');
+  });
+
+  test('remoteCodexCommand strips permission overrides from a resume line only', () => {
+    expect(remoteCodexCommand('AGENT_UNATTENDED=1 codex -m gpt resume 01a1 -a never -s danger-full-access'))
+      .toBe('AGENT_UNATTENDED=1 codex -m gpt resume 01a1');
+    expect(remoteCodexCommand('codex resume 01a1 --ask-for-approval=never --sandbox workspace-write --full-auto -m gpt'))
+      .toBe('codex resume 01a1 -m gpt');
+    expect(remoteCodexCommand('codex resume 01a1 --dangerously-bypass-approvals-and-sandbox'))
+      .toBe('codex resume 01a1');
+    // A fresh thread takes its permissions from the line, so they stay.
+    expect(remoteCodexCommand('codex -a never -s danger-full-access')).toBe('codex -a never -s danger-full-access');
+    // A quoted argument that happens to hold the flags is not touched.
+    expect(remoteCodexCommand(`codex resume 01a1 -s danger-full-access 'Read /x -s y.md'`))
+      .toBe(`codex resume 01a1 'Read /x -s y.md'`);
+    // Words that only contain the flags are not touched.
+    expect(remoteCodexCommand('codex resume 01a1 -m gpt-sa')).toBe('codex resume 01a1 -m gpt-sa');
   });
 
   test('a non-Codex seat is never marked, whatever the policy value', () => {

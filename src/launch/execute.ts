@@ -17,7 +17,7 @@ import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeT
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
-import { IDLE_POLL_MS, type Op, type Step, type UpSeat } from './plan.ts';
+import { IDLE_POLL_MS, remoteCodexCommand, type Op, type Step, type UpSeat } from './plan.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from './codex-endpoint.ts';
 import {
   closeTarget,
@@ -1131,7 +1131,7 @@ export async function executePlan(
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
             : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
-            command = `${command} --remote ${shellQuote(read.url)}`;
+            command = `${remoteCodexCommand(command)} --remote ${shellQuote(read.url)}`;
             startedEndpoint = read.started;
             for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
           } else {
