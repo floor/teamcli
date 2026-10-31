@@ -15,7 +15,10 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import type { HerdrAgent, PaneProcesses } from '../src/herdr.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { testIo } from './helpers.ts';
 import { NOW, fake, owner, world, type ExtraSeat, type World } from './send-native-fixtures.ts';
 
@@ -99,7 +102,7 @@ function fixture(extraSeats: readonly ExtraSeat[] = [], launches: Parameters<typ
 }
 
 /** The status report over the same fixture: the seat's row, read from the plain table. */
-async function statusReach(made: World, seat: string): Promise<{ reach: 'socket' | 'typed'; line: string; out: string }> {
+async function statusReach(made: World, seat: string, foreground: readonly number[] = [SESSION_PID]): Promise<{ reach: 'socket' | 'typed'; line: string; out: string }> {
   const text = readFileSync(join(made.dir, 'team.yaml'), 'utf8');
   const checked = validateTeamFile(text);
   if (!checked.ok) throw new Error('the fixture team file does not validate');
@@ -112,7 +115,7 @@ async function statusReach(made: World, seat: string): Promise<{ reach: 'socket'
     status: 'idle',
     cwd: null,
   }));
-  const processes: Record<string, PaneProcesses | null> = { [PANE]: { shell: SHELL_PID, foreground: [SESSION_PID] } };
+  const processes: Record<string, PaneProcesses | null> = { [PANE]: { shell: SHELL_PID, foreground: [...foreground] } };
   const sources: StatusSources = {
     live: () => ({ running: true, agents: liveAgents, workspaces: [], screens: {}, processes }),
     branch: () => 'main',
@@ -131,23 +134,60 @@ async function statusReach(made: World, seat: string): Promise<{ reach: 'socket'
 }
 
 /** The real send to the same fixture: what its walk actually did with the socket leg. */
-async function sendTo(made: World, seat: string) {
+async function sendTo(made: World, seat: string, opts: { foreground?: number[]; sockets?: string } = {}) {
   const host = fake(made, {
     agents: () => [{ name: seat, pane: PANE }],
-    processInfo: () => ({ shell: SHELL_PID, foreground: [SESSION_PID] }),
-    socketsDir: socketsDir(made),
+    processInfo: () => ({ shell: SHELL_PID, foreground: opts.foreground ?? [SESSION_PID] }),
+    socketsDir: opts.sockets ?? socketsDir(made),
   });
   const io = owner(made.root);
   const code = await runSend([seat, 'a note'], io, host);
   return { code, frames: host.frames, out: io.out, err: io.err };
 }
 
+/** A temporary seat and a seat a registry caller addresses: both are named only by the
+ *  registry's record, which carries the pane and the cross-session address the send uses. */
+function registered(made: World, name: string, address: string): void {
+  const id = teamIdOf(made.root);
+  const record = registerAgent(made.home, {
+    name,
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: id, seat: name, session: 'acme', pane: PANE, address },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(made.home, id, {
+    project: 'acme',
+    entity: 'floor',
+    session: 'acme',
+    root: made.root,
+    lobby: resolveLobby(made.home, { entity: 'floor' }),
+    roster: [{ agent: record.id, seat: name, role: 'implementer', leads: false }],
+    lifecycle: 'running',
+  });
+}
+
 /** A scene's one claim: the status row and the real send agree, and both say `expected`. */
-async function agree(made: World, seat: string, expected: 'socket' | 'typed') {
-  const status = await statusReach(made, seat);
-  const sent = await sendTo(made, seat);
+async function agree(made: World, seat: string, expected: 'socket' | 'typed', opts: { foreground?: number[]; sockets?: string } = {}) {
+  const status = await statusReach(made, seat, opts.foreground);
+  const sent = await sendTo(made, seat, opts);
   expect(status.reach).toBe(expected);
   expect(sent.frames.length === 1).toBe(status.reach === 'socket');
+  return { status, sent };
+}
+
+/** The bare agreement, for a scene whose fix direction is the builders' to choose: the two
+ *  readers must land on the same word, whichever word the send's own walk ends on. */
+async function agreeOnly(made: World, seat: string, opts: { foreground?: number[]; sockets?: string } = {}) {
+  const status = await statusReach(made, seat, opts.foreground);
+  const sent = await sendTo(made, seat, opts);
+  expect(status.reach).toBe(sent.frames.length === 1 ? 'socket' : 'typed');
   return { status, sent };
 }
 
@@ -198,4 +238,36 @@ test('the plain Claude seat with an accepted socket reads socket in both readers
   expect(status.line).toMatch(/ socket$/);
   expect(sent.code).toBe(0);
   expect(sent.out).toContain('lead: delivered (socket)');
+});
+
+// The two cases a registry address can tell apart from the pane's own processes: the recorded
+// address outranks discovery in the send, and a temporary seat exists only in the registry and
+// the state, never in the team file. Each scene only asks that the two readers agree.
+
+test("a recorded address the send prefers over the pane's own fresh socket keeps both readers in step", async () => {
+  const recordedPid = 990022;
+  const freshPid = 990023;
+  const made = fixture();
+  generated(made, 'lead', 'accept');
+  const recorded = join(made.sockets, `${String(recordedPid)}.sock`);
+  writeFileSync(recorded, '');
+  const old = new Date(Date.now() - 120_000);
+  utimesSync(recorded, old, old);
+  placeSocket(made, freshPid);
+  registered(made, 'lead', recorded);
+  // Status discovers the fresh socket of the pane's first process; the send dials the recorded
+  // address of the second, which predates the declaration.
+  await agreeOnly(made, 'lead', { foreground: [freshPid, recordedPid] });
+});
+
+test('a temporary seat a registry-addressed send can reach agrees with its status row', async () => {
+  const made = fixture();
+  generated(made, 'temp', 'accept');
+  const socket = placeSocket(made);
+  registered(made, 'temp', socket);
+  updateState(made.dir, (state) => {
+    state.sessions.acme ??= emptySession();
+    state.sessions.acme.seats.temp = { stage: 'ready', temporary: { like: 'helper', until: 'manual' } };
+  });
+  await agreeOnly(made, 'temp');
 });
