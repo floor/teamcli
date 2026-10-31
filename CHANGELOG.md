@@ -341,7 +341,7 @@ whose running model has drifted is held rather than delivered.
   declares: the owner any agent; an orchestrator another orchestrator of its own team or
   entity; a team's orchestrator or operator any seat of its own team; two operator seats each
   other; any declared seat another declared seat of its own team; an assistant its entity's
-  main coordinator; any seat its own team's orchestrator; and what an owner-signed grant names.
+  coordinator; any seat its own team's orchestrator; and what an owner-signed grant names.
   Arbitrary cross-team and off-roster pairs are refused by
   default, and a refusal for an unregistered sender names that sender, so a cross-team denial
   says which side lacks a registry record.
@@ -1023,12 +1023,12 @@ commands read them.
   and the path it took; the refusal for a seat no record covers names the command that writes
   one (`team up`, `team register <seat>`).
   A seat its file marks `assistant: true` — one per file, never a seat with `count` — is its
-  entity's assistant, and the routing admits it to the entity's main coordinator: the first mark
+  entity's assistant, and the routing admits it to the entity's coordinator: the first mark
   found walking the entity's teams in chain order, the entity's own team first and then its other
   teams by team id, never a role's name. Send is denied by default: the owner may send to any
   agent; an orchestrator to an orchestrator of its own team or of a team in its entity, never
   across entities; a team's orchestrator or operator to any seat of its own team; an assistant
-  to its entity's main coordinator; any seat to its own team's orchestrator; and an owner-signed
+  to its entity's coordinator; any seat to its own team's orchestrator; and an owner-signed
   `send` grant to what it names.
 
 - **The send grammar: `@<nickname>`, `<seat>@<team>`, `lead@<team>`.** One grammar answers
