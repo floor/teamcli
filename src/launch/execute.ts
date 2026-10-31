@@ -37,6 +37,7 @@ import type { SeatState, WaitingRecord } from '../state.ts';
 import { continuitySessionOf } from '../registry/resume.ts';
 import { vendorNoticeRange } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
+import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
 export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'provider error' | 'rate limit' | 'unsent' | 'unknown';
 
@@ -75,10 +76,10 @@ export type Host = {
    */
   managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
   /**
-   * Stops the endpoint a launch this run started when its pane never ran, so a partial launch
-   * leaves no orphaned server. The record is cleared only after a proven stop.
+   * Stops the endpoint a launch this run started, including after a later failure. The record
+   * is cleared only after a proven stop; an expected URL binds cleanup to this launch.
    */
-  stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   /** Whether the conversation a resume line names is on disk for its CLI; null when unknown. */
   conversationExists?(cli: string, cwd: string, id: string): boolean | null;
   /**
@@ -455,9 +456,13 @@ export type ExecuteOptions = {
 export async function executePlan(
   steps: readonly Step[],
   session: string,
-  host: Host,
+  source: Host,
   options?: ExecuteOptions,
 ): Promise<Report> {
+  const host = endpointCleanupHost(source, (seat, why) => {
+    held = true;
+    hold(seat, `${seat}: ${why}\n`);
+  });
   const concurrency = Math.max(1, options?.concurrency ?? 1);
   const parallel = concurrency > 1;
   const closing = options?.isClosing ?? (() => false);
@@ -670,6 +675,12 @@ export async function executePlan(
     return 'settled';
   };
 
+  const dropRecord = (seat: string): boolean => {
+    if (host.drop(seat)) return true;
+    leftOut(seat, 'its endpoint was not stopped; its launch record was kept');
+    return false;
+  };
+
   /** A pause's outcome, become this run's final record or its continuation into the seat's
    *  ordinary steps. `stopped` carries `q` out to the pass after the loop. */
   const settle = (seat: string, result: PauseResult): 'idle' | 'settled' => {
@@ -849,7 +860,7 @@ export async function executePlan(
           return leftOut(seat, `${classification}; its workspace did not close; left as it is`);
         }
       }
-      host.drop(seat);
+      if (!dropRecord(seat)) return 'settled';
       dropped.add(seat);
       if (here.workspace) closed.add(seat);
       final(seat, { kind: 'left out', reason: `${classification} (no terminal for owner)` }, '  its workspace was closed without input\n');
@@ -1009,8 +1020,7 @@ export async function executePlan(
           held = true;
           finish(asked.seat, `${closedLine}; its workspace did not close`);
         } else {
-          host.drop(asked.seat);
-          finish(asked.seat, closedLine);
+          if (dropRecord(asked.seat)) finish(asked.seat, closedLine);
         }
       } else {
         held = true;
@@ -1498,7 +1508,7 @@ export async function executePlan(
             final(op.seat, { kind: 'left out', reason: `${reading}; its workspace did not close; left as it is` }, untested());
             break;
           }
-          host.drop(op.seat);
+          if (!dropRecord(op.seat)) break;
           dropped.add(op.seat);
           const closed = `  its workspace was closed without ${outcome === 'trust' ? 'an answer' : 'input'} and the seat left out\n`;
           final(op.seat, { kind: 'left out', reason: reading }, untested() + closed);
@@ -1778,8 +1788,7 @@ export async function executePlan(
               held = true;
               finish(op.seat, 'timed out leaving its pane; its workspace did not close');
             } else {
-              host.drop(op.seat);
-              finish(op.seat, 'timed out leaving its pane; its workspace was closed');
+              if (dropRecord(op.seat)) finish(op.seat, 'timed out leaving its pane; its workspace was closed');
             }
           } else {
             held = true;
@@ -1976,7 +1985,7 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'its workspace did not close; left as it is' });
           break;
         }
-        host.drop(op.seat);
+        if (!dropRecord(op.seat)) break;
         relaunched.set(op.seat, op.drift || op.reload || verdict === 'same' ? 'drift' : verdict);
         break;
       }
@@ -1997,7 +2006,7 @@ export async function executePlan(
           finish(op.seat, 'its workspace did not close');
           break;
         }
-        host.drop(op.seat);
+        if (!dropRecord(op.seat)) break;
         finish(op.seat, op.said ?? 'stopped');
         break;
       }
@@ -2233,7 +2242,7 @@ export async function executePlan(
           final(seat, { kind: 'left out', reason: 'its workspace did not close; left as it is' });
           continue;
         }
-        host.drop(seat);
+        if (!dropRecord(seat)) continue;
         closed.add(seat);
       } finally {
         if (lock && 'release' in lock) lock.release();

@@ -690,6 +690,14 @@ describe('stopping the endpoint recorded on a seat', () => {
     try {
       const prior = ownedRecord(dir);
       seedRecord(dir, prior);
+      let proofRead = false;
+      const foreign = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT, expectedUrl: 'unix:///tmp/another-launch.sock' }, {
+        alive: () => { proofRead = true; return true; },
+      });
+      expect(foreign.stopped).toBe(false);
+      expect(foreign.why).toContain('not the one this launch started');
+      expect(proofRead).toBe(false);
+      expect(recordedAt(dir)).toEqual(prior);
       const answer = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT }, {
         alive: () => true,
         commandOf: () => `codex app-server --listen ${prior.url}`,
