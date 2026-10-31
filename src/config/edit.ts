@@ -25,7 +25,7 @@ import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, type YamlValue } from '../yaml.ts';
-import { getAt, parsePath, parseValue, recordText, shownValue, withValue } from './team-record.ts';
+import { editedRecordText, getAt, parsePath, parseValue, shownValue, withValue } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
 
 function realRoot(cwd: string): string {
@@ -194,7 +194,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       // exit: config.path
       return 1;
     }
-    next = changed.changed ? recordText(changed.root) : text;
+    next = changed.changed ? editedRecordText(text, path, value, changed.root) : text;
   }
   if (next === text) {
     if (json) writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: false, source: target.kind, approval_differences: [] });

@@ -38,8 +38,8 @@ index: watch.unread_after, seats.lead.model, seats.0.cli. <value> is read as YAM
 number, true, a one-line [list] or {map}), else as text. edit opens the record as YAML
 in $VISUAL or $EDITOR and writes it back once it validates. Every write is validated
 first and is the owner's (or, with --request, recorded for the owner seat to approve with Touch ID and applied with --approval <request-id> once signed); a change to an owner section is named as needing approval
-again. set and unset rewrite the record's text, so its comments are not kept; edit keeps
-them.
+again. set and unset rewrite only the changed key's lines, so the record's comments, above,
+beside and below the key, are kept byte for byte; edit keeps them too.
 
 Exits 0 when the registry or a value is printed or a change is written (or there was
 nothing to change), 1 when the path holds nothing, the caller is not the owner, or the
