@@ -69,7 +69,7 @@ test('the real file runs exactly the one scene a filter names', () => {
 // probe skip can never become silent, and the checks against this repo cannot have gone with it.
 test('a filtered run costs one test per scene', () => {
   const one = runScenes('add.invocation');
-  const two = runScenes('add.invocation,send.held');
+  const two = runScenes('add.invocation,add.seat-name');
   expect(one.output).toContain('analyzer probes skipped');
   expect(two.status).toBe(0);
   expect(passes(two.output) - passes(one.output)).toBe(1);

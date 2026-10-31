@@ -2099,6 +2099,27 @@
       "classify": "unsent",
       "composer": "unsent",
       "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/rules-unsent-builder-3.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/rules-unsent-orchestrator.txt",
+      "cli": "codex",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
+    },
+    {
+      "file": "cursor/2026.10.22/rules-unsent-reviewer-cursor.txt",
+      "cli": "cursor",
+      "classify": "unsent",
+      "composer": "unsent",
+      "provenance": "capture"
     }
   ],
   "yaml": [
