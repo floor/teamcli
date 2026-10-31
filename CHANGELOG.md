@@ -296,6 +296,12 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   (`register.handle-held`). Both refusals name what they found and leave the record unchanged,
   and a record that predates the process identity is not rebound at all: the refresh fills only
   a handle it never had.
+- **A restart or a refresh whose binding was not written says `pull-only` and why.** After the
+  launch, the record is read back as the seat's native route resolves it — a route addressed by
+  the conversation also needs the recorded agent session. A record that is missing, refused or
+  not yet carrying that session leaves the seat reachable by pull alone: the closing line ends
+  `; pull-only: <reason>` and `--json` carries `pull_only`, rather than reporting a restart done
+  whose record was never written.
 
 ## [0.5.5] - 2026-10-26
 
