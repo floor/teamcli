@@ -20,6 +20,7 @@ import type { TeamFile } from '../src/file/types.ts';
 import { CLI_HOOK_FRESH_SECONDS, CLI_HOOK_FUTURE_SKEW_SECONDS, observedSeatState, seatState } from '../src/labels/state.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import { readTriggerLine } from '../src/send/native.ts';
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 import { readHistory } from '../src/send/history.ts';
 import { readRecord, signRecord, signReceiptPayload, signedReceiptOf, verifyReceipt, verifyRecord, writeRecord } from '../src/send/record.ts';
 import { DEFAULT_STATE_THRESHOLDS } from '../src/settings/inherit.ts';
@@ -314,9 +315,24 @@ seats:
       home,
     };
 
-    const retired = await runSend([SEAT, 'hello'], io, host);
-    expect(await retired).toBe(0);
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
+
+    // The bus inbox carried it: the seat's own drop-read trigger is never typed, and the
+    // sender's side has only the unconfirmed ending until the seat's own read writes the
+    // receipt. The drop leg wrote the record the trigger reads.
+    expect(io.out).toContain('sent (unconfirmed)');
     expect(typed).toEqual([]);
+    const dir = dropsAt();
+    const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
+    if (id === undefined) throw new Error('the send wrote no drop');
+
+    // The end-to-end proof: the installed hook command reads the record, and its body reaches
+    // the turn only after a signed read receipt is on disk.
+    expect(landing(run(command))).toBe(`${HEADER}hello`);
+    expectReadReceipt(dir, id);
+    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home)).toEqual([]);
+    // The receipt is what says it was handed over: the next turn prints nothing.
+    expect(run(command)).toBe('');
   }, 60_000);
 
   test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a seat the session does not list takes the default walk to the drop leg: signed record, sent (unconfirmed), nothing typed', async () => {
@@ -343,9 +359,35 @@ seats:
       home,
     };
 
-    const retired = await runSend([SEAT, 'hello'], io, host);
-    expect(await retired).toBe(0);
+    expect(await runSend([SEAT, 'hello'], io, host)).toBe(0);
+
+    // The bus inbox is the channel: the drop file is written whole and nothing is typed, and
+    // the sender's side knows only the unconfirmed end. The reason the typed leg passed rides
+    // the one history line the drop leg wrote.
+    expect(io.out).toContain('sent (unconfirmed)');
     expect(typed).toEqual([]);
+    const dir = dropsAt();
+    const id = readdirSync(dir).find((name) => MESSAGE_ID.test(name));
+    if (id === undefined) throw new Error('the send wrote no drop');
+    // The record is signed and bound to this seat, checkout and session — the seat's own read
+    // would verify it and deliver the body.
+    const held = readRecord(join(dir, id), id);
+    const key = messageKeyState(home);
+    if (!held.ok || held.record === null || key.kind !== 'key') throw new Error('the drop record does not read');
+    expect(verifyRecord(held.record, key.key)).toBe(true);
+    expect(held.record.payload).toMatchObject({ to: SEAT, session: SESSION });
+    expect(realpathSync(held.record.payload.root)).toBe(realpathSync(project));
+    expect(listUnread(dir, { to: SEAT, root: project, session: SESSION }, home).map((one) => one.id)).toEqual([id]);
+    // The drop was not read, and nothing claims it was.
+    expect(existsSync(receiptPath(dir, id))).toBe(false);
+    const history = readHistory('acme', project, home);
+    if (!history.ok) throw new Error(`the history does not read: ${history.reason}`);
+    const entry = history.entries.filter((one) => one.id === id).at(-1);
+    if (entry === undefined) throw new Error('the send wrote no history line');
+    expect(entry.outcome).toBe('sent (unconfirmed)');
+    expect(entry.via).toBe('drop');
+    const reason = (entry.failed ?? []).find((one) => one.startsWith('typed: '));
+    expect(reason).toBe(`typed: ${NO_PANE_MESSAGING}`);
   });
 
   test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a [typed]-only order with no live agent is unreachable, and no drop is written', async () => {

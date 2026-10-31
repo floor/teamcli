@@ -294,8 +294,19 @@ describe('retryHeldDrops', () => {
 
     // The screen says free, but the native store says the seat is in a turn (or a person wait, a
     // session end, or an unproven projection): the drop is left alone and the marker stays.
-    const retired = await retryHeldDrops(at);
-    await retired;
+    await retryHeldDrops(at);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toHaveLength(1);
+    expect(said).toEqual([]);
+
+    // The hold lifted, and the marker is still handled by a watch that never types: the retry
+    // writes nothing into the pane and leaves the drop pending for the seat's own read.
+    at.nativeHeld = new Set();
+    await retryHeldDrops(at);
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a retry whose trigger writes the read receipt is delivered (read), never merely sent', async () => {
@@ -1315,7 +1326,7 @@ describe('retryHeldDrops and a stale channel', () => {
     // The install changes under the watch: the listener serving this seat now runs another
     // version and another packed commit of the same CLI, with the channel declared. The retry
     // reserves the push name before its wake whichever listener is there, so the change does
-    // not open a window: the name is held before the typed line.
+    // not open a window.
     writeListener(dropDir, {
       v: 1,
       seat: 'lead',
@@ -1330,7 +1341,7 @@ describe('retryHeldDrops and a stale channel', () => {
       channel: true,
     });
     const one = pane(claudeBox(''));
-    const retired = await retryHeldDrops({
+    await retryHeldDrops({
       dir: made.dir,
       session: 'acme',
       root: made.root,
@@ -1342,15 +1353,25 @@ describe('retryHeldDrops and a stale channel', () => {
       now: NOW,
       say: () => {},
     });
-    await retired;
+
+    // The wake is never typed, and the push name is held all the same: a serving channel
+    // skips the id, and the retry's own reading never takes the held marker for a push.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    const marker = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as Record<string, unknown>;
+    expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id });
+    expect(channelPushHeld(dropDir, id)).toBe(true);
+    expect(channelPushed(dropDir, id)).toBe(false);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a live channel listener the launch no longer names still holds the push name before typing', async () => {
     const made = world();
     // The team file's launch carries no channel flag any more, but the listener it started with
     // the flag is still running: the marker it wrote at startup is the record of that. It can
-    // still push, so the retry holds the name before the typed line although the current launch
-    // alone would say there is nothing to race.
+    // still push, so the retry holds the name although the current launch alone would say there
+    // is nothing to race.
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const id = 'lead-held-2';
     const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
@@ -1368,7 +1389,7 @@ describe('retryHeldDrops and a stale channel', () => {
       channel: true,
     });
     const one = pane(claudeBox(''));
-    const retired = await retryHeldDrops({
+    await retryHeldDrops({
       dir: made.dir,
       session: 'acme',
       root: made.root,
@@ -1380,14 +1401,24 @@ describe('retryHeldDrops and a stale channel', () => {
       now: NOW,
       say: () => {},
     });
-    await retired;
+
+    // The wake is never typed, and the push name is held all the same: a serving channel
+    // skips the id, and the retry's own reading never takes the held marker for a push.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    const marker = JSON.parse(readFileSync(channelPushPath(dropDir, id), 'utf8')) as Record<string, unknown>;
+    expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id });
+    expect(channelPushHeld(dropDir, id)).toBe(true);
+    expect(channelPushed(dropDir, id)).toBe(false);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
   test.each([
     ['another seat', { seat: 'helper' }],
     ['another session', { session: 'other-session' }],
     ['another root', { root: '/elsewhere' }],
-  ] as const)('a live channel marker naming %s proves nothing, so the retry types without a hold', async (_label, patch) => {
+  ] as const)('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a live channel marker naming %s proves nothing, so the retry types without a hold', async (_label, patch) => {
     const made = world();
     // The fallback binds the marker to this seat, this session and this root. A marker naming
     // another inbox could otherwise hold the push name for good on a seat with no channel.
@@ -1406,7 +1437,7 @@ describe('retryHeldDrops and a stale channel', () => {
       ...patch,
     });
     const one = pane(claudeBox(''));
-    const retired = await retryHeldDrops({
+    await retryHeldDrops({
       dir: made.dir,
       session: 'acme',
       root: made.root,
@@ -1418,13 +1449,21 @@ describe('retryHeldDrops and a stale channel', () => {
       now: NOW,
       say: () => {},
     });
-    await retired;
+
+    // The wake is never typed, and no push name is held: a marker naming another inbox proves
+    // nothing, so nothing can race the retry.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(channelPushHeld(dropDir, id)).toBe(false);
+    expect(existsSync(channelPushPath(dropDir, id))).toBe(false);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 
   test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a dead channel listener leaves no push to race, so the retry types without a hold', async () => {
     const made = world();
     // The same marker, but its process is gone. A server started after the record arrived pushes
-    // nothing (its first listing is marked seen), so the name is left free and the retry types.
+    // nothing (its first listing is marked seen), so the name is left free.
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));
     const id = 'lead-held-3';
     const dropDir = seedHeld(made, 'acme', 'lead', id, 'from the owner — admitted by: the owner\n\nhello');
@@ -1443,7 +1482,7 @@ describe('retryHeldDrops and a stale channel', () => {
       channel: true,
     });
     const one = pane(claudeBox(''));
-    const retired = await retryHeldDrops({
+    await retryHeldDrops({
       dir: made.dir,
       session: 'acme',
       root: made.root,
@@ -1455,6 +1494,14 @@ describe('retryHeldDrops and a stale channel', () => {
       now: NOW,
       say: () => {},
     });
-    await retired;
+
+    // The wake is never typed, and no push name is held: the listener's process is gone, so
+    // nothing can race the retry.
+    expect(one.typed).toEqual([]);
+    expect(one.enters).toBe(0);
+    expect(channelPushHeld(dropDir, id)).toBe(false);
+    expect(existsSync(channelPushPath(dropDir, id))).toBe(false);
+    // The drop is still unread, so its marker stays pending for the seat's own read.
+    expect(readPending(dropDir)).toHaveLength(1);
   });
 });
