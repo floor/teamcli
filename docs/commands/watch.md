@@ -94,7 +94,7 @@ record per event delivered to the owner, at once or as the pass's digest), the d
 signed record and its transport marker under `.agents/send-drops/<session>/<seat>/` when the
 dispatcher pushes an idle seat, the unread report's signed drop under
 `.agents/send-drops/<session>/<lead>` when a message stays unread past twice the window, and,
-through the pane host: the seats'
+through the terminal host: the seats'
 sidebar lines — the workspace title from the file, and the
 display line from the file and the pane's
 screen; it paints them on its first cycle and again when the title, the model or the effort
@@ -282,7 +282,7 @@ seat — it goes to the log — and `--no-notify` can drop its desktop notificat
 permission prompt, a
 vendor notice, a machine figure, an account inside its reserve or at its floor, an idle seat past
 `idle_owner` — is notified anyway, and so are the watch's own notices: the file can't be read,
-the pane host doesn't answer, and the watch
+the terminal host doesn't answer, and the watch
 stopped. Neither flag removes the log line, and neither reaches `team status`: a reserve still
 shows on the budgets table, and a record that is not in force still shows there.
 
@@ -481,7 +481,7 @@ loop prints its lines as plain text either way.
 
 - `0` — the watch ran, and stopped on Ctrl-C, a stop signal, or the end of its work. Or it handed
   itself to its own workspace and the pane's command started. A seat that
-  misbehaves is a report, not a failure; neither is the pane host not answering.
+  misbehaves is a report, not a failure; neither is the terminal host not answering.
 - `1` — a watch already runs for the session. Or `--file` was aimed by a caller that is not the
   owner, `--no-nudge`/`--no-notify` by a caller that is not the owner, the file `up` recorded was
   aimed at by a process that is not the watch's pane, or the watch did not start in its workspace.

@@ -384,8 +384,8 @@ line and then clears it. A waited send writes the signed record through the rece
 delivery walk, releases the seat lock, and watches `<root>/.agents/send-drops/<session>/*/` for
 the first verified reply record on the thread (`payload.thread === record.thread`).
 The command holds the seat's lock (`<state dir>/seat-locks/<session>/<seat>`) around a
-send's write, so a launch of the same seat cannot act beside it and two sends cannot write to
-one pane at once. It
+send's write, so a launch of the same seat cannot act beside it and two sends to that seat
+cannot write at once. It
 writes one line to `.agents/team.log` — a refusal writes its own line there — and appends the
 message's body to the project's message history
 ([team feed](feed.md)) when a send completes. The history line names the channel the send went by,
