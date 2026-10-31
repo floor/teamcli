@@ -522,3 +522,41 @@ export async function launchCodexEndpoint(
   }
   return ensureCodexEndpoint(input);
 }
+
+/** The seat a recorded managed endpoint serves, read from the process at `pid`; null unless the
+ *  full ownership proof holds. With the TUI attached by `--remote`, a Codex seat's tools run as
+ *  children of its app-server, which the launch started outside the seat's pane, so the walk up
+ *  from a seat's own `team` call meets that app-server and no herdr server. The app-server is
+ *  placed as its seat only when its command line is `app-server --listen <url>` for a seat's
+ *  endpoint folder, the team state records that very url and pid for the seat's current presence
+ *  binding, and the process started in the window the record was written in (the proof a stop
+ *  needs). The socket's folder is the user's own 0700 run folder. */
+export function seatOfManagedEndpoint(
+  pid: number,
+  deps: Pick<CodexEndpointDeps, 'alive' | 'commandOf' | 'startOf'> = {},
+): { dir: string; session: string; seat: string; pane?: string } | null {
+  const commandOf = deps.commandOf ?? codexCommandOf;
+  const command = commandOf(pid);
+  if (command === null) return null;
+  const listen = /(?:^|\s)app-server --listen unix:\/\/(\/\S+)\/run\/([^/\s]+)\/([^/\s]+)\/([^/\s]+)\.sock(?:\s|$)/.exec(command);
+  if (listen === null) return null;
+  const [, dir, folder, seat, binding] = listen as unknown as [string, string, string, string, string];
+  if (!isPresenceBinding(binding) || !isPresenceSeatName(seat)) return null;
+  let state;
+  try {
+    state = readState(dir);
+  } catch {
+    return null;
+  }
+  for (const [session, one] of Object.entries(state.sessions)) {
+    if (presenceSessionFolder(session) !== folder) continue;
+    const seatState = one.seats[seat];
+    if (seatState?.presence_binding !== binding) continue;
+    const record = readCodexEndpointRecord(seatState.codex_endpoint);
+    const socket = codexEndpointSocket(dir, session, seat, binding);
+    if (record === null || socket === null || record.pid !== pid || record.url !== socket.url || record.binding !== binding) continue;
+    if (!provenOwner(record, { alive: deps.alive ?? pidAlive, commandOf, startOf: deps.startOf ?? processStartOf })) continue;
+    return { dir, session, seat, ...(typeof seatState.pane === 'string' ? { pane: seatState.pane } : {}) };
+  }
+  return null;
+}

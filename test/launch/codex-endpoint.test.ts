@@ -16,6 +16,7 @@ import {
   ensureCodexEndpoint,
   isSocketFile,
   launchCodexEndpoint,
+  seatOfManagedEndpoint,
   stopRecordedCodexEndpoint,
   stopSeatCodexEndpoint,
   type CodexEndpointDeps,
@@ -734,6 +735,50 @@ describe('stopping the endpoint recorded on a seat', () => {
       seed(dir);
       const answer = stopSeatCodexEndpoint({ dir, session: SESSION, seat: SEAT }, {});
       expect(answer).toEqual({ stopped: false, why: 'the seat records no endpoint for its current binding' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the seat a managed endpoint serves', () => {
+  // With the TUI attached by --remote, a seat's tools run under its app-server: the walk up from
+  // the seat's own `team` call meets that process, which places it only on the full proof.
+  function scene(extra: Partial<CodexEndpointRecord> = {}, pane: string | undefined = 'w5:p1') {
+    const dir = scratch();
+    const record = ownedRecord(dir, extra);
+    updateState(dir, (state) => {
+      (state.sessions[SESSION] ??= emptySession()).seats[SEAT] = {
+        stage: 'launched', presence_binding: BINDING, codex_endpoint: record, ...(pane === undefined ? {} : { pane }),
+      };
+    });
+    return { dir, record };
+  }
+  const proof = (command: string) => ({
+    alive: () => true,
+    commandOf: () => command,
+    startOf: () => T0_MS,
+  });
+
+  test('its own recorded app-server places the seat, at its recorded pane', () => {
+    const { dir, record } = scene();
+    try {
+      const command = `codex app-server --listen ${record.url} -c sandbox_mode="danger-full-access"`;
+      expect(seatOfManagedEndpoint(700, proof(command))).toEqual({ dir, session: SESSION, seat: SEAT, pane: 'w5:p1' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('another pid, a reused pid, another binding, or a stranger\'s socket places nobody', () => {
+    const { dir, record } = scene();
+    try {
+      const command = `codex app-server --listen ${record.url}`;
+      expect(seatOfManagedEndpoint(701, proof(command))).toBeNull();
+      expect(seatOfManagedEndpoint(700, { ...proof(command), startOf: () => T0_MS + 3_600_000 })).toBeNull();
+      expect(seatOfManagedEndpoint(700, proof(command.replace(BINDING, OTHER)))).toBeNull();
+      expect(seatOfManagedEndpoint(700, proof('codex app-server --listen unix:///tmp/elsewhere/x.sock'))).toBeNull();
+      expect(seatOfManagedEndpoint(700, { ...proof(command), commandOf: () => null })).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

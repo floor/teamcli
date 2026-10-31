@@ -7,6 +7,7 @@ import type { HerdrAgent } from './herdr.ts';
 import type { Io } from './io.ts';
 import { readState, type SeatState } from './state.ts';
 import { CLI_PROCESSES, processNameMatches } from './clis.ts';
+import { seatOfManagedEndpoint } from './launch/codex-endpoint.ts';
 
 // Who runs this command, placed by its parent processes, never by its environment. This guards
 // against a mistaken agent, not a hostile one: every seat runs as the owner's user.
@@ -42,6 +43,8 @@ export type CallerSources = {
   paneRootPid(pane: string): number | null;
   env: Record<string, string | undefined>;
   stdinIsTTY: boolean;
+  /** The seat a managed Codex endpoint at `pid` serves (`seatOfManagedEndpoint`), or null. */
+  managedEndpointSeat?(pid: number): { session: string; seat: string; pane?: string } | null;
 };
 
 // Places the caller by its parent processes. When `session` is given the agent list and the pane
@@ -83,7 +86,27 @@ export function placeCaller(sources: CallerSources, session?: string): Caller {
     return { kind: 'unplaced', reason: 'it runs in a herdr pane without an agent' };
   }
 
+  const served = endpointSeat(ancestors, sources, session);
+  if (served !== null) return served;
   return walkOutside(ancestors, sources);
+}
+
+/** A caller whose nearest Codex ancestor is a seat's own managed app-server is that seat: the
+ *  seat's tools run there once its TUI is attached by `--remote`. When a session is asked about,
+ *  the endpoint must serve that session and herdr must still list the seat at its recorded pane. */
+function endpointSeat(ancestors: Process[], sources: Pick<CallerSources, 'managedEndpointSeat' | 'agents'>, session?: string): Caller | null {
+  if (sources.managedEndpointSeat === undefined) return null;
+  const nearest = ancestors.find((process) => processNameMatches(process.name, CLI_PROCESSES));
+  if (nearest === undefined || basename(nearest.name) !== 'codex') return null;
+  const served = sources.managedEndpointSeat(nearest.pid);
+  if (served === null || served.pane === undefined) return null;
+  if (session !== undefined) {
+    if (served.session !== session) return null;
+    const listed = sources.agents()?.find((agent) => agent.pane === served.pane);
+    if (listed?.name !== served.seat) return null;
+    return { kind: 'seat', name: served.seat, pane: served.pane, session };
+  }
+  return { kind: 'seat', name: served.seat, pane: served.pane };
 }
 
 // The walk without any session at all: the owner is a terminal outside herdr, and that reading
@@ -512,5 +535,6 @@ export function currentCaller(io: { env: Record<string, string | undefined>; std
     paneRootPid: (pane) => paneRootPid(pane, session),
     env: io.env,
     stdinIsTTY: io.stdinIsTTY,
+    managedEndpointSeat: (pid) => seatOfManagedEndpoint(pid),
   }, session);
 }

@@ -40,6 +40,23 @@ const terminal: Process[] = [{ pid: 50, name: 'zsh' }, { pid: 40, name: 'login' 
 const seat: Process[] = [{ pid: 210, name: 'zsh' }, { pid: 200, name: 'codex' }, { pid: 10, name: 'herdr' }];
 
 describe('the caller is placed by its parent processes', () => {
+  test('a seat\'s tool run under its managed Codex app-server is that seat, while herdr lists it', () => {
+    // The app-server is started outside the pane, so no herdr server is among the parents.
+    const underEndpoint: Process[] = [{ pid: 910, name: 'zsh' }, { pid: 900, name: 'codex' }, { pid: 1, name: 'launchd' }];
+    const served = (pid: number) => (pid === 900 ? { session: 'main', seat: 'codex-acme', pane: 'w2:p1' } : null);
+    const env = { HERDR_PANE_ID: 'w2:p1' };
+    expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'main'))
+      .toEqual({ kind: 'seat', name: 'codex-acme', pane: 'w2:p1', session: 'main' });
+    // Another session, or a pane herdr lists under another name, places nobody.
+    expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: served }), 'other'))
+      .toMatchObject({ kind: 'unplaced' });
+    expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: () => ({ session: 'main', seat: 'codex-acme', pane: 'w1:p1' }) }), 'main'))
+      .toMatchObject({ kind: 'unplaced' });
+    // A Codex process that is no recorded endpoint stays the detached refusal.
+    expect(placeCaller(sources(underEndpoint, { env, managedEndpointSeat: () => null }), 'main'))
+      .toMatchObject({ kind: 'unplaced', reason: expect.stringMatching(/detached from that pane/) });
+  });
+
   test('a terminal outside herdr, with no agent above it, is the owner', () => {
     expect(placeCaller(sources(terminal))).toEqual({ kind: 'owner' });
   });
