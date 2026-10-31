@@ -275,6 +275,14 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   rules file told the seat not to continue earlier work and not to read drops, so a message
   queued before it was never read. It now tells the seat to read its inbox, act on what is
   addressed to it, and leave earlier work alone unless a message asks for it.
+- **A recorded socket is a route only while it is there and dialable.** A seat's delivery class
+  reads a socket from what a send itself admits — the effective settings' accept, the team
+  file's own `inbound` word, and an address the seat's record names that still exists and does
+  not predate the declaration that accepts it — never from a declaration alone, so dispatch no
+  longer spends work on a route the send would refuse. A recorded address whose file is gone is
+  never dialed: the send says it is gone, under the class the seat has without that socket, and
+  leaves the message where that turn reads it. A fallback that ends in the bus inbox never
+  claims a wake the attempt just disproved.
 
 ## [0.5.5] - 2026-10-26
 
