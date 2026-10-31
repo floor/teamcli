@@ -6811,9 +6811,11 @@ leadTest('the filter names only ids the contract has', () => {
   expect(unknownScenes(wanted, contract.rows.map((row) => row.id)), 'TEAM_EXIT_IDS names an id with no contract row').toEqual([]);
 });
 
+// Reads the whole command tree, the same work the analyzer probes below do, so it carries the
+// same 30s margin over the 5s default.
 leadTest('the exit-code check is clean', () => {
   expect(problems()).toEqual([]);
-});
+}, 30_000);
 
 // The analyzer's own probes: crafted fixtures fed to the analyzer, never this repo's files. A
 // filtered local run (`TEAM_EXIT_IDS`) skips them — a feature diff cannot change what they feed
@@ -7248,13 +7250,15 @@ const unreadForms: { name: string; files: Map<string, string>; needle: string; e
     { name: 'reportFailure returns a helper', files: failureMoved(), needle: 'says code 1, the site returns 2' },
 ];
 
-// The unreadable-form fixtures are analyzer probes too, skipped under a filter for the reason above.
+// The unreadable-form fixtures are analyzer probes too, skipped under a filter for the reason
+// above. Each row reads the whole command tree like the analyzer tests above, so each is given
+// their 30s margin over the 5s default.
 test.each(wanted === null && leadPart(part) ? unreadForms : [])('$name fails the check', (row) => {
   const found = problems(row.extra
     ? { files: row.files, contractText: canon([...contract.rows, ...row.extra]), page: render([...contract.rows, ...row.extra]) }
     : { files: row.files });
   expect(found.some((line) => line.includes(row.needle)), row.name).toBe(true);
-});
+}, 30_000);
 
 // Phase 3: the same add and remove runs under `team-config.source: registry`, on a team moved into
 // the scene's own registry. The edit lands in the record, the file is left as it was, and the
