@@ -56,9 +56,12 @@ choose a session gets `--session-id <uuid>` appended; a line that already carrie
 `--resume`/`-r`, or `--continue`/`-c` is left as the owner wrote it, and an id the line spells is
 recorded. `team restart` records a second source: the recorded conversation a launch resumes, for
 every CLI with a measured resume form — Codex, Antigravity and Grok as well as Claude Code — so a
-resumed start is `resumable` even where TeamCLI set no id. TeamCLI never reads the CLI's session
-files or its state: the id is the one TeamCLI set, or the conversation the two records agreed on
-and the launch resumed. Reading a record back into a launch is `team restart <seat>`, and `team up`
+resumed start is `resumable` even where TeamCLI set no id. TeamCLI takes no session id from the
+CLI's session files and reads none of their contents: the id is the one TeamCLI set, or the
+conversation the two records agreed on and the launch resumed. A Claude Code resume does check
+that its conversation file exists before the launch — the pathname alone, by its presence, never
+its contents — and a recorded conversation that file does not hold runs fresh. Reading a record
+back into a launch is `team restart <seat>`, and `team up`
 after `team down`, which resumes what `down` retained; `team resume` is the pause lever, not a
 session command, and reads no record here.
 
