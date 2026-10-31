@@ -1239,6 +1239,10 @@ export async function executePlan(
           final(op.seat, { kind: 'left out', reason: 'has no pane to read; left at launched' });
           break;
         }
+        // The names the seat's own CLI runs under. A foreground process is read as the CLI only
+        // when its argv0 is one of these: "anything that is not the pane's shell" also names a
+        // wrapper's interpreter, which is not a prompt and not a launch.
+        const processNames = op.cli ? profileFor(op.cli)?.processNames ?? [] : [];
         // What an idle screen means for the seat, wherever it was found: the screen, then the
         // process, then the model comparison. The model comes from that screen read, so the
         // process read sits after it and before the comparison: a model the CLI is not running
@@ -1356,12 +1360,25 @@ export async function executePlan(
           }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
+          // The pane's shell, read once this poll: the relaunch below types a line, and the ended
+          // read further down reads the same evidence.
+          const back = host.shellBack?.(session, here.pane) ?? null;
           // A resume the CLI refused at runtime ("No conversation found") is launched once more,
-          // fresh, in the same pane: the seat is never left at a bare shell for it.
+          // fresh, in the same pane: the seat is never left at a bare shell for it. The relaunch
+          // types a launch line, so it runs only once the CLI is gone — the same evidence
+          // 10139bc22 uses: the pane is back at its shell, or no foreground process is one the
+          // seat's profile runs as. The names are the profile's own, never "anything that is not
+          // the shell": a wrapper's interpreter is such a process, and it is not the CLI that
+          // printed the error.
           if (kind === 'unknown' && !freshAfterMissing) {
             const ran = launchedCommands.get(op.seat);
             const fresh = ran !== undefined && namedResumeTarget(op.cli ?? '', ran) ? withoutResume(op.cli ?? '', ran) : null;
-            const screen = fresh === null ? null : (host.paneText?.(session, here.pane) ?? null);
+            const shellBackNow = (): boolean => {
+              if (back === true) return true;
+              const front = host.foreground?.(session, here.pane) ?? null;
+              return front !== null && !reportedLiveAgent(front, processNames);
+            };
+            const screen = fresh === null || !shellBackNow() ? null : (host.paneText?.(session, here.pane) ?? null);
             if (fresh !== null && screen !== null && conversationMissingOnScreen(op.cli ?? '', plainPaneText(screen))) {
               freshAfterMissing = true;
               const relaunch = withLaunchSession(op.cli ?? '', fresh);
@@ -1379,7 +1396,6 @@ export async function executePlan(
               }
             }
           }
-          const back = host.shellBack?.(session, here.pane) ?? null;
           const at = host.now();
           if (kind === 'unknown' && back === true) {
             shellBackSince ??= at;
@@ -1400,14 +1416,16 @@ export async function executePlan(
           // at its shell shows no CLI prompt whatever herdr reports, and the ended read below is
           // left to say so. The rules delivery still waits for its own recognised idle screen, so
           // a ready taken on herdr's word never types into a screen this run could not read.
-          // herdr's word is taken only while the CLI is still in front of the pane, and only on a
-          // second reading in a row: a CLI that draws and exits at once (a resume it refused)
-          // left herdr's status at idle while the pane went back to its shell, and the seat was
-          // reported ready on a bare shell.
+          // herdr's word is taken only while a foreground process is one the seat's profile runs
+          // as, and only on a second reading in a row: a CLI that draws and exits at once (a
+          // resume it refused) left herdr's status at idle while the pane went back to its shell,
+          // and the seat was reported ready on a bare shell. The CLI is named, never "anything
+          // that is not the shell": a wrapper that has not exec'd its CLI, or one still starting
+          // on a reused pane whose status is stale, is a foreground process of its own, and the
+          // seat was reported ready over a CLI that had not drawn yet.
           if (kind === 'unknown' && back !== true && unreadIdle(host.agentStatus?.(session, here.pane))) {
-            const front = host.processInfo?.(session, here.pane);
-            const cliGone = front !== undefined && front !== null && launchedIdentity(front) === null;
-            if (!cliGone) {
+            const cliSeen = reportedLiveAgent(host.foreground?.(session, here.pane) ?? null, processNames);
+            if (cliSeen) {
               if (herdrIdleBefore) {
                 outcome = 'idle';
                 break;

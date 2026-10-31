@@ -550,6 +550,9 @@ describe('a screen the profile cannot read', () => {
 
   test('herdr reports the seat idle: the launch is ready though no profile read the screen', async () => {
     const { host, out, slept } = world('idle', null);
+    // The CLI itself is a foreground process of the pane: the profile's own name, not just
+    // "anything that is not the shell".
+    host.foreground = () => ['agy'];
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).toBe('alpha: ready\n');
     // herdr's word is taken on a second reading in a row, with the CLI still in front: one poll.
@@ -559,13 +562,34 @@ describe('a screen the profile cannot read', () => {
   test('herdr reports idle but only the shell is in front of the pane: the CLI exited, the seat is not ready', async () => {
     const { host, out } = world('idle', null);
     host.processInfo = () => ({ shell: 100, foreground: [100] });
+    host.foreground = () => ['zsh'];
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).not.toContain('alpha: ready');
     expect(out.join('')).toContain('alpha: left out');
   });
 
+  test('a wrapper that did not exec its CLI is not one: herdr idle does not make the seat ready', async () => {
+    // A wrapper's interpreter is a foreground process of its own, beside the pane's shell. Its
+    // name is not the CLI's, so herdr's idle is not taken on it: the screen was never read, and
+    // nothing says the CLI drew a prompt.
+    const { host, out } = world('idle', null);
+    host.processInfo = () => ({ shell: 100, foreground: [1081, 1082] });
+    host.foreground = () => ['zsh', 'sleep'];
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: left out: timeout\n');
+  });
+
+  test('a wrapper that execs its CLI is: herdr idle is taken, and the seat is ready', async () => {
+    const { host, out } = world('idle', null);
+    host.processInfo = () => ({ shell: 100, foreground: [1081] });
+    host.foreground = () => ['agy'];
+    await executePlan(steps(1), 'acme', host);
+    expect(out.join('')).toBe('alpha: ready\n');
+  });
+
   test('herdr reports the seat done: the launch is ready there too', async () => {
     const { host, out } = world('done', null);
+    host.foreground = () => ['agy'];
     await executePlan(steps(1), 'acme', host);
     expect(out.join('')).toBe('alpha: ready\n');
   });
