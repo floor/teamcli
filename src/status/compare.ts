@@ -1,3 +1,4 @@
+import { homedir } from 'node:os';
 import { declaredModel } from '../file/model.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { defaultLabel } from '../file/validate.ts';
@@ -48,10 +49,11 @@ export type Row = {
 
 /** What reading a row's reach needs beyond the comparison: the receiving team's state folder and
  *  root, for the seat's launch-effective `crossSessionInbound` declaration and the mark a held
- *  frame leaves, and — named — the store folder a send resolves the seat's agent record under,
- *  whose CLI and recorded address the walk reads first. Left out, the reading walks the pane's
- *  own processes alone, as a send the registry cannot answer would. */
-export type ReachRoute = { dir: string; root: string; home?: string };
+ *  frame leaves, and the store folder a send resolves the seat's agent record under — whose CLI
+ *  and recorded address the walk reads first. `home` is the run's own resolved home, the same one
+ *  its other registry reads use; the reader also resolves the default itself when a caller leaves
+ *  it out, so an omission reads the default store and never an empty one. */
+export type ReachRoute = { dir: string; root: string; home: string };
 
 /** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -636,20 +638,22 @@ export function compare(
   // launch whose files do not admit the frame, a pane that is gone or the terminal host could not
   // read, an address the walk would find stale, or a temporary seat no send can resolve. The
   // identity is the one a plain-name send resolves: the seat's agent record when the team has a
-  // registry record, else the file's own seat. A temporary seat has no file line, so its record
-  // is its whole identity and its declaration is read with no launch — exactly the send's read.
+  // registry record, else the file's own seat. The store is the run's own resolved home (`home`,
+  // or the default home when a caller left it out): an omission reads the default store, never an
+  // empty one. A temporary seat has no file line, so its record is its whole identity and its
+  // declaration is read with no launch — exactly the send's read.
   // Reading only the CLI and a pane socket promised the socket leg on launches the walk never
-  // dialed and picked an address it would not; the two readers must agree. No extra
-  // terminal-host call: the reading is the row's own pane.
+  // dialed and picked an address it would not; the two readers must agree on the same store and
+  // the same snapshot. No extra terminal-host call: the reading is the row's own pane.
   if (route !== undefined) {
-    const home = route.home;
-    const record = home === undefined ? null : registryTeamOf(home, route.root, team);
+    const home = route.home ?? homedir();
+    const record = registryTeamOf(home, route.root, team);
     const teamKeys = record === null ? [] : [teamIdOf(record.root), record.project, record.session];
     for (const row of rows) {
       const declared = team.seats.find((seat) => seat.name === row.name);
       const temporary = declared === undefined && state.seats[row.name]?.temporary !== undefined;
       if (declared === undefined && !temporary) continue;
-      const agent = home === undefined || record === null ? null : seatAgent(home, teamKeys, row.name);
+      const agent = record === null ? null : seatAgent(home, teamKeys, row.name);
       if (declared === undefined && agent === null) {
         // A temporary seat is not in the file: with no record behind it a send has no identity to
         // address and refuses, so there is no route to promise.

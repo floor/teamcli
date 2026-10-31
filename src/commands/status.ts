@@ -280,6 +280,10 @@ function clientInvocationProblem(args: ReturnType<typeof readArgs>): string | nu
 
 export async function runStatus(argv: string[], io: Io, sources: StatusSources): Promise<number> {
   const out = cleanedIo(io);
+  // The store folder every registry read of this run resolves under: the sources' own when they
+  // name one, else the caller's home. Resolved once, so the reach column and the other readings
+  // cannot read different stores — an omitted home is the default store, never an empty one.
+  const home = sources.home ?? homedir();
   const args = readArgs(argv, ['session', 'file', 'project', 'client', 'key', 'team'], ['all', 'json']);
   const json = hasJsonFlag(argv);
   // `--project` reads the project level instead of one team: the project's teams, from the
@@ -308,7 +312,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     if (!json) out.stderr(`${KEY_ISOLATION_LINE}\n`);
     const at = sources.now();
     const verified = verifyClientUp({
-      home: sources.home ?? homedir(),
+      home,
       grantFile: resolve(io.cwd, args.values.client),
       keyFile: resolve(io.cwd, args.values.key!),
       cwd: io.cwd,
@@ -373,7 +377,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     // `last_valid` copy. Asked only where the read gate has refused, and only when a record
     // exists, so a seat's own reading reads no clock for it.
     const granted = current.ok && !read
-      && readEntityCreateGrants(sources.home ?? homedir()).length > 0
+      && readEntityCreateGrants(home).length > 0
       && entityGrantAdmits(current.root, io, { home: sources.home, now: sources.now(), cwd: io.cwd });
     if (!current.ok || (!read && !granted)) {
       out.stderr('team status: this team is not yours to read\n');
@@ -448,17 +452,17 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     undefined,
     // The owner's live grant, read fresh: the `team answer` repair line appears only while the
     // team grant carries `dialogs.trust`.
-    dialogsTrustInForce(sources.home ?? homedir(), root, now),
+    dialogsTrustInForce(home, root, now),
     sources.home === undefined ? undefined : new Map(team.seats.flatMap((seat) => {
       const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
       return agent ? [[seat.name, agent.signing] as const] : [];
     })),
     continuityIds,
     // The reach column reads the same readings a send walks: its gate, and its address choice —
-    // the store the seat's agent record (with its recorded socket) is resolved under, the
-    // launch-effective settings and held-frame marks under the state folder, and relative launch
-    // paths under the root.
-    { dir, root, ...(sources.home === undefined ? {} : { home: sources.home }) },
+    // the run's resolved home, the store the seat's agent record (with its recorded socket) is
+    // looked up under, the launch-effective settings and held-frame marks under the state folder,
+    // and relative launch paths under the root.
+    { dir, root, home },
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;
@@ -469,7 +473,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
   // verdict.
   const health = sources.daemonHealth === undefined
     ? null
-    : await sources.daemonHealth(sources.home ?? homedir());
+    : await sources.daemonHealth(home);
   // Whether the seats' presence projections may be called live: only a fresh route verdict that
   // says serving and healthy for this session. Default closed — a persisted status word or a
   // health answer without a verdict proves nothing.

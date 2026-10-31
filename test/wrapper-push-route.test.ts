@@ -6,11 +6,14 @@
 // processes otherwise. What decides the socket is the declaration the line names and the team
 // file's authorization: a launch this build did not write (its own `--settings` file is on the
 // line) is not attested, so its accept alone authorizes nothing — the team file's `inbound:
-// accept` is what admits the route. `team status` reads the send's own gate and address choice,
-// so its reach column can never promise a socket the send would not dial.
+// accept` is what admits the route. `team status` reads the send's own gate and address choice
+// over the same resolved store, so its reach column can never promise a socket the send would not
+// dial.
 import { afterEach, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runSend } from '../src/commands/send.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
 import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
@@ -104,12 +107,13 @@ function recordSeat(made: World, seat: string, address: string | null): void {
 }
 
 /** What `team status` reads for the seat: the comparison's own reach word, with the route's files
- *  named the way the command names them (its state folder and root, and — for a run that reads
- *  the registry — its home). `state` carries the temporary record a row needs. */
+ *  named the way the command names them — its state folder, its root, and the home every registry
+ *  read of the run resolves under (a fixture seat with no record reads an empty store there, never
+ *  no store at all). `state` carries the temporary record a row needs. */
 function reachOf(
   made: World,
   seat: string,
-  options: { store?: true; state?: SessionState } = {},
+  options: { state?: SessionState } = {},
 ): 'socket' | 'typed' | undefined {
   const loaded = readTeamConfig(made.root, { home: made.home });
   if (!loaded.ok) throw new Error('the fixture team file does not load');
@@ -120,12 +124,9 @@ function reachOf(
     screens: {},
     processes: { [PANE]: { shell: 111, foreground: [CLI_PID] } },
   };
-  const route = options.store === true
-    ? { dir: made.dir, root: made.root, home: made.home }
-    : { dir: made.dir, root: made.root };
   const rows = compare(
     loaded.team, 'acme', options.state ?? emptySession(), live, NOW, loaded.team.watch, made.sockets,
-    false, undefined, undefined, route,
+    false, undefined, undefined, { dir: made.dir, root: made.root, home: made.home },
   ).rows;
   return rows.find((row) => row.name === seat)?.reach;
 }
@@ -207,7 +208,7 @@ test('a recorded socket older than the declaration: the send refuses it and the 
   const sent = JSON.parse(io.out) as { channel?: string };
   expect(sent.channel).toBe('drop');
   expect(host.frames).toEqual([]);
-  expect(reachOf(made, 'helper', { store: true })).toBe('typed');
+  expect(reachOf(made, 'helper')).toBe('typed');
 });
 
 test('a recorded socket outside the discovery folders: the send dials it and the row reads socket', async () => {
@@ -232,7 +233,7 @@ test('a recorded socket outside the discovery folders: the send dials it and the
   const sent = JSON.parse(io.out) as { channel?: string };
   expect(sent.channel).toBe('socket');
   expect(host.frames.length).toBe(1);
-  expect(reachOf(made, 'helper', { store: true })).toBe('socket');
+  expect(reachOf(made, 'helper')).toBe('socket');
 });
 
 test('a temporary seat: its agent record and generated declaration give the row the same socket the send dials', async () => {
@@ -266,5 +267,57 @@ test('a temporary seat: its agent record and generated declaration give the row 
   const sent = JSON.parse(io.out) as { channel?: string };
   expect(sent.channel).toBe('socket');
   expect(host.frames.length).toBe(1);
-  expect(reachOf(made, seat, { store: true, state })).toBe('socket');
+  expect(reachOf(made, seat, { state })).toBe('socket');
+});
+
+test('a run that names no home reads the default store, never an empty one', () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made);
+  setLaunch(made, 'helper', wrapperLine(made));
+  // The recorded address sits outside both discovery folders, so only a registry read finds it:
+  // an omitted home that were read as "no store" would show the row typed.
+  const held = join(made.root, '.agents', 'recorded-sockets');
+  mkdirSync(held);
+  const recorded = join(held, `${String(CLI_PID)}.sock`);
+  writeFileSync(recorded, '');
+  recordSeat(made, 'helper', recorded);
+  const status = JSON.stringify(fileURLToPath(new URL('../src/commands/status.ts', import.meta.url)));
+  const config = JSON.stringify(fileURLToPath(new URL('../src/file/team-config.ts', import.meta.url)));
+  const approval = JSON.stringify(fileURLToPath(new URL('../src/approve/approval.ts', import.meta.url)));
+  // The default home is fixed at process start, so the omitted-home reading runs in a child whose
+  // own home is the fixture's.
+  const child = `
+    import { homedir } from 'node:os';
+    import { runStatus } from ${status};
+    import { readTeamConfig } from ${config};
+    import { verifiedOf } from ${approval};
+    const root = ${JSON.stringify(made.root)};
+    const home = ${JSON.stringify(made.home)};
+    const pane = ${JSON.stringify(PANE)};
+    if (homedir() !== home) throw new Error('the synthetic home was not applied');
+    const loaded = readTeamConfig(root, { home });
+    if (!loaded.ok) throw new Error('the fixture team file does not load');
+    const live = { running: true, agents: [{ name: 'helper', agent: 'claude', pane, workspace: 'fixture-workspace', status: 'idle', cwd: null }], workspaces: [], screens: {}, processes: { [pane]: { shell: 111, foreground: [${String(CLI_PID)}] } } };
+    const sources = { live: () => live, branch: () => null, standing: () => verifiedOf(loaded.team, '', root, new Date()), now: () => new Date() };
+    for (const named of [false, true]) {
+      let out = '';
+      const io = { cwd: root, caller: { kind: 'owner' }, env: {}, stdinIsTTY: false, stdout: (text) => { out += text; }, stderr: () => {} };
+      await runStatus([], io, named ? { ...sources, home } : sources);
+      const row = out.split(String.fromCharCode(10)).find((line) => line.trimStart().startsWith('helper '));
+      console.log(JSON.stringify({ named, row }));
+    }
+  `;
+  const run = spawnSync(process.execPath, ['-e', child], {
+    cwd: made.root,
+    env: { ...process.env, HOME: made.home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' },
+    encoding: 'utf8',
+  });
+  if (run.status !== 0) throw new Error(run.stderr);
+  const rows = run.stdout.trim().split('\n').map((line) => JSON.parse(line) as { named: boolean; row: string });
+  expect(rows.length).toBe(2);
+  // The two runs may differ elsewhere by design — a named home is also what the model column's
+  // signing map reads. The reach word is the route's own, and it must not depend on the omission.
+  expect(rows[0]?.row).toMatch(/socket$/);
+  expect(rows[1]?.row).toMatch(/socket$/);
 });

@@ -72,8 +72,11 @@ pane's own processes otherwise — is no older than that declaration; `typed` ot
 a launch that does not admit the frame, a pane that is gone, one the terminal host could not read,
 or a recorded socket the walk would find stale. A temporary seat is not in the file: its agent
 record is its identity and address, and its declaration is the generated settings file its launch
-left, read exactly as a send reads them. The two readers cannot disagree: a row never promises a
-socket the walk would refuse. No path opens a cross-session socket directly; `--wait` writes the
+left, read exactly as a send reads them. The two readers cannot disagree while both read the same
+resolved registry home and the same snapshot: a row never promises a socket the walk would refuse.
+Past that snapshot the row is a reading, not a promise — the send's own admission checks, an
+earlier leg that succeeds, a size limit, or a socket that vanishes after the read are its findings
+to make. No path opens a cross-session socket directly; `--wait` writes the
 signed record through the receiving seat's delivery walk and awaits a reply record on the thread.
 The word is read from the processes the comparison already holds, so no extra terminal-host call is
 made; the seat's own files and the agent record a send would resolve are read from disk.

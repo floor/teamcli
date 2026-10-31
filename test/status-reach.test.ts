@@ -39,6 +39,7 @@ let dir: string;
 let file: string;
 let socks: string;
 let altSocks: string;
+let home: string;
 let team: TeamFile;
 let standing: Standing;
 
@@ -46,6 +47,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'team-reach-'));
   socks = mkdtempSync(join(tmpdir(), 'team-reach-socks-'));
   altSocks = mkdtempSync(join(tmpdir(), 'team-reach-socks-alt-'));
+  // The store the route names: empty, so an unregistered seat reads no record here.
+  home = mkdtempSync(join(tmpdir(), 'team-reach-home-'));
   mkdirSync(join(dir, '.agents'));
   file = join(dir, '.agents', 'team.yaml');
   writeFileSync(file, example);
@@ -62,6 +65,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
   rmSync(socks, { recursive: true, force: true });
   rmSync(altSocks, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 function live(processes?: Record<string, PaneProcesses | null>): Live {
@@ -74,9 +78,9 @@ function live(processes?: Record<string, PaneProcesses | null>): Live {
   };
 }
 
-// The comparison's own route input: the state folder and root `team status` reads the seat's
-// launch-effective settings and held-frame marks under.
-const route = () => ({ dir: join(dir, '.agents'), root: dir });
+// The comparison's own route input: the store home, and the state folder and root `team status`
+// reads the seat's launch-effective settings and held-frame marks under.
+const route = () => ({ dir: join(dir, '.agents'), root: dir, home });
 
 function rows(live: Live, sockets: string | readonly string[] = socks) {
   return compare(team, 'acme-web', emptySession(), live, NOW, team.watch, sockets, false, undefined, undefined, route()).rows;
