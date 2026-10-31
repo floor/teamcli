@@ -6363,7 +6363,7 @@ for (const [name, command, args, invalidArgs] of [
   scene('reply.replied', async (place) => {
     write(place, FILE);
     plantRecord(place.home, place.root, 'acme', 'owner', SENT, "from the file's seat worker (no registry record yet) — admitted by: a seat to its own team's orchestrator\n\nquestion", { from: 'worker', at: NOW.toISOString() });
-    return show(await replied(place, [SENT, 'the answer']), 'worker: replied');
+    return show(await replied(place, [SENT, 'the answer']), 'worker: delivered (drop)');
   });
   scene('reply.refused', async (place) => {
     write(place, FILE);

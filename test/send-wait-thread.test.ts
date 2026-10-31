@@ -244,7 +244,7 @@ describe('team send --wait on the thread across delivery legs', () => {
     const replyIo = testIo(w.root, workerCaller);
     const replyCode = await runReply([SENT_ID, 'late answer'], replyIo, { home: w.home, now: () => NOW });
     expect(replyCode).toBe(0);
-    expect(replyIo.out).toContain('lead: replied');
+    expect(replyIo.out).toContain('lead: delivered (drop)');
     expect(statusOf(workerDrops, SENT_ID, { to: 'worker', root: w.root, session: 'acme' }, key)).toBe('replied');
 
     const leadDrops = dropDir(w.root, 'lead');
