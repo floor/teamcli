@@ -292,14 +292,18 @@ seats:
     launch: claude --model deepseek-flash
 ```
 
-The team runs as the file and the state say, so there is nothing to act on (the note is the
-housekeeping of a role word written the 0.3.5/0.4 way):
+The team runs as the file and the state say, so there is nothing to act on (the notes are the
+housekeeping of a role word written the 0.3.5/0.4 way, and each seat's delivery class where no
+socket is live):
 
 ```console
 $ team check ; echo "exit $?"
 team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
+note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 no differences
 exit 0
@@ -316,6 +320,9 @@ $ team check ; echo "exit $?"
 team beacon, session "lab-beacon"
 key isolation: enforced against team panes (key file still readable by same-user processes)
 note: the lead seat "claude-keeper" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set `role: orchestrator` on it when convenient
+note: claude-keeper: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: claude-beacon: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
+note: worker: no cross-session socket is live, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn
 note: watch: the recorded process 4242 is gone; the daemon health cannot say whether a hosted watch owns the route
 difference: claude-keeper: declares vendor anthropic, which the entity model rule *=!anthropic refuses; a swap to claude-code DeepSeek Flash 4.0 from beacon/worker is proposed
   repair: team swap queue claude-keeper
