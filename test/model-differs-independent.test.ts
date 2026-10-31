@@ -83,6 +83,28 @@ describe('a declaration is read as model plus version, not as two fields compare
   });
 });
 
+// A word that mixes letters and digits — a variant tag such as A4, a family number such as B2 —
+// is part of the model's name, not just its number: two tags name two models, a tag missing names
+// another model, and the same tag written in either field still names one model.
+describe('a letter-bearing token is a word of the name, never just its number', () => {
+  test('a variant tag separates two models', () => {
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini Argon', version: '4' })).toBe(true);
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini Argon B4', version: '4' })).toBe(true);
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini Argon A5', version: '4' })).toBe(true);
+    expect(modelDiffers({ model: 'GLM B2', version: '2.5' }, { model: 'GLM', version: '2.5' })).toBe(true);
+  });
+
+  test('the same tag written in either field is one model', () => {
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini', version: '4 Argon A4' })).toBe(false);
+    expect(modelDiffers({ model: 'Gemini Argon A4', version: '4' }, { model: 'Gemini', version: 'Argon A4 4' })).toBe(false);
+  });
+
+  test('a letter-bearing version field still compares as itself', () => {
+    expect(modelDiffers({ model: 'GLM', version: 'A4' }, { model: 'GLM', version: 'B4' })).toBe(true);
+    expect(modelDiffers({ model: 'GLM', version: 'A4' }, { model: 'GLM', version: '4' })).toBe(true);
+  });
+});
+
 describe('a send to a seat whose record splits the version out of the name', () => {
   const PANE = 'fixture-pane-live';
   let cleanup: () => void = () => {};
