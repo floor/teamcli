@@ -382,6 +382,10 @@ describe('team next', () => {
     // The launch declares accept, the address stands — and the last frame the send dialed there
     // was held at the box, under a declaration that has not been re-confirmed since. The send
     // would not dial it again, so `next` must not treat the seat as wakeable while idle.
+    // This command reads no pane processes, and neither do plan, up or the class a send appends:
+    // for them the conservative rule stands, and a recorded address that still stands is the
+    // only socket evidence the class counts. Watch, the daemon, status and check read the pane
+    // and make the send's own ownership proof.
     launchingSocket(WITH_BOTH, true);
     // The mark sits under the state folder the command reads, named the way the send's own
     // prologue names it: the folder holding the loaded team file, whose path git reports resolved.

@@ -212,7 +212,9 @@ describe("up's delivery warning for a seat it keeps", () => {
     expect(before.out).not.toContain('cannot be woken while it is idle');
 
     // The box held the last frame under the declaration now in force: the send would not dial,
-    // so the kept seat cannot be woken while idle and the run says so.
+    // so the kept seat cannot be woken while idle and the run says so. `up` reads no pane
+    // processes, like next, plan and the class a send appends: the conservative rule stands, and
+    // a recorded address that still stands is the only socket evidence it counts.
     recordHeldSocket(
       heldSocketPath(dir, SESSION, 'worker'),
       declaredInboundOf({ dir, root, session: SESSION, seat: 'worker', launch: 'claude --model claude-opus-5-5' }),

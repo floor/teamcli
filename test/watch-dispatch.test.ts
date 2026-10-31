@@ -466,6 +466,68 @@ describe('a seat nothing can wake while it is idle', () => {
     expect(later.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
     expect(calls.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
   });
+  test('a recorded socket the pane’s processes no longer carry is no wake, though the file stands', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    // Both workers' settings declare accept and their records name the socket a session names by
+    // its pid, and the files stand: everything the record alone can prove. The pass reads each
+    // pane's processes as a send does, and that reading decides whether the address is the pane's.
+    const scene = live();
+    const pidOf: Record<string, number> = { 'worker-1': 731001, 'worker-2': 731002 };
+    for (const agent of scene.agents) {
+      const seat = agent.name ?? '';
+      mkdirSync(join(root, '.agents', 'hooks', 'crew'), { recursive: true });
+      writeFileSync(join(root, '.agents', 'hooks', 'crew', `${seat}.json`), '{"crossSessionInbound":"accept"}\n');
+      const socket = join(base, `${String(pidOf[seat])}.sock`);
+      writeFileSync(socket, '');
+      registerAgent(home, {
+        name: seat,
+        signing: { model: 'Test', version: '1', role: 'builder' },
+        lab: 'test-lab',
+        cli: 'claude-code',
+        launcher: null,
+        launch: 'claude',
+        reach: {
+          team: teamIdOf(root), seat, session: 'crew',
+          pane: seat === 'worker-1' ? 'fixture-pane-1' : 'fixture-pane-2',
+          address: socket,
+        },
+        mcp: [],
+        skills: [],
+        lifecycle: 'running',
+        by: 'team up',
+      });
+    }
+    const processesWith = (foreground: (seat: string) => number[]) => Object.fromEntries(
+      scene.agents.map((agent) => [
+        agent.pane,
+        { shell: 1, foreground: foreground(agent.name ?? '') },
+      ]),
+    );
+    // Each pane runs a process other than the one its record names: the old sockets still stand,
+    // but the walk through this read would not dial them, so the class is pull-on-turn and the
+    // pass spends no attempt.
+    const replaced = await dispatchIdleWork(input({
+      push, team: teamOf(PULL_CREW),
+      live: { ...scene, processes: processesWith((seat) => [pidOf[seat]! + 9]) },
+    }));
+    expect(calls).toEqual([]);
+    expect(replaced.pushed).toEqual([]);
+    expect(replaced.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-1')).toBeUndefined();
+    expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
+    // The panes' own processes carry the recorded sockets: the same records are push-class again.
+    const owned = await dispatchIdleWork(input({
+      push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN),
+      live: { ...scene, processes: processesWith((seat) => [pidOf[seat]!]) },
+    }));
+    expect(owned.pushed.map((one) => one.seat).sort()).toEqual(['worker-1', 'worker-2']);
+  });
   test('an accepted socket whose box held the last frame is no wake either, until its declaration is re-confirmed', async () => {
     queue([{ id: 't1', title: 'First' }]);
     const calls: WorkPushRequest[] = [];

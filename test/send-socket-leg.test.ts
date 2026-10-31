@@ -860,7 +860,9 @@ test('a held frame is marked once, and the socket stays out until the declaratio
 test('a held socket is no wake the send reports either: the class it appends is pull-only', async () => {
   // The receiver accepts its socket and the registry names the address standing in its pane. The
   // box held the last frame under the declaration now in force: the walk skips the socket, and
-  // the class a console line appends must agree with the walk rather than promise a wake.
+  // the class a console line appends must agree with the walk rather than promise a wake. This
+  // class reads no pane processes, like next, plan and up: the conservative rule stands, and a
+  // recorded address that still stands is the only socket evidence it counts.
   const made = world(null);
   cleanup = made.cleanup;
   declareEntity(made, 'floor');

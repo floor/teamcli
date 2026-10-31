@@ -119,6 +119,8 @@ describe('a seat read from its records', () => {
     declared?: { cli: string; launch: string; human?: true; inbound?: 'accept' | 'hold' | 'refuse' };
     state?: Parameters<typeof seatDeliveryClass>[0]['state'];
     home?: string;
+    processes?: Parameters<typeof seatDeliveryClass>[0]['processes'];
+    sockets?: string | readonly string[];
   }) => seatDeliveryClass({
     dir,
     root: dir,
@@ -127,16 +129,20 @@ describe('a seat read from its records', () => {
     ...(input.declared === undefined ? {} : { declared: input.declared }),
     ...(input.state === undefined ? {} : { state: input.state }),
     ...(input.home === undefined ? {} : { home: input.home }),
+    ...(input.processes === undefined ? {} : { processes: input.processes }),
+    ...(input.sockets === undefined ? {} : { sockets: input.sockets }),
   });
 
   /** The launch a socket seat leaves behind: generated settings that declare accept, a registry
    *  record that names a socket address, and the socket file itself. The settings are written
-   *  first and the socket after, so the socket does not predate its declaration. */
-  function socketSeat(seat = 'helper'): { home: string; socket: string } {
+   *  first and the socket after, so the socket does not predate its declaration. A `pid` names
+   *  the socket the way a session names it, so a caller's pane processes can be read against it;
+   *  `session` names the record's own session, for a record that belongs to another one. */
+  function socketSeat(seat = 'helper', shape: { pid?: number; session?: string } = {}): { home: string; socket: string } {
     const home = join(dir, 'home');
     mkdirSync(join(dir, 'hooks', 'acme'), { recursive: true });
     writeFileSync(join(dir, 'hooks', 'acme', `${seat}.json`), '{"crossSessionInbound":"accept"}\n');
-    const socket = join(dir, `${seat}.sock`);
+    const socket = join(dir, shape.pid === undefined ? `${seat}.sock` : `${String(shape.pid)}.sock`);
     writeFileSync(socket, '');
     registerAgent(home, {
       name: seat,
@@ -145,7 +151,7 @@ describe('a seat read from its records', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude',
-      reach: { team: teamIdOf(dir), seat, session: 'acme', pane: 'fixture-pane-9', address: socket },
+      reach: { team: teamIdOf(dir), seat, session: shape.session ?? 'acme', pane: 'fixture-pane-9', address: socket },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -204,6 +210,42 @@ describe('a seat read from its records', () => {
     expect(read_.evidence.socket).toBe(false);
     expect(read_.class).toBe('pull-on-turn');
     expect(wakeableWhileIdle(read_.class)).toBe(false);
+  });
+
+  test('a recorded socket is no evidence once the pane’s processes no longer carry it', () => {
+    // The socket is named by the pid that listened on it, and that pid is the pane's own process:
+    // the address choice a send makes dials it, so the class counts it.
+    const pid = 812345;
+    const { home } = socketSeat('helper', { pid });
+    const declared = { cli: 'claude-code', launch: 'claude' } as const;
+    const state = { cli: 'claude-code', watcher: 'hook' } as const;
+    const inHand = { declared, state, home, sockets: [dir] };
+    const owned = read({ ...inHand, processes: { shell: pid + 1, foreground: [pid] } });
+    expect(owned.evidence.socket).toBe(true);
+    expect(owned.class).toBe('push');
+    // A relaunch replaced the process: the old file still stands, but the pane carries another
+    // pid and no socket of its own, so the walk would not dial and the class must not promise it.
+    const replaced = read({ ...inHand, processes: { shell: pid + 1, foreground: [pid + 2] } });
+    expect(replaced.evidence.socket).toBe(false);
+    expect(replaced.class).toBe('pull-on-turn');
+    // A caller that could not read the pane keeps the conservative rule: the recorded address
+    // that still stands is the only thing the run has, exactly as a send reads a pane it cannot see.
+    const blind = read({ ...inHand });
+    expect(blind.evidence.socket).toBe(true);
+    expect(blind.class).toBe('push');
+  });
+
+  test('a record that names another session is no socket for this one', () => {
+    // The registry's record belongs to the session it was written for: another session's address
+    // is not this seat's route, whatever stands at the path.
+    const { home } = socketSeat('helper', { session: 'other' });
+    const read_ = read({
+      declared: { cli: 'claude-code', launch: 'claude' },
+      state: { cli: 'claude-code', watcher: 'hook' },
+      home,
+    });
+    expect(read_.evidence.socket).toBe(false);
+    expect(read_.class).toBe('pull-on-turn');
   });
 
   test('the team file’s own inbound word keeps the socket out however the launch declares it', () => {

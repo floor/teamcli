@@ -347,6 +347,28 @@ describe('team check names a live seat whose socket a send would skip', () => {
     expect(code).toBe(0);
   });
 
+  test('a recorded socket the pane’s processes no longer carry is a note, not a finding', () => {
+    const w = world([{ name: 'replaced', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
+    const seat = { name: 'replaced', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
+    declare(w, 'replaced');
+    // The registry names the socket of the pid the session had, and the file still stands. The
+    // pane has been relaunched since: its processes are another pid, and no socket in the
+    // folder is one the walk would dial. The class reads the same processes the send's leg
+    // below reads, so it is no push class, and the absence is the class's ordinary state.
+    register(w, seat, writeSocket(w, seat));
+    ready(w, [seat]);
+    const live = liveOn([seat]);
+    const { code, out } = check(w, {
+      ...live,
+      processes: { [PANE_ONE]: { shell: OTHER_PID, foreground: [OTHER_PID + 1] } },
+    });
+    expect(out).toContain(
+      `note: replaced: ${NO_SOCKET}, so sends go to its drop folder; its delivery class is pull-on-turn, and it reads them at its next turn`,
+    );
+    expect(out).not.toContain(NOT_SOCKET);
+    expect(code).toBe(0);
+  });
+
   test('a declared order that leaves the socket out is a choice, not a skipped socket', () => {
     const w = world([{ name: 'bydrop', role: 'orchestrator', launch: 'claude', leads: true }], ['drop']);
     const line = wrapperLine(w, 'bydrop');

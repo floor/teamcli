@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEADLINE, NOT_RUNNING, WRONG_ANSWER, type BrokerOutcome } from '../src/broker/client.ts';
 import type { BrokerRequest } from '../src/broker/protocol.ts';
-import { handleNext, type NextHandlerDeps, type NextHandlerInput, type NextClaim } from '../src/daemon/next.ts';
+import { handleNext, type NextAnswer, type NextHandlerDeps, type NextHandlerInput, type NextClaim } from '../src/daemon/next.ts';
 import { routeOf, type HostedRoute } from '../src/daemon/routes.ts';
 import type { TeamFile } from '../src/file/types.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -106,8 +106,18 @@ async function call(
   mine = false,
   deps: NextHandlerDeps = {},
   home?: string,
+  processes?: NextHandlerInput['processes'],
 ): Promise<Awaited<ReturnType<typeof handleNext>>> {
-  const input: NextHandlerInput = { route, team, caller, action, mine, now, ...(home === undefined ? {} : { home }) };
+  const input: NextHandlerInput = {
+    route,
+    team,
+    caller,
+    action,
+    mine,
+    now,
+    ...(home === undefined ? {} : { home }),
+    ...(processes === undefined ? {} : { processes }),
+  };
   return handleNext(input, deps);
 }
 
@@ -163,14 +173,15 @@ describe('handleNext, file and local sources', () => {
   /** The launch one socket seat leaves behind for the worker: generated settings that declare
    *  accept, a registry record naming a standing socket, and — when `held` — the box's mark left
    *  under the declaration now in force. Both folders are named the way the handler reads them:
-   *  the state folder under the canonical route root. */
-  function socketSeat(held: boolean): string {
+   *  the state folder under the canonical route root. A `pid` names the socket the way a session
+   *  does, so the processes a host reads for the pane can be made against it. */
+  function socketSeat(held: boolean, pid?: number): string {
     const home = join(base, 'home');
     mkdirSync(home, { recursive: true });
     const dir = join(route.root, '.agents');
     mkdirSync(join(dir, 'hooks', 'crew'), { recursive: true });
     writeFileSync(join(dir, 'hooks', 'crew', 'worker.json'), '{"crossSessionInbound":"accept"}\n');
-    const socket = join(base, 'worker.sock');
+    const socket = join(base, pid === undefined ? 'worker.sock' : `${String(pid)}.sock`);
     writeFileSync(socket, '');
     registerAgent(home, {
       name: 'worker',
@@ -210,6 +221,27 @@ describe('handleNext, file and local sources', () => {
     project(FILE_TEAM, urgent);
     const heldHome = socketSeat(true);
     expect(await call(callerOf('worker'), 'claim', false, {}, heldHome)).toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' });
+    expect(leaseNames()).toEqual([]);
+  });
+
+  test('a recorded socket the pane’s processes no longer carry is offered no time-bound record either', async () => {
+    const urgent = '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n';
+    const pid = 900101;
+    const expected: NextAnswer = {
+      ok: true, kind: 'claimed', record: { id: 'urgent', title: 'the time-bound title', deadline: '2026-12-31T00:00:00Z' },
+    };
+    // Control: the host's reading of the claimed pane carries the pid the record names, so the
+    // recorded socket is the pane's own and the seat is push-class.
+    project(FILE_TEAM, urgent);
+    const home = socketSeat(false, pid);
+    expect(await call(callerOf('worker'), 'claim', false, {}, home, { shell: pid + 1, foreground: [pid] })).toEqual(expected);
+    // The pane has been relaunched: the old file still stands, but the host's reading of the
+    // claimed pane proves the address is not its own, so the walk would not dial it, the class
+    // is pull-on-turn, and the time-bound record is not offered.
+    project(FILE_TEAM, urgent);
+    const staleHome = socketSeat(false, pid);
+    expect(await call(callerOf('worker'), 'claim', false, {}, staleHome, { shell: pid + 1, foreground: [pid + 7] }))
+      .toEqual({ ok: true, kind: 'none', why: 'nothing-takeable' });
     expect(leaseNames()).toEqual([]);
   });
 

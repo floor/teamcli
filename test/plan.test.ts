@@ -286,7 +286,9 @@ describe('team plan', () => {
     });
     expect((await run()).out).toContain('1     open   -      the time-bound title\n');
     // The box held the last frame under the declaration in force: the send would not dial, so a
-    // deadline on the seat falls between its turns and the plan says what stays put.
+    // deadline on the seat falls between its turns and the plan says what stays put. This command
+    // reads no pane processes, like next, up and the class a send appends: the conservative rule
+    // stands, and a recorded address that still stands is the only socket evidence counted.
     recordHeldSocket(
       heldSocketPath(dir, 'acme', 'lead'),
       declaredInboundOf({ dir, root, session: 'acme', seat: 'lead', launch: 'claude --model claude-opus-5-5' }),

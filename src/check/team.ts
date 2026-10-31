@@ -1651,8 +1651,14 @@ function socketSkippedDeliveries(
       // keeps for the seat, never a finding read off half a store.
       continue;
     }
-    // The class the seat's own launch left, from the one reader of it.
-    const delivery = seatDeliveryClass({ dir, root, session, seat: seat.name, declared: seat, state: recorded, home });
+    // The class the seat's own launch left, from the one reader of it, with the pane's processes
+    // and this check's own sockets folders: a recorded socket the pane no longer carries is no
+    // push class here either, the same proof the send's leg below makes.
+    const delivery = seatDeliveryClass({
+      dir, root, session, seat: seat.name, declared: seat, state: recorded, home,
+      processes: live.processes?.[listed.pane] ?? null,
+      sockets,
+    });
     // Only the CLI whose profile declares push is read: a seat that never promised a socket is
     // not falling short of one.
     if (delivery.evidence.declared !== 'push') continue;
