@@ -93,6 +93,11 @@ unchanged.
   servers under its managed endpoint are placed as that seat under the full ownership proof:
   the listen URL of its current binding, the recorded pid and a start inside the record's
   window, and, for a session, the pane the session records.
+- **The workflow's live run store.** A run lives in a durable store: an item index that decides
+  exclusion, a versioned, append-only journal that folds the run's state, and reservations that
+  keep one seat on one item at a time. A pending hold has a release deadline, the built-in
+  `work-item` definition ships with the workflow, and `team next` takes the run store's hold
+  before its local lease.
 
 ### Changed
 
