@@ -545,15 +545,16 @@ header itself carries no id: it names the sender as the receiving team's
 `seat@team` from another under the default — and the owner's reads `from the owner`. A sender the
 registry holds no record for is spelled as the file's seat instead — `from the file's seat <name>
 (no registry record yet) — admitted by: <rule>` — so a receiver reads why the id is absent. A handoff prints the body with
-that header, so the sender's own call carries it too. A waited send's frame opens the
-same way, and so
-does the body the message history keeps. The receiver reads who sent a message and why that sender
+that header, so the sender's own call carries it too. A socket frame opens with the sender's
+identity line and then the signed body with that header, and the body the message history keeps
+carries it too. The receiver reads who sent a message and why that sender
 was let through; the record carries the sender's ids from day one.
 
 ## The message-display wake line
 
-A message a socket frame, a channel push or a watch announces opens with a header the
-`message-display` policy renders. The policy is a signed, enforced setting at the entity and team
+A channel push announces a message with a header the `message-display` policy renders, and the
+wake line a watch builds for an unread message renders the same header. The policy is a signed,
+enforced setting at the entity and team
 levels and has no team file field: the entity's default stands until a team writes its own value,
 and the team's value
 wins. The shipped default is
@@ -571,7 +572,7 @@ when it is saved, and the refusal names the placeholder:
 | `{subject}` | the sender's [`--subject`](#synopsis) line, sanitised like every field; empty when none was written |
 | `{summary}` | the body's first content line, sanitised and then cut at 80 characters — never paraphrased, and never the subject |
 | `{age}` | how long the message has waited: seconds, minutes, hours or days |
-| `{id}` | reserved for the record's id; this build's frames leave it empty, because the id travels in the socket frame's `msg_id` only |
+| `{id}` | reserved for the record's id; this build leaves it empty, and the id travels in the socket frame's `msg_id` only |
 
 Every field is data: control characters, escape sequences and line breaks are neutralised, so a
 rendered header is one printable line. A body line that forges a sender header stays summary
@@ -583,13 +584,16 @@ line of at most 100 characters; the hint is kept whole and the header gives way 
 template cannot remove the hint — an agent seat always learns where to read the signed record —
 and the message's id is not in the line.
 
-The socket frame an agent seat receives carries the rendered header, the full body, and the
-fixed reply line, `Reply with: team send <address> "…"`. A person-pane seat's frame carries the
-header and the body and neither the reply line nor the read hint: a person answers in the
-client, and the line is never shown to an agent.
+A socket frame is not a message-display line. The frame an agent seat receives opens with the
+sender's identity line, `Message from <name> (<seat>@<team>)` — the nickname the registry holds,
+the name the seat's written label carries before the middle dot, or its seat name, with no
+summary and no rule — then a blank line, the signed body with its own
+`from … — admitted by: …` header, and the fixed reply line,
+`Reply with: team send <address> "…"`. An ordinary send never frames a human's seat: a
+`human: true` seat walks the drop leg alone, so no frame is dialed for it.
 
-A running watch uses the same header to ring for the oldest waiting message, and it does not
-ring when nothing waits.
+A running watch builds the same header for the oldest waiting message; in this build the ring
+stops before the pane, so the line is built and never typed. It builds none when nothing waits.
 
 ## Outcomes
 
