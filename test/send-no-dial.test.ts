@@ -226,10 +226,17 @@ describe('the watch types no automatic work', () => {
     writeFileSync(join(dir, '.agents', 'team.yaml'), raw.replace('watch:\n', `watch:\n  nudge: ${PROMPT}\n`));
     writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
     // Truthful idle clocks: the reading would offer both workers the task if a route were wired.
+    // Their launch records name the development-channel launch, so an idle wake reaches them
+    // and the missing route is the one failure the scene reports.
     updateState(join(dir, '.agents'), (state) => {
       const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
       for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
-        seats[seat] = { stage: 'ready', last_active: '2026-10-03T13:00:00.000Z' };
+        seats[seat] = {
+          stage: 'ready',
+          last_active: '2026-10-03T13:00:00.000Z',
+          cli: 'claude-code',
+          launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+        };
       }
     });
 

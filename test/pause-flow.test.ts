@@ -312,7 +312,14 @@ describe('the watch reads the pause from the state', () => {
       delete state.pause;
       const seats = (state.sessions['acme-web'] ??= emptySession()).seats;
       for (const seat of ['deepseek-acme', 'deepseek-acme-2']) {
-        seats[seat] = { stage: 'ready', last_active: '2026-10-03T13:00:00.000Z' };
+        // The launch that left these records enabled the development channel, so an idle wake
+        // reaches the seat: the resumed route is this dispatch's own push.
+        seats[seat] = {
+          stage: 'ready',
+          last_active: '2026-10-03T13:00:00.000Z',
+          cli: 'claude-code',
+          launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+        };
       }
     });
     writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');

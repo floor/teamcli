@@ -27,6 +27,7 @@ import { declaredModel } from '../file/model.ts';
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
+import { declaredDeliveryClass } from '../launch/delivery-class.ts';
 import {
   agentList,
   agentStatus,
@@ -1923,7 +1924,14 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // returned: the refusal's words, the live file that counted, the fold. It printed where the
   // gate is used, so it is one more warning line beside the caller's, never wrapped again.
   const gateApproval = gates?.approval ?? null;
-  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval])];
+  // A lead or reviewer is asked to answer between its turns; a seat whose CLI's profile says
+  // nothing can wake it while it is idle is never given time-bound work. The file's own word is
+  // all there is to read here: this run is launching the seat, and nothing is installed yet.
+  const deliveryWarnings = team.seats
+    .filter((seat) => isLeadSeat(team, seat.name) || seat.role === 'reviewer')
+    .filter((seat) => declaredDeliveryClass(seat.cli) === 'none')
+    .map((seat) => `${seat.name} is a ${isLeadSeat(team, seat.name) ? 'lead' : 'reviewer'} seat and ${seat.cli} cannot be woken while it is idle; time-bound work is never dispatched to it`);
+  const warnings: string[] = [...(folded ? [folded] : []), ...(gateApproval === null ? [] : [gateApproval]), ...deliveryWarnings];
   // The audit line each fold owes: written where the gate is used, on a real run, whether a
   // later refusal stops the start or it goes on. A dry run decides nothing and logs none.
   if (!dry) {

@@ -3,9 +3,11 @@
 // (`idleWorkReport`) once per pass and never picks, claims or leases on its own, so the watch
 // cannot disagree with `status` about who is idle or what is takeable. One attempt is spent per
 // seat per idle episode, refusals included; the episode ends only when a later reading no longer
-// counts the seat. The old typed work nudge is suppressed for every episode this dispatcher
-// owns, whether or not a direct route is wired: a seat the dispatcher cannot reach is told
-// nothing rather than typed at by a second path.
+// counts the seat. A seat whose class cannot be woken while it is idle — pull-on-turn, or
+// nothing at all — is spent no attempt: the work push would be a wake that never lands, so the
+// seat is left to read its queue at its next turn. The old typed work nudge is suppressed for
+// every episode this dispatcher owns, whether or not a direct route is wired: a seat the
+// dispatcher cannot reach is told nothing rather than typed at by a second path.
 //
 // The spend is durable: the episode's identity is the seat's persisted `last_active`, and the
 // claim that spends its one attempt lives in the session's state record (src/watch/claim.ts).
@@ -23,6 +25,7 @@ import { writeRuntimeMailboxRecord } from '../bus/owner.ts';
 import { readEntityOrchestrator } from '../bus/seats.ts';
 import type { DirectSendResult } from '../commands/send.ts';
 import type { BrokerWorkSnapshot, IdleWorkInput, IdleWorkReport } from '../idle_work.ts';
+import { seatDeliveryClass, wakeableWhileIdle } from '../launch/delivery-class.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { liveLeases } from '../tasks/lease.ts';
 import { fileSourceOf } from '../tasks/queue.ts';
@@ -166,6 +169,22 @@ function scopeOf(input: IdleWorkInput): string {
   return `${input.root}${SEP}${input.team.session}`;
 }
 
+/** One seat's effective class this pass, read from the records already in hand: the team file's
+ *  row for its launch line, and the session's runtime record for what the launch actually left.
+ *  A seat the pass holds no record for falls to the class its file row declares. */
+function deliveryClassOf(input: IdleDispatchInput, seat: string) {
+  const declared = input.team.seats.find((one) => one.name === seat);
+  const state = input.state.seats[seat];
+  return seatDeliveryClass({
+    dir: input.dir,
+    root: input.root,
+    session: input.team.session,
+    seat,
+    ...(declared === undefined ? {} : { declared }),
+    ...(state === undefined ? {} : { state }),
+  }).class;
+}
+
 /** Test and restart seam: forget every in-process memory — the empty-source notice ledger and
  *  the settles a held lock still owes. The durable claims are deliberately not forgotten: a
  *  restart re-reads them from the state file, which is the point of the record. */
@@ -286,6 +305,10 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
       }
       // A readable claim of an earlier episode falls through to capture, which replaces it.
     }
+    // A seat nothing can wake while it is idle is spent no attempt: the push would be a wake
+    // that never lands and the episode's one attempt would be gone with it. A claim of this
+    // episode was followed above, so a wake already sent is still settled and announced.
+    if (!wakeableWhileIdle(deliveryClassOf(input, seat))) continue;
     const captured = captureIdleClaim(input.dir, {
       session: input.team.session,
       seat,

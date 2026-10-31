@@ -43,6 +43,8 @@ const RULE = '─'.repeat(40);
 const STATUS = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
 const IDLE_SCREEN = `● Done.\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
 const WIN = '5.5';
+// The worker's launch enables the development channel, so an idle wake reaches it.
+const PUSH_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
 
 // The crew names its entity, so the main orchestrator is mapped from the registry; it declares
 // no `tasks:` block, so its queue is the local `.agents/queue.yaml`.
@@ -75,7 +77,7 @@ seats:
     vendor: anthropic
     model: Claude Opus
     version: "${WIN}"
-    launch: claude
+    launch: ${PUSH_LAUNCH}
 `;
 
 // The entity's own team: its coordinator is the main orchestrator the dispatcher maps, and its

@@ -94,7 +94,11 @@ seats:
 }
 
 function setup(): void {
-  const text = teamText();
+  writeTeam(teamText());
+}
+
+/** The file and the approval the owner's `team approve` leaves for exactly this text. */
+function writeTeam(text: string): void {
   writeFileSync(join(dir, 'team.yaml'), text);
   const loaded = loadTeamFile(root, { file: join(dir, 'team.yaml'), home });
   if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
@@ -532,4 +536,47 @@ test('a live conversation the records do not bind is not taken for the seat', as
   const sessions = readStoreSessions(sessionsPath(team, root, home), home);
   if (!sessions.ok) throw new Error(sessions.reason);
   expect(sessions.sessions.filter((one) => one.seat === WORKER)).toEqual([]);
+});
+
+test('a reviewer seat whose CLI cannot be woken while it is idle is warned about, and the plan still prints', async () => {
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    cli: jules
+    vendor: google
+    model: Gemini Pro
+    version: "4.0"
+    launch: jules
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const dry = testIo(root, { kind: 'owner' });
+  expect(await runUp(['--dry-run'], dry, made.sources)).toBe(0);
+  expect(dry.out).toContain(
+    '! checker is a reviewer seat and jules cannot be woken while it is idle; time-bound work is never dispatched to it\n',
+  );
+  // The warning does not stand in for the plan: the kept seat still prints its line.
+  expect(dry.out).toContain(`  skip ${WORKER}: already ready; left as it is`);
+});
+
+test('a real run says the same warning on its stderr, and still starts the team', async () => {
+  const reviewer = `  - role: reviewer
+    name: checker
+    label: checker
+    human: true
+    cli: jules
+    vendor: google
+    model: Gemini Pro
+    version: "4.0"
+    launch: jules
+`;
+  writeTeam(`${teamText()}${reviewer}`);
+  recordValid();
+  const made = makeWorld({ screen: IDLE_A });
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources)).toBe(0);
+  expect(io.err).toContain(
+    'team up: checker is a reviewer seat and jules cannot be woken while it is idle; time-bound work is never dispatched to it\n',
+  );
 });

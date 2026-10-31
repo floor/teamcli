@@ -1044,7 +1044,16 @@ describe('production watch wiring, assigned-work gate, and screen verification',
       format: 1,
       sessions: {
         'acme-dev': {
-          seats: { 'worker-1': { stage: 'ready', last_active: new Date(clock - 600_000).toISOString() } },
+          // The worker's launch enabled the development channel: the idle wake reaches it, and
+          // the dispatcher's direct route is the one automatic work request this scene counts.
+          seats: {
+            'worker-1': {
+              stage: 'ready',
+              last_active: new Date(clock - 600_000).toISOString(),
+              cli: 'claude-code',
+              launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+            },
+          },
           worktrees: {},
         },
       },

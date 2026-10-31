@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
 import { runNext } from '../../src/commands/next.ts';
-import { emptySession, updateState } from '../../src/state.ts';
+import { emptySession, readState, updateState } from '../../src/state.ts';
 import { fileAdapter } from '../../src/tasks/file.ts';
 import { LEASE_MS } from '../../src/tasks/lease.ts';
 import type { TaskAdapter } from '../../src/tasks/adapter.ts';
@@ -52,8 +52,15 @@ seats:
 
 const ONE = '- id: m1\n  title: one\n';
 const TWO = '- id: m1\n  title: one\n- id: m2\n  title: two\n';
+const TIMED = '- id: m1\n  title: one\n  deadline: 2026-12-31T00:00:00Z\n- id: m2\n  title: two\n';
 
 const lead: Caller = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' };
+/** The caller a seat's own pane makes: the pane the fixture's state records for it. */
+function callerOf(seat: string): Extract<Caller, { kind: 'seat' }> {
+  const record = readState(join(root, '.agents')).sessions.acme?.seats[seat];
+  if (record?.pane === undefined) throw new Error(`the fixture records no pane for seat ${seat}`);
+  return { kind: 'seat', name: seat, pane: record.pane, session: 'acme' };
+}
 const CTX = 'team acme, session "acme"\n';
 const now = Date.parse('2026-10-08T09:00:00.000Z');
 
@@ -158,6 +165,41 @@ describe('team next with a reservation store injected', () => {
     expect(answer).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
     expect(leaseExists('m1')).toBe(false);
     expect(holdOf(store)).toBeUndefined();
+  });
+
+  test('a seat nothing can wake while it is idle takes the ordinary work, and the time-bound item is never held', async () => {
+    ready(TIMED);
+    const store = new StandInStore();
+    // The worker's launch installs no wake adapter, so an idle worker is pull-on-turn: the
+    // time-bound record would fall due between its turns, and the ordinary one stays open.
+    const caller = callerOf('worker');
+    const io = testIo(root, caller);
+    const code = await runNext([], io, { home, now: () => now, reservations: store });
+    expect({ code, out: io.out, err: io.err }).toEqual({ code: 0, out: `${CTX}m2  two\nteam next: claimed m2\n`, err: '' });
+    expect(holdOf(store, 'm2')).toMatchObject({ kind: 'next-claim', owner: `next:worker:${caller.pane}`, seat: 'worker' });
+    // The time-bound item was never offered, so the store was never asked to hold it.
+    expect(holdOf(store, 'm1')).toBeUndefined();
+    expect(leaseExists('m1')).toBe(false);
+    expect(leaseExists('m2')).toBe(true);
+  });
+
+  test('a seat a wake reaches while it is idle takes the time-bound item, hold first', async () => {
+    ready(TIMED);
+    updateState(join(root, '.agents'), (state) => {
+      const seats = state.sessions.acme!.seats;
+      seats.worker = {
+        ...seats.worker!,
+        cli: 'claude-code',
+        launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+      };
+    });
+    const store = new StandInStore();
+    const caller = callerOf('worker');
+    const io = testIo(root, caller);
+    const code = await runNext([], io, { home, now: () => now, reservations: store });
+    expect({ code, out: io.out, err: io.err }).toEqual({ code: 0, out: `${CTX}m1  one\n  deadline: 2026-12-31T00:00:00Z\nteam next: claimed m1\n`, err: '' });
+    expect(holdOf(store, 'm1')).toMatchObject({ kind: 'next-claim', owner: `next:worker:${caller.pane}` });
+    expect(holdOf(store, 'm2')).toBeUndefined();
   });
 
   test('a lapsed hold does not exclude its item, and the claim replaces it', async () => {

@@ -299,6 +299,37 @@ describe('team next', () => {
     expect((await run()).out).toBe(`${CTX}b  second\nteam next: claimed b\n`);
   });
 
+  test('a seat nothing can wake while it is idle is offered no time-bound record', async () => {
+    const queue = '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n- id: plain\n  title: the ordinary title\n';
+    ready(WITH_BOTH, queue);
+    // The worker's launch installs no wake adapter, so an idle worker is pull-on-turn: the
+    // time-bound record would fall due between its turns, and the ordinary one stays open.
+    expect(await run([], worker)).toEqual({
+      code: 0,
+      out: `${CTX}plain  the ordinary title\nteam next: claimed plain\n`,
+      err: '',
+    });
+    // With only the time-bound record left, the same seat is offered nothing at all.
+    ready(WITH_BOTH, '- id: urgent\n  title: the time-bound title\n  deadline: 2026-12-31T00:00:00Z\n');
+    expect(await run([], worker)).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });
+    expect(leaseNames()).toEqual([]);
+
+    // Control: the same queue, with the worker launched with the development channel on its
+    // line — a seat a wake reaches while it is idle — offers the time-bound record first.
+    ready(WITH_BOTH, queue);
+    updateState(join(root, '.agents'), (state) => {
+      const seats = state.sessions.acme!.seats;
+      seats.worker = {
+        ...seats.worker!,
+        cli: 'claude-code',
+        launch_line: 'claude --dangerously-load-development-channels server:team-inbox',
+      };
+    });
+    expect((await run([], worker)).out).toBe(
+      `${CTX}urgent  the time-bound title\n  deadline: 2026-12-31T00:00:00Z\nteam next: claimed urgent\n`,
+    );
+  });
+
   test('a non-empty blocked-by, repos, or needs is not taken, and an empty list is', async () => {
     ready(WITH, '- id: m1\n  title: the task title\n  blocked-by: [m0]\n');
     expect(await run()).toEqual({ code: 0, out: `${CTX}team next: nothing is takeable\n`, err: '' });

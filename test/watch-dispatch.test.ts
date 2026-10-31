@@ -46,7 +46,10 @@ const busy = `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${RULE}\n❯ 
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 
 // A crew whose entity is named, so the main orchestrator can be mapped from a registry. No
-// `tasks:` block: the local queue is the source, as it is for a team that declares none.
+// `tasks:` block: the local queue is the source, as it is for a team that declares none. The
+// workers carry the development channel on their launch lines: the dispatcher spends no attempt
+// on a seat nothing can wake while it is idle, so the seats it pushes model a push-class seat.
+const PUSH_LAUNCH = 'claude --dangerously-load-development-channels server:team-inbox';
 const CREW = `format: 1
 project: acme-web
 entity: acme
@@ -76,15 +79,25 @@ seats:
     vendor: anthropic
     model: Claude Opus
     version: "${WIN}"
-    launch: claude
+    launch: ${PUSH_LAUNCH}
   - role: worker
     name: worker-2
     cli: claude-code
     vendor: anthropic
     model: Claude Opus
     version: "${WIN}"
-    launch: claude
+    launch: ${PUSH_LAUNCH}
 `;
+
+/** The same crew with a plain launch line: a Claude seat with no event adapter is pull-on-turn,
+ *  the class the dispatcher spends no attempt on. */
+const PULL_CREW = CREW.replaceAll(PUSH_LAUNCH, 'claude');
+
+/** One worker wakeable, the other not: the mixed reading the skip must not apply to the whole. */
+const MIXED_CREW = CREW.replace(
+  `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: ${PUSH_LAUNCH}`,
+  `name: worker-2\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "${WIN}"\n    launch: claude`,
+);
 
 function teamOf(text: string): TeamFile {
   const result = validateTeamFile(text);
@@ -371,6 +384,46 @@ describe('a route that is absent or unmappable', () => {
     expect(result.fallback?.written).toHaveLength(1);
     expect(result.fallback?.missing).toEqual([]);
     expect(recordsIn(join(root, '.agents', 'messages', 'crew-lead'))).toHaveLength(1);
+  });
+});
+
+describe('a seat nothing can wake while it is idle', () => {
+  test('is spent no attempt: no push, no claim, and the typed nudge stays suppressed', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    const result = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW) }));
+    expect(calls).toEqual([]);
+    expect(result.pushed).toEqual([]);
+    expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
+    expect(result.fallback).toBeUndefined();
+    // The episode keeps no claim: the attempt was never spent, so nothing is owed a notice.
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-1')).toBeUndefined();
+    expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
+    // A later pass reads the same class and still spends nothing.
+    const later = await dispatchIdleWork(input({ push, team: teamOf(PULL_CREW), now: new Date(NOW + MIN) }));
+    expect(later.pushed).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  test('the skip is per seat: a wakeable seat beside it is still pushed', async () => {
+    queue([{ id: 't1', title: 'First' }]);
+    const calls: WorkPushRequest[] = [];
+    const push: WorkPush = async (request) => {
+      calls.push(request);
+      return { ok: true, outcome: 'delivered' };
+    };
+    const result = await dispatchIdleWork(input({ push, team: teamOf(MIXED_CREW) }));
+    expect(calls.map((one) => one.seat)).toEqual(['worker-1']);
+    expect(result.pushed).toEqual([{ seat: 'worker-1', ok: true, outcome: 'delivered' }]);
+    expect(result.suppressed?.sort()).toEqual(['worker-1', 'worker-2']);
+    const state = readState(join(root, '.agents')).sessions.crew ?? emptySession();
+    expect(idleClaimOf(state, 'worker-1')).toBeDefined();
+    expect(idleClaimOf(state, 'worker-2')).toBeUndefined();
   });
 });
 
@@ -876,13 +929,16 @@ describe('the watch seam', () => {
     writeFileSync(file, raw.replace('watch:\n', 'watch:\n  nudge: Take the next unfinished item in your queue and start it.\n'));
     writeFileSync(join(dir, '.agents', 'queue.yaml'), '- id: t1\n  title: "First"\n');
     const old = new Date(Date.parse('2026-10-03T13:00:00Z')).toISOString();
+    // The launch record says what the launcher ran: both seats carry the development channel, so
+    // the dispatcher reads them as push-class seats and spends its one attempt on each.
+    const launched = { launch_line: PUSH_LAUNCH, cli: 'claude-code' };
     writeFileSync(join(dir, '.agents', 'team.state.json'), `${JSON.stringify({
       format: 1,
       sessions: {
         'acme-web': {
           seats: {
-            'deepseek-acme': { stage: 'ready', last_active: old },
-            'deepseek-acme-2': { stage: 'ready', last_active: old },
+            'deepseek-acme': { stage: 'ready', last_active: old, ...launched },
+            'deepseek-acme-2': { stage: 'ready', last_active: old, ...launched },
           },
           worktrees: {},
         },

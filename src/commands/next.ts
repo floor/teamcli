@@ -24,6 +24,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { DaemonNextInput, DaemonNextOutcome } from '../daemon/next-client.ts';
 import type { Command, Io } from '../io.ts';
+import { seatDeliveryClass, wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import { plainText } from '../launch/plain.ts';
 import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import type { TaskAdapter, TaskRecord, TaskRefusal } from '../tasks/adapter.ts';
@@ -221,6 +222,18 @@ async function pass(
   // and `team status` print for the record.
   const placed = place(loaded.team, loaded.root, io);
   if (placed.kind === 'refused') return callerRefuse(io, placed.message, emit.json);
+  // The seat's delivery class, read from its launch records: a class nothing can wake while the
+  // seat is idle is offered no time-bound record, because the deadline falls between its turns.
+  const declaredSeat = loaded.team.seats.find((seat) => seat.name === placed.seat);
+  const stateSeat = state?.sessions[loaded.team.session]?.seats[placed.seat];
+  const delivery = seatDeliveryClass({
+    dir: dirname(loaded.path),
+    root: loaded.root,
+    session: loaded.team.session,
+    seat: placed.seat,
+    ...(declaredSeat === undefined ? {} : { declared: declaredSeat }),
+    ...(stateSeat === undefined ? {} : { state: stateSeat }),
+  }).class;
   // The seat's own pause: `team pause <seat>` stops this seat alone, while the rest of the team
   // keeps claiming. It is read after the seat is placed, because the record is keyed by the
   // seat's name, and `--release` has already skipped the state read above.
@@ -238,7 +251,7 @@ async function pass(
   if (sources.daemonNext !== undefined) {
     return nextViaDaemon(io, loaded, sources.daemonNext, mine, release, speak, emit, hold, placed);
   }
-  if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold, placed);
+  if (tasks.source === 'linear') return nextFromBroker(io, loaded, tasks, sources, mine, release, speak, emit, hold, placed, delivery);
   const registry = sources.registry ?? fileRegistry;
   const adapter = registry[tasks.source];
   if (!adapter) return file(io, 'tasks.source must be file', emit.json);
@@ -271,7 +284,7 @@ async function pass(
     ? (record: TaskRecord) =>
         claimFn({ root: loaded.root, path: tasks.path, record, seat: placed.seat, pane: placed.pane, now: at }).kind === 'held'
     : undefined;
-  return take(io, loaded.root, read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, claim, speak, emit, hold, sources.reservations, identity);
+  return take(io, loaded.root, read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, claim, speak, emit, hold, sources.reservations, identity, delivery);
 }
 
 /**
@@ -291,6 +304,7 @@ async function nextFromBroker(
   emit: Emit,
   hold: Hold | undefined,
   placed: { seat: string; pane: string },
+  delivery: DeliveryClass,
 ): Promise<number> {
   const now = sources.now ?? Date.now;
   const at = now();
@@ -321,7 +335,7 @@ async function nextFromBroker(
   // A notice about the read is for a person reading the table; a `--json` run's stderr stays
   // empty, the document on stdout being the whole answer.
   if (outcome.notice !== undefined && !emit.json) io.stderr(`team next: ${outcome.notice}\n`);
-  return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, emit, hold, sources.reservations, identity);
+  return take(io, loaded.root, outcome.read, placed, tasks.pull ?? 'self', tasks.fallback ?? 'file', mine, at, undefined, speak, emit, hold, sources.reservations, identity, delivery);
 }
 
 /** The daemon proxy's transport failures. The source being unavailable keeps the command's
@@ -421,6 +435,10 @@ function swapAnswer(io: Io, message: string, hint: string | null, json: boolean)
  * exclusion and the claim takes the store's hold before the lease (or before the adapter's
  * claim). A hold the store refuses skips the candidate; nothing is leased or dispatched from it.
  * A wait's re-pass runs this whole take again, so an item released between passes can be taken.
+ *
+ * A seat whose class cannot be woken while it is idle is offered no time-bound record — the
+ * deadline would fall between its turns with nothing to reach it — while the ordinary work in
+ * the same queue stays open to it.
  */
 async function take(
   io: Io,
@@ -437,9 +455,13 @@ async function take(
   hold: Hold | undefined,
   reservations: ReservationStore | undefined,
   identity: NextHoldBase,
+  delivery: DeliveryClass,
 ): Promise<number> {
   const known = new Map(read.records.map((record) => [record.id, record]));
-  const candidates = order(takeable(read.records, placed.seat, pull, mine), fallback);
+  const ordered = order(takeable(read.records, placed.seat, pull, mine), fallback);
+  const candidates = wakeableWhileIdle(delivery)
+    ? ordered
+    : ordered.filter((record) => record.deadline === undefined);
   const open = reservations === undefined ? candidates : openCandidates(reservations, identity, candidates, at);
   let outcome: { kind: 'held'; record: TaskRecord } | { kind: 'none' } | { kind: 'kept' };
   if (claim) {
@@ -463,7 +485,7 @@ async function take(
     }
     outcome = held ? { kind: 'held', record: held } : { kind: 'none' };
   } else if (reservations !== undefined) {
-    outcome = takeUnderHolds(root, known, open, { store: reservations, base: identity, seat: placed.seat, pane: placed.pane, now: at });
+    outcome = takeUnderHolds(root, known, open, { store: reservations, base: identity, seat: placed.seat, pane: placed.pane, now: at, delivery });
   } else {
     outcome = claimLocal(root, { now: at, seat: placed.seat, pane: placed.pane, known, candidates });
   }

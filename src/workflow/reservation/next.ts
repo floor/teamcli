@@ -6,6 +6,7 @@
 //
 // The adapter-claim path (a tracker-side claim) has no local lease to follow, so its hold is
 // written around the adapter's claim instead, in the command; this file is only the lease path.
+import { wakeableWhileIdle, type DeliveryClass } from '../../launch/delivery-class.ts';
 import { claimLocal, LEASE_MS, liveLeaseOf } from '../../tasks/lease.ts';
 import type { TaskRecord } from '../../tasks/adapter.ts';
 import { claimNext, excludedItems, releaseNextClaim, renewNextClaim } from './ops.ts';
@@ -20,6 +21,9 @@ export type NextHold = {
   seat: string;
   pane: string;
   now: number;
+  /** The seat's measured delivery class. A class nothing can wake while the seat is idle is
+   *  offered no time-bound record, so the store's hold is never written for one. */
+  delivery: DeliveryClass;
 };
 
 export type NextClaimOutcome = { kind: 'held'; record: TaskRecord } | { kind: 'none' } | { kind: 'kept' };
@@ -29,6 +33,10 @@ export type NextClaimOutcome = { kind: 'held'; record: TaskRecord } | { kind: 'n
  * and its claim with it: the store's deadline and the lease's `until` are the same instant. A new
  * claim tries each candidate in order, hold first, lease second; a candidate whose hold is
  * refused is skipped, and a lease that cannot be written releases the hold it just took.
+ *
+ * Time-bound work is never assigned to a seat whose class cannot be woken while the seat is
+ * idle: the deadline falls between its turns and nothing would reach it. Such a seat is still
+ * offered the ordinary work in the same queue.
  */
 export function takeUnderHolds(
   root: string,
@@ -36,9 +44,12 @@ export function takeUnderHolds(
   candidates: readonly TaskRecord[],
   input: NextHold,
 ): NextClaimOutcome {
-  const { store, base, seat, pane, now } = input;
+  const { store, base, seat, pane, now, delivery } = input;
   const expiresAt = now + LEASE_MS;
   const itemOf = (id: string): ItemIdentity => ({ ...base, id });
+  const offered = wakeableWhileIdle(delivery)
+    ? candidates
+    : candidates.filter((record) => record.deadline === undefined);
 
   const live = liveLeaseOf(root, seat, now);
   if (live !== null) {
@@ -48,7 +59,7 @@ export function takeUnderHolds(
     return renewed;
   }
 
-  for (const record of candidates) {
+  for (const record of offered) {
     const item = itemOf(record.id);
     const claimed = claimNext(store, { item, seat, pane, now, expiresAt });
     if (claimed.kind === 'refused') continue;

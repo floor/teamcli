@@ -17,6 +17,7 @@ import { DEADLINE, NOT_RUNNING, WRONG_ANSWER, type BrokerOutcome } from '../brok
 import type { BrokerRequest } from '../broker/protocol.ts';
 import { anotherPaneRefusal, callerVerdict, noPaneRefusal, standingOf, type Caller } from '../caller.ts';
 import type { TeamFile } from '../file/types.ts';
+import { seatDeliveryClass, wakeableWhileIdle, type DeliveryClass } from '../launch/delivery-class.ts';
 import { plainText } from '../launch/plain.ts';
 import { pauseText, readState, type State } from '../state.ts';
 import { queuedSwap, swapLine } from '../swap/queue.ts';
@@ -139,8 +140,20 @@ export async function handleNext(input: NextHandlerInput, deps: NextHandlerDeps 
       );
     }
   }
+  // The seat's delivery class, read from its launch records: a class nothing can wake while the
+  // seat is idle is offered no time-bound record, because the deadline falls between its turns.
+  const declaredSeat = team.seats.find((seat) => seat.name === caller.seat);
+  const stateSeat = state?.sessions[route.session]?.seats[caller.seat];
+  const delivery = seatDeliveryClass({
+    dir: join(route.root, '.agents'),
+    root: route.root,
+    session: route.session,
+    seat: caller.seat,
+    ...(declaredSeat === undefined ? {} : { declared: declaredSeat }),
+    ...(stateSeat === undefined ? {} : { state: stateSeat }),
+  }).class;
   const tasks = team.tasks ?? LOCAL_TASKS;
-  if (tasks.source === 'linear') return nextFromBroker(input, tasks, deps);
+  if (tasks.source === 'linear') return nextFromBroker(input, tasks, deps, delivery);
   const registry = deps.registry ?? fileRegistry;
   const adapter = registry[tasks.source];
   if (!adapter) return refuse('next.file', 'tasks.source must be file');
@@ -167,7 +180,7 @@ export async function handleNext(input: NextHandlerInput, deps: NextHandlerDeps 
     ? undefined
     : (record: TaskRecord) =>
         claimFn({ root: route.root, path: tasks.path, record, seat: caller.seat, pane: caller.pane, now }).kind === 'held';
-  return take(input, tasks, read, claim, deps.reservations, identity);
+  return take(input, tasks, read, claim, deps.reservations, identity, delivery);
 }
 
 /**
@@ -179,6 +192,7 @@ async function nextFromBroker(
   input: NextHandlerInput,
   tasks: NonNullable<TeamFile['tasks']>,
   deps: NextHandlerDeps,
+  delivery: DeliveryClass,
 ): Promise<NextAnswer> {
   const { route, caller, now } = input;
   const identity: NextHoldBase = { source: tasks.source, project: input.team.project, team: input.team.session };
@@ -207,7 +221,7 @@ async function nextFromBroker(
   // This build's broker answers records for a tracker source; any other read kind is an answer
   // the caller fails safe on, exactly like an unparseable line.
   if (outcome.read.kind !== 'records') return refuse('next.broker', WRONG_ANSWER);
-  const answer = take(input, tasks, outcome.read, undefined, deps.reservations, identity);
+  const answer = take(input, tasks, outcome.read, undefined, deps.reservations, identity, delivery);
   return outcome.notice === undefined ? answer : { ...answer, notice: outcome.notice };
 }
 
@@ -221,6 +235,10 @@ async function nextFromBroker(
  * exclusion and the store's hold is taken before the lease (or before the adapter's claim), so a
  * `next` claim and a dispatch reservation exclude each other in both directions. A hold the
  * store refuses skips the candidate; nothing is leased or claimed from it.
+ *
+ * A seat whose class cannot be woken while it is idle is offered no time-bound record: the
+ * deadline falls between its turns with nothing to reach it. The ordinary work in the same queue
+ * stays open to it.
  */
 function take(
   input: NextHandlerInput,
@@ -229,10 +247,14 @@ function take(
   claim: ((record: TaskRecord) => boolean) | undefined,
   reservations: ReservationStore | undefined,
   identity: NextHoldBase,
+  delivery: DeliveryClass,
 ): NextAnswer {
   const { route, caller, now } = input;
   const known = new Map(read.records.map((record) => [record.id, record]));
-  const candidates = order(takeable(read.records, caller.seat, tasks.pull ?? 'self', input.mine), tasks.fallback ?? 'file');
+  const ordered = order(takeable(read.records, caller.seat, tasks.pull ?? 'self', input.mine), tasks.fallback ?? 'file');
+  const candidates = wakeableWhileIdle(delivery)
+    ? ordered
+    : ordered.filter((record) => record.deadline === undefined);
   const open = reservations === undefined ? candidates : openCandidates(reservations, identity, candidates, now);
   let outcome: { kind: 'held'; record: TaskRecord } | { kind: 'none' } | { kind: 'kept' };
   if (claim) {
@@ -256,7 +278,7 @@ function take(
     }
     outcome = held ? { kind: 'held', record: held } : { kind: 'none' };
   } else if (reservations !== undefined) {
-    outcome = takeUnderHolds(route.root, known, open, { store: reservations, base: identity, seat: caller.seat, pane: caller.pane, now });
+    outcome = takeUnderHolds(route.root, known, open, { store: reservations, base: identity, seat: caller.seat, pane: caller.pane, now, delivery });
   } else {
     outcome = claimLocal(route.root, { now, seat: caller.seat, pane: caller.pane, known, candidates });
   }

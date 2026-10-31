@@ -311,16 +311,22 @@ function workerRuntime(target: { seat: string; pane: string } = { seat: SEAT, pa
   return { pump, claims, wake };
 }
 
-/** The worker's session accepts cross-session frames and exposes a socket for its pane: the direct
- *  route a push is allowed to take. The declaration file is backdated so the socket is newer than
- *  it, as a session launched after its accept declaration would be. */
-function directRoute(target: string = SEAT): void {
+/** The worker's session declares that it takes cross-session frames: the class a push may wake.
+ *  The declaration file is backdated so a socket the session exposes after it is newer, as a
+ *  session launched after its accept declaration would be. */
+function declareAccept(target: string = SEAT): void {
   const settings = cliHookSettingsPath(join(root, '.agents'), SESSION, target);
   if (settings === null) throw new Error(`${target}: no settings path for the fixture`);
   mkdirSync(dirname(settings), { recursive: true });
   writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
   const past = new Date(Date.now() - 60_000);
   utimesSync(settings, past, past);
+}
+
+/** The worker's session accepts cross-session frames and exposes a socket for its pane: the direct
+ *  route a push is allowed to take. */
+function directRoute(target: string = SEAT): void {
+  declareAccept(target);
   writeFileSync(join(sockets, '222.sock'), '');
 }
 
@@ -700,10 +706,12 @@ describe('the watch gives an idle worker its queued work', () => {
   });
 
   test('a receiver with no direct route gets one refusal, and nothing is typed or claimed', async () => {
-    // The worker exposes no socket for its pane: no direct leg can take the push. The watch
-    // attempts it once and the attempt is refused before any typed fallback. The admitted send
+    // The worker exposes no socket for its pane: no direct leg can take the push. Its session
+    // still accepts cross-session frames, so the seat is one a wake reaches and the dispatch
+    // makes the attempt; the attempt is refused before any typed fallback. The admitted send
     // still leaves its durable signed copy before any attempt, and that copy alone wakes nothing:
     // nothing is typed into the pane and no lease is taken.
+    declareAccept();
     const io = testIo(root, { kind: 'owner' });
     const runtime = workerRuntime();
     const sent = pushViaSend({ direct: false, onDeliver: runtime.wake });
