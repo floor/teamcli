@@ -152,11 +152,14 @@ the attempt is refused before the pane, the marker stays, and thirty minutes aft
 given up with `the retry window passed`. Ten minutes is the window
 the native leg allows for a confirmation, so a live inbox never delays a message longer than the
 frame path does. The `native` leg is a call the sender's own process makes or the receiving
-seat's own runtime queue, never a frame this walk writes: a Codex receiver's queue takes the send
-while its `codex-daemon` policy is on, and a walk from the owner, or from a sender whose own file
-does not declare `cli: claude-code`, records the leg `unavailable`; a sender whose own file does
-declare it gets [the native handoff](#the-native-channel) instead — one pending record, the exact
-target, the body and the `--confirm` line — and makes the call itself. The typed leg is never
+seat's own runtime queue, never a frame this walk writes. A Codex receiver's queue takes the send
+only when its `codex-daemon` policy is on, a trusted runtime session is bound to the seat, and
+the queue answers the bounded live readiness probe — the policy alone does not admit it. For a
+Claude receiver, a walk from the owner, or from a sender whose own file does not declare
+`cli: claude-code`, records the leg `unavailable`; a sender whose own file does declare it gets
+[the native handoff](#the-native-channel) instead — one pending record, the exact target, the
+body and the `--confirm` line — and makes the call itself.
+The typed leg is never
 walked in this build: `TYPING_LEGS` names it, the walk filters it out before any leg runs, and
 the trigger line is built but never typed. Where a declared order put `typed`, the seat's own
 event adapters stand in its place, and a send no adapter takes ends at the drop leg with the
