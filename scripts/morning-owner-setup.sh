@@ -1,5 +1,5 @@
 #!/bin/sh
-# The morning owner setup, run by an agent (Iris). The owner types nothing: the owner's acts are
+# The morning owner setup, run by an agent (the orchestrator). The owner types nothing: the owner's acts are
 # the native prompts this script triggers on the owner's own Mac.
 #
 #   1. build the owner-seat helper (ad-hoc; with --identity it is codesigned: macOS keychain "Allow")
@@ -8,8 +8,8 @@
 #   3. register the owner seat (Secure Enclave key; Touch ID confirms it)
 #   4. set the entity's owner-signers and grant-emission policies
 #   5. for each target, team grant --client grok-bot … --inbox --request: send AND messages, so the
-#      target's orchestrator can `team reply` and Iris reads it with `team messages --client`.
-#      One grant binds one entity and one team, so floor (Atlas) and teamcli (Agamemnon) are two.
+#      target's orchestrator can `team reply` and the orchestrator reads it with `team messages --client`.
+#      One grant binds one entity and one team, so floor (Reviewer) and teamcli (Coordinator) are two.
 #   6. the owner seat answers always (Touch ID, once per target) and the script runs --execute; a
 #      re-run renews each grant through its standing rule with no prompt
 #
@@ -20,7 +20,7 @@
 #        [--answer always|oui] [--test-signer] [--dev-mode] [--replace-global] [--set-policies] [--dry-run]
 #
 # --targets      comma list of <entity>/<team> the grant goes to (default floor/floor,teamcli/teamcli:
-#                orchestrator@floor is Atlas, orchestrator@teamcli is Agamemnon)
+#                orchestrator@floor is Reviewer, orchestrator@teamcli is Coordinator)
 # --answer       the owner seat's answer to the grant request (default always: a standing, owner-signed
 #                rule, so the weekly renewal of this same grant needs no Touch ID; oui is single-use)
 #

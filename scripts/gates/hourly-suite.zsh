@@ -1,6 +1,6 @@
 #!/bin/zsh
 # hourly-suite.zsh — one full suite on the integration tip, at most once an hour, while a
-# round is open (owner-approved structural change, Dr Jones 2026-10-17 ~09:00).
+# round is open (owner-approved structural change, owner 2026-10-17 ~09:00).
 #
 # An operator seat runs it in its OWN pane, as a loop — never a detached background loop:
 #     zsh scripts/gates/hourly-suite.zsh --loop
@@ -74,7 +74,7 @@ release_locks() {
   fi
   heavy_slot=""; hourly_lock=""
 }
-# A lock whose owner pid is gone is reclaimed, never waited on (Atlas, 2026-10-17: a light slot
+# A lock whose owner pid is gone is reclaimed, never waited on (Reviewer, 2026-10-17: a light slot
 # sat four hours under a dead pid; the same rule here for the hourly lock and the heavy slots).
 # The owner's pid is the second word of its second line — this script's `run <pid> <epoch>`
 # token, or another writer's `<holder> <pid> <epoch>` — or, failing that, of its first line. A

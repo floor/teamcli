@@ -197,8 +197,8 @@ describe('Antigravity launch and captured screens', () => {
     };
     expect(commandOf('agy', { registry: { launch: 'agy', model: 'Gemini Flash', version: '3.8', sessionId: id } }))
       .toBe(`AGENT_UNATTENDED=1 agy --conversation=${id} --dangerously-skip-permissions`);
-    expect(commandOf('zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
-      .toBe(`AGENT_UNATTENDED=1 zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions`);
+    expect(commandOf('zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro', { resume: id }))
+      .toBe(`AGENT_UNATTENDED=1 zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id} --dangerously-skip-permissions`);
     expect(commandOf('zsh -lc "agy --model gemini-3.1-pro"', { resume: id }))
       .toBe(`AGENT_UNATTENDED=1 zsh -lc "agy --model gemini-3.1-pro --conversation=${id}" --dangerously-skip-permissions`);
   });

@@ -21,7 +21,7 @@ top=$(git rev-parse --show-toplevel 2>/dev/null) || { print -u2 "light-check: no
 cd $top
 branch=$(git branch --show-current); [[ -n $branch ]] || branch="detached@$(git rev-parse --short HEAD)"
 
-# Machine-wide cap (Atlas, 2026-10-17 04:00, load ~90): at most 4 light checks at once, in the
+# Machine-wide cap (Reviewer, 2026-10-17 04:00, load ~90): at most 4 light checks at once, in the
 # light slots light-slot-{1..4}.lock (separate from the 3 heavy slots). Wait for a free slot.
 # A slot whose owner pid is gone is reclaimed, never waited on (a dead pid held one for four
 # hours); a live pid's slot is never touched. reclaim_dead_lock is gate-common.sh's.
@@ -38,7 +38,7 @@ while [[ -z $SLOT ]]; do
   done
   [[ -z $SLOT ]] && { print "light-check: all 4 light slots busy; waiting"; /bin/sleep 20; }
 done
-# A hard wall-clock limit for the whole check (Atlas, 2026-10-17): a hung check must never sit
+# A hard wall-clock limit for the whole check (Reviewer, 2026-10-17): a hung check must never sit
 # on a light slot. The setting is the whole check's wall clock, measured from the slot; at the
 # limit a watchdog kills this check's own process tree — the bun it started and that bun's
 # children, never another process — writes the TIMEOUT line, and the check exits non-zero with

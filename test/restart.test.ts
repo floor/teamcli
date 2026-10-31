@@ -1178,7 +1178,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Antigravity wrapper keeps --conversation=<id> on the forwarded launch line', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh agy --model gemini-3.8-flash';
+    const launch = 'zsh /home/owner/as-floor.sh agy --model gemini-3.8-flash';
     const { fixture, run } = seeded({
       registry: AGY_CONVERSATION,
       cli: 'antigravity',
@@ -1233,7 +1233,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Grok wrapper keeps -r <id> on the forwarded launch line', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh grok --model grok-4.7';
+    const launch = 'zsh /home/owner/as-floor.sh grok --model grok-4.7';
     const { fixture, run } = seeded({
       registry: GROK_SESSION,
       cli: 'grok',
@@ -1259,7 +1259,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
   });
 
   test('a restored Codex wrapper keeps resume <id> after the flags the seat already names', async () => {
-    const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
+    const launch = 'zsh /home/owner/as-floor.sh codex -m gpt-6.1-sol -c model_reasoning_effort=high';
     const { fixture, run } = seeded({
       registry: 'ses_codex',
       declaredCli: 'codex',
@@ -1285,7 +1285,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     // attaches the managed endpoint; codex-cli 0.161.0 refuses -a/-s on a remote resume (the
     // seat would exit to its shell), so the attached line sheds them and the thread keeps the
     // permissions it was recorded with.
-    const launch = 'zsh /Users/owner/as-floor.sh codex -m gpt-6.1-sol';
+    const launch = 'zsh /home/owner/as-floor.sh codex -m gpt-6.1-sol';
     const { fixture, run } = seeded({
       registry: 'ses_codex',
       declaredCli: 'codex',

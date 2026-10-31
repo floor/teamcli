@@ -428,8 +428,8 @@ describe('the resume line a launch appends', () => {
     expect(withResume('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_1'))
       .toBe('codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1');
     // A wrapper that forwards its arguments keeps `resume` and the id at the end of that line.
-    expect(withResume('codex', 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_1'))
-      .toBe('zsh /Users/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1');
+    expect(withResume('codex', 'zsh /home/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_1'))
+      .toBe('zsh /home/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1');
     // A quoted script is the program zsh runs: `resume` after the quotes never reaches codex.
     expect(withResume('codex', 'zsh -lc "codex -m gpt-6-sol -c model_reasoning_effort=high"', 'ses_1'))
       .toBe('zsh -lc "codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_1"');
@@ -453,8 +453,8 @@ describe('the resume line a launch appends', () => {
     expect(withResume('antigravity', 'agy --model gemini-3.1-pro', id))
       .toBe(`agy --model gemini-3.1-pro --conversation=${id}`);
     // The wrapper execs its arguments, so the flag is the launch line's last word, not a rewrite of `agy`.
-    expect(withResume('antigravity', 'zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro', id))
-      .toBe(`zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}`);
+    expect(withResume('antigravity', 'zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro', id))
+      .toBe(`zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}`);
     // A quoted script is the program zsh runs: a flag after the quotes never reaches agy.
     expect(withResume('antigravity', 'zsh -lc "agy --model gemini-3.1-pro"', id))
       .toBe(`zsh -lc "agy --model gemini-3.1-pro --conversation=${id}"`);
@@ -470,8 +470,8 @@ describe('the resume line a launch appends', () => {
     expect(supportsSessionResume('grok')).toBe(true);
     expect(withResume('grok', 'grok', id)).toBe(`grok -r ${id}`);
     expect(withResume('grok', 'grok --model grok-4.7', id)).toBe(`grok --model grok-4.7 -r ${id}`);
-    expect(withResume('grok', 'zsh /Users/owner/as-floor.sh grok --model grok-4.7', id))
-      .toBe(`zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${id}`);
+    expect(withResume('grok', 'zsh /home/owner/as-floor.sh grok --model grok-4.7', id))
+      .toBe(`zsh /home/owner/as-floor.sh grok --model grok-4.7 -r ${id}`);
     expect(withResume('grok', 'zsh -lc "grok --model grok-4.7"', id))
       .toBe(`zsh -lc "grok --model grok-4.7 -r ${id}"`);
     const profile = profileFor('grok');
@@ -482,14 +482,14 @@ describe('the resume line a launch appends', () => {
 
   test('a Grok line that already names a session keeps its own choice', () => {
     const id = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
-    for (const line of [`grok -r ${id}`, 'grok --resume other', 'grok --session-id 7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6', 'zsh /Users/owner/as-floor.sh grok -r']) {
+    for (const line of [`grok -r ${id}`, 'grok --resume other', 'grok --session-id 7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6', 'zsh /home/owner/as-floor.sh grok -r']) {
       expect(withResume('grok', line, 'ses_1')).toBeNull();
     }
   });
 
   test('an Antigravity line that already names a conversation keeps its own choice', () => {
     const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
-    for (const line of [`agy --conversation=${id}`, 'agy --conversation other', 'zsh /Users/owner/as-floor.sh agy --conversation']) {
+    for (const line of [`agy --conversation=${id}`, 'agy --conversation other', 'zsh /home/owner/as-floor.sh agy --conversation']) {
       expect(withResume('antigravity', line, 'ses_1')).toBeNull();
     }
   });
@@ -501,17 +501,17 @@ describe('a launch line that already selects a conversation', () => {
     expect(namedResumeTarget('claude-code', 'claude -r ses_9')).toBe('ses_9');
     expect(namedResumeTarget('claude-code', 'claude --resume=ses_9')).toBe('ses_9');
     expect(namedResumeTarget('codex', 'codex -m gpt-6-sol resume ses_9')).toBe('ses_9');
-    expect(namedResumeTarget('codex', 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_9')).toBe('ses_9');
+    expect(namedResumeTarget('codex', 'zsh /home/owner/as-floor.sh codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_9')).toBe('ses_9');
     expect(namedResumeTarget('codex', 'zsh -lc "codex -m gpt-6-sol resume ses_9"')).toBe('ses_9');
     const grokId = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
     expect(namedResumeTarget('grok', `grok -r ${grokId}`)).toBe(grokId);
     expect(namedResumeTarget('grok', `grok --resume ${grokId}`)).toBe(grokId);
-    expect(namedResumeTarget('grok', `zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${grokId}`)).toBe(grokId);
+    expect(namedResumeTarget('grok', `zsh /home/owner/as-floor.sh grok --model grok-4.7 -r ${grokId}`)).toBe(grokId);
     expect(namedResumeTarget('grok', `zsh -lc "grok -r ${grokId}"`)).toBe(grokId);
     const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
     expect(namedResumeTarget('antigravity', `agy --conversation=${id}`)).toBe(id);
     expect(namedResumeTarget('antigravity', `agy --conversation ${id}`)).toBe(id);
-    expect(namedResumeTarget('antigravity', `zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}`)).toBe(id);
+    expect(namedResumeTarget('antigravity', `zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}`)).toBe(id);
     expect(namedResumeTarget('antigravity', `zsh -lc "agy --conversation=${id}"`)).toBe(id);
   });
 
@@ -522,10 +522,10 @@ describe('a launch line that already selects a conversation', () => {
     for (const line of ['codex resume', 'codex resume --last', 'codex resume --all', 'zsh -lc "codex resume --last"']) {
       expect(namedResumeTarget('codex', line)).toBe('');
     }
-    for (const line of ['grok -r', 'grok --resume', 'zsh /Users/owner/as-floor.sh grok -r --model grok-4.7']) {
+    for (const line of ['grok -r', 'grok --resume', 'zsh /home/owner/as-floor.sh grok -r --model grok-4.7']) {
       expect(namedResumeTarget('grok', line)).toBe('');
     }
-    for (const line of ['agy --conversation', 'agy --conversation=', 'zsh /Users/owner/as-floor.sh agy --conversation --model x']) {
+    for (const line of ['agy --conversation', 'agy --conversation=', 'zsh /home/owner/as-floor.sh agy --conversation --model x']) {
       expect(namedResumeTarget('antigravity', line)).toBe('');
     }
   });
@@ -554,15 +554,15 @@ describe('a launch line that already selects a conversation', () => {
       .toEqual({ kind: 'refuse', why: 'its launch line resumes without naming the recorded conversation' });
     expect(resumeCarry('codex', 'codex -m gpt-6-sol -c model_reasoning_effort=high', 'ses_codex'))
       .toEqual({ kind: 'line', line: 'codex -m gpt-6-sol -c model_reasoning_effort=high resume ses_codex' });
-    expect(resumeCarry('codex', 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol', 'ses_codex'))
-      .toEqual({ kind: 'line', line: 'zsh /Users/owner/as-floor.sh codex -m gpt-6-sol resume ses_codex' });
+    expect(resumeCarry('codex', 'zsh /home/owner/as-floor.sh codex -m gpt-6-sol', 'ses_codex'))
+      .toEqual({ kind: 'line', line: 'zsh /home/owner/as-floor.sh codex -m gpt-6-sol resume ses_codex' });
     expect(resumeCarry('codex', 'zsh -lc "codex -m gpt-6-sol resume ses_codex"', 'ses_codex'))
       .toEqual({ kind: 'line', line: 'zsh -lc "codex -m gpt-6-sol resume ses_codex"' });
     const grokId = '7c2e9a14-6b0d-4f83-9a21-0d5e8c3b71a6';
     expect(resumeCarry('grok', 'grok', grokId))
       .toEqual({ kind: 'line', line: `grok -r ${grokId}` });
-    expect(resumeCarry('grok', 'zsh /Users/owner/as-floor.sh grok --model grok-4.7', grokId))
-      .toEqual({ kind: 'line', line: `zsh /Users/owner/as-floor.sh grok --model grok-4.7 -r ${grokId}` });
+    expect(resumeCarry('grok', 'zsh /home/owner/as-floor.sh grok --model grok-4.7', grokId))
+      .toEqual({ kind: 'line', line: `zsh /home/owner/as-floor.sh grok --model grok-4.7 -r ${grokId}` });
     expect(resumeCarry('grok', `zsh -lc "grok -r ${grokId}"`, grokId))
       .toEqual({ kind: 'line', line: `zsh -lc "grok -r ${grokId}"` });
     expect(resumeCarry('grok', 'grok -r ses_9', grokId))
@@ -576,8 +576,8 @@ describe('a launch line that already selects a conversation', () => {
     const id = 'b4b1b021-e8af-4213-9b7e-470b233b712f';
     expect(resumeCarry('antigravity', 'agy', id))
       .toEqual({ kind: 'line', line: `agy --conversation=${id}` });
-    expect(resumeCarry('antigravity', 'zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro', id))
-      .toEqual({ kind: 'line', line: `zsh /Users/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}` });
+    expect(resumeCarry('antigravity', 'zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro', id))
+      .toEqual({ kind: 'line', line: `zsh /home/owner/as-floor.sh agy --model gemini-3.1-pro --conversation=${id}` });
     expect(resumeCarry('antigravity', `agy --conversation=${id}`, id))
       .toEqual({ kind: 'line', line: `agy --conversation=${id}` });
     expect(resumeCarry('antigravity', `zsh -lc "agy --conversation=${id}"`, id))

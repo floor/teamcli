@@ -154,7 +154,7 @@ describe('muse launch and captured screens', () => {
   });
 
   test('the captured 1.4.11 post-Enter frame is a line not submitted: its trailing empty row is a typed newline, never an exact read-back', () => {
-    const line = rulesLine('/Users/example/.config/team/demo-3f9c2a8e1d7b/rules/builder-6.md', '68952ad875fc');
+    const line = rulesLine('/home/example/.config/team/demo-3f9c2a8e1d7b/rules/builder-6.md', '68952ad875fc');
     const text = fixture1411('rules-line-unsent');
     // The authorized capture is the box after Enter on a 1.4.11 pane: the key inserted a typed
     // newline instead of submitting, and the line is still there. The trailing empty row is a
@@ -349,7 +349,7 @@ describe('the rules delivery on the 1.4.11 ready box, with herdr unable to repor
 // line's wrapped rows and nothing under them; the authorized post-Enter capture
 // (`rules-line-unsent.txt`) draws the line and then one empty row, the typed newline Enter left
 // when it did not submit. Read-back never takes the trailing empty row as the line's own.
-const CAPTURED_LINE = rulesLine('/Users/example/.config/team/demo-3f9c2a8e1d7b/rules/builder-6.md', '68952ad875fc');
+const CAPTURED_LINE = rulesLine('/home/example/.config/team/demo-3f9c2a8e1d7b/rules/builder-6.md', '68952ad875fc');
 
 /** The idle box with `text` typed into it and one more Enter taken as a newline: the line, the
  *  empty row the newline draws, then the closing rule. */

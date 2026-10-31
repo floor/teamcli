@@ -54,6 +54,6 @@
 [0m[2m  Worked for 11s • 10:30[0m
  
  
-[0m[1m›[0m Read /Users/jvial/.config/team/teamcli-5e46a02374b3/rules/orchestrator.md (sha256 92ae1ae483d5): your standing rules for this session; reply ready and wait for your brief.
+[0m[1m›[0m Read /home/example/.config/team/teamcli-5e46a02374b3/rules/orchestrator.md (sha256 92ae1ae483d5): your standing rules for this session; reply ready and wait for your brief.
  
   [0m[38;2;246;226;183mGPT-6.1-Sol medium[0m · [0m[38;2;143;179;239mexperiments/client-seats-config[0m · [0m[38;2;242;181;144mContext 97% left[0m · [0m[38;2;233;144;169mweekly 99% left[0m                                                                                 ⚠ [0m[38;2;196;167;103m1 warning[0m · [0m[1mf2[0m to view

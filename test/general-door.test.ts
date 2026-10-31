@@ -179,10 +179,10 @@ test('the launchd unit carries the installing PATH, so the service finds herdr (
   const { darwinServiceManager } = await import('../src/daemon/service-darwin.ts');
   const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
   const base = { execPath: '/bin/node', entry: '/x/cli.js', roots: ['/r'] };
-  expect(manager.install(home, { ...base, path: '/Users/x/.local/bin:/usr/bin' }).ok).toBe(true);
+  expect(manager.install(home, { ...base, path: '/home/x/.local/bin:/usr/bin' }).ok).toBe(true);
   const unit = readFileSync(manager.unitPath(home), 'utf8');
   expect(unit).toContain('<key>EnvironmentVariables</key>');
-  expect(unit).toContain('<string>/Users/x/.local/bin:/usr/bin</string>');
+  expect(unit).toContain('<string>/home/x/.local/bin:/usr/bin</string>');
   expect(manager.install(home, base).ok).toBe(true);
   expect(readFileSync(manager.unitPath(home), 'utf8')).not.toContain('EnvironmentVariables');
 });

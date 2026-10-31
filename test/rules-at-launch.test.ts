@@ -112,7 +112,7 @@ describe('a seat this run did not launch', () => {
       running: () => {}, drop: () => {}, say: (line: string) => { events.push(`say:${line}`); }, log: () => {},
     } as unknown as Host;
     const steps: Step[] = [
-      { kind: 'run', argv: [], do: { do: 'deliver', seat: 'reviewer-cursor', label: 'reviewer-cursor', cli: 'cursor', rules: 'Rules.', path: PATH, line: LINE, seconds: 1, pane: 'p1' } },
+      { kind: 'run', argv: [], do: { do: 'deliver', seat: 'reviewer-agent', label: 'reviewer-agent', cli: 'cursor', rules: 'Rules.', path: PATH, line: LINE, seconds: 1, pane: 'p1' } },
     ];
     await executePlan(steps, 'acme', host);
     expect(events).toContain('write');
@@ -120,6 +120,6 @@ describe('a seat this run did not launch', () => {
     expect(events).not.toContain('typed');
     expect(events).not.toContain('run');
     expect(events).not.toContain('stage:ready');
-    expect(events.join('\n')).toContain('run team restart reviewer-cursor to carry them');
+    expect(events.join('\n')).toContain('run team restart reviewer-agent to carry them');
   });
 });

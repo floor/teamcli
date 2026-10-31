@@ -228,7 +228,7 @@ describe('owner page', () => {
     expect(OWNER_PAGE_HTML).toContain('Always allow');
     expect(OWNER_PAGE_HTML).toContain('>Deny<');
     expect(OWNER_PAGE_HTML).toContain('A migration needs that');
-    expect(OWNER_PAGE_HTML).toContain('No owner seat yet. Ask Iris to run setup.');
+    expect(OWNER_PAGE_HTML).toContain('No owner seat yet. Ask the orchestrator to run setup.');
     expect(OWNER_PAGE_HTML).toContain('Add a passkey (iPhone or Mac)');
     expect(OWNER_PAGE_HTML).toContain('Approve with my passkey');
     expect(OWNER_PAGE_HTML).toContain('data-w="oui"');

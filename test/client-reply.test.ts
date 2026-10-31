@@ -117,9 +117,9 @@ async function clientRead(w: World, extra: string[] = []) {
 describe('a client sends, the recipient seat replies, the client reads the reply', () => {
   test('the full round trip, then the client acks it', async () => {
     const w = world(true);
-    const sent = await clientSend(w, 'Atlas, can you hear me?');
+    const sent = await clientSend(w, 'Reviewer, can you hear me?');
     expect(sent.code).toBe(0);
-    const reply = await seatReply(w, 'orchestrator', sent.id, 'Loud and clear, Iris.');
+    const reply = await seatReply(w, 'orchestrator', sent.id, 'Loud and clear, Assistant.');
     expect(reply.err).toBe('');
     expect(reply.code).toBe(0);
     expect(reply.json).toMatchObject({ status: 'replied', to: 'client:grok-bot', thread: sent.id });
@@ -127,7 +127,7 @@ describe('a client sends, the recipient seat replies, the client reads the reply
     const read = await clientRead(w);
     expect(read.err).not.toContain('refused');
     expect(read.code).toBe(0);
-    expect(JSON.stringify(read.json)).toContain('Loud and clear, Iris.');
+    expect(JSON.stringify(read.json)).toContain('Loud and clear, Assistant.');
     expect(read.json.rows).toHaveLength(1);
     expect(read.json.rows[0]).toMatchObject({ id: reply.json.record, from: 'orchestrator', to: 'client:grok-bot', status: 'shown' });
     const acked = await clientRead(w, ['--ack', reply.json.record]);

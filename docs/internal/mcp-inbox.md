@@ -108,7 +108,7 @@ content_sha256, status: "sent (channel)"}`. That marker is the proof the notific
 never the proof it was read, and a record already holding one is not pushed a second time.
 
 The transport acknowledges nothing. T1's independent replay of a spike server measured only the
-visible wrapper line, `← team: Message from Agamemnon`, with that spike server named `team`; the
+visible wrapper line, `← team: Message from Coordinator`, with that spike server named `team`; the
 `ack` call is the only channel receipt. `ack` takes the id from the meta and writes the signed
 read receipt `team ack` writes — `{status: "read", read_by: "channel"}` at `<id>.read.json`,
 published with the same exclusive, no-clobber link as `inbox_read`. An id this inbox does not
