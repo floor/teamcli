@@ -171,5 +171,13 @@ describe('the liveRegion fail-safe over an older error', () => {
     expect(ran.read).toBe('idle');
     expect(ran.result).toBe(false);
     expect(ran.typed).toEqual([]);
+    // An idle screen would take the line, so Enter is the reading that proves the refusal ran
+    // before the prompt: a delivery that pressed it would submit whatever the box held.
+    expect(ran.entered).toBe(0);
+    // No pane messaging: delivery refuses before any screen is read, so the refusal carries the
+    // no-pane line, as the adjacent wrapped-error scene asserts.
+    expect(ran.refusals[0]).toMatchObject({
+      stop: 'typing', typed: false, sent: false, kind: 'unknown', row: NO_PANE_MESSAGING,
+    });
   });
 });
