@@ -58,8 +58,9 @@ describe('a receiving session that predates its accept declaration', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     const entry = history.entries.at(-1);
-    expect(entry?.to).toBe('lead');
-    expect(entry?.failed).toContain(`socket: ${REASON}`);
+    if (entry === undefined) throw new Error('the send wrote no history entry');
+    expect(entry.to).toBe('lead');
+    expect(entry.failed).toContain(`socket: ${REASON}`);
   });
 
   test('a session started after the declaration is dialed, so the gate is the socket age', async () => {
@@ -78,6 +79,10 @@ describe('a receiving session that predates its accept declaration', () => {
     expect(history.ok).toBe(true);
     if (!history.ok) return;
     const entry = history.entries.at(-1);
-    expect(entry?.failed ?? []).not.toContain(`socket: ${REASON}`);
+    // An absent entry must fail here, not read as "the reason is absent".
+    if (entry === undefined) throw new Error('the send wrote no history entry');
+    expect(entry.to).toBe('lead');
+    expect(entry.body).toContain('a note');
+    expect(entry.failed ?? []).not.toContain(`socket: ${REASON}`);
   });
 });
