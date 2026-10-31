@@ -14,18 +14,53 @@ afterEach(() => {
   cleanup = () => {};
 });
 
-test('no pane messaging, nothing is typed and the bus inbox keeps it; was: --json sent (unconfirmed) names the seat, exit 0, and the drop id', async () => {
-  // A trigger the seat takes is a transport delivery, not a read: the box cleared and the
-  // screen moved on, and no signed read receipt came back. The document therefore says
-  // `sent (unconfirmed)` with the trigger note, as docs/commands/send.md's typed-leg row says,
-  // and the exit is still 0 — the record is on disk.
+test('--json sent (unconfirmed) names the seat, exit 0, and the drop id', async () => {
+  // The drop file is the whole record: no read receipt came back, so the document says
+  // `sent (unconfirmed)` and the exit is 0 — the record is on disk.
   const made = world();
   cleanup = made.cleanup;
   const { host, pane } = nativeHost(made, ['idle', 'working']);
   const io = owner(made.root);
 
-  const retired = await runSend(['native', 'hello', '--json'], io, host);
-  expect(await retired).toBe(0);
+  const code = await runSend(['native', 'hello', '--json'], io, host);
+
+  expect(code).toBe(0);
+  expect(io.err).toBe(queuedLine('native', NO_EVENT_ADAPTER_TOOK_IT));
+  const doc = JSON.parse(io.out) as {
+    schema: { name: string; version: number };
+    format: number;
+    dry_run: boolean;
+    status: string;
+    action_summary: string;
+    project: string;
+    session: string;
+    seat: string;
+    channel: string;
+    ids: { sent: string; reply: null };
+  };
+  expect(doc.schema).toEqual({ name: 'team.send', version: 1 });
+  expect(doc.format).toBe(1);
+  expect(doc.dry_run).toBe(false);
+  expect(doc.seat).toBe('native');
+  expect(doc.status).toBe('sent (unconfirmed)');
+  expect(doc.action_summary).toBe('native: sent (unconfirmed) (drop, 0 ms)');
+  expect(doc.project).toBe('acme');
+  expect(doc.session).toBe('acme');
+  expect(doc.channel).toBe('drop');
+  expect(doc.ids.reply).toBeNull();
+  expect('reply' in doc).toBe(false);
+  expect('plan' in doc).toBe(false);
+  const drops = dropDir(made.dir);
+  const names = readdirSync(drops);
+  // The drop is the signed record the document names; the `<id>.fallback.json` beside it is
+  // the delivery walk's episode marker (src/send/fallback-events.ts), a derivative file and
+  // never a second message.
+  expect(names.filter((name) => !name.endsWith('.fallback.json') && !name.endsWith('.pending'))).toEqual([doc.ids.sent]);
+  expect(names).toContain(`${doc.ids.sent}.fallback.json`);
+  expect(recordBody(join(drops, doc.ids.sent))).toBe(filed('hello'));
+  expect(pane.typed.length).toBe(0);
+  expect(pane.enters).toBe(0);
+  expect(host.frames).toEqual([]);
 });
 
 test('no pane messaging, nothing is typed and the bus inbox keeps it; was: --json not-submitted writes the error document naming the box and the drop path', async () => {
