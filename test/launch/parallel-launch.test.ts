@@ -23,7 +23,7 @@ function seatSteps(name: string, cli: 'claude-code' | 'codex', seconds = 90): St
       kind: 'run',
       argv: [],
       // The rules line rides the launch (rules are never typed into a pane).
-      do: { do: 'launch', seat: name, label: name, command: rules === 'message' ? `${cli} 'Read /x/rules/${name}.md'` : cli },
+      do: { do: 'launch', seat: name, label: name, command: rules === 'message' ? `${cli} 'Read /x/rules/${name}.md'` : cli, ...(rules === 'message' ? { rulesCarried: true } : {}) },
     },
     {
       kind: 'wait',

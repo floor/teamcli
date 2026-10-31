@@ -37,6 +37,13 @@ export type Op =
    *  on a hand-built op: every planned launch names them. */
   | { do: 'launch'; seat: string; label: string; command: string; pane?: string; notice?: string; cli?: string; cwd?: string; teamFile?: string; watcher?: CliWatcher;
       /**
+       * True when the command this step runs carries the seat's rules line: decided here, where
+       * the line is given to `launchCommand`, never re-derived from the built command — the line
+       * is shell-quoted on it, and a profile with no launch prompt carries none at all. Absent on
+       * a hand-built op: no rules ride its launch.
+       */
+      rulesCarried?: boolean;
+      /**
        * This launch starts (or reuses) the managed Codex app-server endpoint recorded on the
        * seat's current presence binding, and attaches the TUI to it with `--remote`. Set only
        * for a Codex seat with the signed `codex-daemon` policy on, a plain Codex launch line,
@@ -112,7 +119,13 @@ export type Op =
   /** A seat already running, painted from the file without typing into it or launching it again.
    *  Line 1 is the workspace title; line 2 is display_agent. A failed call is one line. */
   | { do: 'relabel'; seat: string; pane: string; workspace: string; title: string; displayAgent: string }
-  | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string }
+  | { do: 'deliver'; seat: string; label: string; cli: string; rules: string; path: string; line: string; seconds: number; pane?: string; notice?: string;
+      /**
+       * Whether a launch line for this seat can carry the rules at all: its profile names a
+       * launch prompt. False means no launch ever carries them, so the left-out report says that
+       * and never advises a restart.
+       */
+      launchCanCarryRules?: boolean }
   | { do: 'ready'; seat: string; rules: 'option' | 'message' | 'prepend'; notice?: string }
   | {
       do: 'repair';
@@ -859,14 +872,19 @@ export function upPlan(input: UpInput): Step[] {
     const resumeGap = carried?.kind === 'refuse'
       ? `its recorded conversation cannot be resumed: ${carried.why}`
       : undefined;
+    // The rules line this launch gives `launchCommand`, and whether that call appends it: only a
+    // message-mode profile with a launch prompt carries one. `execute.ts` writes the rules file
+    // before the command runs from this decision, never by searching the built command for the
+    // line, which is shell-quoted there.
+    const rulesLine = profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined;
+    const rulesCarried = rulesLine !== undefined && profile.rulesPrompt !== null;
     const command = launchCommand(profile, recordedLine, seat.rules, input.cliHooks?.[seat.name], {
       seat: seat.name,
       session,
       ...selfRunner(),
       ...(input.teamFile === undefined ? {} : { file: input.teamFile }),
       ...(input.briefEpochs?.[seat.name] === undefined ? {} : { epoch: input.briefEpochs[seat.name] }),
-    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon },
-      profile.rulesMode === 'message' && !seat.rulesRefusal ? seat.rulesFile?.line : undefined);
+    }, seat.sessionName, codexDaemon === undefined ? undefined : { codexDaemon }, rulesLine);
     // A managed Codex seat's endpoint, decided from the same signed policy that shaped the line:
     // the launch must be the Codex binary itself (a wrapper's own endpoint is not ours to bind),
     // and a `--remote` or `--no-daemon` the file already names is a collision, refused rather
@@ -892,7 +910,7 @@ export function upPlan(input: UpInput): Step[] {
         kind: 'run',
         argv: herdr(session, 'pane', 'run', pane, command),
         note: launchNote,
-        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
+        do: { do: 'launch', seat: seat.name, label: seat.label, command, pane: seat.pane, cli: profile.cli, cwd, ...(input.teamFile === undefined ? {} : { teamFile: input.teamFile }), ...(said ? { notice: said } : {}), watcher, rulesCarried, ...(managedCodex && input.stateDir !== undefined ? { codexEndpoint: { dir: input.stateDir } } : {}) },
       });
     }
     const rules = profile.rulesMode;
@@ -960,12 +978,15 @@ export function upPlan(input: UpInput): Step[] {
       }
       const said = takeNotice();
       const file = seat.rulesFile;
+      // Where no launch prompt exists, restart builds the same line the launch did: the note
+      // says no launch carries them rather than advising a restart that cannot.
+      const carryNote = profile.rulesPrompt === null
+        ? 'the rules go to a per-seat file in the project state folder; its CLI takes no initial prompt at launch, so no launch carries them, and a seat is never typed into: it is left out'
+        : 'the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them';
       steps.push({
         kind: 'run',
         argv: ['team', 'rules', '--with-launch', file.line],
-        note: said
-          ? `${said}; the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them`
-          : 'the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them',
+        note: said ? `${said}; ${carryNote}` : carryNote,
         do: {
           do: 'deliver',
           seat: seat.name,
@@ -975,6 +996,7 @@ export function upPlan(input: UpInput): Step[] {
           path: file.path,
           line: file.line,
           seconds: profile.idleTimeout,
+          launchCanCarryRules: profile.rulesPrompt !== null,
           pane: seat.pane,
           ...(said ? { notice: said } : {}),
         },

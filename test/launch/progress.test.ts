@@ -358,8 +358,9 @@ describe('a three-seat launch', () => {
     ];
     // alpha's launch carries its rules line: rules are never typed into a pane.
     const alpha = seat('alpha', 'claude', 5);
-    const launchStep = alpha[1]!.do as { command: string };
+    const launchStep = alpha[1]!.do as { command: string; rulesCarried?: boolean };
     launchStep.command = "claude 'Read /x/rules/alpha.md (sha256 000000000000): your standing rules.'";
+    launchStep.rulesCarried = true;
     return [
       ...alpha,
       {

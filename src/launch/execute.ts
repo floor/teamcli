@@ -1127,6 +1127,27 @@ export async function executePlan(
           if (inbox && !inbox.ok) hold(op.seat, `${op.seat}: the team inbox was not registered: ${inbox.reason}\n`);
         }
         const here = place(op.seat, op.pane);
+        // The rules line rides this launch: its file is written before anything starts, so the
+        // CLI reads it on its first turn, and a file that cannot be written leaves the seat out
+        // before a managed endpoint is started for it. Whether the launch carries the line is the
+        // plan's own decision (`rulesCarried`), never a search of the built command: the line is
+        // shell-quoted on it, and a profile with no launch prompt carries none at all.
+        const rulesOp = steps
+          .map((step) => step.do)
+          .find((d): d is Extract<Op, { do: 'deliver' }> => d?.do === 'deliver' && d.seat === op.seat);
+        if (here && rulesOp && host.deliverRules && op.rulesCarried === true) {
+          const written = await host.deliverRules(
+            session, here.pane, rulesOp.cli,
+            { text: rulesOp.rules, path: rulesOp.path, line: rulesOp.line, seat: rulesOp.seat, writeOnly: true },
+            rulesOp.seconds,
+          );
+          if (written !== true) {
+            dropped.add(op.seat);
+            final(op.seat, { kind: 'left out', reason: typeof written === 'object' ? refusalReport(written) : 'its rules file was not written; nothing was launched' });
+            break;
+          }
+          rulesAtLaunch.add(op.seat);
+        }
         // The managed Codex endpoint is started here, after the seat was allowed and its inbox
         // registered: the plan's command stays the deterministic line a dry run prints, and the
         // attach is added only once an endpoint exists to attach to. A start failure is said
@@ -1164,24 +1185,6 @@ export async function executePlan(
         const launch = withLaunchSession(op.cli ?? '', command);
         launchedCommands.set(op.seat, launch.command);
         launchedThisRun.add(op.seat);
-        // The rules line rides this launch: its file is written first, so the CLI reads it on its
-        // first turn. A file that cannot be written leaves the seat out before anything runs.
-        const rulesOp = steps
-          .map((step) => step.do)
-          .find((d): d is Extract<Op, { do: 'deliver' }> => d?.do === 'deliver' && d.seat === op.seat);
-        if (here && rulesOp && host.deliverRules && launch.command.includes(rulesOp.line)) {
-          const written = await host.deliverRules(
-            session, here.pane, rulesOp.cli,
-            { text: rulesOp.rules, path: rulesOp.path, line: rulesOp.line, seat: rulesOp.seat, writeOnly: true },
-            rulesOp.seconds,
-          );
-          if (written !== true) {
-            dropped.add(op.seat);
-            final(op.seat, { kind: 'left out', reason: typeof written === 'object' ? refusalReport(written) : 'its rules file was not written; nothing was launched' });
-            break;
-          }
-          rulesAtLaunch.add(op.seat);
-        }
         if (!here || !host.paneRun(session, here.pane, launch.command)) {
           // A server this call started was never attached: it is this run's to stop, so a pane
           // that did not run leaves no endpoint behind.
@@ -1601,11 +1604,14 @@ export async function executePlan(
           const written = await host.deliverRules?.(session, here.pane, op.cli, { ...file, writeOnly: true }, op.seconds);
           if (stopped) break;
           dropped.add(op.seat);
+          // A profile that names no launch prompt can never carry the line, on this launch or on
+          // a restart that builds the same one: the report says so instead of advising a restart.
+          const held = written === true ? '; its rules file is written' : '';
           final(op.seat, {
             kind: 'left out',
-            reason: written === true
-              ? `rules not typed: its rules ride only a launch; its rules file is written: run team restart ${op.seat} to carry them`
-              : `rules not typed: its rules ride only a launch; run team restart ${op.seat} to carry them`,
+            reason: op.launchCanCarryRules === false
+              ? `rules not typed: its CLI takes no initial prompt at launch, so no launch carries them${held}`
+              : `rules not typed: its rules ride only a launch${held}: run team restart ${op.seat} to carry them`,
           });
           break;
         }

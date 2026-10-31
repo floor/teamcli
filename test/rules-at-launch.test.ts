@@ -44,13 +44,13 @@ describe('the launch line carries the rules line', () => {
 });
 
 describe('executing a launch that carries the rules line', () => {
-  function run(command: string) {
+  function run(command: string, carried: boolean, line = LINE) {
     const events: string[] = [];
     const host: Host = {
       startServer: () => true,
       sessionUp: () => true,
       createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
-      paneRun: (_s, _p, cmd) => { events.push(`run:${cmd.includes(LINE) ? 'with-line' : 'plain'}`); return true; },
+      paneRun: (_s, _p, cmd) => { events.push(`run:${cmd.includes(line) ? 'with-line' : 'plain'}`); return true; },
       typeLine: () => { events.push('typed'); return false; },
       deliverRules: async (_s, _p, _c, file) => { events.push(file.writeOnly === true ? 'write' : 'deliver'); return file.writeOnly === true ? true : false; },
       renameAgent: () => true,
@@ -69,14 +69,14 @@ describe('executing a launch that carries the rules line', () => {
       log: () => {},
     };
     const steps: Step[] = [
-      { kind: 'run', argv: [], do: { do: 'launch', seat: 'coder', label: 'coder', command, pane: 'p1', cli: 'codex', cwd: '.' } },
-      { kind: 'run', argv: [], do: { do: 'deliver', seat: 'coder', label: 'coder', cli: 'codex', rules: 'Rules.', path: PATH, line: LINE, seconds: 1, pane: 'p1' } },
+      { kind: 'run', argv: [], do: { do: 'launch', seat: 'coder', label: 'coder', command, pane: 'p1', cli: 'codex', cwd: '.', rulesCarried: carried } },
+      { kind: 'run', argv: [], do: { do: 'deliver', seat: 'coder', label: 'coder', cli: 'codex', rules: 'Rules.', path: PATH, line, seconds: 1, pane: 'p1' } },
     ];
     return { events, done: executePlan(steps, 'acme', host) };
   }
 
   test('the file is written before the command runs, and nothing is typed', async () => {
-    const { events, done } = run(`codex ${shellQuote(LINE)}`);
+    const { events, done } = run(`codex ${shellQuote(LINE)}`, true);
     await done;
     expect(events.slice(0, 2)).toEqual(['write', 'run:with-line']);
     expect(events).not.toContain('typed');
@@ -84,13 +84,96 @@ describe('executing a launch that carries the rules line', () => {
     expect(events).toContain('stage:ready');
   });
 
+  test('the plan flag decides, not the built command: a line shell-quoted with an apostrophe is still carried', async () => {
+    // `shellQuote` turns the line's own apostrophe into '\'', so the built command never holds
+    // the line as a substring. The plan's flag, which follows the line it gave the launch, does.
+    const quoted = "Read /x/rules/o'brien.md (sha256 5e1d0a9c4b2f): your standing rules for this session; reply ready and wait for your brief.";
+    const command = `codex ${shellQuote(quoted)}`;
+    expect(command.includes(quoted)).toBe(false);
+    expect(command).toContain(`o'\\''brien`);
+    const { events, done } = run(command, true, quoted);
+    await done;
+    expect(events.slice(0, 2)).toEqual(['write', 'run:plain']);
+    expect(events).not.toContain('typed');
+    expect(events).not.toContain('deliver');
+    expect(events).toContain('stage:ready');
+  });
+
   test('a launch without the line is not taken as delivered, and its rules are never typed: the file is written, the seat left out', async () => {
-    const { events, done } = run('codex');
+    const { events, done } = run('codex', false);
     await done;
     expect(events).toContain('write');
     expect(events).not.toContain('deliver');
     expect(events).not.toContain('stage:ready');
     expect(events).not.toContain('typed');
+  });
+
+  test('the plan says a launch line carries them, but this seat was not launched: the file is written, the seat left out', async () => {
+    const said: string[] = [];
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
+      paneRun: () => true,
+      typeLine: () => false,
+      deliverRules: async (_s, _p, _c, file) => file.writeOnly === true,
+      renameAgent: () => true,
+      closeWorkspace: () => true,
+      stopSession: () => true,
+      kill: () => true,
+      agentPanes: () => ['p1'],
+      classify: () => 'idle',
+      sleep: async () => {},
+      now: () => 0,
+      allow: () => null,
+      record: () => {},
+      running: () => {},
+      drop: () => {},
+      say: (line) => { said.push(line); },
+      log: () => {},
+    };
+    const steps: Step[] = [{
+      kind: 'run',
+      argv: [],
+      do: { do: 'deliver', seat: 'reviewer-codex', label: 'reviewer-codex', cli: 'codex', rules: 'Rules.', path: PATH, line: LINE, seconds: 1, pane: 'p1', launchCanCarryRules: true },
+    }];
+    await executePlan(steps, 'acme', host);
+    expect(said.join('')).toContain('run team restart reviewer-codex to carry them');
+  });
+
+  test('a profile with no launch prompt can never carry them: the report says so and names no restart', async () => {
+    const said: string[] = [];
+    const host: Host = {
+      startServer: () => true,
+      sessionUp: () => true,
+      createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
+      paneRun: () => true,
+      typeLine: () => false,
+      deliverRules: async (_s, _p, _c, file) => file.writeOnly === true,
+      renameAgent: () => true,
+      closeWorkspace: () => true,
+      stopSession: () => true,
+      kill: () => true,
+      agentPanes: () => ['p1'],
+      classify: () => 'idle',
+      sleep: async () => {},
+      now: () => 0,
+      allow: () => null,
+      record: () => {},
+      running: () => {},
+      drop: () => {},
+      say: (line) => { said.push(line); },
+      log: () => {},
+    };
+    const steps: Step[] = [{
+      kind: 'run',
+      argv: [],
+      do: { do: 'deliver', seat: 'reviewer-codex', label: 'reviewer-codex', cli: 'codex', rules: 'Rules.', path: PATH, line: LINE, seconds: 1, pane: 'p1', launchCanCarryRules: false },
+    }];
+    await executePlan(steps, 'acme', host);
+    expect(said.join('')).toContain('its CLI takes no initial prompt at launch, so no launch carries them');
+    expect(said.join('')).toContain('its rules file is written');
+    expect(said.join('')).not.toContain('restart');
   });
 });
 
