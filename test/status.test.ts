@@ -411,6 +411,59 @@ describe('team status', () => {
     expect(code).toBe(0);
   });
 
+  // The CLI's own binary reached by a path, through env, or quoted is still a plain CLI launch:
+  // no launcher there selects a model, so the declaration cannot be shown as a reading of the
+  // pane — it keeps the unread suffix and the note.
+  test('a plain CLI launch by path, env or quotes marks the declaration unread, never as the reading', async () => {
+    for (const launch of ['/opt/fixture/bin/claude', 'env claude', '"claude"']) {
+      writeFileSync(file, example.replace(
+        '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+        `    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: ${launch}`,
+      ));
+      approveOnDisk();
+      const shown = built();
+      const pane = paneOf(shown, 'deepseek-acme');
+      live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+      const { code, out } = await status();
+      expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+GLM 5\\.3 \\(declared, unread\\)\\s+${pane}`));
+      expect(out).toContain('note: deepseek-acme: its screen shows no model; the declared GLM 5.3 stands, and the screen reading is unread');
+      expect(code).toBe(0);
+    }
+  });
+
+  // A launcher this reader cannot follow proves nothing: the declaration is a declaration, and
+  // the column says so rather than passing it off as the pane's model.
+  test('an unrecognized launcher leaves the declaration unread in the column', async () => {
+    writeFileSync(file, example.replace(
+      '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+      '    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: unknown-wrapper',
+    ));
+    approveOnDisk();
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { code, out } = await status();
+    expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+GLM 5\\.3 \\(declared, unread\\)\\s+${pane}`));
+    expect(out).toContain('note: deepseek-acme: its screen shows no model; the declared GLM 5.3 stands, and the screen reading is unread');
+    expect(code).toBe(0);
+  });
+
+  // The family test ignores case: `claude fable` is Claude's own family, so its screen is read
+  // like any other Claude model's, and the CLI's Opus default is a drift.
+  test('a Claude family spelled in lower case is read off the CLI screen', async () => {
+    writeFileSync(file, example.replace(
+      '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+      '    model: claude fable\n    version: "5.1"\n    display: claude fable 5.1\n    launch: /opt/fixture/bin/claude',
+    ));
+    approveOnDisk();
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { code, out } = await status();
+    expect(out).toContain('difference: deepseek-acme: running Claude Opus 5.5, file says claude fable 5.1');
+    expect(code).toBe(1);
+  });
+
   test('a stored classification outside the closed list reads unknown in the row and the difference', async () => {
     // A state file as a hand-edited or corrupted one can hold: an escape sequence and a forged
     // line where the classification belongs. The row, the difference and its repair carry the

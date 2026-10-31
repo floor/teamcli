@@ -6,7 +6,7 @@
 // row alone — the same line the composer reads, so the two cannot disagree — and a screen that
 // shows no such row names no model.
 import { stripSgr } from '../ansi.ts';
-import { usesLauncher } from '../launch/line.ts';
+import { launchProgram } from '../launch/line.ts';
 import { profileFor, statusModelRules, statusOnLine } from '../profiles/profile.ts';
 import { screenData, statusRow } from '../watch/screen.ts';
 
@@ -70,20 +70,48 @@ export function runningModel(cli: string, screen: string): Running | null {
 }
 
 /** A Claude Code seat declaring a model from another maker. The CLI's own status line names its
- *  own families only, so no reading of it is ever this seat's model. */
+ *  own families only, so no reading of it is ever this seat's model. The family test ignores
+ *  case: the file's spelling is not its model's identity, and the version comparisons here
+ *  already read case as spelling. */
 export function foreignModelOnClaudeCode(seat: { cli: string; model: string }): boolean {
-  return seat.cli === 'claude-code' && !seat.model.startsWith('Claude ');
+  return seat.cli === 'claude-code' && !/^claude\b/i.test(seat.model.trim());
 }
 
-/** A provider wrapper in front of Claude Code: another maker's model, and a launch line whose
- *  first word is not the CLI's own (or one the file marks `model_from: launcher`). Claude Code's
- *  status line prints its own families whatever provider the wrapper selected, so the launcher's
- *  declaration — or the provider id on its banner — is the seat's model. A caller that does not
- *  know the launch line cannot rule the wrapper out. */
+/** Whether a launcher's own name names the declared model: a word of the model that is a name —
+ *  not a bare number — appearing as a word of the program (`claude-glm.sh` for GLM, `team-deepseek`
+ *  for DeepSeek). That is the launcher's provenance: it is named for the provider whose model it
+ *  selects. A generic name (`unknown-wrapper`) names no model, so it proves nothing. */
+function launcherNamesModel(program: string, model: string): boolean {
+  const named = program.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word !== '');
+  return model
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .some((word) => word.length >= 3 && /[a-z]/.test(word) && named.includes(word));
+}
+
+/** What a launch line proves about the model in the seat's pane: `cli` when it starts the CLI's
+ *  own binary — however a path, `env`, or a quoted word spells it — so the screen is the CLI's
+ *  own and its family is a contradiction against another maker's declaration; `wrapper` when the
+ *  file says the launcher chooses the model (`model_from: launcher`) or the launcher's name
+ *  names the declared model; `unknown` when the line is absent or this reader cannot follow it.
+ *  Unknown is not proof of anything: it is read as unread, never as a measured match. */
+function launchProof(seat: { cli: string; model: string; launch?: string; modelFrom?: 'launcher' }): 'cli' | 'wrapper' | 'unknown' {
+  if (seat.modelFrom === 'launcher') return 'wrapper';
+  if (seat.launch === undefined || seat.launch.trim() === '') return 'unknown';
+  const program = launchProgram(seat.launch);
+  if (program === null) return 'unknown';
+  const binary = profileFor(seat.cli)?.binary;
+  if (binary !== undefined && program === binary) return 'cli';
+  return launcherNamesModel(program, seat.model) ? 'wrapper' : 'unknown';
+}
+
+/** A provider wrapper in front of Claude Code: another maker's model, and a launch line that
+ *  proves a launcher selecting it. Claude Code's status line prints its own families whatever
+ *  provider the wrapper selected, so the launcher's declaration — or the provider id on its
+ *  banner — is the seat's model. A plain CLI launch and a launch this reader cannot follow are
+ *  not wrappers. */
 export function wrapperSeat(seat: { cli: string; model: string; launch?: string; modelFrom?: 'launcher' }): boolean {
-  if (!foreignModelOnClaudeCode(seat)) return false;
-  if (seat.modelFrom === 'launcher') return true;
-  return seat.launch === undefined || usesLauncher({ cli: seat.cli, launch: seat.launch });
+  return foreignModelOnClaudeCode(seat) && launchProof(seat) === 'wrapper';
 }
 
 /** The id on the launch wrapper's banner line, `<id> · API Usage Billing`, where the pane shows
@@ -111,16 +139,17 @@ function bannerRunning(id: string, declared: Running): Running {
 // for a seat that runs another maker's model through a provider wrapper, its status line prints
 // the CLI's own default whatever the launcher selected, so the launcher's declared model is the
 // live one — or the provider's own id where the wrapper prints one on its banner. Another
-// maker's model on the CLI's own launch line is unread — the line never names it. A seat whose
-// version the caller does not know keeps the unread answer, and every other seat is read off its
-// screen.
+// maker's model on the CLI's own launch line is unread — the line never names it — and so is one
+// whose launch line this reader cannot follow: only a proven wrapper is shown by its declaration.
+// A seat whose version the caller does not know keeps the unread answer, and every other seat is
+// read off its screen.
 export function seatModel(
   seat: { cli: string; model: string; version?: string; launch?: string; modelFrom?: 'launcher' },
   screen: string | undefined,
 ): Running | null {
   if (screen === undefined) return null;
   if (!foreignModelOnClaudeCode(seat)) return runningModel(seat.cli, screen);
-  if (!wrapperSeat(seat)) return null;
+  if (launchProof(seat) !== 'wrapper') return null;
   if (seat.version === undefined || seat.version === '') return null;
   const declared: Running = { model: seat.model, version: seat.version };
   const banner = bannerModel(screen);
@@ -131,15 +160,21 @@ export function seatModel(
 
 /** The model a seat runs where the caller must compare like with like — a send's drift hold, the
  *  watch's signed observation, `team check`, an `up` registry comparison. A wrapper is read from
- *  the declaration it signs or launches (or the provider id on its banner); every other seat,
- *  a bare Claude Code launch of another maker's model included, is read off its screen, whose
- *  Claude family is then the contradiction the declared model needs. */
+ *  the declaration it signs or launches (or the provider id on its banner); a plain Claude Code
+ *  launch of another maker's model is read off its screen, whose Claude family is then the
+ *  contradiction the declared model needs; and a launch line this reader cannot follow leaves
+ *  the model unread, never a measured match. */
 export function signedSeatModel(
   seat: { cli: string; model: string; version: string; launch?: string; modelFrom?: 'launcher' },
   screen: string | undefined,
 ): Running | null {
-  if (wrapperSeat(seat)) return seatModel(seat, screen);
-  return screen === undefined ? null : runningModel(seat.cli, screen);
+  if (screen === undefined) return null;
+  if (!foreignModelOnClaudeCode(seat)) return runningModel(seat.cli, screen);
+  const proof = launchProof(seat);
+  if (proof === 'wrapper') return seatModel(seat, screen);
+  if (proof === 'cli') return runningModel(seat.cli, screen);
+  // An unreadable launch line: the model is unread, and unread is never a drift.
+  return null;
 }
 
 /**

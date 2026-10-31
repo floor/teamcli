@@ -27,7 +27,7 @@ import { updateState } from '../src/state.ts';
 import { expirePendingNative } from '../src/watch/native.ts';
 import type { RetryScene } from '../src/watch/retry.ts';
 import { recordBody, testIo, type TestIo } from './helpers.ts';
-import { NOW, dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
+import { NOW, dropDir, fake, filed, owner, scripted, world, type Fake, type World } from './send-native-fixtures.ts';
 
 let cleanup: () => void = () => {};
 
@@ -150,6 +150,77 @@ test('a registered recipient behind a provider wrapper is not held for the famil
   expect(files.length).toBe(1);
   expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
   expect(host.frames).toEqual([]);
+});
+
+/** The Claude Code screen these scenes read: the CLI's own default family, as a foreign signing
+ *  on a plain CLI launch contradicts. */
+const OPUS_SCREEN = `❯ \n${'─'.repeat(40)}\n  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
+
+/** The lead's registry record, with this signing and launch, on the pane the fixture's live agent
+ *  holds — so a scene never writes a pane shape by hand. */
+function registerLeadWith(made: World, host: Fake, signing: { model: string; version: string }, launch: string): void {
+  const leadPane = host.agents('acme')?.find((one) => one.name === 'lead')?.pane ?? '';
+  registerAgent(made.home, {
+    name: 'lead',
+    signing: { ...signing, role: 'coordinator' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch,
+    reach: { team: teamIdOf(made.root), seat: 'lead', session: 'acme', pane: leadPane, address: null },
+    mcp: [], skills: [], lifecycle: 'running', by: 'up',
+  });
+}
+
+// A path, an `env` prefix, or quotes spell the CLI's own binary; no launcher there selects a
+// model, so the Claude family its screen names is the contradiction the signing needs. (At the
+// round-1 head these three forms counted as wrappers and the send was delivered.)
+test('the CLI reached by a path, through env, or quoted is the CLI: a foreign signing is held on its screen', async () => {
+  for (const launch of ['/opt/fixture/bin/claude', 'env claude', '"claude"']) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], OPUS_SCREEN);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, { model: 'DeepSeek Flash', version: 'V4.1' }, launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+    expect(io.err).toContain('model drift: DeepSeek Flash V4.1 vs Claude Opus 4.6');
+    expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    made.cleanup();
+  }
+});
+
+// The family test is not a spelling test: `claude fable` is the CLI's own family in lower case,
+// read off the screen like any other Claude model, so the Opus screen is a drift.
+test('a Claude family spelled in lower case is read off the CLI screen, never as a foreign model', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const pane = scripted(['idle', 'working'], OPUS_SCREEN);
+  const host = fake(made, { native: pane });
+  registerLeadWith(made, host, { model: 'claude fable', version: '5.1' }, '/opt/fixture/bin/claude');
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
+  expect(io.err).toContain('model drift: claude fable 5.1 vs Claude Opus 4.6');
+  expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+});
+
+// A launcher this reader cannot follow proves nothing about the model: the provider id on its
+// banner is not a measured reading, so the model is unread — and unread is never a drift.
+test('an unrecognized launcher leaves a foreign model unread: its banner is not a measured match', async () => {
+  const made = world(['typed']);
+  cleanup = made.cleanup;
+  const pane = scripted(['idle', 'working'], `glm-5.4 · API Usage Billing\n${OPUS_SCREEN}`);
+  const host = fake(made, { native: pane });
+  registerLeadWith(made, host, { model: 'GLM', version: '5.3' }, 'unknown-wrapper');
+  const io = owner(made.root);
+
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(io.err).not.toContain('model drift');
+  const drops = dropDir(made.dir, 'lead');
+  const files = readdirSync(drops).filter((name) => !name.includes('.'));
+  expect(files.length).toBe(1);
+  expect(recordBody(join(drops, files[0] as string))).toBe(filed('hello'));
 });
 
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
