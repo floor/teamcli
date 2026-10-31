@@ -11,21 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 0.5.10 is one release for everything since 0.5.5. The work prepared as 0.5.6 through 0.5.9 is
 folded in here: the owner seat and grants, the registry, quiet starts, the general grant on
-every command, the end of pane messaging, and the managed Codex endpoint.
+every command, the end of typed messaging, and the managed Codex endpoint.
 
 ### Breaking change
 
 **Nothing is ever typed into a seat.** No message, wake, reminder, watch nudge, rules line or
-restart handover is sent by typing into a seat's pane or prompt. Every message ends in the
+restart handover is sent by typing into a seat's terminal or prompt. Every message ends in the
 seat's bus inbox and wakes the seat through its own adapter: a live development channel, an
 MCP inbox, a socket its launch accepts, or a Codex runtime queue. A seat with no push adapter
 reads its inbox on its own turn, and the sender is told `queued, no event adapter`. Starting a
-CLI in a pane, its exit keys and `team answer` (a permission dialog, not a message) are
+CLI in a terminal, its exit keys and `team answer` (a permission dialog, not a message) are
 unchanged.
 
 ### Upgrade notes
 
-- **A pull-only seat reads its own inbox.** Nothing is typed into its pane. The launch's
+- **A pull-only seat reads its own inbox.** Nothing is typed into its terminal. The launch's
   turn-start reader serves the waiting records on the seat's own turn, each with its signed
   read receipt; `team messages` serves them to a reader in the checkout. A seat whose launch
   gives it an adapter — a live development channel, an MCP inbox, a socket, or a Codex runtime
@@ -92,7 +92,7 @@ unchanged.
   endpoint; the endpoint accepts the app-server's linked socket. A Codex seat's tools and MCP
   servers under its managed endpoint are placed as that seat under the full ownership proof:
   the listen URL of its current binding, the recorded pid and a start inside the record's
-  window, and, for a session, the pane the session records.
+  window, and, for a session, the terminal it records.
 - **The workflow's live run store.** A run lives in a durable store: an item index that decides
   exclusion, a versioned, append-only journal that folds the run's state, and reservations that
   keep one seat on one item at a time. A pending hold has a release deadline, the built-in
@@ -111,9 +111,9 @@ unchanged.
 
 ### Fixed
 
-- **The machine daemon under launchd finds herdr.** The unit carries the installing shell's
-  PATH; without it every session read failed and every hosted send answered "the session could
-  not be read".
+- **The machine daemon under the system's service manager finds the terminal host.** The unit
+  carries the installing shell's PATH; without it every session read failed and every hosted
+  send answered "the session could not be read".
 - **A slow heartbeat probe no longer kills the hosted send endpoint.** Three 2 s misses in a
   row mark it failed, and an answer restores it; one 400 ms miss used to mark it failed for
   good.
@@ -140,11 +140,12 @@ unchanged.
 - **A resume line the CLI cannot find is launched fresh.** Before the launch runs, the
   conversation is checked on disk and a missing one is launched fresh with a note. If the CLI
   still refuses the resume at runtime, the idle wait reads that refusal and relaunches fresh
-  once in the same pane.
+  once in the same terminal.
 - A launch record can no longer re-run a disallowed launch line.
-- **herdr's idle never makes a seat ready once its CLI has exited.** herdr's word counts only
-  while a CLI is in front of the pane and on a second reading in a row; a pane back at its
-  shell waits into the ended reading, the missing-conversation fallback or the timeout.
+- **The terminal host's idle never makes a seat ready once its CLI has exited.** Its word
+  counts only while a CLI is in front of the terminal and on a second reading in a row; a
+  terminal back at its shell waits into the ended reading, the missing-conversation fallback or
+  the timeout.
 - **A Codex seat's managed endpoint keeps its inbox server and its permissions.** A TUI attached
   by remote loads the app-server's `-c` pairs, so the seat keeps its team inbox server, and the
   endpoint carries its approval policy and sandbox mode. Measured on codex-cli 0.161.0: a
