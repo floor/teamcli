@@ -73,8 +73,9 @@ export function rulesLine(path: string, hash12: string): string {
 }
 
 /** What a quiet start (`team up --no-launch`) adds to every seat's rules file: the seat, fresh or
- *  resumed, is told not to pick up earlier work or read drops on its own. */
-export const QUIET_START_NOTE = 'TeamCLI restart: do not continue any earlier work and do not read drops; reply ready and wait until your lead or the owner sends you a task.';
+ *  resumed, is told to read its inbox and act on what is addressed to it, and not to pick up
+ *  earlier work unless a message asks for it. */
+export const QUIET_START_NOTE = 'TeamCLI restart: read your inbox, act on what is addressed to you, and do not continue any earlier work unless a message asks for it.';
 
 /** A seat's rules delivery for a quiet start: the file's text with {@link QUIET_START_NOTE} as its
  *  last paragraph, and the typed line naming the hash of that text. */

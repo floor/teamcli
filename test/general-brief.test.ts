@@ -588,7 +588,8 @@ seats:
     expect(quiet.text).toBe(`Rule one.\n\n${QUIET_START_NOTE}\n`);
     expect(quiet.line).toBe(rulesLine('/x/rules/lead.md', rulesFileHash(quiet.text)));
     expect(quiet.line.length).toBe(plain.line.length);
-    expect(QUIET_START_NOTE).toContain('do not continue any earlier work and do not read drops');
+    expect(QUIET_START_NOTE).toContain('read your inbox, act on what is addressed to you');
+    expect(QUIET_START_NOTE).toContain('do not continue any earlier work unless a message asks for it');
   });
 
   test('the usage names --no-launch for the owner and the --client form', () => {
