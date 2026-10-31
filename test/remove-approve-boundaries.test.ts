@@ -20,6 +20,8 @@ import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { agentsDir, getAgent, registerAgent } from '../src/registry/agents.ts';
+import { getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
@@ -412,6 +414,41 @@ describe('the everyday commands with an old approval record on disk', () => {
     expect(code, `remove said:\n${io.out}\n${io.err}`).toBe(0);
     expect(liveText()).not.toContain('name: builder-1');
     expect(readFileSync(recordPath, 'utf8')).toBe(before);
+  });
+
+  test("remove retires the seat's agent record, which is never deleted", async () => {
+    approveAt(teamYaml(), OLD);
+    const id = teamIdOf(root);
+    const registered = registerAgent(home, {
+      name: 'builder-1',
+      signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+      lab: 'anthropic',
+      cli: 'claude-code',
+      launcher: null,
+      launch: 'claude --model claude-opus-5-5',
+      reach: { team: id, seat: 'builder-1', session: 'acme', pane: 'b1-pane', address: null },
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'test',
+    });
+    upsertTeam(home, id, {
+      project: 'acme',
+      session: 'acme',
+      root,
+      by: 'test',
+      roster: [{ agent: registered.id, seat: 'builder-1', role: 'implementer' }],
+    });
+    const io = testIo(root, owner);
+    const code = await runRemove(['builder-1'], io, removeSources([agentOf('builder-1', 'b1-pane', 'w1')]));
+    expect(code, `remove said:\n${io.out}\n${io.err}`).toBe(0);
+    const after = getAgent(home, registered.id);
+    expect(after?.lifecycle).toBe('retired');
+    expect(after?.orphaned_at).toEqual(expect.any(String));
+    expect(after?.reach).toMatchObject({ team: id, seat: 'builder-1', pane: null });
+    expect(after?.signing).toEqual(registered.signing);
+    expect(existsSync(join(agentsDir(home), `${registered.id}.yaml`))).toBe(true);
+    expect(getTeam(home, id)?.roster.some((line) => line.agent === registered.id)).toBe(false);
   });
 
   test('down stops the seats and the record is untouched', async () => {

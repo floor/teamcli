@@ -1271,6 +1271,56 @@ export const SESSIONS_OUTPUT_SCHEMA: CommandSchemaSpec = {
   },
 };
 
+/** Published `--json` output schema for `team agents prune` (`schema/agents.schema.json`). */
+export const AGENTS_OUTPUT_SCHEMA: CommandSchemaSpec = {
+  name: 'team.agents',
+  fileName: 'agents.schema.json',
+  title: 'team agents prune --json output',
+  required: ['format', 'apply', 'records', 'counts'],
+  properties: {
+    format: { type: 'integer', const: 1 },
+    apply: { type: 'boolean' },
+    records: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'name', 'team', 'project', 'seat', 'session', 'lifecycle', 'state', 'action', 'orphaned_at', 'reason'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+          name: { type: 'string', minLength: 1 },
+          team: { type: 'string', minLength: 1 },
+          project: { type: ['string', 'null'] },
+          seat: { type: 'string', minLength: 1 },
+          session: { type: 'string', minLength: 1 },
+          lifecycle: { type: 'string', enum: ['registered', 'running', 'stopped', 'retired'] },
+          state: { type: 'string', enum: ['orphaned', 'superseded', 'declared', 'unverified', 'unregistered'] },
+          action: { type: 'string', enum: ['retire', 'none'] },
+          orphaned_at: { type: ['string', 'null'] },
+          reason: { type: 'string', minLength: 1 },
+        },
+      },
+    },
+    counts: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['listed', 'orphaned', 'superseded', 'declared', 'unverified', 'unregistered', 'to_retire', 'retired', 'unchanged', 'failed'],
+      properties: {
+        listed: { type: 'integer', minimum: 0 },
+        orphaned: { type: 'integer', minimum: 0 },
+        superseded: { type: 'integer', minimum: 0 },
+        declared: { type: 'integer', minimum: 0 },
+        unverified: { type: 'integer', minimum: 0 },
+        unregistered: { type: 'integer', minimum: 0 },
+        to_retire: { type: 'integer', minimum: 0 },
+        retired: { type: 'integer', minimum: 0 },
+        unchanged: { type: 'integer', minimum: 0 },
+        failed: { type: 'integer', minimum: 0 },
+      },
+    },
+  },
+};
+
 /** Published `--json` output schema for `team plan` (`schema/plan.schema.json`). */
 export const PLAN_OUTPUT_SCHEMA: CommandSchemaSpec = {
   name: 'team.plan',
@@ -3040,6 +3090,7 @@ export const COMMAND_OUTPUT_SCHEMAS: readonly CommandSchemaSpec[] = [
   CONFIG_KEYS_OUTPUT_SCHEMA,
   SEAT_OUTPUT_SCHEMA,
   WORKFLOW_OUTPUT_SCHEMA,
+  AGENTS_OUTPUT_SCHEMA,
 ];
 
 
