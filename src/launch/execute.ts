@@ -1589,8 +1589,8 @@ export async function executePlan(
           final(op.seat, {
             kind: 'left out',
             reason: written === true
-              ? `its rules ride only a launch and nothing was typed; its rules file is written: run team restart ${op.seat} to carry them`
-              : `its rules ride only a launch and nothing was typed; run team restart ${op.seat} to carry them`,
+              ? `rules not typed: its rules ride only a launch; its rules file is written: run team restart ${op.seat} to carry them`
+              : `rules not typed: its rules ride only a launch; run team restart ${op.seat} to carry them`,
           });
           break;
         }
