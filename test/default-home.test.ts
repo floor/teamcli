@@ -5,7 +5,7 @@
 // that a socket-only seat is offered its time-bound record. The last scenes are the classifier's
 // own no-home rule seen through the handler: a caller that names no home proves no address, and
 // the conservative reading stands.
-import { afterEach, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, expect, mock, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import * as realOs from 'node:os';
 import { dirname, join } from 'node:path';
@@ -16,7 +16,12 @@ import type { TeamFile } from '../src/file/types.ts';
 let fakeHome = '';
 // Registered before the command modules load (they are imported dynamically below), so every
 // `homedir()` in the run answers the fixture home. The real module's other exports are intact.
+const realHomedir = realOs.homedir;
 mock.module('node:os', () => ({ ...realOs, homedir: () => fakeHome }));
+// Bun's module mocks are process-wide, and every test file of a run shares one process: put the
+// captured real lookup back when this file ends, so a later file's default home is the machine's
+// again rather than this fixture's.
+afterAll(() => { mock.module('node:os', () => ({ ...realOs, homedir: realHomedir })); });
 
 const { world } = await import('./send-native-fixtures.ts');
 const { testIo } = await import('./helpers.ts');
