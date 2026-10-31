@@ -602,7 +602,9 @@ function capture(w: World, caller?: Caller): { io: Io; out: () => string; err: (
 
 async function sendAt(w: World, grantPath: string, now: Date, sendId = 'drop-1'): Promise<{ code: number; err: string }> {
   const argv = ['--client', grantPath, '--key', w.keyPath, 'orchestrator@floor', 'hello orchestrator'];
-  const c = capture(w);
+  // The client's own shell, pinned: without a caller the pane guard walks the real parent
+  // processes, so a suite run from inside a pane is refused before the grant is read.
+  const c = capture(w, { kind: 'owner' });
   const host = { home: w.home, now: () => now, sendId: () => sendId } as unknown as SendHost;
   const code = await runClientSend(readArgs(argv, ['file', 'client', 'key', 'request-id'], ['json']), c.io, host, false);
   return { code, err: c.err() };
