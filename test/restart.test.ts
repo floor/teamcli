@@ -421,6 +421,30 @@ function makeHarness(
   return { sources, did };
 }
 
+/** What a real managed Codex launch leaves on the seat: a fresh presence incarnation and the
+ *  app-server endpoint recorded under it, bound to each other. */
+function managedEndpoint(fixture: Fixture, binding: string, url = 'unix:///tmp/worker.sock'): NonNullable<Launch['codexEndpoint']> {
+  return {
+    managed: async () => {
+      updateState(fixture.dir, (state) => {
+        const held = (state.sessions.acme ??= emptySession()).seats.worker;
+        if (held !== undefined) {
+          held.presence_binding = binding;
+          held.codex_endpoint = {
+            url,
+            binding,
+            pid: 4242,
+            started_at: '2026-10-31T00:00:00.000Z',
+            config: [],
+          };
+        }
+      });
+      return { kind: 'up' as const, url, started: true };
+    },
+    stop: () => ({ stopped: true }),
+  } as unknown as NonNullable<Launch['codexEndpoint']>;
+}
+
 describe('team restart <seat>', () => {
   test('owner restarts a free running seat, prints pre-close facts, updates state, and does not edit team.yaml', async () => {
     const fixture = makeFixture();
@@ -1307,33 +1331,21 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
   // The incident's other ending, and the live shape: the relaunched pane never reports the thread
   // it started, so the state ends naming no conversation while the managed launch has recorded a
-  // fresh endpoint and a fresh presence incarnation for it. The restart says exactly that
+  // fresh endpoint and a fresh presence incarnation for it. The endpoint's own thread read is made
+  // and proves nothing (a socket that is not listening here), so the restart says exactly that
   // (pull-only), and the class a send prints must say the same: the runtime queue is addressed by
   // the conversation the records bind, and an endpoint alone never wakes anybody.
-  test('a restart whose new pane reports no thread ends pull-only, and the class claims no wake', async () => {
+  test('a restart whose new pane and endpoint name no thread ends pull-only, and the class claims no wake', async () => {
     const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
     updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
     const BOUND = 'prs_fedcba987654';
     // What the real managed launch leaves: the endpoint, recorded under a fresh incarnation.
-    run.sources.upLaunch.codexEndpoint = {
-      managed: async () => {
-        updateState(fixture.dir, (state) => {
-          const held = (state.sessions.acme ??= emptySession()).seats.worker;
-          if (held !== undefined) {
-            held.presence_binding = BOUND;
-            held.codex_endpoint = {
-              url: 'unix:///tmp/worker.sock',
-              binding: BOUND,
-              pid: 4242,
-              started_at: '2026-10-31T00:00:00.000Z',
-              config: [],
-            };
-          }
-        });
-        return { kind: 'up' as const, url: 'unix:///tmp/worker.sock', started: true };
-      },
-      stop: () => ({ stopped: true }),
-    } as unknown as NonNullable<Launch['codexEndpoint']>;
+    run.sources.upLaunch.codexEndpoint = managedEndpoint(fixture, BOUND);
+    // The endpoint read this run makes: the socket is gone, so no thread is proven.
+    run.sources.codexThreads = async () => ({
+      kind: 'unavailable',
+      why: 'the Codex endpoint socket is not listening (ENOENT)',
+    });
     run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
     // The old pane draws Codex's own screens around the one exit text the stop types; the new
     // pane draws the idle prompt, but herdr lists no session for it.
@@ -1378,6 +1390,92 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(delivery.words).toBe('queued; worker reads it at its next turn (pull-only)');
     expect(delivery.evidence.endpoint).toBe(false);
     expect(delivery.evidence.conversation).toBe(false);
+    // The run says which read proved nothing, so a reader can tell an unreadable endpoint from a
+    // pane that simply reported no thread.
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: no thread was bound from its Codex endpoint (the Codex endpoint socket is not listening (ENOENT))');
+  });
+
+  // The incident's live repair, on the preferred path: the relaunched pane reports no thread, but
+  // the managed endpoint its launch started holds exactly one loaded thread, and that thread is
+  // the conversation the seat's runtime queue is addressed by. The restart reads it from the
+  // endpoint (never from the pane) and binds it to both records, so the seat ends reachable
+  // through its queue rather than only at its next turn.
+  test('a restart binds the one thread its Codex endpoint holds, and the class claims the wake', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const BINDING = 'prs_fedcba987654';
+    const THREAD = '019a0000-aaaa-7bbb-8ccc-ddddeeeeffff';
+    run.sources.upLaunch.codexEndpoint = managedEndpoint(fixture, BINDING);
+    const asked: string[] = [];
+    run.sources.codexThreads = async (endpoint) => {
+      asked.push(endpoint);
+      return { kind: 'read', ids: [THREAD] };
+    };
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    // The read is addressed by the seat's own recorded endpoint, never a home-derived path.
+    expect(asked).toEqual(['unix:///tmp/worker.sock']);
+    expect(io.out).not.toContain('pull-only');
+    // Both records now name the endpoint's thread, under the incarnation the launch wrote.
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.presence_binding).toBe(BINDING);
+    expect(seat?.agent_session).toBe(THREAD);
+    const record = findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' });
+    expect(record?.seat_handle).toBe('seat_0123456789ab');
+    expect(record?.reach.agent_session).toBe(THREAD);
+    expect(recordedSeatSession({
+      home: fixture.home,
+      root: fixture.root,
+      herdrSession: 'acme',
+      seat: { name: 'worker', cli: 'codex' },
+      state: seat,
+    }).kind).toBe('bound');
+    // The native route and the class read the same binding: this seat can be woken while idle.
+    const delivery = seatDeliveryClass({
+      home: fixture.home,
+      dir: fixture.dir,
+      root: fixture.root,
+      session: 'acme',
+      seat: 'worker',
+      declared: { cli: 'codex', launch: 'codex -m gpt-6.1-sol' },
+      state: seat,
+    });
+    expect(delivery.class).toBe('between-turns');
+    expect(delivery.words).toBe('woken through its runtime queue');
+    expect(delivery.evidence.endpoint).toBe(true);
+    expect(delivery.evidence.conversation).toBe(true);
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain(`worker: its Codex endpoint holds thread ${THREAD}; bound as the seat's session`);
+  });
+
+  // The ambiguous reading: the endpoint holds two threads, so neither is proven to be this seat's.
+  // Nothing is bound, and the restart stays honest about what a send will do.
+  test('a restart whose Codex endpoint holds more than one thread binds none and stays pull-only', async () => {
+    const { fixture, run, agentId } = seeded({ registry: 'ses_old', declaredCli: 'codex' });
+    updateAgent(fixture.home, agentId!, { seat_handle: 'seat_fedcba987654' });
+    const BINDING = 'prs_fedcba987654';
+    run.sources.upLaunch.codexEndpoint = managedEndpoint(fixture, BINDING);
+    run.sources.codexThreads = async () => ({
+      kind: 'read',
+      ids: ['019a0000-aaaa-7bbb-8ccc-ddddeeeeffff', '019a0000-1111-7222-8333-444455556666'],
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 300, foreground: [301] });
+    run.sources.screenText = (_session, pane) =>
+      pane === 'pane-old' ? (run.did.typed.length > 0 ? CODEX_EXIT_TYPED : CODEX_OLD_IDLE) : CODEX_NEW_IDLE;
+    const io = testIo(fixture.root, { kind: 'owner' });
+
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    const seat = readState(fixture.dir).sessions.acme?.seats.worker;
+    expect(seat?.agent_session).toBeUndefined();
+    expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_old');
+    const log = readFileSync(join(fixture.dir, 'team.log'), 'utf8');
+    expect(log).toContain('worker: no thread was bound from its Codex endpoint (its Codex endpoint holds 2 threads; none is proven to be this seat\'s)');
   });
 
   test('a host-restored process on the recorded pane can be replaced when its registry session agrees', async () => {

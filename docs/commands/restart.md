@@ -71,7 +71,17 @@ team. The run is the second door past the placement and who-may-run-it gates, ne
 | Outcome | What is printed | Exit |
 | --- | --- | --- |
 | the seat was restarted | the three pre-close facts, `<seat>: stopped`, the launch record, `<seat>: unsent text pasted back` when the box held unsent text, and `team restart: restarted <seat>; pane <old-pane> -> <new-pane>` | 0 |
-| the seat was restarted, and its native route cannot address it | the same lines, with the closing one ending `; pull-only: <reason>` — no agent record binds the seat, or, for a CLI whose runtime is addressed by the conversation it holds, the record carries no conversation yet; the seat stands, and only pull reaches it | 0 |
+| the seat was restarted on a managed Codex endpoint that held exactly one thread | the same lines, with no `pull-only`; the log says `<seat>: its Codex endpoint holds thread <id>; bound as the seat's session` | 0 |
+| the seat was restarted, and its native route cannot address it | the same lines, with the closing one ending `; pull-only: <reason>` — no agent record binds the seat, or, for a CLI whose runtime is addressed by the conversation it holds, no conversation is proven; the seat stands, and only pull reaches it | 0 |
+
+The conversation a managed Codex seat's runtime queue is addressed by belongs to the endpoint its
+launch started, not to the pane: a fresh pane reports no thread, and the launch starts a new
+conversation. After the new pane is ready, the restart therefore asks that recorded endpoint which
+threads it holds and, when exactly one is loaded, binds it as the seat's conversation in both the
+seat state and its agent record. It never waits for the pane to report the thread. An endpoint that
+holds no thread yet, holds more than one, or does not answer proves nothing: the records are left as
+they were, the closing line says `pull-only`, and the log names what the read proved instead
+(`<seat>: no thread was bound from its Codex endpoint (<reason>)`).
 | `--dry-run` succeeded | the stop line and the launch plan | 0 |
 | the run was refused, or the seat was left behind | `team restart: <reason>` | 1 |
 | the invocation or the team file can't be read | `team restart: <problem>` and the usage | 2 |

@@ -56,6 +56,9 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { boxHoldsText, deliverRules, fileRefusalOf, type Refusal } from '../launch/deliver.ts';
 import { executePlan, type Host } from '../launch/execute.ts';
 import { launchCodexEndpoint, stopSeatCodexEndpoint } from '../launch/codex-endpoint.ts';
+import { bindCodexSeatThread } from '../launch/codex-thread-binding.ts';
+import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
+import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import { GENERAL_BRIEF_SHA256, currentBriefEpochs, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState } from '../launch/cli-hook.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict } from '../launch/identity.ts';
@@ -110,6 +113,9 @@ export type RestartSources = RemoveSources & {
   machine?: (root: string) => Machine;
   standing?: (root: string) => Standing;
   seatBudget?: typeof seatBudget;
+  /** Reads the threads a managed Codex endpoint holds, for the seat state and record a fresh
+   *  pane could not fill. Absent: this run reads no endpoint and the seat stays pull-only. */
+  codexThreads?: (endpoint: string) => Promise<CodexLoadedThreadsRead>;
 };
 
 function aim(session: string): string | undefined {
@@ -163,6 +169,7 @@ export const realSources: RestartSources = {
   upLaunch: realUpLaunch,
   doctor: doctorSources,
   machine: readMachine,
+  codexThreads: (endpoint) => readLoadedCodexThreads({ endpoint }),
 };
 
 const LEFT: Record<Exclude<DownSeat['state'], 'free'>, string> = {
@@ -1093,7 +1100,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       ...(expectedBrief === undefined ? {} : { brief: expectedBrief }),
     });
     const report = await executePlan(plan, session, host);
-    const afterwards = readState(dir).sessions[session]?.seats[name];
+    let afterwards = readState(dir).sessions[session]?.seats[name];
     const launchedOk = !report.held && !report.dropped.includes(name) && afterwards?.stage === 'ready' && !report.serverFailed;
     if (!launchedOk || !afterwards?.pane) {
       logLine(dir, input.command, who, `${name}: launch did not reach ready${draftCopy === undefined ? '' : `; its unsent text is copied at ${draftCopy}`}`, sources.now());
@@ -1114,6 +1121,49 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         noteIo.stdout(`${plainLine(said)}\n`);
         logLine(dir, input.command, who, said, sources.now());
       }
+    }
+    // A managed Codex seat's conversation is owned by the app-server its launch started: herdr
+    // names no session for a fresh managed pane, so the state and the seat's record can both name
+    // none while the endpoint holds the thread its runtime queue is addressed by. When the
+    // records do not bind a conversation, read the endpoint's own loaded threads and bind the one
+    // it proves to both records, so a send right after the restart is addressed to a real
+    // conversation rather than falling to a pull. A read that proves nothing — no thread, several,
+    // or an endpoint that does not answer — leaves the records as they were, and the result below
+    // says pull-only with the reason the record gives.
+    if (
+      afterwards !== undefined
+      && nativePushBindingFor(launching.cli) === 'conversation'
+      && inspectRecordedCodexEndpoint(afterwards.codex_endpoint, afterwards.presence_binding).kind === 'ok'
+      && recordedSeatSession({
+        home,
+        root,
+        herdrSession: session,
+        seat: launching,
+        state: afterwards,
+      }).kind !== 'bound'
+      && sources.codexThreads !== undefined
+    ) {
+      const bound = await bindCodexSeatThread({
+        home,
+        root,
+        dir,
+        session,
+        seat: launching,
+        state: afterwards,
+        read: sources.codexThreads,
+      });
+      if (bound.kind === 'bound') {
+        afterwards = readState(dir).sessions[session]?.seats[name] ?? afterwards;
+        logLine(dir, input.command, who, `${name}: its Codex endpoint holds thread ${bound.id}; bound as the seat's session`, sources.now());
+      } else {
+        logLine(dir, input.command, who, `${name}: no thread was bound from its Codex endpoint (${bound.why})`, sources.now());
+      }
+    }
+    if (afterwards === undefined || afterwards.pane === undefined) {
+      // The ready check above returned for a seat whose state was already gone; a state that
+      // vanished while the binding read ran is the same shape, and the result says so.
+      logLine(dir, input.command, who, `${name}: launch did not reach ready; its state is gone`, sources.now());
+      return { kind: 'not-ready', message: `${name} did not reach a ready prompt` };
     }
     // The state this run wrote is ready; the registry write that binds the seat to it may not
     // have landed. The record is read back with the binding the seat's native route needs: a
