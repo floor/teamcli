@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The registry MVP's acceptance scenes (design-registry-mvp.md, §Acceptance), test-first:
 // (a) an agy seat — a CLI with no SendMessage — sends to the main coordinator by `name@team`,
 //     and the drop the receiver is pointed at names the sender's agent id and the rule that
@@ -587,45 +588,30 @@ seats:
 });
 
 describe('a CLI that swallows the first Enter', () => {
-  test('is pressed again, and the delivery is verified', async () => {
+  test('no pane messaging, the typed leg is refused; was: is pressed again, and the delivery is verified', async () => {
     const cli = boxCli(1);
-    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
-    expect(receipt).toMatchObject({ outcome: 'delivered', tries: 2, status: 'working' });
-    expect(cli.typed).toEqual([{ session: DELIVER_SESSION, pane: DELIVER_PANE, text: DROP_LINE }]);
-    expect(cli.enters).toBe(2);
-    // Both Enters went to the box while it still held team's own line: the second is the retry,
-    // never an Enter into a dialog, an empty box, or text someone else left there.
-    expect(cli.entersOnLine).toEqual([true, true]);
+    const retired = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 });
 
 describe('a CLI that never submits', () => {
-  test('is not-submitted, with the box text, inside the try bound', async () => {
+  test('no pane messaging, the typed leg is refused; was: is not-submitted, with the box text, inside the try bound', async () => {
     const cli = boxCli(Infinity);
-    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
-    // Never a silent success: the receipt carries what the box holds.
-    expect(receipt.outcome).toBe('not-submitted');
-    expect(receipt.box).toBe(DROP_LINE);
-    expect(receipt.tries).toBe(3); // the doc's bound
-    expect(cli.enters).toBe(3); // and the loop stops there
-    expect(cli.entersOnLine).toEqual([true, true, true]);
+    const retired = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 });
 
 describe('a box that shows a dim suggestion', () => {
-  test('counts as empty, and no Enter goes out on it', async () => {
+  test('no pane messaging, the typed leg is refused; was: counts as empty, and no Enter goes out on it', async () => {
     // The captured frame greys `Resume briefly.` — a suggestion the profile's placeholder list
     // does not name, so only the faint styling (SGR 2) can make it read as empty (the capture's
     // README records exactly that pair: its plain read stays unsent). The same frame is drawn
     // again once the CLI has taken the line, so the scene has it both before the type and after.
     expect(IDLE_SUGGESTION).toContain('\u001b[2m');
     const cli = boxCli(0, 'suggestion');
-    const receipt = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
-    expect(receipt).toMatchObject({ outcome: 'delivered', tries: 1 });
-    // The suggestion was never text to hold on or submit: team typed its own line, and the one
-    // Enter went to that line.
-    expect(cli.typed.map((call) => call.text)).toEqual([DROP_LINE]);
-    expect(cli.enters).toBe(1);
-    expect(cli.entersOnLine).toEqual([true]);
+    const retired = await deliverTrigger(bindPane(cli, DELIVER_SESSION), DELIVER_PANE, DROP_LINE, DELIVER_PROFILE);
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 });

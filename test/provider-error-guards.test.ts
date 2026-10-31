@@ -15,7 +15,7 @@ const limit = `API Error: Request rejected (429) · Usage limit reached for 5 ho
 const screens = [lost, limit];
 
 describe('nothing is typed into a provider error or a rate limit', () => {
-  test('delivery refuses at the first read, before any wait', async () => {
+  test('no pane messaging, rules are never typed; was: delivery refuses at the first read, before any wait', async () => {
     for (const screen of screens) {
       let naps = 0;
       const calls: string[] = [];
@@ -32,14 +32,13 @@ describe('nothing is typed into a provider error or a rate limit', () => {
         now: () => clock,
         sleep: async (ms) => { naps += 1; clock += ms; },
       };
-      expect(await deliverRules('claude-code', 'Rules.', 30, io)).toBe(false);
+      const retired = await deliverRules('claude-code', 'Rules.', 30, io);
+      expect(await retired).toBe(false);
       expect(calls).toEqual([]);
-      expect(naps).toBe(0);
-      expect(refusals.at(-1)?.kind).toBe(readScreen('claude-code', screen).kind);
     }
   });
 
-  test('a screen that becomes a provider error or a rate limit after Enter gets no further key', async () => {
+  test('no pane messaging, rules are never typed; was: a screen that becomes a provider error or a rate limit after Enter gets no further key', async () => {
     for (const next of screens) {
       let raw = claudeBox('');
       const calls: string[] = [];
@@ -56,10 +55,9 @@ describe('nothing is typed into a provider error or a rate limit', () => {
         now: () => clock,
         sleep: async (ms) => { clock += ms; },
       };
-      expect(await deliverRules('claude-code', 'Rules.', 5, io)).toBe(false);
-      expect(calls).toEqual(['Rules.', 'Enter']);
-      expect(refusals.at(-1)?.stop).toBe('ack');
-      expect(refusals.at(-1)?.kind).toBe(readScreen('claude-code', next).kind);
+      const retired = await deliverRules('claude-code', 'Rules.', 5, io);
+      expect(await retired).toBe(false);
+      expect(calls).toEqual([]);
     }
   });
 

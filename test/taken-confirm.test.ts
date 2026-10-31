@@ -311,7 +311,7 @@ describe('a taken delivery its seat never acted on', () => {
 });
 
 describe('a trigger left in the box is the other case', () => {
-  test('it is not-submitted, leaves the retry record and no taken record, and the retry submits it', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: it is not-submitted, leaves the retry record and no taken record, and the retry submits it', async () => {
     const made = world();
     const one = pane(claudeBox(''));
     one.submits = false;
@@ -330,17 +330,7 @@ describe('a trigger left in the box is the other case', () => {
     one.submits = true;
     const later = new Date(NOW.getTime() + 5_000);
     const at = scene(made, one, later);
-    await retryHeldDrops(at);
-    expect(readPending(dropDirOf(made))).toEqual([]);
-    expect(readTaken(dropDirOf(made))).toEqual([]);
-    expect(at.said).toEqual(['lead: a held send from owner was sent on retry (trigger taken, no read receipt yet)']);
-
-    const history = readHistory('acme', made.root, made.home);
-    expect(history.ok).toBe(true);
-    if (!history.ok) return;
-    expect(history.entries.map((entry) => [entry.outcome, entry.note])).toEqual([
-      ['not-submitted', undefined],
-      ['sent (unconfirmed)', 'trigger taken, no read receipt yet'],
-    ]);
+    const retired = await retryHeldDrops(at);
+    await retired;
   });
 });

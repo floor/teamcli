@@ -938,7 +938,7 @@ export class LockBusyError extends Error {
 // first held lock instead of pausing, so a caller on a scheduler tick can defer the same work to
 // a later tick without blocking its event loop.
 export function withLock<T>(dir: string, work: () => T, options: { waitMs?: number; onStale?: (pid: number) => void } = {}): T {
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, LOCK_FILE);
   const waitMs = options.waitMs ?? 5000;
   const deadline = Date.now() + waitMs;

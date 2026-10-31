@@ -166,20 +166,20 @@ describe('the rules read-back over a faint suggestion', () => {
     return { io, calls };
   }
 
-  test('a faint suggestion is an empty box: the rules are typed and sent', async () => {
+  test('no pane messaging, rules are never typed; was: a faint suggestion is an empty box: the rules are typed and sent', async () => {
     const d = delivery(claude('idle-suggestion-other-ansi'));
-    expect(await deliverRules('claude-code', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('claude-code', 'Rules.', 1, d.io);
+    expect(await retired).toBe(false);
   });
 
-  test('a wrapped faint suggestion is an empty box too', async () => {
+  test('no pane messaging, rules are never typed; was: a wrapped faint suggestion is an empty box too', async () => {
     const wrapped = claudeWith(
       `\u276f\u00a0${FAINT}check the CI result of the open pull request and report which tests failed on${RESET}`,
       `  ${FAINT}the hosted run${RESET}`,
     );
     const d = delivery(wrapped);
-    expect(await deliverRules('claude-code', 'Rules.', 1, d.io)).toBe(true);
-    expect(d.calls).toEqual(['Rules.', 'Enter']);
+    const retired = await deliverRules('claude-code', 'Rules.', 1, d.io);
+    expect(await retired).toBe(false);
   });
 
   test('typed text in the box is not: the rules are not typed over it', async () => {

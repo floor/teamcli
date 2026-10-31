@@ -1152,7 +1152,7 @@ async function askForHandover(input: {
     return input.path;
   }
   try {
-    mkdirSync(dirname(input.path), { recursive: true });
+    mkdirSync(dirname(input.path), { recursive: true, mode: 0o700 });
   } catch {
     input.log(`${input.name}: the handover folder could not be made; the launch goes on`);
     return undefined;

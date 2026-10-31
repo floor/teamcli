@@ -59,11 +59,10 @@ describe('rules read-back on the real Codex 0.161 and Cursor screens', () => {
       expect(boxHoldsText(cli, line, screen)).toBe(true);
     });
 
-    test(`${file}: a later run finds its own unsent line and sends it without typing again`, async () => {
+    test(`no pane messaging, rules are never typed; was: ${file}: a later run finds its own unsent line and sends it without typing again`, async () => {
       const s = seat(cli, fixture(file));
-      expect(await deliverRules(cli, line, 30, s.io)).toBe(true);
-      expect(s.calls).toEqual(['Enter']);
-      expect(s.refusals).toEqual([]);
+      const retired = await deliverRules(cli, line, 30, s.io);
+      expect(await retired).toBe(false);
     });
   }
 });
@@ -71,41 +70,36 @@ describe('rules read-back on the real Codex 0.161 and Cursor screens', () => {
 describe('a seat that turns busy under the typed line', () => {
   const { cli, file, line } = SCREENS[0];
 
-  test('is waited out, then gets its Enter: no mismatch is declared', async () => {
+  test('no pane messaging, rules are never typed; was: is waited out, then gets its Enter: no mismatch is declared', async () => {
     const s = seat(cli, fixture(file));
     // The seat is free at the first look and busy right after (a queued drop starts a turn).
     let looks = 0;
     const status = s.io.status;
     s.io.status = () => { looks += 1; if (looks === 2) s.busy(4000); return status(); };
-    expect(await deliverRules(cli, line, 30, s.io)).toBe(true);
-    expect(s.calls).toEqual(['Enter']);
-    expect(s.refusals).toEqual([]);
+    const retired = await deliverRules(cli, line, 30, s.io);
+    expect(await retired).toBe(false);
   });
 
-  test('still busy at the deadline: reported busy, the line left in its box, no clearing key', async () => {
+  test('no pane messaging, rules are never typed; was: still busy at the deadline: reported busy, the line left in its box, no clearing key', async () => {
     const s = seat(cli, fixture(file));
     let looks = 0;
     const status = s.io.status;
     s.io.status = () => { looks += 1; if (looks === 2) s.busy(10 * 60_000); return status(); };
-    expect(await deliverRules(cli, line, 5, s.io)).toBe(false);
-    expect(s.calls.filter((call) => call === 'Enter' || call.startsWith('key:'))).toEqual([]);
-    const why = s.refusals.at(-1)!;
-    expect(why).toMatchObject({ stop: 'working', typed: true, sent: false });
-    expect(refusalReport(why)).toContain('busy with a turn');
-    expect(refusalReport(why)).not.toContain("read-back didn't match");
+    const retired = await deliverRules(cli, line, 5, s.io);
+    expect(await retired).toBe(false);
   });
 });
 
 describe('a frame still drawing after the line was typed', () => {
   const { cli, file, line } = SCREENS[1];
-  test('a screen the grammar does not read yet is waited out, not called a mismatch', async () => {
+  test('no pane messaging, rules are never typed; was: a screen the grammar does not read yet is waited out, not called a mismatch', async () => {
     const s = seat(cli, fixture(file));
     const box = s.io.screen;
     let looks = 0;
     // The first two looks after the start read a frame the grammar does not know (Codex's MCP
     // start-up row on a narrow pane); then the box is drawn.
     s.io.screen = () => { looks += 1; return looks >= 3 && looks <= 5 ? 'Starting MCP servers (0/1): team_inbox' : box(); };
-    expect(await deliverRules(cli, line, 30, s.io)).toBe(true);
-    expect(s.refusals).toEqual([]);
+    const retired = await deliverRules(cli, line, 30, s.io);
+    expect(await retired).toBe(false);
   });
 });

@@ -26,7 +26,7 @@ const KEPT = 3;
 // logs through, so no command's exit status and no watch pass depends on the log being writable.
 export function logLine(dir: string, command: string, caller: string, what: string, now: Date = new Date()): void {
   try {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
     const path = join(dir, LOG_FILE);
     if (existsSync(path) && statSync(path).size >= MAX_BYTES) rotate(path);
     const line = plainLine(`${command} [${caller}] ${what}`).replace(/\s+/g, ' ');

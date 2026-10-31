@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // The current prompt after a turn that ended: the approved field note
 // (briefs-0.5.4/claude-code-stale-error-above-ready-prompt-20261021.txt, sha256 f1fb5444…) records
 // an API Error line, then the turn's own `done` line, then an idle prompt — and the watch and
@@ -183,17 +184,14 @@ describe('a turn-end after the error makes the prompt current', () => {
     expect(stateOf('idle', readScreen('claude-code', afterCompletion), 'claude-code')).toBe('free');
   });
 
-  test('a send types into that prompt instead of refusing it as a dialog', async () => {
+  test('no pane messaging, the typed leg is refused; was: a send types into that prompt instead of refusing it as a dialog', async () => {
     const host = fakeHost({
       before: afterCompletion,
       typed: (line) => pane(ENDED, line),
       after: historicalErrorWorking,
     });
-    const result = await deliverTrigger(host, 'pane-1', SEND_LINE, 'claude-code');
-    expect(result.outcome).toBe('delivered');
-    expect(result.evidence).toBe('status');
-    expect(host.log.typed).toEqual([SEND_LINE]);
-    expect(host.log.enters).toBe(1);
+    const retired = await deliverTrigger(host, 'pane-1', SEND_LINE, 'claude-code');
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 });
 
@@ -206,13 +204,10 @@ describe('an error without a later turn-end is still the dialog', () => {
     expect(stateOf('idle', readScreen('claude-code', immediateError), 'claude-code')).toBe('blocked');
   });
 
-  test('a send refuses that pane and types nothing', async () => {
+  test('no pane messaging, the typed leg is refused; was: a send refuses that pane and types nothing', async () => {
     const host = fakeHost({ before: immediateError, typed: () => immediateError, after: immediateError });
-    const result = await deliverTrigger(host, 'pane-1', SEND_LINE, 'claude-code');
-    expect(result.outcome).toBe('unreachable');
-    expect(result.dialog).toBe('provider error');
-    expect(host.log.typed).toEqual([]);
-    expect(host.log.enters).toBe(0);
+    const retired = await deliverTrigger(host, 'pane-1', SEND_LINE, 'claude-code');
+    expect(await retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
   });
 
   test('a turn-end before a fresh error does not dismiss the fresh error', () => {

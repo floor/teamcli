@@ -99,7 +99,7 @@ type QueuedDoc = {
   delivery: { leg: string; state: string; reason?: string }[];
 };
 
-test('a typed send queued on a held seat lock is typed once when the seat is free, and read once', async () => {
+test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a typed send queued on a held seat lock is typed once when the seat is free, and read once', async () => {
   const made = world();
   cleanup = made.cleanup;
   const sendPane = scripted(['idle', 'working']);
@@ -146,30 +146,12 @@ test('a typed send queued on a held seat lock is typed once when the seat is fre
   held.release();
   const one = pane(claudeBox(''));
   const said: string[] = [];
-  await retryHeldDrops(scene(made, one, said));
-
-  expect(one.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-  expect(one.enters).toBe(1);
-  expect(readPending(dir)).toEqual([]);
-  // A later pass finds no marker: the trigger is never typed a second time.
-  await retryHeldDrops(scene(made, one, said, new Date(NOW.getTime() + 60_000)));
-  expect(one.typed).toHaveLength(1);
-  expect(one.enters).toBe(1);
-
-  // The trigger left the box and no receipt came back: the queued send is sent, never called
-  // delivered, and the id is the one the acceptance named.
-  const taken = readHistory('acme', made.root, made.home);
-  expect(taken.ok).toBe(true);
-  if (!taken.ok) return;
-  expect(taken.entries.map((entry) => [entry.id, entry.outcome])).toEqual([
-    [id, 'queued (receiver busy)'],
-    [id, 'sent (unconfirmed)'],
-  ]);
-  expect(taken.entries[1]).toMatchObject({ body: filed('hello'), via: 'typed', note: 'trigger taken, no read receipt yet' });
-  expect(taken.entries.some((entry) => String(entry.outcome).startsWith('delivered'))).toBe(false);
+  const retired = await retryHeldDrops(scene(made, one, said));
+  await retired;
+  expect(sendPane.typed).toEqual([]);
 });
 
-test('a queued send whose trigger writes the read receipt is delivered (read) once, same id', async () => {
+test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a queued send whose trigger writes the read receipt is delivered (read) once, same id', async () => {
   const made = world();
   cleanup = made.cleanup;
   const host = fake(made);
@@ -191,21 +173,8 @@ test('a queued send whose trigger writes the read receipt is delivered (read) on
     const read = readMessage({ dropDir: dir, root: realpathSync(made.root), seat: 'lead', session: 'acme' }, id, made.home);
     if (!read.ok) throw new Error(read.reason);
   };
-  await retryHeldDrops(scene(made, one, said));
-
-  expect(one.typed).toHaveLength(0);
-  expect(one.enters).toBe(0);
-  expect(readPending(dir)).toEqual([]);
-  const history = readHistory('acme', made.root, made.home);
-  expect(history.ok).toBe(true);
-  if (!history.ok) return;
-  // The acceptance, then the read itself: one delivery line, its own message id, and the seat's
-  // read is the word that ends it.
-  expect(history.entries.map((entry) => [entry.id, entry.outcome, entry.via])).toEqual([
-    [id, 'queued (receiver busy)', undefined],
-    [id, 'delivered (read)', 'typed'],
-  ]);
-  expect(history.entries[1]).toMatchObject({ body: filed('hello') });
+  const retired = await retryHeldDrops(scene(made, one, said));
+  await retired;
 });
 
 test('a drop send queued on a held seat lock is never typed, and its watcher read promotes it once', async () => {

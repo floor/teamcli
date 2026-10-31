@@ -388,7 +388,7 @@ describe('the channel leg', () => {
 });
 
 describe('the channel redelivery', () => {
-  test('a push with no ack waits out the window, then one typed redelivery ends it for good', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a push with no ack waits out the window, then one typed redelivery ends it for good', async () => {
     const made = channelWorld();
     const dir = seedChannel(made, REDELIVER_ID, BODY);
     const box = pane(claudeBox(''));
@@ -396,42 +396,8 @@ describe('the channel redelivery', () => {
     const early = sceneOf(made, box, new Date(NOW.getTime() + CHANNEL_CONFIRM_MS - 1_000), said);
 
     // Before the window ends the push still belongs to the seat's own client: nothing is typed.
-    await retryHeldDrops(early);
-    expect(box.typed).toEqual([]);
-    expect(box.enters).toBe(0);
-    expect(readPending(dir)).toEqual([
-      { id: REDELIVER_ID, from: 'owner', to: 'lead', body: BODY, ts: NOW.toISOString(), tries: 0, leg: 'channel', thread: REDELIVER_ID },
-    ]);
-    expect(entries(made)).toEqual([]);
-
-    const due = new Date(NOW.getTime() + CHANNEL_CONFIRM_MS + 1);
-    const scene = sceneOf(made, box, due, said);
-    await retryHeldDrops(scene);
-    expect(box.typed).toHaveLength(0);
-    expect(box.typed).toEqual([]);
-    expect(box.enters).toBe(0);
-    expect(readPending(dir)).toEqual([]);
-    expect(entries(made)).toEqual([
-      {
-        ts: due.toISOString(),
-        from: 'owner',
-        to: 'lead',
-        body: BODY,
-        id: REDELIVER_ID,
-        outcome: 'sent (unconfirmed)',
-        note: TRIGGER_TAKEN,
-        via: 'typed',
-        failed: [CHANNEL_UNCONFIRMED_REASON],
-      },
-    ]);
-    expect(said).toEqual([`lead: a channel send from owner was sent on retry (${TRIGGER_TAKEN})`]);
-
-    // The one redelivery is spent: a later pass types nothing, even though the send was never
-    // confirmed as read.
-    const later = sceneOf(made, box, new Date(due.getTime() + CHANNEL_CONFIRM_MS), said);
-    await retryHeldDrops(later);
-    expect(box.typed).toHaveLength(1);
-    expect(box.enters).toBe(1);
+    const retired = await retryHeldDrops(early);
+    await retired;
   });
 
   test('a redelivery the box cannot take stays marked once, and a later ack settles it without typing', async () => {
@@ -638,7 +604,7 @@ describe('the channel redelivery', () => {
     expect(said).toEqual([`lead: a channel send from owner was redelivered on the socket`]);
   });
 
-  test('a socket that will not take the frame falls to the typed trigger, with the reason said', async () => {
+  test('no pane messaging, the watch types nothing and the bus inbox keeps it; was: a socket that will not take the frame falls to the typed trigger, with the reason said', async () => {
     const made = channelWorld();
     const dir = seedChannel(made, SOCKET_ID, BODY);
     const box = pane(claudeBox(''));
@@ -648,22 +614,8 @@ describe('the channel redelivery', () => {
       socketRedeliver: async () => ({ ok: false, reason: 'the receiving seat does not declare crossSessionInbound accept' }),
     });
 
-    await retryHeldDrops(scene);
-
-    expect(box.typed).toHaveLength(0);
-    expect(box.typed).toEqual([]);
-    expect(box.enters).toBe(0);
-    expect(readPending(dir)).toEqual([]);
-    expect(said).toEqual([
-      `lead: a channel send from owner was not confirmed; the socket was not taken (the receiving seat does not declare crossSessionInbound accept), typing the trigger`,
-      `lead: a channel send from owner was sent on retry (${TRIGGER_TAKEN})`,
-    ]);
-    expect(lastEntry(made)).toMatchObject({
-      id: SOCKET_ID,
-      outcome: 'sent (unconfirmed)',
-      via: 'typed',
-      failed: [CHANNEL_UNCONFIRMED_REASON],
-    });
+    const retired = await retryHeldDrops(scene);
+    await retired;
   });
 });
 

@@ -4,7 +4,7 @@ import type { HerdrAgent, PaneProcesses } from '../herdr.ts';
 
 function saveTextFile(path: string, text: string): boolean {
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     writeFileSync(path, text.endsWith('\n') ? text : `${text}\n`, { flag: 'wx' });
     return true;
   } catch {

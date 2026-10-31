@@ -103,17 +103,15 @@ describe('the completed frame and the retained layout around it', () => {
     expect(rows).toContain(`⏺ ${LOST}`);
   });
 
-  test('the completed frame delivers once: an ended turn is history above a ready box', async () => {
-    const ran = await deliver(FIXTURE);
-    expect(ran.read).toBe('idle');
-    expect(dialogKind('claude-code', FIXTURE)).toBeNull();
-    expect(ran.result).toBe(true);
-    expect(ran.typed).toEqual([RULES]);
-    expect(ran.entered).toBe(1);
-    expect(ran.refusals).toEqual([]);
+  test('no pane messaging, rules are never typed; was: the completed frame delivers once: an ended turn is history above a ready box', async () => {
+    const retired = await deliver(FIXTURE);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('the retained layout without its completion row is a provider error and takes no input', async () => {
+  test('no pane messaging, rules are never typed; was: the retained layout without its completion row is a provider error and takes no input', async () => {
     const screen = withoutRow(FIXTURE, DONE);
     expect(screen).not.toContain(DONE);
     // The counterexample is this exact remainder: the blank margin stays beside the notice.
@@ -121,148 +119,130 @@ describe('the completed frame and the retained layout around it', () => {
     const notice = rows.findIndex((row) => row.includes(NOTICE));
     expect(notice).toBeGreaterThan(0);
     expect(rows[notice - 1]).toBe('');
-    const ran = await deliver(screen);
-    expect(ran.read).toBe('provider error');
-    expect(dialogKind('claude-code', screen)).toBe('provider error');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals).toHaveLength(1);
-    expect(ran.refusals[0]).toMatchObject({
-      stop: 'screen', typed: false, sent: false, kind: 'provider error', row: null,
-    });
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('the same layout without its update notice refuses the same way', async () => {
+  test('no pane messaging, rules are never typed; was: the same layout without its update notice refuses the same way', async () => {
     const screen = withoutNotice(withoutRow(FIXTURE, DONE));
     expect(screen).not.toContain(NOTICE);
-    const ran = await deliver(screen);
-    expect(ran.read).toBe('provider error');
-    expect(dialogKind('claude-code', screen)).toBe('provider error');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals).toHaveLength(1);
-    expect(ran.refusals[0]).toMatchObject({
-      stop: 'screen', typed: false, sent: false, kind: 'provider error', row: null,
-    });
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 });
 
 describe('the caution controls around that frame', () => {
-  test('an error contiguous with the box refuses the whole window', async () => {
+  test('no pane messaging, rules are never typed; was: an error contiguous with the box refuses the whole window', async () => {
     const screen = [LOST, '─'.repeat(40), '❯', '─'.repeat(40)].join('\n');
-    const ran = await deliver(screen);
-    expect(ran.read).toBe('provider error');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('a permission dialog is its owner\'s, never the delivery\'s', async () => {
-    const ran = await deliver(PERMISSION);
-    expect(ran.read).toBe('permission');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'permission' });
+  test('no pane messaging, rules are never typed; was: a permission dialog is its owner\'s, never the delivery\'s', async () => {
+    const retired = await deliver(PERMISSION);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('a running turn refuses at once and types nothing', async () => {
-    const ran = await deliver(FIXTURE.replace(DONE, `${DONE}\n  esc to interrupt`));
-    expect(ran.read).toBe('working');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'working', kind: 'working', typed: false, sent: false });
+  test('no pane messaging, rules are never typed; was: a running turn refuses at once and types nothing', async () => {
+    const retired = await deliver(FIXTURE.replace(DONE, `${DONE}\n  esc to interrupt`));
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('a draft in the box is left alone, never typed over', async () => {
-    const ran = await deliver(withDraft(FIXTURE, 'owner draft'));
-    expect(ran.read).toBe('unsent');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'leftover', kind: 'unsent', typed: false, sent: false });
+  test('no pane messaging, rules are never typed; was: a draft in the box is left alone, never typed over', async () => {
+    const retired = await deliver(withDraft(FIXTURE, 'owner draft'));
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('an error after the completion is fresh, not history', async () => {
-    const ran = await deliver(FIXTURE.replace(DONE, `${DONE}\n${LOST}`));
-    expect(ran.read).toBe('provider error');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+  test('no pane messaging, rules are never typed; was: an error after the completion is fresh, not history', async () => {
+    const retired = await deliver(FIXTURE.replace(DONE, `${DONE}\n${LOST}`));
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('a completion quoted in prose does not end the turn', async () => {
+  test('no pane messaging, rules are never typed; was: a completion quoted in prose does not end the turn', async () => {
     const screen = [LOST, `⏺ The log said "${DONE}"`, claudeBox('')].join('\n');
     expect(readScreen('claude-code', screen)).toEqual({ kind: 'provider error' });
-    const ran = await deliver(screen);
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('an indented completion row does not end the turn', async () => {
+  test('no pane messaging, rules are never typed; was: an indented completion row does not end the turn', async () => {
     const screen = [LOST, `  ${DONE}`, claudeBox('')].join('\n');
     expect(readScreen('claude-code', screen)).toEqual({ kind: 'provider error' });
-    const ran = await deliver(screen);
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('a malformed completion row does not end the turn', async () => {
+  test('no pane messaging, rules are never typed; was: a malformed completion row does not end the turn', async () => {
     const screen = [LOST, '✻ Cooked for 5m 51s · done soon', claudeBox('')].join('\n');
     expect(readScreen('claude-code', screen)).toEqual({ kind: 'provider error' });
-    const ran = await deliver(screen);
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'provider error' });
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('an old error above its own completion stays history', async () => {
+  test('no pane messaging, rules are never typed; was: an old error above its own completion stays history', async () => {
     const screen = [LOST, DONE, claudeBox('')].join('\n');
     expect(readScreen('claude-code', screen)).toEqual({ kind: 'idle' });
     expect(dialogKind('claude-code', screen)).toBeNull();
-    const ran = await deliver(screen);
-    expect(ran.result).toBe(true);
-    expect(ran.typed).toEqual([RULES]);
-    expect(ran.entered).toBe(1);
-    expect(ran.refusals).toEqual([]);
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('a blank margin over its own completion does not make the old error live', async () => {
+  test('no pane messaging, rules are never typed; was: a blank margin over its own completion does not make the old error live', async () => {
     const screen = [LOST, '', DONE, claudeBox('')].join('\n');
     expect(readScreen('claude-code', screen)).toEqual({ kind: 'idle' });
-    const ran = await deliver(screen);
-    expect(ran.result).toBe(true);
-    expect(ran.typed).toEqual([RULES]);
-    expect(ran.entered).toBe(1);
-    expect(ran.refusals).toEqual([]);
+    const retired = await deliver(screen);
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('a working status refuses even over an idle-looking frame', async () => {
-    const ran = await deliver(FIXTURE, 'working');
-    expect(ran.read).toBe('idle');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'working', kind: 'working' });
+  test('no pane messaging, rules are never typed; was: a working status refuses even over an idle-looking frame', async () => {
+    const retired = await deliver(FIXTURE, 'working');
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 
-  test('an unrecognized screen waits its deadline out and refuses with nothing typed', async () => {
-    const ran = await deliver('unrecognized screen');
-    expect(ran.read).toBe('unknown');
-    expect(ran.result).toBe(false);
-    expect(ran.typed).toEqual([]);
-    expect(ran.entered).toBe(0);
-    expect(ran.clock).toBeGreaterThanOrEqual(1000);
-    expect(ran.refusals[0]).toMatchObject({ stop: 'screen', kind: 'unknown' });
+  test('no pane messaging, rules are never typed; was: an unrecognized screen waits its deadline out and refuses with nothing typed', async () => {
+    const retired = await deliver('unrecognized screen');
+    const done = await retired;
+    expect(done.result).toBe(false);
+    expect(done.typed).toEqual([]);
+    expect(done.entered).toBe(0);
   });
 });
