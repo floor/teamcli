@@ -110,12 +110,12 @@ function layout(worker = workerLine()): Place {
 function seedEndpoint(place: Place, record = ENDPOINT): void {
   updateState(place.dir, (state) => {
     const session = (state.sessions.acme ??= emptySession());
-    session.seats.worker = { stage: 'ready', pane: 'w1:p1', presence_binding: BINDING, codex_endpoint: { ...record } };
+    session.seats.worker = { stage: 'ready', pane: 'pane-a', presence_binding: BINDING, codex_endpoint: { ...record } };
   });
 }
 
 const agent = (name: string, status = 'idle', cli = 'claude'): HerdrAgent => ({
-  name, agent: cli, pane: 'w1:p1', workspace: 'w1', status, cwd: null,
+  name, agent: cli, pane: 'pane-a', workspace: 'w1', status, cwd: null,
 });
 
 function launchOf(over: Partial<DownLaunch> = {}): DownLaunch {
@@ -123,7 +123,7 @@ function launchOf(over: Partial<DownLaunch> = {}): DownLaunch {
     typeText: () => true,
     sendKey: () => true,
     pressEnter: () => true,
-    agentPanes: () => ['w1:p1'],
+    agentPanes: () => ['pane-a'],
     closeWorkspace: () => true,
     stopSession: () => true,
     deleteSession: () => true,

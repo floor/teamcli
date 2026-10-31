@@ -23,7 +23,7 @@ const BYPASS = '  ⏵⏵ bypass permissions on (shift+tab to cycle)';
 const WIDE_TOP = `${'─'.repeat(220)} builder-7 ─`;
 const WIDE_BOTTOM = '─'.repeat(WIDE_TOP.length);
 
-/** Atlas R4-6: the provider error wraps at a narrow pane width, then the idle frame follows. */
+/** The provider error wraps at a narrow pane width, then the idle frame follows. */
 const WRAPPED_ACTIVE_ERROR = [
   '⏺ API Error: Connection lost mid-response. The response',
   '  above may be incomplete.',
@@ -36,7 +36,7 @@ const WRAPPED_ACTIVE_ERROR = [
   BYPASS,
 ].join('\n');
 
-/** Atlas R4-5: the update notice shares the completion's terminal row, right-aligned. */
+/** The update notice shares the completion's terminal row, right-aligned. */
 const COMPLETED_WITH_INLINE_NOTICE = [
   `⏺ ${LOST}`,
   '',

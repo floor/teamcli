@@ -17,9 +17,9 @@ import { gitEnv, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T11:30:00Z');
 const owner = { kind: 'owner' } as const;
-const leadSeat = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' } as const;
+const leadSeat = { kind: 'seat', name: 'lead', pane: 'pane-a', session: 'acme' } as const;
 const FILE = ['--file', '.agents/team.yaml'];
-const BUS = { pane: 'w2:p1', workspace: 'w9', started: '2026-10-15T11:00:00Z' };
+const BUS = { pane: 'pane-b', workspace: 'w9', started: '2026-10-15T11:00:00Z' };
 
 type Place = { base: string; root: string; home: string; file: string; dir: string };
 
@@ -85,7 +85,7 @@ function layout(): Place {
 function seedSeat(at: Place): void {
   updateState(at.dir, (state) => {
     const session = (state.sessions.acme ??= emptySession());
-    session.seats.worker = { stage: 'ready', pane: 'w1:p1', workspace: 'w1' } as never;
+    session.seats.worker = { stage: 'ready', pane: 'pane-a', workspace: 'w1' } as never;
   });
 }
 

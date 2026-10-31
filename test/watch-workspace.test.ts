@@ -203,35 +203,35 @@ describe("the owner's bare run hands the watch to its workspace", () => {
     const creates: string[] = [];
     let held: { pid?: number; heartbeat: string; pane?: string; workspace?: string; started_at?: string } | undefined;
     // The pane runs `up`'s own command, which carries no `--file`: a pane is not an owner.
-    const io = testIo(root, { kind: 'pane', pane: 'w9:p1' });
+    const io = testIo(root, { kind: 'pane', pane: 'pane-a' });
     const code = await runWatch(['--session', SESSION], io, watchSources({
       ...handingOver(),
-      ownPane: () => ({ pane: 'w9:p1', workspace: 'w9' }),
+      ownPane: () => ({ pane: 'pane-a', workspace: 'w9' }),
       wait: async () => {
         held = state().sessions[SESSION]?.watch;
         return false;
       },
       createWorkspace: (_session, _cwd, label) => {
         creates.push(label);
-        return { pane: 'w9:p1', workspace: 'w9' };
+        return { pane: 'pane-a', workspace: 'w9' };
       },
     }));
     expect(code, io.out + io.err).toBe(0);
     expect(creates).toEqual([]);
     expect(io.err).toBe('');
     expect(io.out).toContain(`watching the session "${SESSION}"`);
-    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9', started_at: NOW.toISOString() });
+    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'pane-a', workspace: 'w9', started_at: NOW.toISOString() });
   });
 
   test('the record `up` leaves admits its own pane, and no other', async () => {
     place();
     // `up` has made the workspace and typed the command: the record names the pane, and that
     // pane's first pass has not written a pid yet.
-    record({ pane: 'w8:p1', workspace: 'w8', heartbeat: NOW.toISOString() });
-    const here = testIo(root, { kind: 'pane', pane: 'w8:p1' });
+    record({ pane: 'pane-b', workspace: 'w8', heartbeat: NOW.toISOString() });
+    const here = testIo(root, { kind: 'pane', pane: 'pane-b' });
     let held: { pid?: number; heartbeat: string; pane?: string; workspace?: string; started_at?: string } | undefined;
     const code = await runWatch(['--session', SESSION], here, watchSources({
-      ownPane: () => ({ pane: 'w8:p1', workspace: 'w8' }),
+      ownPane: () => ({ pane: 'pane-b', workspace: 'w8' }),
       wait: async () => {
         held = state().sessions[SESSION]?.watch;
         return false;
@@ -240,15 +240,15 @@ describe("the owner's bare run hands the watch to its workspace", () => {
     expect(code, here.out + here.err).toBe(0);
     expect(here.out).toContain(`watching the session "${SESSION}"`);
     // The command the pane was given is the watch: its first pass owns the record.
-    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'w8:p1', workspace: 'w8', started_at: NOW.toISOString() });
+    expect(held).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), pane: 'pane-b', workspace: 'w8', started_at: NOW.toISOString() });
 
     // The pane that stopped kept no record; a second call from anywhere else is refused.
-    record({ pane: 'w8:p1', workspace: 'w8', heartbeat: NOW.toISOString() });
+    record({ pane: 'pane-b', workspace: 'w8', heartbeat: NOW.toISOString() });
     const elsewhere = testIo(root, { kind: 'pane', pane: 'w9:p1' });
     const refused = await runWatch(['--session', SESSION], elsewhere, watchSources());
     expect(refused).toBe(1);
-    expect(elsewhere.err).toBe(`team watch: a watch already runs for the session "${SESSION}" (pane w8:p1)\n`);
-    expect(state().sessions[SESSION]?.watch?.pane).toBe('w8:p1');
+    expect(elsewhere.err).toBe(`team watch: a watch already runs for the session "${SESSION}" (pane pane-b)\n`);
+    expect(state().sessions[SESSION]?.watch?.pane).toBe('pane-b');
   });
 });
 
@@ -370,9 +370,9 @@ describe('the hand-over edges', () => {
   test('the pane\'s own first pass reads the recorded file, though the walk cannot place it', async () => {
     place();
     updateState(join(root, '.agents'), (held) => {
-      (held.sessions[SESSION] ??= emptySession()).watchdog = { file: '.agents/team.yaml', pane: 'w9:p1' };
+      (held.sessions[SESSION] ??= emptySession()).watchdog = { file: '.agents/team.yaml', pane: 'pane-c' };
     });
-    record({ heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9' });
+    record({ heartbeat: NOW.toISOString(), pane: 'pane-c', workspace: 'w9' });
     const io = testIo(root, { kind: 'unplaced', reason: 'it runs in a herdr pane without an agent' });
     // The pass's own write is read inside the wait that follows it: a watch that stops clears its
     // record in the loop's finally.
@@ -390,7 +390,7 @@ describe('the hand-over edges', () => {
     expect(io.out).toContain(`watching the session "${SESSION}"`);
     // The first pass records its pid and keeps the pane and workspace the hand-over recorded.
     expect(during).toEqual({
-      pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9', started_at: NOW.toISOString(),
+      pid: 4242, heartbeat: NOW.toISOString(), pane: 'pane-c', workspace: 'w9', started_at: NOW.toISOString(),
     });
   });
 
