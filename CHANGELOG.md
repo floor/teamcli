@@ -283,6 +283,11 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   never dialed: the send says it is gone, under the class the seat has without that socket, and
   leaves the message where that turn reads it. A fallback that ends in the bus inbox never
   claims a wake the attempt just disproved.
+- **A restart waits for the session lock instead of refusing at once.** `team restart` takes the
+  session's mutator lock before its first effect — the stop — standing aside up to fifteen
+  seconds for the run already holding it, so a restart that arrives while the watch is restoring
+  is no longer turned away at the first reading. When the wait is spent it refuses with the
+  holder's pid named and nothing stopped, rather than leaving a seat half-stopped.
 
 ## [0.5.5] - 2026-10-26
 
