@@ -47,6 +47,10 @@ export function seatBlocks(text: string): SeatBlock[] {
   const key = indent(lines[header] ?? '');
   const blocks: SeatBlock[] = [];
   let start = -1;
+  // The seat items' own dash column, from the first item. A dash deeper than it is a list inside
+  // a seat (`delivery_order:` / `- typed`), never the start of the next seat: reading it as one
+  // cut a seat off after that key and left its other fields to the seat above it.
+  let itemIndent = -1;
   const flush = (end: number) => {
     if (start < 0) return;
     const body = lines.slice(start, end);
@@ -62,6 +66,8 @@ export function seatBlocks(text: string): SeatBlock[] {
       break;
     }
     if (/^\s*-\s+/.test(line)) {
+      if (itemIndent < 0) itemIndent = indent(line);
+      if (indent(line) > itemIndent) continue;
       flush(i);
       start = i;
     }
