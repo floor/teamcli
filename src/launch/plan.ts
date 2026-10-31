@@ -518,29 +518,57 @@ export function codexEndpointConfig(command: string): string[] {
 }
 
 /**
- * The line a managed Codex seat runs once it attaches to its endpoint. Measured on codex-cli
- * 0.161.0: an attached TUI sends its own permissions with each turn, and `codex resume <id>
- * --remote …` refuses `-a`/`-s` (and their long forms, and the same keys as `-c`) with
- * "Permission overrides are not supported when resuming a remote task", leaving the seat at its
- * shell. Without them the resumed turns ran under the TUI's own default (workspace-write in the
- * rollout's turn context), whatever the thread or the endpoint was started with, so the seat
- * could not write its own inbox receipts. A fresh `codex --remote … -s danger-full-access -a
- * never` turn ran danger-full-access. So a resume line that carries permission overrides starts
- * a fresh thread when attached: its `resume <id>` words go, its overrides stay. A resume line with
- * no overrides keeps its thread, and a fresh line is unchanged.
+ * The line a managed Codex seat runs once it attaches to its endpoint. Keep the selected
+ * conversation; permission overrides belong to `codexEndpointConfig` on a remote resume.
+ * Other configuration and quoted arguments stay on the line. A fresh launch is unchanged.
+ *
+ * Measured 2026-10-31 on codex-cli 0.161.0 with a synthetic home, local response fixture and
+ * scratch terminal session: start the endpoint with `-c approval_policy="never" -c
+ * sandbox_mode="danger-full-access"`, launch a fresh thread with `-a never -s danger-full-access`,
+ * then detach and run `codex resume <id> --remote <endpoint>` without permission overrides.
+ * Repeat after stopping that endpoint and starting another with the same config. All three
+ * completed turns recorded `approval_policy: "never"` and `sandbox_policy.type:
+ * "danger-full-access"` in the synthetic rollout's `turn_context`, on the same thread.
+ * Evidence: ~/Code/floor/briefs/teamcli-notes/briefs-0.5.10/a7-measurement/measurement.json
+ * and provider.py. This measurement used an endpoint carrying the line's config words.
  */
 export function remoteCodexCommand(command: string): string {
   // Raw shell words, quotes kept: a word is only ever matched whole and unquoted, so a quoted
   // argument (the rules line, a `-c` value) that happens to hold `resume` is never touched.
-  const words: string[] = command.match(/(?:[^\s'"]+|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
-  const at = words.indexOf('resume');
-  if (at < 0) return command;
-  const overrides = words.some((word) => ['-a', '-s', '--ask-for-approval', '--sandbox', '--full-auto', '--dangerously-bypass-approvals-and-sandbox'].includes(word)
-    || /^--(ask-for-approval|sandbox)=/.test(word));
-  if (!overrides) return command;
-  const next = words[at + 1];
-  const drop = next !== undefined && (next === '--last' || !next.startsWith('-')) ? 2 : 1;
-  return [...words.slice(0, at), ...words.slice(at + drop)].join(' ');
+  const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
+  if (!words.includes('resume')) return command;
+  const kept: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === '--') {
+      kept.push(...words.slice(i));
+      break;
+    }
+    if (['--full-auto', '--dangerously-bypass-approvals-and-sandbox'].includes(word)
+      || /^--(ask-for-approval|sandbox)=/.test(word)) continue;
+    if (['-a', '-s', '--ask-for-approval', '--sandbox'].includes(word)) {
+      if (words[i + 1] !== undefined && !words[i + 1]!.startsWith('-')) i++;
+      continue;
+    }
+    const config = word === '-c' || word === '--config';
+    const inline = word.startsWith('--config=');
+    const value = config ? words[i + 1] : inline ? word.slice('--config='.length) : undefined;
+    if (value !== undefined) {
+      // A config value is one shell word even when quotes or spaces occur inside it.
+      const key = unquoteWord(value).split('=', 1)[0]!.trim();
+      if (/^(approval_policy|sandbox_mode|sandbox_workspace_write)(\.|$)/.test(key)) {
+        if (config) i++;
+        continue;
+      }
+      if (config) {
+        kept.push(word, value);
+        i++;
+        continue;
+      }
+    }
+    kept.push(word);
+  }
+  return kept.length === words.length ? command : kept.join(' ');
 }
 
 export function upPlan(input: UpInput): Step[] {

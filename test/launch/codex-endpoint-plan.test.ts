@@ -110,27 +110,37 @@ describe('the managed Codex endpoint intent', () => {
     expect(launchOp(upPlan(input({ ...over, team: loaded.team }, seatOver))).do).toHaveProperty('codexEndpoint');
   });
 
-  test('a resume carrying permission overrides is marked; the attach starts a fresh thread', () => {
-    // codex-cli 0.161.0 refuses -a/-s on a remote resume and exits to the shell; without them the
-    // resumed thread keeps the permissions it was recorded with.
+  test('a resume carrying permission overrides is marked for the configured endpoint', () => {
     const launch = launchOp(upPlan(input({}, { launch: 'codex resume 01a1 -a never -s danger-full-access' })));
     expect(launch.do).toHaveProperty('codexEndpoint');
     const fresh = launchOp(upPlan(input({}, { launch: 'codex -a never -s danger-full-access' })));
     expect(fresh.do).toHaveProperty('codexEndpoint');
   });
 
-  test('remoteCodexCommand starts a fresh thread for a resume that carries permission overrides', () => {
+  test('remoteCodexCommand keeps the selected thread and sheds only remote permission overrides', () => {
     expect(remoteCodexCommand('AGENT_UNATTENDED=1 codex resume 01a1 -m gpt -a never -s danger-full-access'))
-      .toBe('AGENT_UNATTENDED=1 codex -m gpt -a never -s danger-full-access');
-    expect(remoteCodexCommand('codex resume --last --sandbox=workspace-write')).toBe('codex --sandbox=workspace-write');
+      .toBe('AGENT_UNATTENDED=1 codex resume 01a1 -m gpt');
+    expect(remoteCodexCommand('codex resume --last --sandbox=workspace-write')).toBe('codex resume --last');
     expect(remoteCodexCommand('codex resume 01a1 --dangerously-bypass-approvals-and-sandbox'))
-      .toBe('codex --dangerously-bypass-approvals-and-sandbox');
+      .toBe('codex resume 01a1');
     // No overrides: the thread is kept. A fresh line is unchanged.
     expect(remoteCodexCommand('codex resume 01a1 -m gpt')).toBe('codex resume 01a1 -m gpt');
     expect(remoteCodexCommand('codex -a never -s danger-full-access')).toBe('codex -a never -s danger-full-access');
     // A quoted argument that holds the words is not touched.
     expect(remoteCodexCommand(`codex -s danger-full-access 'Read /resume -s y.md'`))
       .toBe(`codex -s danger-full-access 'Read /resume -s y.md'`);
+  });
+
+  test('permission config keys move to the endpoint while other config and prompt words stay', () => {
+    const line = `codex resume 01a1 --ask-for-approval never --sandbox danger-full-access -c 'approval_policy="never"' --config='sandbox_mode="danger-full-access"' -c 'sandbox_workspace_write.network_access=true' -c 'model_reasoning_effort="high"' 'Read resume -s y.md'`;
+    expect(remoteCodexCommand(line)).toBe(`codex resume 01a1 -c 'model_reasoning_effort="high"' 'Read resume -s y.md'`);
+    expect(codexEndpointConfig(line)).toEqual([
+      '-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"',
+      '-c', 'approval_policy="never"', '-c', 'sandbox_mode="danger-full-access"',
+      '-c', 'sandbox_workspace_write.network_access=true', '-c', 'model_reasoning_effort="high"',
+    ]);
+    expect(remoteCodexCommand('codex resume 01a1 --full-auto')).toBe('codex resume 01a1');
+    expect(remoteCodexCommand('codex resume 01a1 -- -s prompt')).toBe('codex resume 01a1 -- -s prompt');
   });
 
   test('codexEndpointConfig carries the line\'s config and permissions to the endpoint', () => {

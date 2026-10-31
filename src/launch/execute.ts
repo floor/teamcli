@@ -724,6 +724,23 @@ export async function executePlan(
   };
   // The identity read after the idle prompt, to carry into every later record of the seat.
   const identities = new Map<string, LaunchedIdentity>();
+  const liveSession = (seat: string, pane: string, cli: string): string | undefined => {
+    const listed = host.agentList?.(session)?.find((agent) => agent.pane === pane
+      && (agent.name === null || agent.name === undefined || agent.name === seat));
+    // A reading explicitly attributed to another CLI is never a resume id for this one.
+    if (listed?.agent && !reportedLiveAgent([listed.agent], profileFor(cli)?.processNames ?? [])) return undefined;
+    return listed?.session || undefined;
+  };
+  const laterLaunchSession = (seat: string, pane: string, cli: string): { agent_session?: string } => {
+    // Only finish a launch this run owns. A later command finding a different live thread
+    // must still refuse the mismatch rather than rewriting the record to make it agree.
+    if (!launchedThisRun.has(seat)
+      || seatProcessVerdict(identities.get(seat), host.processInfo?.(session, pane)) !== 'same') return {};
+    const id = liveSession(seat, pane, cli);
+    if (id === undefined) return {};
+    launchSessions.set(seat, id);
+    return { agent_session: id };
+  };
 
   // The display label may be shared. The seat's name is the only key; the watch has no seat.
   const place = (key: string, pane?: string, workspace?: string): Place | null => {
@@ -1139,9 +1156,6 @@ export async function executePlan(
             : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
             const attached = remoteCodexCommand(command);
-            if (attached !== command) {
-              hold(op.seat, `${op.seat}: starts a fresh Codex thread on its managed endpoint: codex-cli refuses permission overrides on a remote resume, and without them the seat would run under the default sandbox\n`);
-            }
             command = `${attached} --remote ${shellQuote(read.url)}`;
             startedEndpoint = read.started;
             for (const note of read.notes ?? []) hold(op.seat, `${op.seat}: ${note}\n`);
@@ -1255,7 +1269,7 @@ export async function executePlan(
           const identity = launchedIdentity(host.processInfo?.(session, here.pane) ?? null);
           if (identity) {
             identities.set(op.seat, identity);
-            const sessionId = host.agentList?.(session)?.find((agent) => agent.pane === here.pane)?.session ?? launchSessions.get(op.seat);
+            const sessionId = liveSession(op.seat, here.pane, op.cli) ?? launchSessions.get(op.seat);
             host.record(op.seat, {
               stage: 'launched',
               pane: here.pane,
@@ -1554,6 +1568,7 @@ export async function executePlan(
         host.record(op.seat, {
           stage: 'named',
           pane: here.pane,
+          ...laterLaunchSession(op.seat, here.pane, op.cli ?? ''),
           ...(here.workspace ? { workspace: here.workspace } : {}),
           ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
         });
@@ -1564,6 +1579,7 @@ export async function executePlan(
             stage: 'ready',
             rules: op.rules,
             pane: here.pane,
+            ...laterLaunchSession(op.seat, here.pane, op.cli ?? ''),
             ...(here.workspace ? { workspace: here.workspace } : {}),
             ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
           });
@@ -1619,6 +1635,7 @@ export async function executePlan(
           stage: 'ready',
           rules: 'message',
           pane: here.pane,
+          ...laterLaunchSession(op.seat, here.pane, op.cli),
           ...(identities.has(op.seat) ? { launched: identities.get(op.seat) } : {}),
         });
         finishReady(op.seat);

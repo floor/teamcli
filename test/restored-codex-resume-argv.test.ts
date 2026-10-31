@@ -471,7 +471,7 @@ describe('a recorded launcher that already names a resume', () => {
     expect(run.did.runs.length).toBe(1);
     const line = run.did.runs[0] ?? '';
     // One resume subcommand, no second choice appended after it.
-    expect(line.match(/\bresume\b/g)?.length).toBe(1);
+    expect(line.match(/(?:^|\s)resume(?=\s|$)/g)?.length).toBe(1);
     expect(line).toContain(`resume ${SESSION_ID}`);
     expect(stateSession(fixture)).toBe(SESSION_ID);
     expect(recordedSession(fixture)).toBe(SESSION_ID);
