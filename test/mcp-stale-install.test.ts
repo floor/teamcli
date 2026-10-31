@@ -8,13 +8,11 @@
 // hooks).
 import { afterEach, describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import {
-  CHANNEL_HELD_RECEIPT,
-  channelPushPath,
   channelPushed,
 } from '../src/mcp/channel.ts';
 import {
@@ -336,20 +334,16 @@ describe('a sender falling back from a stale channel', () => {
       expect(await runSend(['lead', TRIGGER], sendIo, host)).toBe(0);
       expect(sendIo.out).toContain('(drop');
       expect(sendIo.out).not.toContain('sent (channel)');
-      expect(pane.typed).toHaveLength(1);
-      expect(pane.enters).toBe(1);
+      expect(pane.typed).toHaveLength(0);
+      expect(pane.enters).toBe(0);
 
-      // Let the 250 ms watcher tick over the record more than once: no push is written, so the
-      // stale server added no second wake to the typed trigger's one.
+      // Let the 250 ms watcher tick over the record more than once. No pane messaging: no
+      // trigger is typed, so the sender holds no push name, and the server's one push is the
+      // seat's only wake. It still wakes the seat once, never twice.
       await new Promise((resolve) => setTimeout(resolve, 600));
-      expect(notices(serverFeed.replies)).toEqual([]);
-      expect(pane.typed).toHaveLength(1);
-
-      // The held marker landed before the record, at the push marker's own name; it is not a
-      // push, so a channel wait for this id still does not read it as delivered.
-      const marker = JSON.parse(readFileSync(channelPushPath(dir, SEND_ID), 'utf8')) as Record<string, unknown>;
-      expect(marker).toMatchObject({ v: 1, kind: CHANNEL_HELD_RECEIPT, id: SEND_ID });
-      expect(channelPushed(dir, SEND_ID)).toBe(false);
+      expect(notices(serverFeed.replies)).toHaveLength(1);
+      expect(pane.typed).toHaveLength(0);
+      expect(pane.enters).toBe(0);
     } finally {
       serverFeed.end();
       expect(await running).toBe(0);

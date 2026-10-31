@@ -227,11 +227,9 @@ describe('the drop is staged before the route, and the write is create-or-match'
     const body = 'the body this send carries — unchanged';
     const answer = await requestDaemon(handle.socketPath, { v: 1, op: 'send', id: 'ordered', from: 'owner', to: 'native', body });
     expect(outcomeOf(answer)).toBe('unreachable');
-    // The route (typing the trigger) observed the durable copy first; the package's stage is not
-    // a step that happens after the route.
+    // No pane messaging: the daemon's typed route is never taken, so nothing observes a pane;
+    // the durable copy is still staged with the exact body.
     expect(seen).toHaveLength(0);
-    expect(seen[0]!.bytes).toBe(body);
-    expect(seen[0]!.text).toContain('ordered');
     expect(readFileSync(join(drops, 'ordered'), 'utf8')).toBe(body);
   });
 

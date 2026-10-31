@@ -189,7 +189,8 @@ describe('team send --wait on the thread across delivery legs', () => {
         project: 'acme',
         session: 'acme',
         seat: 'worker',
-        channel: leg,
+        // No pane messaging: a typed word is never walked, so the walk ends at the bus drop.
+        channel: leg === 'typed' ? 'drop' : leg,
         thread: SENT_ID,
         reply: expect.stringContaining(`ack via ${leg}`),
       });
@@ -204,7 +205,9 @@ describe('team send --wait on the thread across delivery legs', () => {
         expect(host.enters).toEqual([]);
         expect(readPending(dropDir(w.root, 'worker'))).toEqual([]);
       } else {
-        expect(host.typed).toHaveLength(1);
+        // No pane messaging: the typed word is never walked, so nothing is typed or entered.
+        expect(host.typed).toEqual([]);
+        expect(host.enters).toEqual([]);
       }
       rmSync(base, { recursive: true, force: true });
       base = '';

@@ -372,18 +372,18 @@ test('a replacement that stops at launched moves the agent to the pane that is r
   expect(agent.seat_handle).toBe(HANDLE);
 });
 
-test('a replacement that stops at named moves the agent to the pane that is running', async () => {
+test('a replacement whose name lands moves the agent to the pane that is running', async () => {
   const id = registry();
   state({ stage: 'ready', pane: OLD_PANE, workspace: OLD_WORKSPACE, launched: OLD_LAUNCHED, agent_session: OLD_SESSION });
-  // The name lands; the rules do not, so the seat stays `named` with the live pane recorded.
+  // The name lands and the rules rode the launch line, so nothing is left to type: the seat
+  // reaches `ready` on the live pane, and no stop at `named` for want of typed rules arises.
   const made = sources();
   const io = testIo(root, { kind: 'owner' });
-  expect(await runUp([], io, made.sources)).toBe(1);
+  expect(await runUp([], io, made.sources)).toBe(0);
 
-  expect(io.out).toContain(`${SEAT}: left out: rules not typed`);
-  expect(io.err).toContain(`1 refused (${SEAT}: rules not typed`);
+  expect(io.out).not.toContain('rules not typed');
   expect(seatState()).toMatchObject({
-    stage: 'named',
+    stage: 'ready',
     pane: NEW_PANE,
     workspace: NEW_WORKSPACE,
     launched: NEW_LAUNCHED,

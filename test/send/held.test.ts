@@ -10,13 +10,13 @@ import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../../src/send/no-pane-mes
 // session is touched and no real pane is read.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../../src/commands/send.ts';
 import { lobbyDir } from '../../src/lobby/gate.ts';
 import { readHistory } from '../../src/send/history.ts';
-import { readTriggerLine, type NativePane } from '../../src/send/native.ts';
+import { type NativePane } from '../../src/send/native.ts';
 import type { SendOutcome } from '../../src/send/uds.ts';
 import { recordBody, testIo } from '../helpers.ts';
 
@@ -190,8 +190,10 @@ describe('team send: the plain send is the typed trigger again', () => {
     expect(host.socketsTried).toEqual([]);
     const drops = join(dir, 'send-drops', 'acme', 'lead');
     const path = join(drops, readdirSync(drops).find((name) => !name.includes('.')) as string);
-    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-    expect(host.pane.enters).toBe(1);
+    // No pane messaging: the plain send stages its drop and types nothing.
+    expect(host.pane.typed).toEqual([]);
+    expect(existsSync(path)).toBe(true);
+    expect(host.pane.enters).toBe(0);
     expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
     const read = readHistory('acme', root, host.home);
     expect(read.ok).toBe(true);
@@ -199,9 +201,8 @@ describe('team send: the plain send is the typed trigger again', () => {
     expect(read.entries[0]).toMatchObject({
       to: 'lead',
       outcome: 'sent (unconfirmed)',
-      note: 'trigger taken, no read receipt yet',
       ms: 0,
-      via: 'typed',
+      via: 'drop',
     });
   });
 });

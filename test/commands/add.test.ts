@@ -813,15 +813,15 @@ describe('team add', () => {
     };
     const closes: string[] = [];
     made.launch.closeWorkspace = (_session, workspace) => { closes.push(workspace); return true; };
-    // The rules file is written only when the rules are delivered, and this seat never reached
-    // its prompt: nothing was typed, so no file exists. It is the `team up` finish that types.
+    // The rules ride the launch line, so the rules file is written before the pane starts, even
+    // though this seat never reached its prompt; nothing is typed, now or at the `team up` finish.
     const file = rulesFilePath('acme', project, home, 'scribe-tmp-01') as string;
     const io = testIo(project, owner);
     expect(await runAdd(['--temporary', '--like', 'scribe', '--until', 'merged:fix/fresh'], io, sources(made))).toBe(1);
     expect(io.out).toContain('scribe-tmp-01: left out: trust\n');
     expect(io.err).toContain('  a lead finishes it with `team up`\n');
     expect(closes).toEqual([]);
-    expect(existsSync(file)).toBe(false);
+    expect(existsSync(file)).toBe(true);
     const seat = readState(join(project, '.agents')).sessions.acme?.seats['scribe-tmp-01'];
     expect(seat?.waiting).toMatchObject({ state: 'waiting-owner', classification: 'trust' });
     expect(seat?.temporary).toMatchObject({ like: 'scribe', until: 'merged:fix/fresh' });

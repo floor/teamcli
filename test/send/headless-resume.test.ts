@@ -755,7 +755,7 @@ describe('runSend and sendDirect integration for Gemini and Cursor headless-resu
     const claudeIo = testIo(scene.root, { kind: 'owner' });
     expect(await runSend(['lead', 'check', '--dry-run'], claudeIo, claudeHost)).toBe(0);
     expect(claudeIo.out).toBe(
-      `team acme, session "${SESSION}"\nlead: dry-run: claude-code via no leg of its delivery order this build can walk; nothing was written\n`,
+      `team acme, session "${SESSION}"\nlead: dry-run: claude-code via a 0600 drop file with nothing typed into the pane; nothing was written\n`,
     );
   });
 
