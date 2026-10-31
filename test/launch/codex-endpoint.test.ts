@@ -5,7 +5,8 @@
 // signalled, and only the endpoint's own socket under the seat's own run folder is ever removed.
 // A socket no record names is left where it is, and said.
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emptySession, readState, updateState } from '../../src/state.ts';
@@ -13,6 +14,7 @@ import { presenceSessionFolder } from '../../src/daemon/presence/spool.ts';
 import {
   codexEndpointSocket,
   ensureCodexEndpoint,
+  isSocketFile,
   launchCodexEndpoint,
   stopRecordedCodexEndpoint,
   stopSeatCodexEndpoint,
@@ -95,6 +97,34 @@ describe('the endpoint socket path', () => {
       expect(codexEndpointSocket(deep, SESSION, SEAT, BINDING)).toBeNull();
     } finally {
       rmSync(deep, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the endpoint socket the app-server makes', () => {
+  test('a link to a private socket counts; a link to a shared folder or a plain file does not', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'cx-sock-'));
+    const hidden = join(base, 'daemon');
+    mkdirSync(hidden, { mode: 0o700 });
+    const real = join(hidden, 's.sock');
+    const server = createServer();
+    await new Promise<void>((done) => server.listen(real, done));
+    try {
+      const link = join(base, 'a.sock');
+      symlinkSync(real, link);
+      expect(isSocketFile(real)).toBe(true);
+      expect(isSocketFile(link)).toBe(true);
+      chmodSync(hidden, 0o755);
+      expect(isSocketFile(link)).toBe(false);
+      chmodSync(hidden, 0o700);
+      writeFileSync(join(hidden, 'plain'), '');
+      const plainLink = join(base, 'b.sock');
+      symlinkSync(join(hidden, 'plain'), plainLink);
+      expect(isSocketFile(plainLink)).toBe(false);
+      expect(isSocketFile(join(base, 'missing.sock'))).toBe(false);
+    } finally {
+      server.close();
+      rmSync(base, { recursive: true, force: true });
     }
   });
 });

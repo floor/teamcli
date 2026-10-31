@@ -25,8 +25,8 @@
 //   ended it with exit 143 and empty stdout/stderr. The launch spawns the same command with the
 //   state folder's own path, never a path derived from HOME.
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
-import { lstatSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { lstatSync, mkdirSync, readdirSync, readlinkSync, statSync, unlinkSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
 import {
   codexEndpointPath,
@@ -149,9 +149,22 @@ function isPlainDir(path: string): boolean {
   }
 }
 
-function isSocketFile(path: string): boolean {
+/** The endpoint's socket is there: a socket at the path, or (measured on codex-cli 0.161.0, whose
+ *  `app-server --listen unix://PATH` hands the listen to its app-server daemon) a link this user
+ *  owns at the path, resolving to a socket this user owns in a folder only this user can enter. */
+export function isSocketFile(path: string, uid: number | undefined = process.getuid?.()): boolean {
   try {
-    return lstatSync(path).isSocket();
+    const at = lstatSync(path);
+    if (at.isSocket()) return true;
+    if (!at.isSymbolicLink() || (uid !== undefined && at.uid !== uid)) return false;
+    // One link, read rather than resolved: a resolver that opens the target refuses a socket.
+    const named = readlinkSync(path);
+    const target = isAbsolute(named) ? named : join(dirname(path), named);
+    const socket = statSync(target);
+    const folder = statSync(dirname(target));
+    if (!socket.isSocket()) return false;
+    if (uid !== undefined && (socket.uid !== uid || folder.uid !== uid)) return false;
+    return (folder.mode & 0o077) === 0;
   } catch {
     return false;
   }
