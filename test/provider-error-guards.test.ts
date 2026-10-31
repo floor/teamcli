@@ -8,6 +8,7 @@ import { executePlan, type Host } from '../src/launch/execute.ts';
 import { downPlan } from '../src/launch/plan.ts';
 import { CLASSIFICATIONS, classificationOf, progressWriter, recordText } from '../src/launch/progress.ts';
 import { guardReading } from '../src/profiles/overrides.ts';
+import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { claudeBox } from './helpers.ts';
 
@@ -110,7 +111,10 @@ describe('nothing is typed into a provider error or a rate limit', () => {
     };
     expect(await deliverRules('codex', 'Rules.', 5, delivery)).toBe(false);
     expect(calls).toEqual([]);
-    expect(refusal.at(-1)?.kind).toBe('rate limit');
+    // No pane messaging: delivery refuses before any screen is read, so the refusal names the
+    // line it would have typed rather than the screen the reading above blocks on.
+    expect(refusal.at(-1)?.kind).toBe('unknown');
+    expect(refusal.at(-1)?.row).toBe(NO_PANE_MESSAGING);
 
     const exitKeys: string[] = [];
     let raw = codexIdle;
