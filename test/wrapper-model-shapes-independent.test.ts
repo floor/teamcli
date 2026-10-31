@@ -1,8 +1,9 @@
 // What a wrapper seat's declaration means against the provider id on its banner, where the
 // model's own name already carries the version: `Kimi K2.5` + `2.5`, `Kimi` + `K2.5`,
-// `GLM 5.3` + `5.3`, `DeepSeek V4.1` + `V4.1`. The declaration is one name-and-version string,
-// so the banner's spelling of the same model confirms it — while another version, another
-// order, or another number is a drift the send must hold. Every pane here is synthetic.
+// `GLM 5.3` + `5.3`, `DeepSeek V4.1` + `V4.1`, and `GLM 2B` + `2.5`, whose capacity shares a
+// digit with the version but is not it. The declaration is one name-and-version string, so the
+// banner's spelling of the same model confirms it — while another version, another order, or
+// another number is a drift the send must hold. Every pane here is synthetic.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -104,6 +105,18 @@ describe('a wrapper declaration whose model carries its version', () => {
 
   test('a DeepSeek declaration repeating its version matches its banner id', async () => {
     await expectDelivered({ model: 'DeepSeek V4.1', version: 'V4.1' }, 'claude-deepseek.sh', 'deepseek-v4.1');
+  });
+
+  // A model token keeps its own digits: `GLM 2B` and version `2.5` share the digit 2, but `2B`
+  // is the model's capacity, not the version written twice, so the banner spells both.
+  test('a declaration whose model keeps its own digits matches its banner id', async () => {
+    await expectDelivered({ model: 'GLM 2B', version: '2.5' }, 'claude-glm.sh', 'glm-2b-2.5');
+  });
+
+  // The banner that drops the capacity's digit names another model, though it spells the
+  // version the same way: the model the declaration names is not the one the banner shows.
+  test('a banner dropping the model token’s own digit is still a drift', async () => {
+    await expectHeld({ model: 'GLM 2B', version: '2.5' }, 'claude-glm.sh', 'glm-b-2.5');
   });
 
   // Another version is never the same model, however close the number looks: k25 is not k2.5.
