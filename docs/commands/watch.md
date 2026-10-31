@@ -333,7 +333,7 @@ it did instead. The lines around them:
 | `a nudge was typed and not sent: <seat>'s box does not hold it` | the pane had not drawn the typed line, or held something else, when the bounded wait for it ended; nothing is sent, and the line is tried again on the next pass |
 | `rang <seat>: <the message-display wake line>` | a message was already waiting, that seat's box was an empty idle prompt, and the dispatcher did not own an episode for it that pass; the line was typed and sent, and the body was not |
 | `message <id> for <seat> has been waiting <n> minutes` | that message is older than `nudge_wait` and the seat's box was not free; said once, to the owner, and nothing is typed |
-| `<seat>: its work was not dispatched directly (<why>); nothing was typed for it this episode` | the shared idle reading counted the seat idle with takeable work, and the direct route was absent or refused, once per idle episode |
+| `<seat>: its work was not dispatched directly (<why>); the work waits in its bus inbox and is read at its next wake` / `<seat>: its work was not dispatched directly (<why>); nothing was written for it and the attempt is not retried in this idle episode` | the shared idle reading counted the seat idle with takeable work, and the direct route was absent or refused, once per idle episode; the first is said when a signed copy of the work was staged before the refusal, the second when nothing was written |
 | `<seat> was not told: <why>` / `<role> <seat> was not told: <why>` | a dispatcher record could not be written to the team lead or the main orchestrator; the target and the reason are named, and no identity is invented in its place |
 | `herdr doesn't answer; the watch keeps trying` | the pass is skipped and the watch goes on |
 | `<account>: its check is unreadable` | the check command failed, timed out, or printed something other than one to three lines for a subscription or one line for a spend account; its output is never logged |
@@ -360,11 +360,18 @@ it did instead. The lines around them:
 
 The dispatcher also leaves signed records in the team lead's and the main orchestrator's
 mailboxes, and their bodies are its words, not console lines: `<project>: <seat> is idle with
-takeable work but was not told directly (<why>); nothing was typed for it`; `<project>: <n> idle,
+takeable work but was not told directly (<why>); the work waits in its bus inbox and is read at
+its next wake` when a signed copy of the work was staged before the refusal, and `<project>:
+<seat> is idle with takeable work but was not told directly (<why>); nothing was written for it
+and the attempt is not retried in this idle episode` otherwise; `<project>: <n> idle,
 nothing queued (<names>)`, once per continuous idle stretch and not under a pause; and
 `<project>: <seat> accepted a work wake a minute ago and is still idle with no observed claim; it
 will not be woken again in this idle episode`, once, when a pass at least a minute after an
-accepted wake finds no live lease and no activity clock at or past the wake.
+accepted wake finds no live lease and no activity clock at or past the wake. A refused push's
+notice that a later pass has to recover from the claim record — the write went through and the
+publication did not — says the same without the route, because the claim keeps none:
+`<project>: <seat> is idle with takeable work and its direct work request was refused earlier in
+this idle episode; the attempt is spent and will not be repeated`.
 
 A message waiting in a seat's own drop folder is not a report: it is what the ring's own reader,
 `team drops --read`, serves. When that seat's box is an empty idle prompt, the watch types

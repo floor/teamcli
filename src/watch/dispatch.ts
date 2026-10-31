@@ -38,13 +38,22 @@ export type WorkPushRequest = { seat: string; pane: string; cli: string; body: s
 /** The route's honest answer. `outcome` is the transport's own word and is always required: a
  *  route never flattens `code0`, a held delivery or a durable copy into a successful wake. A
  *  push result is never read or claim proof. */
-export type WorkPushResult = { ok: true; outcome: string } | { ok: false; refused: string };
+export type WorkPushResult =
+  | { ok: true; outcome: string }
+  | {
+    ok: false;
+    refused: string;
+    /** A signed copy of the work was written to the seat's bus inbox before the route refused,
+     *  so the seat reads it at its next wake. Absent, nothing was written. */
+    staged?: boolean;
+  };
 
 /**
  * What the idle dispatcher reads back from one direct send. Only a route that delivered is a
  * wake; a stored copy, a timeout, an unreachable or a refused ending is `ok: false`, whatever the
  * command's exit code was. A run that ended before any route was attempted is a refusal too, with
- * the command's own words when it said any.
+ * the command's own words when it said any. A refused ending reports whether a signed copy of the
+ * work was already staged in the seat's inbox: that copy is what the seat reads at its next wake.
  */
 export function workPushResultOf(result: DirectSendResult | null, said: string): WorkPushResult {
   if (result === null) {
@@ -53,7 +62,11 @@ export function workPushResultOf(result: DirectSendResult | null, said: string):
   }
   const detail = result.reason === undefined ? '' : `: ${result.reason}`;
   if (result.outcome === 'delivered') return { ok: true, outcome: `${result.route}: delivered${detail}` };
-  return { ok: false, refused: `${result.route}: ${result.outcome}${detail}` };
+  return {
+    ok: false,
+    refused: `${result.route}: ${result.outcome}${detail}`,
+    ...(result.record === null ? {} : { staged: true }),
+  };
 }
 
 /** The direct route a watch's sources may wire. Absent, this dispatcher sends nothing and types
@@ -62,7 +75,7 @@ export type WorkPush = (request: WorkPushRequest) => Promise<WorkPushResult>;
 
 export type PushedWork =
   | { seat: string; ok: true; outcome: string }
-  | { seat: string; ok: false; refused: string };
+  | { seat: string; ok: false; refused: string; staged?: boolean };
 
 /** What one announcement wrote, could not write, or could not map. `missing` names a recipient
  *  the registry does not resolve (the main orchestrator, usually): the limitation is said, and
@@ -127,6 +140,9 @@ type PendingSettle = {
   at: string;
   /** The route's words, for the announcement this process can still make. Never persisted. */
   refused?: string;
+  /** Whether a signed copy of the work was staged in the seat's inbox before the route refused.
+   *  Never persisted: the claim record keeps no route and no copy. */
+  staged?: boolean;
 };
 
 const pendingSettles = new Map<string, PendingSettle>();
@@ -303,13 +319,19 @@ export async function dispatchIdleWork(input: IdleDispatchInput): Promise<IdleDi
         claim_id: captured.claim.claim_id,
         outcome: outcome.pushed.ok ? 'accepted' : 'refused',
         at: input.now.toISOString(),
-        ...(outcome.pushed.ok ? {} : { refused: outcome.pushed.refused }),
+        ...(outcome.pushed.ok
+          ? {}
+          : {
+            refused: outcome.pushed.refused,
+            ...(outcome.pushed.staged === true ? { staged: true } : {}),
+          }),
       });
       continue;
     }
     if (outcome.pushed.ok) continue;
     replayNotice(input, result, captured.claim.claim_id, 'push', seat,
-      refusalText(input, seat, outcome.pushed.refused), pushBinding(seat, captured.claim));
+      refusalText(input, seat, outcome.pushed.refused, outcome.pushed.staged === true),
+      pushBinding(seat, captured.claim));
   }
   return result;
 }
@@ -347,7 +369,7 @@ async function followClaim(
       if (settled.kind !== 'settled') return;
       if (settled.claim.state === 'refused' && owed.refused !== undefined) {
         replayNotice(input, result, claim.claim_id, 'push', seat,
-          refusalText(input, seat, owed.refused), pushBinding(seat, claim));
+          refusalText(input, seat, owed.refused, owed.staged === true), pushBinding(seat, claim));
       }
       return;
     }
@@ -389,8 +411,10 @@ async function followClaim(
   }
   if (claim.state === 'refused') {
     if (claim.notice !== 'refused') return;
+    // The claim record keeps no route and no staged copy, so the recovered notice says the one
+    // fact the record proves: the episode's one attempt is spent.
     replayNotice(input, result, claim.claim_id, 'push', seat,
-      `${input.team.project}: ${seat} is idle with takeable work and its direct work request was refused earlier in this idle episode; nothing was typed for it`,
+      `${input.team.project}: ${seat} is idle with takeable work and its direct work request was refused earlier in this idle episode; the attempt is spent and will not be repeated`,
       pushBinding(seat, claim));
     return;
   }
@@ -417,8 +441,11 @@ function unknownBinding(seat: string, claim: IdleClaim): string {
   return `unknown${SEP}${seat}${SEP}${claim.idle_since}${SEP}${claim.claim_id}`;
 }
 
-function refusalText(input: IdleDispatchInput, seat: string, refused: string): string {
-  return `${input.team.project}: ${seat} is idle with takeable work but was not told directly (${refused}); nothing was typed for it`;
+function refusalText(input: IdleDispatchInput, seat: string, refused: string, staged: boolean): string {
+  const standing = staged
+    ? 'the work waits in its bus inbox and is read at its next wake'
+    : 'nothing was written for it and the attempt is not retried in this idle episode';
+  return `${input.team.project}: ${seat} is idle with takeable work but was not told directly (${refused}); ${standing}`;
 }
 
 function stalledText(input: IdleDispatchInput, seat: string): string {
@@ -483,7 +510,14 @@ async function attempt(
   try {
     const outcome = await input.push(request);
     if (outcome.ok) return { pushed: { seat, ok: true, outcome: outcome.outcome } };
-    return { pushed: { seat, ok: false, refused: outcome.refused } };
+    return {
+      pushed: {
+        seat,
+        ok: false,
+        refused: outcome.refused,
+        ...(outcome.staged === true ? { staged: true } : {}),
+      },
+    };
   } catch (error) {
     return { pushed: { seat, ok: false, refused: error instanceof Error ? error.message : String(error) } };
   }

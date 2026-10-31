@@ -1016,7 +1016,10 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           });
         for (const item of idleDispatch.pushed) {
           if (item.ok) continue;
-          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); nothing was typed for it this episode`, false);
+          const standing = item.staged === true
+            ? 'the work waits in its bus inbox and is read at its next wake'
+            : 'nothing was written for it and the attempt is not retried in this idle episode';
+          tell(`${item.seat}: its work was not dispatched directly (${item.refused}); ${standing}`, false);
         }
         for (const line of idleDispatch.fallback?.failed ?? []) tell(line, true);
         for (const line of idleDispatch.fallback?.missing ?? []) say(line, false);
