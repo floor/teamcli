@@ -57,7 +57,8 @@ import {
   type SessionState,
 } from '../herdr.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
-import type { Host } from '../launch/execute.ts';
+import { endpointCleanupHost } from '../launch/endpoint-cleanup.ts';
+import { reportedLiveAgent } from '../launch/agent.ts';
 import { installCliHooks, plannedCliHooks, resetCliHookState, restorePresenceBinding } from '../launch/cli-hook.ts';
 import { executePlan, restoreSummaryOf, type Report, type RestoreSweepSummary } from '../launch/execute.ts';
 import type { EndpointStopRead, ManagedEndpointRead } from '../launch/codex-endpoint.ts';
@@ -178,7 +179,7 @@ export type Launch = {
    *  process. */
   codexEndpoint?: {
     managed(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
-    stop(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+    stop(input: { dir: string; session: string; seat: string; expectedUrl?: string }): EndpointStopRead;
   };
   /** Sets the pane's display_agent after launch. False is one line and does not leave the seat out. */
   reportDisplayAgent?(session: string, pane: string, text: string): boolean;
@@ -2315,7 +2316,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         };
       });
     };
-    const host: Host = {
+    const host = endpointCleanupHost({
       startServer: launch.startServer,
       sessionUp: launch.sessionUp,
       createWorkspace: launch.createWorkspace,
@@ -2629,7 +2630,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         });
       },
       seatLock: (name) => acquireSeatLock(dir, session, name),
-    };
+    });
 
     // §2: the owner's terminal. Only a run that may prompt builds a reader, and a read only
     // happens from the pause's own key(): a caller whose stdin is not a terminal never gets here
@@ -2672,10 +2673,13 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       drop: () => host.drop(input.seat),
       screen: () => {
         const kind = readScreen(seatCli(input.seat), launch.paneText(session, input.pane) ?? undefined).kind;
-        if (kind === 'idle' || kind === 'working') return kind;
+        if (kind === 'working') return kind;
+        const cliSeen = reportedLiveAgent(launch.foreground(session, input.pane), profileFor(seatCli(input.seat))?.processNames ?? []);
+        const back = launch.shellBack?.(session, input.pane) ?? null;
+        if (kind === 'idle') return back !== true && cliSeen ? 'idle' : 'timeout';
         if (
           kind === 'unknown'
-          && (launch.shellBack?.(session, input.pane) ?? null) !== true
+          && back !== true && cliSeen
           && unreadIdle(launch.agentStatus?.(session, input.pane) ?? null)
         ) {
           return 'idle';

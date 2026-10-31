@@ -330,7 +330,7 @@ export function stopRecordedCodexEndpoint(
  *  provably this launch's. The record is cleared only after the stop succeeded, so an unprovable
  *  predecessor stays visible rather than being erased on a refusal. */
 export function stopSeatCodexEndpoint(
-  input: { dir: string; session: string; seat: string },
+  input: { dir: string; session: string; seat: string; expectedUrl?: string },
   deps: CodexEndpointDeps = {},
 ): EndpointStopRead {
   let seatState;
@@ -341,6 +341,9 @@ export function stopSeatCodexEndpoint(
   }
   const record = readRecordedCodexEndpoint(seatState?.codex_endpoint, seatState?.presence_binding);
   if (record === null) return { stopped: false, why: 'the seat records no endpoint for its current binding' };
+  if (input.expectedUrl !== undefined && record.url !== input.expectedUrl) {
+    return { stopped: false, why: 'the recorded endpoint is not the one this launch started; nothing was stopped' };
+  }
   const stopped = stopRecordedCodexEndpoint({ ...input, record }, deps);
   if (!stopped.stopped) return stopped;
   updateState(input.dir, (file) => {
