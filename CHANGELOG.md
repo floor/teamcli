@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-10-31
+
+### Changed (breaking)
+
+- **No pane messaging.** No message, wake, reminder, watch nudge, rules line or restart handover
+  is ever typed into a seat's pane or prompt (`src/send/no-pane-messaging.ts`). The `typed` and
+  `native` delivery legs are never walked; the chokepoints that typed (`deliverTrigger`,
+  `submitTrigger`, `deliverCompose`, `deliverRules`, the watch's nudge writer, the send
+  endpoint's and `team send`'s pane bindings, the restart handover) refuse before touching the
+  pane. Delivery goes through the bus and a vendor's event adapter (Claude development channel,
+  MCP inbox, socket, a CLI's runtime queue); a seat with none keeps the message in its bus inbox
+  (the drop file) and the sender is told `queued, no event adapter`. Starting a CLI in a pane, its
+  exit keys and `team answer` (a permission dialog, not a message) are unchanged.
+
+### Fixed
+
+- **The machine daemon under launchd finds herdr.** The unit carries the installing shell's PATH;
+  without it every session read failed and every hosted send answered "the session could not be
+  read".
+- **A slow heartbeat probe no longer kills the hosted send endpoint.** Three 2 s misses in a row
+  mark it failed, and an answer restores it; one 400 ms miss used to mark it failed for good.
+- **Seats may send while the daemon is up.** The send endpoint refused every sender but the owner
+  and the orchestrator; it now refuses only a sender that is no seat of the team, and the CLI's
+  admission decides the rest.
+
 ## [0.5.8-hotfix.1] - 2026-10-30
 
 The 0.5.8.1 fix (published under the SemVer name 0.5.8-hotfix.1, the line's hotfix form).

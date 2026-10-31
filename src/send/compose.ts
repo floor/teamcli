@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from './no-pane-messaging.ts';
 // A compose delivery: the profile's own module walks the CLI's screens and types the brief
 // where the CLI asks for it. The caller keeps the seat lock, writes the drop file and writes
 // the history; this file only builds what the module may see — the pane, the seat's folder,
@@ -84,6 +85,8 @@ export function listedRepos(binary: string, args: readonly string[], dir: string
  * the module's repair line, so the operator reads what to do next in the same sentence.
  */
 export async function deliverCompose(native: NativePane, run: ComposeRun): Promise<ComposeResult> {
+  // No pane messaging: a compose box is never typed into (src/send/no-pane-messaging.ts).
+  if (NO_PANE_MESSAGING.length > 0) return { outcome: 'unreachable', reason: NO_PANE_MESSAGING };
   const foreground = native.foregroundCwd?.(run.session, run.pane) ?? null;
   const foregroundRepo = foreground === null ? null : originRepo(foreground);
   const cwd = foreground !== null && foregroundRepo !== null ? foreground : run.seatCwd;

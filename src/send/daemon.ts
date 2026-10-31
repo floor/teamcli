@@ -1,3 +1,4 @@
+import { refuseTyping } from './no-pane-messaging.ts';
 // The `team send` delivery daemon (`<storeDir>/send/daemon.sock` and `daemon.lock`).
 //
 // Owns the per-seat FIFO queue (`MAX_QUEUE_DEPTH = 32`), retries when a seat is mid-turn
@@ -30,7 +31,7 @@ import { stage as relayStage } from '../../packages/relay/index.js';
 import { createHostServer } from '../../packages/relay/host/server.js';
 import type { TeamFile } from '../file/types.ts';
 import { readTeamConfig } from '../file/team-config.ts';
-import { agentList, agentStatus, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import { paneHoldsShell, seatProcessVerdict } from '../launch/identity.ts';
 import { acquireSeatLock } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
@@ -87,14 +88,15 @@ export const realDaemonHost: DaemonHost = {
   socketsDir: join(tmpdir(), 'cc-socks'),
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
-    typeText: (session, pane, text) => typeText(pane, text, session),
-    pressEnter: (session, pane) => pressEnter(pane, session),
+    // No pane messaging: the send endpoint never types (src/send/no-pane-messaging.ts).
+    typeText: refuseTyping,
+    pressEnter: refuseTyping,
     status: (session, pane) => agentStatus(pane, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     paneText: (session, pane) => paneRead(pane, 40, session),
     // The queue's typed leg is the same delivery `team send` makes: a box holding its owner's
     // unsent text is cleared with the profile's measured keys and the text pasted back.
-    sendKey: (session, pane, key) => sendKey(pane, key, session),
+    sendKey: refuseTyping,
   },
   now: () => new Date(),
   home: homedir(),

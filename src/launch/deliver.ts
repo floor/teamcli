@@ -1,3 +1,4 @@
+import { NO_PANE_MESSAGING } from '../send/no-pane-messaging.ts';
 import { reportedLiveAgent } from './agent.ts';
 import { herdrUnreliable, profileFor } from '../profiles/index.ts';
 import type { RulesFileWrite } from './rules-file.ts';
@@ -398,6 +399,9 @@ export async function deliverRules(cli: string, line: string, seconds: number, i
   };
   const free = () => ['idle', 'done'].includes(io.status() ?? '') || wordless();
   const report = (why: Refusal): false => { io.report?.(why); return false; };
+  // No pane messaging: the rules line is never typed; the rules file is written and the seat
+  // reads it through its event adapter (src/send/no-pane-messaging.ts).
+  if (NO_PANE_MESSAGING.length > 0) return report({ stop: 'typing', typed: false, sent: false, kind: 'unknown', row: NO_PANE_MESSAGING });
   // The CLI may start through a wrapper: a shell runs in the pane first, and the CLI draws
   // behind it. Nothing is typed until the CLI itself is the pane's foreground process and its
   // idle box is up — a line typed into the wrapper's shell would run as a command, not arrive

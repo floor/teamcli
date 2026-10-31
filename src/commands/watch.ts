@@ -1,3 +1,4 @@
+import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { machineAccountsOf } from '../information/machine-accounts.ts';
 import { randomUUID } from 'node:crypto';
 import { readArgs } from '../args.ts';
@@ -280,8 +281,9 @@ export const realWatchSources: WatchSources = {
   status: agentStatus,
   foreground: (pane, session) => paneForeground(pane, session),
   processes: (pane, session) => paneProcesses(pane, session),
-  typeText,
-  pressEnter,
+  // No pane messaging: the watch never types a nudge or a reminder (src/send/no-pane-messaging.ts).
+  typeText: refuseTyping,
+  pressEnter: refuseTyping,
   sendKey: (pane, key, session) => herdrSendKey(pane, key, session),
   sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
   notify,

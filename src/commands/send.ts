@@ -1,3 +1,4 @@
+import { isTypingLeg, NO_PANE_MESSAGING, QUEUED_NO_EVENT_ADAPTER, refuseTyping } from '../send/no-pane-messaging.ts';
 import { randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -15,7 +16,7 @@ import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrid
 import { NOT_A_REPO } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
-import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, pressEnter, sendKey, typeText, type PaneProcesses } from '../herdr.ts';
+import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
@@ -400,12 +401,13 @@ export const realHost: SendHost = {
   socketsDirAlt: '/tmp/cc-socks',
   deliver: (socketPath, frame) => sendFrame(socketPath, frame),
   native: {
-    typeText: (session, pane, text) => typeText(pane, text, session),
-    pressEnter: (session, pane) => pressEnter(pane, session),
+    // No pane messaging: a send never types (src/send/no-pane-messaging.ts).
+    typeText: refuseTyping,
+    pressEnter: refuseTyping,
     status: (session, pane) => agentStatus(pane, session),
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     paneText: (session, pane) => paneRead(pane, 40, session),
-    sendKey: (session, pane, key) => sendKey(pane, key, session),
+    sendKey: refuseTyping,
     foregroundCwd: (session, pane) => paneForegroundCwd(pane, session),
   },
   now: () => new Date(),
@@ -1110,7 +1112,14 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
   // reader sees what the pane was spared. The drop file waits where a keystroke cannot be taken
   // back.
   const human = overrides.human ?? (declared?.human === true);
-  const chosen: readonly DeliveryLeg[] = human ? ['drop'] : ordered;
+  // No pane messaging (src/send/no-pane-messaging.ts): the typed and native legs are never walked;
+  // the drop leg always closes the walk, so a seat with no event adapter keeps the message in its
+  // bus inbox and the sender is told so.
+  const eventLegs: DeliveryLeg[] = ordered.filter((leg) => !isTypingLeg(leg));
+  if (!eventLegs.includes('drop')) eventLegs.push('drop');
+  const typingSetAside = ordered.filter((leg) => isTypingLeg(leg));
+  const noEventAdapter = !human && !eventLegs.some((leg) => leg !== 'drop');
+  const chosen: readonly DeliveryLeg[] = human ? ['drop'] : eventLegs;
   // A direct-only walk (the watch's idle dispatch) is a wake or nothing: only a route that
   // reaches a live receiver without a keystroke stays. The typed and native legs type, the drop
   // leg is a stored copy and the mcp-inbox leg is the seat's own storage — none of them is a
@@ -1252,6 +1261,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     entry.state = state;
     if (reason !== undefined) entry.reason = reason;
   };
+  if (!human) {
+    for (const leg of typingSetAside) failures.push(`${leg}: ${NO_PANE_MESSAGING}`);
+    if (noEventAdapter && !dry) io.stderr(`team send: ${to.seat}: ${QUEUED_NO_EVENT_ADAPTER} (${NO_PANE_MESSAGING}); the message waits in its bus inbox\n`);
+  }
   if (human) {
     for (const leg of order) {
       const reason = humanSkipReason(leg);

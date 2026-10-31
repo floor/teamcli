@@ -1,3 +1,4 @@
+import { refuseTyping } from '../send/no-pane-messaging.ts';
 import { chmodSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -1156,7 +1157,8 @@ async function askForHandover(input: {
     input.log(`${input.name}: the handover folder could not be made; the launch goes on`);
     return undefined;
   }
-  const typed = input.sources.upLaunch.typeText?.(input.session, input.pane, handoverRequest(input.path)) ?? false;
+  // No pane messaging: the handover request is never typed (src/send/no-pane-messaging.ts).
+  const typed = refuseTyping() && (input.sources.upLaunch.typeText?.(input.session, input.pane, handoverRequest(input.path)) ?? false);
   const entered = typed && (input.sources.upLaunch.pressEnter?.(input.session, input.pane) ?? false);
   if (!entered) {
     input.log(`${input.name}: the handover request was not typed; the launch goes on`);
