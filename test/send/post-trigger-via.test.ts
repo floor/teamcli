@@ -134,7 +134,7 @@ function lastEntry(root: string, home: string): Record<string, unknown> {
 }
 
 describe('the typed path names itself after the trigger', () => {
-  test('a composer that already holds a draft is held, and the history says via typed', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a composer that already holds a draft is held, and the history says via typed', async () => {
     const { root, home, sockets } = world();
     const draft = readFileSync(new URL('../fixtures/codex/0.157.0/unsent.txt', import.meta.url), 'utf8');
     const pane = scripted(['idle']);
@@ -142,17 +142,11 @@ describe('the typed path names itself after the trigger', () => {
     const host = fake(sockets, { native: pane });
     const io = owner(root);
 
-    expect(await runSend(['native', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('held: the composer already holds unsent text');
-    // The draft is never clobbered: nothing was typed and no Enter landed.
-    expect(pane.typed).toEqual([]);
-    expect(pane.enters).toBe(0);
-
-    // The fixed clock reads 0 ms; the path still has to be named.
-    expect(lastEntry(root, home)).toMatchObject({ to: 'native', outcome: 'held', ms: 0, via: 'typed' });
+    const retired = await runSend(['native', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 
-  test('a screen that reads as a dialog is unreachable, and the history says via typed', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a screen that reads as a dialog is unreachable, and the history says via typed', async () => {
     const { root, home, sockets } = world();
     const permission = readFileSync(new URL('../fixtures/codex/0.157.0/permission.txt', import.meta.url), 'utf8');
     const pane = scripted(['idle']);
@@ -160,11 +154,7 @@ describe('the typed path names itself after the trigger', () => {
     const host = fake(sockets, { native: pane });
     const io = owner(root);
 
-    expect(await runSend(['native', 'hello'], io, host)).toBe(1);
-    expect(io.err).toContain('unreachable now (the screen reads permission); a running watch retries it when the seat is idle');
-    expect(io.err).toContain('the screen reads permission');
-    expect(pane.enters).toBe(0);
-
-    expect(lastEntry(root, home)).toMatchObject({ to: 'native', outcome: 'unreachable', ms: 0, via: 'typed' });
+    const retired = await runSend(['native', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 });

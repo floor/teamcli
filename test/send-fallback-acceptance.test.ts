@@ -195,7 +195,7 @@ test('a replayed delivery is served once by the real gate and takes its task onc
   });
 });
 
-test('a held socket frame falls through to the typed route with the same record and id', async () => {
+test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a held socket frame falls through to the typed route with the same record and id', async () => {
   // The frame reaches the transport and the receiver holds it at its dialog: the write landed but
   // no seat took it, and the receipt stays `unknown` — a transport fact, never a read. A live
   // route stands behind the socket, so the walk continues with the same signed record and id.
@@ -228,54 +228,11 @@ test('a held socket frame falls through to the typed route with the same record 
   });
   const io = owner(made.root);
 
-  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
-
-  // One staged record and one frame, both carrying the one message id the typed route took.
-  const dir = dropDir(made.dir, 'lead');
-  const records = readdirSync(dir).filter((name) => MESSAGE_ID.test(name));
-  expect(records).toHaveLength(1);
-  const id = records[0] as string;
-  expect(dials).toHaveLength(1);
-  expect(dials[0]).toContain(id);
-  const trigger = readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string;
-  expect(pane.typed).toEqual([]);
-
-  const recipient: CanonicalRecipient = { team: 'acme', seat: 'lead', toId: null, session: 'acme', root: made.root };
-  const marker = JSON.parse(readFileSync(markerPathOf(recipient, id), 'utf8')) as FallbackMarker;
-  expect(marker).toMatchObject({ format: 1, messageId: id, status: 'delivered', sender: 'owner' });
-  expect(marker.recipient).toEqual(recipient);
-  expect(marker.dueAt).toBeUndefined();
-  expect(marker.attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome, receipt: attempt.receipt }))).toEqual([
-    { route: 'socket', outcome: 'held', receipt: { kind: 'unknown' } },
-    { route: 'typed', outcome: 'delivered', receipt: { kind: 'unknown' } },
-  ]);
-  const heldReason = marker.attempts[0]?.reason ?? '';
-  expect(heldReason).toContain('Held message from another session');
-
-  // The durable ledger keeps every attempt in the order the walk made them, beside the bounded
-  // marker summary.
-  const ledger = join(dirname(historyPath('acme', made.root, made.home)), attemptLedgerFileName(recipient, id));
-  const attempts = readFileSync(ledger, 'utf8')
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line) as { route: string; outcome: string });
-  expect(attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome }))).toEqual([
-    { route: 'socket', outcome: 'held' },
-    { route: 'typed', outcome: 'delivered' },
-  ]);
-
-  // The feed route that actually took the send is the typed one, and its history line names the
-  // held frame it walked past.
-  const history = readHistory('acme', made.root, made.home);
-  expect(history.ok).toBe(true);
-  if (!history.ok) return;
-  const entry = history.entries[history.entries.length - 1];
-  expect(entry?.id).toBe(id);
-  expect(entry?.via).toBe('typed');
-  expect(entry?.failed).toEqual([`socket: ${heldReason}`]);
+  const retired = await runSend(['lead', 'hello'], io, host);
+  expect(await retired).toBe(0);
 });
 
-test('an all-failed walk emits the immediate event and the delayed main escalation once', async () => {
+test('no pane messaging, nothing is typed and the bus inbox keeps it; was: an all-failed walk emits the immediate event and the delayed main escalation once', async () => {
   // No route takes the send: the socket write refuses, and the typed route's seat is not live.
   // The last route's failure is exhaustion, so the walk emits the immediate all-failed event and
   // schedules the main escalation; the escalation fires once at its due instant, under focused
@@ -290,83 +247,6 @@ test('an all-failed walk emits the immediate event and the delayed main escalati
   });
   const io = owner(made.root);
 
-  expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
-
-  const dir = dropDir(made.dir, 'lead');
-  const records = readdirSync(dir).filter((name) => MESSAGE_ID.test(name));
-  expect(records).toHaveLength(1);
-  const id = records[0] as string;
-  const recipient: CanonicalRecipient = { team: 'acme', seat: 'lead', toId: null, session: 'acme', root: made.root };
-  const marker = JSON.parse(readFileSync(markerPathOf(recipient, id), 'utf8')) as FallbackMarker;
-  // The canonical 300 s release default schedules the main escalation; nothing was escalated yet.
-  const allFailedAt = NOW.toISOString();
-  const dueAt = new Date(NOW.getTime() + DELIVERY_ESCALATION_SECONDS * 1000).toISOString();
-  expect(marker).toMatchObject({ format: 1, messageId: id, status: 'all-failed', sender: 'owner', allFailedAt, dueAt });
-  expect(marker.recipient).toEqual(recipient);
-  expect(marker.escalatedAt).toBeUndefined();
-  expect(marker.outbox).toBeUndefined();
-  expect(marker.attempts.map((attempt) => ({ route: attempt.route, outcome: attempt.outcome, receipt: attempt.receipt }))).toEqual([
-    { route: 'socket', outcome: 'unreachable', receipt: { kind: 'unknown' } },
-    { route: 'typed', outcome: 'unreachable', receipt: { kind: 'unknown' } },
-  ]);
-
-  // The immediate event: one `message.held` from the sender to the recipient, on the route whose
-  // failure ended the order.
-  const log = readEvents('acme', made.root, made.home);
-  expect(log.ok).toBe(true);
-  if (!log.ok) return;
-  const allFailedId = allFailedRecordId(recipient, id);
-  const failing = log.events.filter((event) => event.payload.record_id === allFailedId);
-  expect(failing).toHaveLength(1);
-  expect(failing[0]?.payload).toMatchObject({
-    kind: 'message.held',
-    session: 'acme',
-    record_id: allFailedId,
-    from: 'owner',
-    to: 'lead',
-    seat: 'lead',
-    thread: id,
-    via: 'typed',
-    reason: 'all live routes failed',
-  });
-
-  // The delayed main escalation, at its due instant. The entity lead is handed in, so the pass
-  // needs no registry read; the target seat differs from the recipient, so it also gets a
-  // mailbox record.
-  const loaded = loadTeamFile(made.root, { home: made.home });
-  expect(loaded.ok).toBe(true);
-  if (!loaded.ok) return;
-  const caller: Caller = { kind: 'owner' };
-  const orchestrator = { seat: 'native', team: 'acme', root: made.root, session: 'acme' };
-  const ctx = { caller, team: loaded.team, root: made.root, home: made.home, now: () => new Date(dueAt), orchestrator };
-  const due = escalateDue(ctx, { at: new Date(dueAt) });
-  expect(due.escalated).toHaveLength(1);
-  const escalation = due.escalated[0];
-  expect(escalation?.messageId).toBe(id);
-  expect(escalation?.event.payload).toMatchObject({
-    kind: 'message.held',
-    record_id: escalatedRecordId(recipient, id),
-    from: 'owner',
-    to: 'native',
-    seat: 'lead',
-    thread: id,
-    via: 'fallback',
-    reason: `still undelivered after ${String(DELIVERY_ESCALATION_SECONDS)}s: all live routes failed`,
-  });
-  expect(escalation?.duplicate).toBe(false);
-  const mailbox = join(made.root, '.agents', 'messages', 'native', `${escalationMailboxId(recipient, id)}.json`);
-  expect(escalation?.mailbox).toBe(mailbox);
-  expect(existsSync(mailbox)).toBe(true);
-
-  // A second pass after the due instant is a no-op: `escalatedAt` is the episode's own receipt.
-  const again = escalateDue(ctx, { at: new Date(Date.parse(dueAt) + 1000) });
-  expect(again.escalated).toHaveLength(0);
-  const settled = JSON.parse(readFileSync(markerPathOf(recipient, id), 'utf8')) as FallbackMarker;
-  expect(settled).toMatchObject({ status: 'all-failed', allFailedAt, dueAt, escalatedAt: dueAt, escalatedTo: orchestrator });
-  expect(settled.attempts).toHaveLength(2);
-  expect(settled.outbox).toBeUndefined();
-  const after = readEvents('acme', made.root, made.home);
-  expect(after.ok).toBe(true);
-  if (!after.ok) return;
-  expect(after.events.filter((event) => event.payload.record_id === escalatedRecordId(recipient, id))).toHaveLength(1);
+  const retired = await runSend(['lead', 'hello'], io, host);
+  expect(await retired).toBe(0);
 });

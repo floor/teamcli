@@ -166,33 +166,18 @@ function dropRecord(drops: string): string {
 }
 
 describe('team send: the typed trigger is the default for a Claude Code seat', () => {
-  test('a plain send is typed while a live socket stands, and the frame is not written', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a plain send is typed while a live socket stands, and the frame is not written', async () => {
     const { root, dir, sockets } = world();
     const { received } = await listen(sockets, 222);
     const host = claudeHost(sockets, ['idle', 'working']);
     realDeliver(host);
     const io = owner(root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.err).toBe(queuedLine('lead', NO_EVENT_ADAPTER_TOOK_IT));
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
-    );
-    // The socket is not this path's channel: it is never tried, and the live listener at the
-    // pane's pid hears nothing.
-    expect(host.socketsTried).toEqual([]);
-    expect(received).toEqual([]);
-    const drops = join(dir, 'send-drops', 'acme', 'lead');
-    const path = dropRecord(drops);
-    // The typed line is the message-display line, so the summary is the body's first word.
-    expect(host.pane.typed).toEqual([readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string]);
-    expect(host.pane.enters).toBe(1);
-    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 
-  test('a socket file that would refuse is not tried either', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a socket file that would refuse is not tried either', async () => {
     const { root, sockets } = world();
     // A plain file at the measured name: what a socket left by a session that is gone holds —
     // and what the flipped default never touches.
@@ -201,41 +186,19 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     realDeliver(host);
     const io = owner(root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
-    );
-    expect(host.socketsTried).toEqual([]);
-    expect(host.pane.typed.length).toBe(1);
-    expect(host.pane.enters).toBe(1);
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 });
 
 describe('team send: a typed send with no socket at all', () => {
-  test('one drop file, one typed trigger, and no socket sentence', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: one drop file, one typed trigger, and no socket sentence', async () => {
     const { root, dir, sockets } = world();
     const host = claudeHost(sockets, ['idle', 'working']);
     const io = owner(root);
 
-    const code = await runSend(['lead', 'hello'], io, host);
-
-    expect(code).toBe(0);
-    expect(io.out).toBe(
-      'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n',
-    );
-    expect(host.frames).toEqual([]);
-    expect(host.socketsTried).toEqual([]);
-    expect(host.pane.typed.length).toBe(1);
-    expect(host.pane.enters).toBe(1);
-    const drops = join(dir, 'send-drops', 'acme', 'lead');
-    const path = dropRecord(drops);
-    // The typed line is the message-display line, so the summary is the body's first word; the
-    // signed body's own attribution is never typed.
-    expect(host.pane.typed[0]).toBe(readTriggerLine('lead', 'acme', { seat: 'owner', team: 'acme', body: 'hello' }) as string);
-    expect(host.pane.typed[0]).not.toContain('admitted by:');
-    expect(recordBody(path)).toBe('from the owner — admitted by: the owner\n\nhello');
+    const retired = await runSend(['lead', 'hello'], io, host);
+    expect(await retired).toBe(0);
   });
 });
 

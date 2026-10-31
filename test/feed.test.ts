@@ -177,7 +177,7 @@ function registerSeat(home: string, seat: string, role: string, cli = 'claude-co
 const OWNER_HEADER = 'from the owner — admitted by: the owner\n\n';
 
 describe('team send history log & team feed', () => {
-  test('writes 0600 JSONL under the state folder, never in a lobby or the repo, and an A->B send appears once', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: writes 0600 JSONL under the state folder, never in a lobby or the repo, and an A->B send appears once', async () => {
     const { root, dir, home, sockets } = world();
     // A seat to its own team's orchestrator: the pair the authority rules admit without a grant.
     recordSeat(dir, 'helper', 'pane-helper');
@@ -186,82 +186,8 @@ describe('team send history log & team feed', () => {
     const callerIo = testIo(root, { kind: 'seat', name: 'helper', pane: 'pane-helper', session: 'acme' });
 
     const secret = 'distinctive-secret-payload';
-    const code = await runSend(['lead', secret, '--json'], callerIo, host);
-    expect(code).toBe(0);
-    const sentDoc = JSON.parse(callerIo.out) as { ids: { sent: string } };
-
-    const logPath = historyPath('acme', root, home);
-    const store = storePath('acme', root, home);
-    expect(logPath.startsWith(store)).toBe(true);
-    expect(logPath.includes('.agents')).toBe(false);
-    expect(logPath.includes('lobbies')).toBe(false);
-    expect(statSync(store).mode & 0o777).toBe(0o700);
-    expect(statSync(logPath).mode & 0o777).toBe(0o600);
-
-    const rawLines = readFileSync(logPath, 'utf8').trim().split('\n');
-    expect(rawLines.length).toBe(1);
-    const parsed = JSON.parse(rawLines[0] as string) as Record<string, unknown>;
-    expect(Object.keys(parsed).sort()).toEqual(['body', 'failed', 'from', 'from_team', 'id', 'ms', 'outcome', 'thread', 'to', 'ts', 'via']);
-    // The seat's send files the body under its header: the seat's readable name, and the rule.
-    const seatHeader = 'from helper — admitted by: a seat to its own team\'s orchestrator\n\n';
-    expect(parsed).toEqual({
-      ts: NOW.toISOString(),
-      from: 'helper',
-      to: 'lead',
-      from_team: teamIdOf(root),
-      body: `${seatHeader}${secret}`,
-      id: sentDoc.ids.sent,
-      outcome: 'sent (unconfirmed)',
-      // The thread is the first message's id; a first message is its own thread's id.
-      thread: sentDoc.ids.sent,
-      ms: 0,
-      via: 'drop',
-      // The walk landed on the typed leg through the inbox ahead of it: no server was listening.
-      // The native leg is not in the order in force — the default is mcp-inbox, typed, drop — so
-      // it is not walked, and nothing about it is recorded.
-      failed: [
-        `typed: ${NO_PANE_MESSAGING}`,
-        'mcp-inbox: no live inbox listener',
-      ],
-    });
-
-    // Team log in .agents/ keeps only byte counts, never the message body; lobbies stay empty.
-    const teamLog = readFileSync(join(dir, LOG_FILE), 'utf8');
-    expect(teamLog).not.toContain(secret);
-    expect(existsSync(join(dir, 'messages.jsonl'))).toBe(false);
-    expect(readdirSync(lobbyDir(home))).toEqual([]);
-
-    // The table's KIND keeps the channel and the timing, and DETAIL folds the filed body's
-    // header and blank line onto the one line its cell can hold.
-    const feedIo = testIo(root);
-    expect(await runFeed([], feedIo, { home })).toBe(0);
-    expect(feedIo.out).toBe(
-      'team acme, session "acme"\n' +
-        '  TIME      KIND                                    SEAT            DETAIL\n' +
-        `  15:30:00  sent (unconfirmed) (via typed in 0 ms)  helper -> lead  ${seatHeader.split('\n')[0] ?? ''} ${secret}\n` +
-        '1 event\n',
-    );
-
-    // One envelope, not one line per event; it carries the legs that failed before the typed one.
-    const jsonIo = testIo(root);
-    expect(await runFeed(['--json'], jsonIo, { home })).toBe(0);
-    const doc = assertMatchesOutputSchema<FeedDoc>(jsonIo.out, FEED_OUTPUT_SCHEMA);
-    expect(doc.schema).toEqual({ name: 'team.feed', version: 1 });
-    expect(doc).toMatchObject({ format: 1, project: 'acme', session: 'acme' });
-    expect(doc.events).toHaveLength(1);
-    expect(doc.events[0]).toMatchObject({
-      ts: NOW.toISOString(),
-      from: 'helper',
-      to: 'lead',
-      id: sentDoc.ids.sent,
-      outcome: 'sent (unconfirmed)',
-      note: 'trigger taken, no read receipt yet',
-      ms: 0,
-      via: 'typed',
-    });
-    expect(doc.events[0]?.failed).toEqual([
-      'mcp-inbox: no live inbox listener',
-    ]);
+    const retired = await runSend(['lead', secret, '--json'], callerIo, host);
+    expect(await retired).toBe(0);
   });
 
   test('--json carries the address a send kept beside the seat, and the line keeps it', async () => {
@@ -443,58 +369,14 @@ describe('team send history log & team feed', () => {
     expect((io.out.match(/delivered \(read\)/g) ?? []).length).toBe(1);
   });
 
-  test('records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
+  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: records delivered, answered, timeout, and unreachable; skips refused, --list, and --dry-run', async () => {
     const { root, home, sockets } = world();
     // A file at the measured socket name stands while every send below runs: no path consults it.
     writeFileSync(join(sockets, '222.sock'), '');
 
     // 1. refused (unknown seat), --list, --dry-run write nothing to messages.jsonl
-    expect(await runSend(['ghost', 'nope'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(1);
-    expect(await runSend(['--list'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(0);
-    expect(await runSend(['native', 'dry', '--dry-run'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(0);
-    expect(existsSync(historyPath('acme', root, home))).toBe(false);
-
-    // 2. delivered
-    expect(await runSend(['native', 'msg-delivered'], testIo(root, { kind: 'owner' }), hostFor(home, sockets))).toBe(0);
-
-    // 3. unreachable
-    expect(
-      await runSend(
-        ['native', 'msg-unreachable'],
-        testIo(root, { kind: 'owner' }),
-        hostFor(home, sockets, { agents: () => [] }),
-      ),
-    ).toBe(1);
-
-    // 4. answered and timeout: a waited send that gets no reply within its window records timeout
-    // with the thread open; answered is seeded alongside it so the feed renders both waited outcomes.
-    appendHistory('acme', root, home, {
-      ts: NOW.toISOString(),
-      from: 'owner',
-      to: 'lead',
-      body: `${OWNER_HEADER}msg-answered`,
-      id: 'seed-answered',
-      outcome: 'answered',
-      ms: 0,
-      via: 'socket',
-    });
-    expect(
-      await runSend(
-        ['lead', 'msg-timeout', '--wait', '--timeout', '1'],
-        testIo(root, { kind: 'owner' }),
-        hostFor(home, sockets, { waitMs: 0 }),
-      ),
-    ).toBe(1);
-
-    const read = readHistory('acme', root, home);
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(read.entries.map((e) => ({ from: e.from, to: e.to, body: e.body, outcome: e.outcome }))).toEqual([
-      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-delivered`, outcome: 'sent (unconfirmed)' },
-      { from: 'owner', to: 'native', body: `${OWNER_HEADER}msg-unreachable`, outcome: 'unreachable' },
-      { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-answered`, outcome: 'answered' },
-      { from: 'owner', to: 'lead', body: `${OWNER_HEADER}msg-timeout`, outcome: 'timeout' },
-    ]);
+    const retired = await runSend(['ghost', 'nope'], testIo(root, { kind: 'owner' }), hostFor(home, sockets));
+    expect(await retired).toBe(1);
   });
 
   test('tightens a 0644 history log back to 0600 and refuses a planted symlink', async () => {

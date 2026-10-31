@@ -805,8 +805,9 @@ read receipt yet`.
 
 ```console
 $ team send claude-keeper "the gate is green" ; echo "exit $?"
+team send: claude-keeper: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-claude-keeper: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
+claude-keeper: sent (unconfirmed) (drop, 0 ms)
 exit 0
 ```
 
@@ -816,8 +817,9 @@ like any other:
 
 ```console caller=operator-a
 $ team send operator-b "the handover is ready" ; echo "exit $?"
+team send: operator-b: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-operator-b: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
+operator-b: sent (unconfirmed) (drop, 0 ms)
 exit 0
 ```
 
@@ -859,6 +861,7 @@ verified reply record:
 
 ```console reply="the gate is green"
 $ team send claude-keeper "is the gate green?" --wait ; echo "exit $?"
+team send: claude-keeper: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
 claude-keeper: answered
 the gate is green
@@ -870,7 +873,7 @@ A dry run of the same send names the walk and writes nothing:
 ```console
 $ team send claude-keeper "is the gate green?" --wait --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file and one trigger line, then a 0600 drop file, with nothing typed into the pane; nothing was written
+claude-keeper: dry-run: claude-code via the seat's own MCP inbox, falling back to a 0600 drop file, with nothing typed into the pane; nothing was written
 exit 0
 ```
 
@@ -990,8 +993,9 @@ the receipt it writes is what the watch promotes:
 
 ```console
 $ team send gpt-reviewer "hello" ; echo "exit $?"
+team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team beacon, session "beacon"
-gpt-reviewer: sent (unconfirmed) (typed, 0 ms; trigger taken, no read receipt yet)
+gpt-reviewer: sent (unconfirmed) (drop, 0 ms)
 exit 0
 ```
 
@@ -1000,6 +1004,7 @@ it exits 1 and leaves the thread open:
 
 ```console
 $ team send gpt-reviewer "hello" --wait --timeout 5 ; echo "exit $?"
+team send: gpt-reviewer: queued, no event adapter (no event adapter of this seat took it); the message waits in its bus inbox
 team send: gpt-reviewer: timeout: sent, no reply on the thread within 5s; the thread stays open
 exit 1
 ```
@@ -1009,6 +1014,6 @@ exit 1
 ```console
 $ team send gpt-reviewer "hello" --dry-run ; echo "exit $?"
 team beacon, session "beacon"
-gpt-reviewer: dry-run: codex via its native runtime queue, falling back to a 0600 drop file and one trigger line, then the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written
+gpt-reviewer: dry-run: codex via its native runtime queue, falling back to the seat's own MCP inbox, then a 0600 drop file, with nothing typed into the pane; nothing was written
 exit 0
 ```
