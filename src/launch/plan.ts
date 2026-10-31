@@ -503,7 +503,9 @@ function unquoteWord(word: string): string {
  * app-server's (a danger-full-access thread read "Workspace" under a default app-server and
  * "Full Access" under one started with `-c sandbox_mode="danger-full-access"`). So every `-c`
  * pair of the line, and its `-a`/`-s` overrides as their config keys — however the line spells
- * them (spaced, `=`-joined, or attached short) — go to the endpoint.
+ * them (spaced, `=`-joined, or attached short) — go to the endpoint. A bare `--` ends option
+ * parsing as it does for the CLI: every word after the first one is positional (a prompt), so a
+ * prompt word shaped like an option never becomes an endpoint permission.
  */
 export function codexEndpointConfig(command: string): string[] {
   const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
@@ -523,8 +525,14 @@ export function codexEndpointConfig(command: string): string[] {
     if (attached !== null) return { flag: `-${attached[1]!}`, value: unquoteWord(attached[2]!) };
     return null;
   };
+  // A bare `--` ends option parsing, as it does for the CLI: every later word is positional (the
+  // prompt), in every spelling — spaced, `=`-joined, attached short or long. An attached-looking
+  // prompt word such as `-sdanger-full-access` after it names no sandbox.
+  let positional = false;
   for (let i = 0; i < words.length; i++) {
     const word = words[i]!;
+    if (word === '--') { positional = true; continue; }
+    if (positional) continue;
     const next = i + 1 < words.length ? unquoteWord(words[i + 1]!) : undefined;
     const own = joined(word);
     const flag = own === null ? word : own.flag;

@@ -161,6 +161,30 @@ describe('the managed Codex endpoint intent', () => {
     expect(codexEndpointConfig('codex -m gpt')).toEqual([]);
   });
 
+  test('words after the bare -- terminator are positional, whatever they look like', () => {
+    // A prompt word shaped like an attached short option is a prompt word: it must not reach
+    // the endpoint as a permission override beside the line's own explicit one.
+    const sandbox = 'codex -m gpt-6.1-sol -s read-only resume 01a1 -- -sdanger-full-access';
+    expect(codexEndpointConfig(sandbox)).toEqual(['-c', 'sandbox_mode="read-only"']);
+    expect(remoteCodexCommand(sandbox)).toBe('codex -m gpt-6.1-sol resume 01a1 -- -sdanger-full-access');
+    const approval = 'codex -m gpt-6.1-sol -a untrusted resume 01a1 -- -anever';
+    expect(codexEndpointConfig(approval)).toEqual(['-c', 'approval_policy="untrusted"']);
+    // The spaced form after `--` was read before the attached forms existed; it is positional too.
+    const spaced = 'codex -m gpt-6.1-sol -s read-only resume 01a1 -- -s danger-full-access';
+    expect(codexEndpointConfig(spaced)).toEqual(['-c', 'sandbox_mode="read-only"']);
+    // Every other spelling is positional after `--` as well.
+    const every = `codex -s read-only -- -m gpt --sandbox=danger-full-access --ask-for-approval never --full-auto --dangerously-bypass-approvals-and-sandbox -c 'sandbox_mode="danger-full-access"' --config approval_policy=never`;
+    expect(codexEndpointConfig(every)).toEqual(['-c', 'sandbox_mode="read-only"']);
+  });
+
+  test('an option before the terminator is still read, and only the first -- ends options', () => {
+    expect(codexEndpointConfig('codex -s read-only -c model_reasoning_effort=high -- -sworkspace-write'))
+      .toEqual(['-c', 'sandbox_mode="read-only"', '-c', 'model_reasoning_effort=high']);
+    // A second `--` after the first is an ordinary positional word.
+    expect(codexEndpointConfig('codex -s read-only -- -a never -- -s danger-full-access'))
+      .toEqual(['-c', 'sandbox_mode="read-only"']);
+  });
+
   test('a non-Codex seat is never marked, whatever the policy value', () => {
     const plan = upPlan({
       ...input(),

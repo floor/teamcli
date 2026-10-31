@@ -107,6 +107,15 @@ describe('a line without permission flags receives the complete defaults', () =>
       'AGENT_UNATTENDED=1 codex -- -a on-request -a never -s danger-full-access --no-alt-screen',
     );
   });
+
+  test('an attached-looking word after -- does not suppress the defaults either', () => {
+    expect(launched(codex, 'codex -- -sdanger-full-access')).toBe(
+      'AGENT_UNATTENDED=1 codex -- -sdanger-full-access -a never -s danger-full-access --no-alt-screen',
+    );
+    expect(launched(codex, 'codex -- -anever -sworkspace-write')).toBe(
+      'AGENT_UNATTENDED=1 codex -- -anever -sworkspace-write -a never -s danger-full-access --no-alt-screen',
+    );
+  });
 });
 
 describe('the codex daemon policy lands beside the permission options', () => {
