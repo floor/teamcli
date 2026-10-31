@@ -16,7 +16,7 @@ import { CHECK_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
-import { CLAUDE_IDLE, deliverBriefs, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, deliverBriefs, notesOtherThanSocket, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-17T11:00:00Z');
@@ -150,7 +150,7 @@ describe('a delegate entry naming approve', () => {
   test('an entry that does not name approve draws no note', () => {
     const root = place(CLEAN);
     const { code, out } = check(root);
-    expect(out).not.toContain('note:');
+    expect(notesOtherThanSocket(out)).toEqual([]);
     expect(out).toContain('no differences');
     expect(code).toBe(0);
   });
