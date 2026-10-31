@@ -163,9 +163,9 @@ test('an accepted socket frame writes the signed read receipt, and the frame ope
 
   expect(code).toBe(0);
   expect(host.frames).toHaveLength(1);
-  // The frame's first line is the sender as a person reads it; the record's own attribution
-  // line follows it under one blank line, unchanged.
-  expect(frameContent(host.frames[0] as string).startsWith('Message from owner (owner@acme)\n\nfrom the owner — admitted by: the owner\n')).toBe(true);
+  // The frame's first line is the display header: the sender as a person reads it and the body's
+  // first content line; the record's own attribution line follows it under one blank line.
+  expect(frameContent(host.frames[0] as string).startsWith('Message from owner (owner@acme): a note\n\nfrom the owner — admitted by: the owner\n')).toBe(true);
   // The receipt is a signed read, naming the delivery that took the record.
   const drops = dropDir(made.dir, 'lead');
   const id = recordName(drops);
@@ -323,7 +323,7 @@ test('a seat with no nickname opens the frame with its written label name, and w
   // The roster holds no nickname, so the written label's name before the middle dot stands.
   expect(await runSend(['lead', 'from the label'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('Message from Epimetheus (labelled@acme)\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Message from Epimetheus (labelled@acme): from the label\n\n')).toBe(true);
 
   // A written label with nothing before the middle dot falls through to the seat name.
   const blank = registerSeat(made, 'blank', 'w5:p1');
@@ -333,7 +333,7 @@ test('a seat with no nickname opens the frame with its written label name, and w
   const fromBlank = testIo(made.root, { kind: 'seat', name: 'blank', pane: 'w5:p1', session: 'acme' });
   expect(await runSend(['lead', 'from the blank'], fromBlank, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('Message from blank (blank@acme)\n\n')).toBe(true);
+  expect(frameContent(again.frames[0] as string).startsWith('Message from blank (blank@acme): from the blank\n\n')).toBe(true);
 });
 
 test('a direct-only push leaves the record unread: its receiving runtime is the reader', async () => {
@@ -369,7 +369,7 @@ test('a seat sender opens the frame with its nickname, and with its seat name wh
 
   expect(await runSend(['lead', 'from bea'], io, host)).toBe(0);
   expect(host.frames).toHaveLength(1);
-  expect(frameContent(host.frames[0] as string).startsWith('Message from Bea (helper@acme)\n\n')).toBe(true);
+  expect(frameContent(host.frames[0] as string).startsWith('Message from Bea (helper@acme): from bea\n\n')).toBe(true);
 
   // The roster without a nickname for the seat: the same line falls back to the seat name.
   const native = registerSeat(made, 'native', 'w3:p1');
@@ -379,5 +379,5 @@ test('a seat sender opens the frame with its nickname, and with its seat name wh
   const fromNative = testIo(made.root, { kind: 'seat', name: 'native', pane: 'w3:p1', session: 'acme' });
   expect(await runSend(['lead', 'from native'], fromNative, again)).toBe(0);
   expect(again.frames).toHaveLength(1);
-  expect(frameContent(again.frames[0] as string).startsWith('Message from native (native@acme)\n\n')).toBe(true);
+  expect(frameContent(again.frames[0] as string).startsWith('Message from native (native@acme): from native\n\n')).toBe(true);
 });

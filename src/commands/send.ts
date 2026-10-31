@@ -1218,15 +1218,6 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     { seat: record.from, ...(record.from_id === null ? {} : { id: record.from_id }) },
     { ...naming, mode: 'nickname' },
   );
-  const wakeHeader = renderMessageDisplay(wakeTemplate, {
-    name: wakeName,
-    seat: record.from,
-    team: team.project,
-    ...(record.subject === undefined ? {} : { subject: record.subject }),
-    summary: messageSummaryOf(record.body),
-    age: '0s',
-    id: '',
-  });
   // A direct-only caller hands in the pane and CLI its own pass saw for this seat: the send is
   // bound to them, never re-aimed at a pane the caller did not read. A seat the session no longer
   // lists at that pane, or whose file now names another CLI, is refused here — before any route
@@ -1475,7 +1466,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         note(walkAttempt('socket', 'refused', false, host.now(), startedAt, { reason: socketGuard.why }));
         break;
       }
-      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameIdentityHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null), human);
+      const attempt = await deliverSocketFrame(dir, who, from, to, record, failures, host, report, startedAt, wait, inbound, root, frameDisplayHeader(record, naming, team.project, caller.kind === 'seat' ? labelNameOf(team, caller.name) : null, wakeTemplate), human);
       if (attempt.kind === 'delivered') {
         markLeg('socket', 'attempted');
         note(walkAttempt('socket', 'delivered', false, host.now(), startedAt));
@@ -4152,14 +4143,21 @@ function labelNameOf(team: TeamFile, seat: string): string | null {
 }
 
 /**
- * The display line an accepted socket frame opens with: the sender as a person reads it — the
- * nickname the registry (or the seat's own setting) holds, the name its written label carries
- * before the middle dot, then the seat name — and the address it sits at in the team this run
- * sends from. Display only: the signed record below it is the message, and the record's body
+ * The display line an accepted socket frame opens with: the receiving team's `message-display`
+ * template, the sender as a person reads it — the nickname the registry (or the seat's own
+ * setting) holds, the name its written label carries before the middle dot, then the seat name —
+ * and the address it sits at in the team this run sends from, with the body's first content line
+ * as the summary. Display only: the signed record below it is the message, and the record's body
  * keeps its own `from … — admitted by: …` line. A registry that cannot answer reads as no
  * nickname, so a frame always names its sender.
  */
-function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, teamName: string, labelName: string | null): string {
+function frameDisplayHeader(
+  record: RecordPayload,
+  naming: SenderNaming,
+  teamName: string,
+  labelName: string | null,
+  template: string,
+): string {
   let name = '';
   try {
     name = senderNickname(
@@ -4172,7 +4170,15 @@ function frameIdentityHeader(record: RecordPayload, naming: SenderNaming, teamNa
   // A nickname wins; then the name the seat's written label carries; then the seat name, so the
   // line always names its sender.
   if (name === '') name = labelName ?? '';
-  return `Message from ${name === '' ? record.from : name} (${record.from}@${teamName})`;
+  return renderMessageDisplay(template, {
+    name: name === '' ? record.from : name,
+    seat: record.from,
+    team: teamName,
+    ...(record.subject === undefined ? {} : { subject: record.subject }),
+    summary: messageSummaryOf(record.body),
+    age: '0s',
+    id: '',
+  });
 }
 
 /** Reads the target pane until the held-message dialog shows, or ~1s passes: the dialog renders
@@ -4389,6 +4395,9 @@ export async function redeliverChannelOnSocket(input: {
     root,
     cross: false,
   };
+  // The frame opens with the same display words the original send would have written: the
+  // receiving team's template in force now, so a redelivery never opens differently from a send.
+  const wakeTemplate = messageDisplayInForce({ home: host.home, root, team: input.team, now: host.now() });
   const attempt = await deliverSocketFrame(
     dir,
     payload.from,
@@ -4402,7 +4411,7 @@ export async function redeliverChannelOnSocket(input: {
     false,
     inbound,
     root,
-    frameIdentityHeader(payload, naming, input.team.project, labelNameOf(input.team, seat)),
+    frameDisplayHeader(payload, naming, input.team.project, labelNameOf(input.team, seat), wakeTemplate),
     false,
   );
   if (attempt.kind === 'delivered') return { ok: true };

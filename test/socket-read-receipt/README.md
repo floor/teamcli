@@ -32,11 +32,12 @@ the seat scenes register `helper` on the team's roster with a nickname, or with 
    later pass. The retry is a typed line, not a read: no receipt appears behind it. This
    row is green at the pre-fix source by design — it pins the behavior the hotfix keeps.
 4. An accepted frame from a seat with nickname `Bea` opens with exactly
-   `Message from Bea (helper@acme)`, alone on its first line, then one blank line, then
-   the unchanged record body. The header is display only: the signed record keeps its own
-   `from Bea — admitted by: …` line and its bytes never carry the display header.
+   `Message from Bea (helper@acme): a note`, alone on its first line, then one
+   blank line, then the unchanged record body. The header is display only: the
+   signed record keeps its own `from Bea — admitted by: …` line and its bytes
+   never carry the display header.
 5. With no nickname on the roster, the same frame opens with
-   `Message from helper (helper@acme)`.
+   `Message from helper (helper@acme): a note`.
 
 ## Contract pinned
 
@@ -47,15 +48,15 @@ The product branch's answers, at the strings level:
   `read_by` was stripped or changed does not verify. Written by the existing write-once,
   `0600` receipt writer, only on the accepted branch, after the held-dialog read. A
   receipt write that fails does not fail the send: the record simply stays unread.
-- Frame header: `Message from <name> (<seat>@<team>)`, with no trailing colon, no summary,
-  nothing else on the line and no admitted-by suffix. `<name>` is the sender's nickname as
-  the naming rule resolves it, falling back to the seat name; `<seat>` is the record's
-  signed sender; `<team>` is the sending team's project name. The frame keeps its shape:
-  header, blank line, record body (which keeps its own attribution line), blank line, the
-  existing reply line. Owner and watch frames follow the same rule
-  (`Message from owner (owner@<team>)`, `Message from watch (watch@<team>)`). The typed
-  wake line and the sender-line setting are unchanged; the message-display setting is not
-  part of this fix.
+- Frame header: the receiving team's `message-display` header, rendered with the sender's
+  nickname, its written label name, or the seat name; the record's signed sender and team
+  in `<seat>@<team>`, and the body's first content line as the summary. Under the shipped
+  template the first line reads `Message from <name> (<seat>@<team>): <summary>`, alone on
+  its line and with no admitted-by suffix. The frame keeps its shape: header, blank line,
+  record body (which keeps its own attribution line), blank line, the existing reply line.
+  Owner and watch frames follow the same rule (`Message from owner (owner@<team>): …`,
+  `Message from watch (watch@<team>): …`). The typed wake line and the sender-line setting
+  are unchanged.
 
 ## Running
 
