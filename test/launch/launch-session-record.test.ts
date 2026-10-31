@@ -34,6 +34,7 @@ test('a launch records the conversation id it carries, not only what herdr reads
     // herdr reads nothing back for the first two, and a stale id for the third's pane is absent too.
     agentList: () => [{ pane: 'herdr-pane', session: 'herdr-read-id' } as never],
     processInfo: () => ({ shell: 1, foreground: [2] }),
+    foreground: () => ['claude'],
     classify: (): ScreenKind => 'idle',
     sleep: async () => {},
     now: () => 0,
@@ -90,6 +91,7 @@ test.each([
       ...(named ? { session: 'ses_live_endpoint' } : {}),
     }],
     processInfo: () => ({ shell: 1, foreground: [named && replaced ? 3 : 2] }),
+    foreground: () => ['codex'],
     classify: (): ScreenKind => 'idle',
     sleep: async () => {},
     now: () => 0,

@@ -73,6 +73,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.seat-name` | `add` | 2 | a seat name is required | `team add` |
 | `add.temporary-flags` | `add` | 2 | --until and --worktree need --temporary | `team add worker --until result:out.md` |
 | `add.temporary-unexpected` | `add` | 2 | an unexpected argument was passed to --temporary | `team add extra --temporary` |
+| `agents.plan` | `agents` | 0 | the dry run found no record to retire | `team agents prune` |
+| `agents.retired` | `agents` | 0 | every listed record that needed retiring was retired | `team agents prune --apply` |
+| `agents.incomplete` | `agents` | 1 | --apply left a record unretired because it could not be written | `team agents prune --apply` |
+| `agents.owner` | `agents` | 1 | --apply was aimed by a caller who is not the owner | `team agents prune --apply` |
+| `agents.registry` | `agents` | 1 | the team registry cannot be read | `team agents prune` |
+| `agents.stale` | `agents` | 1 | the dry run found records to retire | `team agents prune` |
+| `agents.invocation` | `agents` | 2 | the invocation cannot be read | `team agents prune --nope` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
 | `answer.ambiguous` | `answer` | 1 | herdr lists more than one agent of this name | `team answer lead trust` |

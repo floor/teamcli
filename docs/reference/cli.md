@@ -103,6 +103,58 @@ Usage:
 | --- | --- | --- |
 | `name` | yes | no |
 
+## `agents`
+
+Hidden: no
+
+Usage:
+
+    team agents prune [--apply] [--json]
+
+### Who may run it
+
+`any-caller` — the listing reads the machine agent registry and the team registry and changes nothing, so any caller reads it; --apply retires a record no roster names, and that write is the owner's, from a terminal outside herdr
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+None.
+
+### `prune`
+
+Hidden: no
+
+Usage:
+
+    team agents prune [--apply] [--json]
+
+#### Who may run it
+
+`any-caller` — the only verb: the listing changes nothing and is any caller's, and --apply retires the records it lists and is the owner's, from a terminal outside herdr
+
+#### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--apply` | no | no | no |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--json` | no | no | no |
+| `--key` | yes | no | no |
+| `-h` | no | no | yes |
+
+#### Positionals
+
+None.
+
 ## `answer`
 
 Hidden: no

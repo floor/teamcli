@@ -452,6 +452,14 @@ function buildGates(): Record<string, Gate> {
       why: 'removing a team registry record is the owner\'s, from a terminal outside herdr or by an owner-seat answer for that forget; it does not stop panes or delete the team file',
       terminal: { who: 'the owner', where: 'a terminal outside herdr' },
     },
+    agents: {
+      kind: 'any-caller',
+      why: 'the listing reads the machine agent registry and the team registry and changes nothing, so any caller reads it; --apply retires a record no roster names, and that write is the owner\'s, from a terminal outside herdr',
+    },
+    'agents:prune': {
+      kind: 'any-caller',
+      why: 'the only verb: the listing changes nothing and is any caller\'s, and --apply retires the records it lists and is the owner\'s, from a terminal outside herdr',
+    },
     batch: {
       kind: 'any-caller',
       why: 'it records several owner-seat actions as one request, or runs a batch the owner seat already signed; it does not grant, change owner-signers, or change approval-mode',

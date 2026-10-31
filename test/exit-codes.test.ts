@@ -26,6 +26,7 @@ import { runBus, type BusCommandSources } from '../src/commands/bus.ts';
 import { runApprovals } from '../src/commands/approvals.ts';
 import { runBatch } from '../src/commands/batch.ts';
 import { runForget } from '../src/commands/forget.ts';
+import { runAgents } from '../src/commands/agents.ts';
 import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
@@ -112,7 +113,7 @@ import { writePolicySet } from '../src/policy/index.ts';
 import { overridesPath } from '../src/profiles/overrides.ts';
 import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
-import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
@@ -5788,6 +5789,66 @@ scene('forget.approval-requested', async (place) => {
 });
 scene('forget.approval-refused', async (place) =>
   show(await forgetRun(place, ['abc123abc123', '--approval', 'oa_nope'], detachedCaller), 'is not an owner-seat request id'));
+async function agentsRun(place: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  return { code: await runAgents(argv, io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+/** An agent record for `seat` under this place's team id, and the registry record that names the
+ *  team, so the record's team is one the registry holds. */
+function agentUnderTeam(place: Place, seat: string): void {
+  registerAgent(place.home, {
+    name: seat,
+    signing: { model: 'Claude Opus', version: '5.5', role: 'implementer' },
+    lab: 'anthropic',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude --model claude-opus-5-5',
+    reach: { team: teamIdOf(place.root), seat, session: 'acme', pane: null, address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'stopped',
+    by: 'test',
+  });
+  upsertTeam(place.home, teamIdOf(place.root), { project: 'acme', session: 'acme', root: place.root, by: 'test' });
+}
+
+scene('agents.invocation', async (place) => show(await agentsRun(place, ['nope']), 'unknown subcommand "nope"'));
+scene('agents.registry', async (place) => {
+  mkdirSync(dirname(teamsFile(place.home)), { recursive: true });
+  writeFileSync(teamsFile(place.home), 'teams: [\n');
+  return show(await agentsRun(place, ['prune']), 'teams.yaml');
+});
+scene('agents.plan', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'lead');
+  return show(await agentsRun(place, ['prune']), 'none to retire');
+});
+scene('agents.stale', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune']), '1 record to retire');
+});
+scene('agents.retired', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune', '--apply']), '1 record retired');
+});
+scene('agents.incomplete', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  chmodSync(agentsDir(place.home), 0o555);
+  try {
+    return show(await agentsRun(place, ['prune', '--apply']), 'could not be retired');
+  } finally {
+    chmodSync(agentsDir(place.home), 0o755);
+  }
+});
+scene('agents.owner', async (place) => {
+  write(place, TEAM);
+  agentUnderTeam(place, 'ghost');
+  return show(await agentsRun(place, ['prune', '--apply'], detachedCaller), 'only the owner runs this');
+});
 async function batchRun(place: Place, argv: string[], caller: Caller = owner, store?: ReturnType<typeof seatOwner>): Promise<Ran> {
   const io = testIo(place.root, caller);
   return { code: await runBatch(argv, io, { home: place.home, ...(store ? { ownerSeatStore: store } : {}) }), out: io.out, err: io.err };

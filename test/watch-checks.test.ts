@@ -356,6 +356,16 @@ describe('a seat stopped on a provider error or a rate limit', () => {
   // The wall's own frame: the rejected line sits directly above the box, as the capture draws
   // it. A later turn row between the two is a quote of the wall, not the wall.
   const limit = `● Done.\n\nAPI Error: Request rejected (429) · Usage limit reached for 5 hour. Your limit will reset at 11:00\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
+  const codexModelSwitch = `Approaching rate limits
+Switch to gpt-6-luna for lower credit usage?
+
+
+› 1. Switch to gpt-6-luna                   Fast and affordable model for easier tasks.
+  2. Keep current model
+  3. Keep current model (never show again)  Hide future rate limit reminders about switching models
+
+  enter select · esc back
+`;
   const team = () => teamFile();
   const run = (memory: ReturnType<typeof newMemory>, now: number, screen: string) => texts(pass({
     team: team(),
@@ -387,6 +397,25 @@ describe('a seat stopped on a provider error or a rate limit', () => {
     expect(run(memory, 0, limit)).toContain('deepseek-acme is out of quota on deepseek: usage limit, resets at 11:00');
     expect(run(memory, 11 * 60_000, idle).some((line) => line.includes('rate limit'))).toBe(false);
     expect(run(memory, 12 * 60_000, limit)).toContain('deepseek-acme is out of quota on deepseek: usage limit, resets at 11:00');
+  });
+
+  test('the Codex model-switch dialog is a prompt, not an idle seat or watch nudge', () => {
+    const memory = newMemory();
+    const runSwitch = (now: number) => texts(pass({
+      team: team(),
+      watch: team().watch,
+      state: emptySession(),
+      live: live({ 'codex-acme': { status: 'done', screen: codexModelSwitch } }),
+      machine: fine,
+      now,
+      memory,
+      approval: [],
+    }));
+    const first = runSwitch(0);
+    expect(first).toContain('codex-acme needs a choice: rate-limit model switch');
+    expect(first.some((line) => line.includes('has been idle'))).toBe(false);
+    const later = runSwitch(11 * 60_000);
+    expect(later.some((line) => line.includes('has been idle'))).toBe(false);
   });
 });
 
