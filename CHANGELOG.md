@@ -156,6 +156,11 @@ unchanged.
   section leaves the canonical record unchanged.
 - **Several watch and MCP channel-push races are closed**, including push name reservation and
   a stale inbox server reload.
+- **`team mcp serve` finds its team without a `--file`.** A server started without one takes its
+  team from the registry record that holds its seat, narrowed by `--session`, and never reads the
+  folder it starts in as the team. When more than one registered team holds the seat it refuses,
+  naming the teams it found; a seat no registered team holds is refused with the `--file` it
+  needs.
 - **The Codex daemon dialog closes on `team down`**, and a detached agent is named by `caller`.
 - **Team-made state folders are 0700.** The log, the state lock, the restart handover and the
   launch's own files make their folders 0700, so the rules file written before launch is not
