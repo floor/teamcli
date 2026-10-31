@@ -170,8 +170,14 @@ export function sessionDefaultMove(approvedDigest: string | undefined, team: App
   return null;
 }
 
+/** One difference a file has against its approval. `seat-missing` is the report's own line for a
+ *  seat the approval still holds and the file no longer names; `compare` never produces it,
+ *  because a seat taken out needs no new approval. */
 export type Difference =
-  { kind: 'section'; name: string; moved?: { from: string; to: string } } | { kind: 'seat-changed'; name: string } | { kind: 'seat-new'; name: string };
+  | { kind: 'section'; name: string; moved?: { from: string; to: string } }
+  | { kind: 'seat-changed'; name: string }
+  | { kind: 'seat-new'; name: string }
+  | { kind: 'seat-missing'; name: string };
 
 /**
  * What in the file the owner has not approved. The file passes when every
@@ -212,6 +218,7 @@ export function describe(difference: Difference): string {
   }
   if (difference.kind === 'section') return `\`${difference.name}\` changed`;
   if (difference.kind === 'seat-new') return `seat ${difference.name} is not in the last approval`;
+  if (difference.kind === 'seat-missing') return `seat ${difference.name} is missing since the last approval`;
   return `seat ${difference.name} changed`;
 }
 
@@ -221,6 +228,6 @@ export function describe(difference: Difference): string {
  * readings fold; `null` for a section difference.
  */
 export function seatNamed(line: string): string | null {
-  const match = /^seat (.+) (?:changed|is not in the last approval)$/.exec(line);
+  const match = /^seat (.+) (?:changed|is not in the last approval|is missing since the last approval)$/.exec(line);
   return match?.[1] ?? null;
 }

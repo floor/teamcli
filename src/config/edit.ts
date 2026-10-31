@@ -252,7 +252,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // next up or restart runs the line the team now declares, not the one the record kept.
   const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats) : [];
   if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
-  const stale = checked.ok ? (approvalDifferences(checked.team, root, home) ?? []) : [];
+  const stale = checked.ok ? (approvalDifferences(checked.team, root, home, { text: next }) ?? []) : [];
   if (!commentsKept) io.stderr(`team config: the record was rewritten whole to change ${rawPath}; its comments were not kept\n`);
   if (json) {
     writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, comments_kept: commentsKept, approval_differences: stale });
