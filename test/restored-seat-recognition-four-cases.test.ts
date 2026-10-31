@@ -120,7 +120,7 @@ function recordState(extra: { cursorSession?: string } = {}): void {
       launched: { shell: 120, cli: [220] }, agent_session: 'ses_codex_recorded',
     } as never;
     session.seats['reviewer-agent'] = {
-      stage: 'ready', pane: 'w4:p1', workspace: 'w4', id: 'seat_444444444444',
+      stage: 'ready', pane: 'fixture:reviewer', workspace: 'fixture-reviewer', id: 'seat_444444444444',
       launched: { shell: 130, cli: [230] },
       ...(extra.cursorSession === undefined ? {} : { agent_session: extra.cursorSession }),
     } as never;
@@ -165,7 +165,7 @@ function live(over: { cursorSession?: string; cursorScreen?: string } = {}): Liv
       { name: 'writer-06', agent: 'codex', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null, session: 'ses_writer06' },
       { name: 'codex-reviewer', agent: 'codex', pane: 'w3:p1', workspace: 'w3', status: 'idle', cwd: null, session: 'ses_codex_live' },
       {
-        name: 'reviewer-agent', agent: 'cursor', pane: 'w4:p1', workspace: 'w4', status: 'idle', cwd: null,
+        name: 'reviewer-agent', agent: 'cursor', pane: 'fixture:reviewer', workspace: 'fixture-reviewer', status: 'idle', cwd: null,
         ...(over.cursorSession === undefined ? {} : { session: over.cursorSession }),
       },
     ],
@@ -173,19 +173,19 @@ function live(over: { cursorSession?: string; cursorScreen?: string } = {}): Liv
       { id: 'w1', label: 'writer-06' },
       { id: 'w2', label: 'architect' },
       { id: 'w3', label: 'codex-reviewer' },
-      { id: 'w4', label: 'reviewer-agent' },
+      { id: 'fixture-reviewer', label: 'reviewer-agent' },
     ],
     screens: {
       'w1:p1': CODEX_IDLE,
       'w2:p1': CLAUDE_IDLE,
       'w3:p1': CODEX_DRIFT,
-      'w4:p1': over.cursorScreen ?? CURSOR_IDLE,
+      'fixture:reviewer': over.cursorScreen ?? CURSOR_IDLE,
     },
     processes: {
       'w1:p1': { shell: 101, foreground: [201] },
       'w2:p1': { shell: 111, foreground: [211] },
       'w3:p1': { shell: 121, foreground: [221] },
-      'w4:p1': { shell: 131, foreground: [231] },
+      'fixture:reviewer': { shell: 131, foreground: [231] },
     },
   };
 }
@@ -322,13 +322,13 @@ describe('reviewer-agent: a Cursor seat the registry does not bind', () => {
     // The Cursor profile keeps no session id of its own at launch, so the registry is the only
     // record that can tie this restored pane to the seat. When it does, the seat is the seat: the
     // Cursor idle screen is read as idle, not as a doubt.
-    registerSeat('reviewer-agent', 'cursor', 'seat_444444444444', 'w4:p1', 'ses_cursor');
+    registerSeat('reviewer-agent', 'cursor', 'seat_444444444444', 'fixture:reviewer', 'ses_cursor');
     const { code, doc } = await readSeat('reviewer-agent', live({ cursorSession: 'ses_cursor' }));
     expect(code).toBe(0);
     const status = doc.status as Record<string, unknown>;
     expect(status.cli).toBe('cursor');
     expect(status.status).toBe('idle');
     expect(status.state).toBe('idle');
-    expect(status.pane).toBe('w4:p1');
+    expect(status.pane).toBe('fixture:reviewer');
   });
 });
