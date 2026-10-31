@@ -173,9 +173,10 @@ not a message) are unchanged.
   naming the teams it found; a seat no registered team holds is refused with the `--file` it
   needs.
 - **The Codex daemon dialog closes on `team down`**, and a detached agent is named by `caller`.
-- **Team-made state folders are 0700.** The log, the state lock, the restart handover and the
-  launch's own files make their folders 0700, so the rules file written before launch is not
-  refused.
+- **Team-made state folders are created 0700.** The log, the state lock, the restart handover
+  and the launch's own files create their folders with mode 0700, so a project store they
+  first make is accepted by the rules file written before launch. A folder that already exists
+  keeps the mode it has.
 - **A client drop no event adapter took is recorded as the drop leg**, sent unconfirmed, and
   the log says `queued, no event adapter` rather than `unreachable`.
 - **A bundle-grant send walks the same delivery legs as any other send**, and a walk that fails
