@@ -68,17 +68,20 @@ Every command, flag, refusal and exit code is in
 
 ## What's new in 0.5.10
 
-0.5.10 makes one rule absolute: nothing is ever typed into a seat. A message reaches its
-recipient through the seat's own event adapters — a channel push, a socket frame, its runtime's
-queue — through its inbox, or through its drop folder for its next read. No send presses a key in
-a pane, and the watch never nudges one by typing. A seat that no route can wake still gets the
-message: it waits in the bus inbox, and the command says so in plain words.
+0.5.10 makes one rule absolute for messages: none is ever typed into a seat. A message reaches
+its recipient through the seat's own event adapters — a channel push, a socket frame, its
+runtime's queue — through its inbox, or through its drop folder for its next read. No send
+presses a key in a pane, and the watch never nudges one by typing; launch lines, dialog answers
+and exit keys remain the commands' own typing, not a message. A seat that no route can wake still
+gets the message: it waits in the bus inbox, and the command says so in plain words.
 
 Each seat has a delivery class — `push`, `between-turns`, `pull-on-turn` or `none` — measured from
 its CLI's profile and refined by what its launch installed. `team send` appends the receiving
 seat's class to its outcome line, `team status`'s REACH column says whether a send's socket leg is
 eligible, and `team check` names a seat whose live socket a send would skip, with the repair. A
-Claude seat behind a provider wrapper is read as the model and version the file declares.
+Claude seat behind a provider wrapper is read as the model and version the file declares, unless
+the provider's own banner names a different model — then the banner's id is the reading and the
+drift shows.
 `team restart <seat>` resumes the recorded conversation, and `team up` after `team down` resumes
 what `down` retained. `team config set --request` and `team add --request` file an owner request
 from a folder that is not a checkout, keyed by the team's registry record. `team config set` and
