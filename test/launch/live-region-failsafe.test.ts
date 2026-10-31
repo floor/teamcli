@@ -10,6 +10,7 @@
 import { describe, expect, test } from 'bun:test';
 import { deliverRules, type Delivery, type Refusal } from '../../src/launch/deliver.ts';
 import { dialogKind } from '../../src/send/deliver.ts';
+import { NO_PANE_MESSAGING } from '../../src/send/no-pane-messaging.ts';
 import { readScreen, type Screen } from '../../src/watch/screen.ts';
 import { claudeBox } from '../helpers.ts';
 
@@ -156,19 +157,19 @@ describe('the liveRegion fail-safe over an older error', () => {
     expect(ran.result).toBe(false);
     expect(ran.typed).toEqual([]);
     expect(ran.entered).toBe(0);
+    // No pane messaging: delivery refuses before any screen is read, so the refusal carries the
+    // no-pane line; the reading asserted above is what keeps the narrow pane blocked.
     expect(ran.refusals[0]).toMatchObject({
-      stop: 'screen', typed: false, sent: false, kind: 'provider error', row: null,
+      stop: 'typing', typed: false, sent: false, kind: 'unknown', row: NO_PANE_MESSAGING,
     });
   });
 
-  test('a right-aligned update notice on the completion row leaves the prompt deliverable', async () => {
+  test('no pane messaging, rules are never typed; was: a right-aligned update notice on the completion row leaves the prompt deliverable', async () => {
     expect(readScreen('claude-code', COMPLETED_WITH_INLINE_NOTICE)).toEqual({ kind: 'idle' });
     expect(dialogKind('claude-code', COMPLETED_WITH_INLINE_NOTICE)).toBeNull();
     const ran = await deliver(COMPLETED_WITH_INLINE_NOTICE);
     expect(ran.read).toBe('idle');
-    expect(ran.result).toBe(true);
-    expect(ran.typed).toEqual([RULES]);
-    expect(ran.entered).toBe(1);
-    expect(ran.refusals).toEqual([]);
+    expect(ran.result).toBe(false);
+    expect(ran.typed).toEqual([]);
   });
 });
