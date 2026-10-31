@@ -59,14 +59,14 @@ function reserveFor(store: ReservationStore, item: ItemIdentity, runId: string) 
     runId,
     attempt: 1,
     thread: `th-${runId}`,
-    receiver: { seat: 'work', pane: 'w2:p1' },
+    receiver: { seat: 'work', pane: 'fixture2:pane1' },
     expiresAt: T,
     at: AT,
   });
 }
 
 function claimFor(store: ReservationStore, item: ItemIdentity) {
-  return claimNext(store, { item, seat: 'work', pane: 'w2:p1', now: AT, expiresAt: T });
+  return claimNext(store, { item, seat: 'work', pane: 'fixture2:pane1', now: AT, expiresAt: T });
 }
 
 describe('a seat holding one item', () => {
@@ -87,12 +87,12 @@ describe('a seat holding one item', () => {
     expect(reserveFor(reservationStore, X, run).kind).toBe('reserved');
     expect(acknowledge(reservationStore, {
       item: X, runId: run, attempt: 1, thread: `th-${run}`,
-      seat: 'work', pane: 'w2:p1', messageId: 'msg-1', at: T - 1000,
+      seat: 'work', pane: 'fixture2:pane1', messageId: 'msg-1', at: T - 1000,
     }).kind).toBe('acknowledged');
 
     expect(claimFor(reservationStore, Y)).toMatchObject({ kind: 'refused', reason: 'receiver-busy' });
     expect(entryOf(store, Y)?.hold).toBeUndefined();
-    expect(entryOf(store, X)?.hold).toMatchObject({ phase: 'holder', holder: { seat: 'work', pane: 'w2:p1' } });
+    expect(entryOf(store, X)?.hold).toMatchObject({ phase: 'holder', holder: { seat: 'work', pane: 'fixture2:pane1' } });
   });
 
   test('the reverse direction already refuses: a next-claim makes the seat busy for a reservation', () => {
@@ -102,7 +102,7 @@ describe('a seat holding one item', () => {
 
     expect(reserveFor(reservationStore, Y, 'run-2')).toMatchObject({ kind: 'refused', reason: 'receiver-busy' });
     expect(entryOf(store, Y)?.hold).toBeUndefined();
-    expect(entryOf(store, X)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:work:w2:p1', seat: 'work' });
+    expect(entryOf(store, X)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:work:fixture2:pane1', seat: 'work' });
   });
 });
 
@@ -114,7 +114,7 @@ describe('the boundaries of the seat scan', () => {
 
     expect(claimFor(reservationStore, Y)).toMatchObject({ kind: 'refused', reason: 'receiver-busy' });
     expect(entryOf(store, Y)?.hold).toBeUndefined();
-    expect(entryOf(store, X)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:work:w2:p1' });
+    expect(entryOf(store, X)?.hold).toMatchObject({ kind: 'next-claim', owner: 'next:work:fixture2:pane1' });
   });
 
   test('releasing the source hold lifts the exclusion at once, for both kinds', () => {
@@ -125,7 +125,7 @@ describe('the boundaries of the seat scan', () => {
 
     const claims = scene();
     expect(claimFor(claims.store, X).kind).toBe('claimed');
-    expect(releaseNextClaim(claims.store, { item: X, seat: 'work', pane: 'w2:p1', at: AT })).toBe(true);
+    expect(releaseNextClaim(claims.store, { item: X, seat: 'work', pane: 'fixture2:pane1', at: AT })).toBe(true);
     expect(claimFor(claims.store, Y).kind).toBe('claimed');
   });
 
@@ -134,7 +134,7 @@ describe('the boundaries of the seat scan', () => {
     const reservationStore: ReservationStore = store;
     expect(reserveFor(reservationStore, X, 'run-1').kind).toBe('reserved');
 
-    expect(claimNext(reservationStore, { item: X, seat: 'lead', pane: 'w1:p1', now: AT, expiresAt: T })).toMatchObject({
+    expect(claimNext(reservationStore, { item: X, seat: 'lead', pane: 'fixture1:pane1', now: AT, expiresAt: T })).toMatchObject({
       kind: 'refused',
       reason: 'hold-live',
     });
@@ -146,7 +146,7 @@ describe('the boundaries of the seat scan', () => {
     expect(claimFor(reservationStore, X).kind).toBe('claimed');
 
     clock.at = T;
-    expect(claimNext(reservationStore, { item: Y, seat: 'work', pane: 'w2:p1', now: T, expiresAt: T + 60_000 }).kind).toBe(
+    expect(claimNext(reservationStore, { item: Y, seat: 'work', pane: 'fixture2:pane1', now: T, expiresAt: T + 60_000 }).kind).toBe(
       'claimed',
     );
   });
@@ -178,13 +178,13 @@ describe('the boundaries of the seat scan', () => {
 
     clock.at = AT + 1000;
     expect(
-      renewNextClaim(reservationStore, { item: X, seat: 'work', pane: 'w2:p1', now: AT + 1000, expiresAt: T + 120_000 }),
+      renewNextClaim(reservationStore, { item: X, seat: 'work', pane: 'fixture2:pane1', now: AT + 1000, expiresAt: T + 120_000 }),
     ).toBe(true);
     const renewed = entryOf(store, X)?.hold;
-    expect(renewed).toMatchObject({ owner: 'next:work:w2:p1', kind: 'next-claim', phase: 'pending', expiresAt: new Date(T + 120_000).toISOString() });
+    expect(renewed).toMatchObject({ owner: 'next:work:fixture2:pane1', kind: 'next-claim', phase: 'pending', expiresAt: new Date(T + 120_000).toISOString() });
 
     expect(expire(reservationStore, T)).toEqual([]);
-    expect(claimNext(reservationStore, { item: Y, seat: 'other', pane: 'w3:p1', now: T, expiresAt: T + 60_000 }).kind).toBe(
+    expect(claimNext(reservationStore, { item: Y, seat: 'other', pane: 'fixture3:pane1', now: T, expiresAt: T + 60_000 }).kind).toBe(
       'claimed',
     );
   });
