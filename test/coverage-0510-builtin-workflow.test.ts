@@ -79,6 +79,9 @@ describe('the built-in work-item definition', () => {
 
   test('the graph is parsed once and reused', () => {
     const first = builtinDefinition(WORK_ITEM_NAME);
+    // A cache that answers undefined twice would compare equal; the graph must exist first.
+    if (first === undefined) throw new Error('the built-in work-item graph is missing');
+    expect(first.workflow.name).toBe(WORK_ITEM_NAME);
     expect(builtinDefinition(WORK_ITEM_NAME)).toBe(first);
     expect(BUILTIN_DEFINITION_NAMES).toEqual([WORK_ITEM_NAME]);
   });
