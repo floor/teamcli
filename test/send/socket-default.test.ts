@@ -1,6 +1,6 @@
 import { NO_EVENT_ADAPTER_TOOK_IT, queuedLine } from '../../src/send/no-pane-messaging.ts';
-// `team send` to a Claude Code seat: the typed trigger (a 0600 drop file and one line) is the
-// channel, and no path opens the seat's cross-session socket. The gate is SOCKET_SEND in
+// `team send` to a Claude Code seat: the 0600 drop file is the channel and nothing is typed into
+// the pane, and no path opens the seat's cross-session socket. The gate is SOCKET_SEND in
 // src/send/uds.ts, off while the channel is unattested; these scenes pin the gated state, so
 // flipping the constant back reddens them loudly.
 //
@@ -166,19 +166,30 @@ function dropRecord(drops: string): string {
 }
 
 describe('team send: the typed trigger is the default for a Claude Code seat', () => {
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a plain send is typed while a live socket stands, and the frame is not written', async () => {
+  test('a plain send lands in the drop while a live socket stands, and the frame is not written', async () => {
     const { root, dir, sockets } = world();
     const { received } = await listen(sockets, 222);
     const host = claudeHost(sockets, ['idle', 'working']);
     realDeliver(host);
     const io = owner(root);
 
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(io.err).toContain('queued, no event adapter');
+    // The socket is not this path's channel: it is never tried, and the live listener at the
+    // pane's pid hears nothing.
+    expect(host.socketsTried).toEqual([]);
+    expect(received).toEqual([]);
+    expect(host.pane.typed).toEqual([]);
+    expect(host.pane.enters).toBe(0);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(recordBody(dropRecord(drops))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: a socket file that would refuse is not tried either', async () => {
-    const { root, sockets } = world();
+  test('a socket file that would refuse is not tried either', async () => {
+    const { root, dir, sockets } = world();
     // A plain file at the measured name: what a socket left by a session that is gone holds —
     // and what the flipped default never touches.
     writeFileSync(join(sockets, '222.sock'), '');
@@ -186,19 +197,34 @@ describe('team send: the typed trigger is the default for a Claude Code seat', (
     realDeliver(host);
     const io = owner(root);
 
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(host.socketsTried).toEqual([]);
+    expect(host.pane.typed).toEqual([]);
+    expect(host.pane.enters).toBe(0);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(recordBody(dropRecord(drops))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 });
 
 describe('team send: a typed send with no socket at all', () => {
-  test('no pane messaging, nothing is typed and the bus inbox keeps it; was: one drop file, one typed trigger, and no socket sentence', async () => {
+  test('one drop file, no typed trigger, and no socket sentence', async () => {
     const { root, dir, sockets } = world();
     const host = claudeHost(sockets, ['idle', 'working']);
     const io = owner(root);
 
-    const retired = await runSend(['lead', 'hello'], io, host);
-    expect(await retired).toBe(0);
+    const code = await runSend(['lead', 'hello'], io, host);
+
+    expect(code).toBe(0);
+    expect(io.out).toBe('team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms)\n');
+    expect(host.frames).toEqual([]);
+    expect(host.socketsTried).toEqual([]);
+    expect(host.pane.typed).toEqual([]);
+    expect(host.pane.enters).toBe(0);
+    const drops = join(dir, 'send-drops', 'acme', 'lead');
+    expect(recordBody(dropRecord(drops))).toBe('from the owner — admitted by: the owner\n\nhello');
   });
 });
 
