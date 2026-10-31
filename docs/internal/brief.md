@@ -95,16 +95,23 @@ claim is superseded: the seat's reader refuses that older delivery by name, and 
 the seat a record it cannot read. A marker whose id is the claim's is retired only when a signed
 read receipt bound to the claim says the seat read it — the typed leg has no other way to show a
 read, and an earlier build's receipt, which bound no claim, proves nothing. A marker of the
-current claim that is not read is exactly what a retry still owes, and is never touched.
+current claim that is not read is exactly what a retry still owes, and is never touched — not by
+the human seat's cleanup, and not by the age bound, however old it is: a read bound to the claim,
+or a newer claim, is what ends it.
 
 The retry pass applies the rules before it decides a seat is human (whose typed trigger would be
 given up without them), keeps a native held record, or ages a marker out, and says one line per
-retirement. A broadcast of a claim the seat already holds writes no new sidecar at all: the
-delivery is the claim and the record it names, and a repeat is not a new notification. `prune` is
-the supported maintenance path for the markers already on disk: it is the seat's own verb, its dry
-run is the default, and it only removes the launch-brief markers the two rules name — never a
-signed record, a receipt, an unread current claim or another send's marker. A claim it cannot read
-is a refusal, because a prune that cannot say which delivery is current retires nothing.
+retirement. The current claim's unread marker outlasts all three. A broadcast of a claim the seat
+already holds writes no new sidecar at all: the delivery is the claim and the record it names, and
+a repeat is not a new notification. `prune` is the supported maintenance path for the markers
+already on disk: it is the seat's own verb, its dry run is the default, and it only removes the
+launch-brief markers the two rules name — never a signed record, a receipt, an unread current
+claim or another send's marker. A claim it cannot read is a refusal, because a prune that cannot
+say which delivery is current retires nothing. The claim is also read once more after the folder
+listing, before anything is removed: a launch that publishes a newer claim while the run lists
+the folder writes that claim's marker right after it, and the marker is already in the listing,
+so a claim that changed retires nothing and the run says why. A claim is written before its
+marker, so a claim published after the recheck cannot slip a marker into the listing.
 
 ## Crash reconciliation
 

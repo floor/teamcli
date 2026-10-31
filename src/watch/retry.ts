@@ -494,10 +494,17 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
         scene.home,
         briefBindingOf(claim),
       );
+    // The current claim's unread marker is what a retry still owes: nothing below retires it —
+    // not the human seat's cleanup, and not the age bound. It leaves the store when the seat
+    // reads it (a receipt bound to the claim) or when a newer claim supersedes it.
+    const owed = new Set<string>();
     const pending = drops.filter((drop) => {
       if (claim === null || drop.from !== GENERAL_BRIEF_FROM) return true;
       if (drop.id === claim.id) {
-        if (!read) return true;
+        if (!read) {
+          owed.add(drop.id);
+          return true;
+        }
         clearPending(dropDir, drop.id);
         scene.say(`${seat.name}: a dropped send from ${drop.from} was read in its drop folder`, false);
         return false;
@@ -510,9 +517,11 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     // A pane the file marks as a human's is never typed into: a retry is typing, so a marker
     // left for such a seat is given up on where it stands, with the reason, and the message
     // waits in its drop file for a person to read. A drop-leg marker is not a retry at all —
-    // a person reading the drop writes no receipt — so it is only forgotten.
+    // a person reading the drop writes no receipt — so it is only forgotten. The current claim's
+    // unread marker is neither: it waits for the person's read, and is not given up.
     if (seat.human === true) {
       for (const drop of pending) {
+        if (owed.has(drop.id)) continue;
         if (drop.leg === 'drop') clearPending(dropDir, drop.id);
         else giveUp(scene, dropDir, drop, 'the pane is a human\'s, and nothing is typed into it');
       }
@@ -525,11 +534,13 @@ export async function retryHeldDrops(scene: RetryScene): Promise<void> {
     // The age bound is applied before the pane is looked for: a seat that vanished leaves no
     // pane to retry, and its marker must not sit in the store forever. A drop-leg marker has
     // nothing to retry, only a receipt to wait for: past the bound it is given up on with the
-    // file's path and the word that no watcher read it.
+    // file's path and the word that no watcher read it. The current claim's unread marker is
+    // exempt: it is the seat's one live delivery, and a retry still owes it however long the
+    // seat takes to read it.
     const now = scene.now.getTime();
     const live: PendingDrop[] = [];
     for (const drop of pending) {
-      if (now - Date.parse(drop.ts) <= PENDING_MAX_AGE_MS) {
+      if (owed.has(drop.id) || now - Date.parse(drop.ts) <= PENDING_MAX_AGE_MS) {
         live.push(drop);
         continue;
       }

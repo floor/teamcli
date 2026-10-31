@@ -1674,6 +1674,69 @@ describe('launch-brief retry sidecars', () => {
     expect(one.typed).toEqual([]);
   });
 
+  test('the current claim\'s unread marker is not given up when it outlives the retry window', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(
+      made,
+      'acme',
+      'lead',
+      claim.incarnation,
+      0,
+      new Date(NOW.getTime() - PENDING_MAX_AGE_MS - 1),
+    );
+    expect(sidecar.id).toBe(claim.id);
+    // No native hold: the marker is the claim's own unread delivery, and a retry still owes it
+    // however long the seat takes to read it.
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a human seat\'s current unread marker waits for the person\'s read, not a cleanup', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home), true));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', claim.incarnation);
+    expect(sidecar.id).toBe(claim.id);
+    // Nothing is typed at a human's pane, and the current claim's marker is not given up either:
+    // a person's read is what retires it.
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+    expect(one.typed).toEqual([]);
+  });
+
   test('another send\'s marker is never retired, whatever the seat\'s claim names', async () => {
     const made = world();
     const team = teamOf(teamText(made.root, lobbyDir(made.home)));

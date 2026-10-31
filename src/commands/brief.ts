@@ -701,6 +701,21 @@ function runBriefPrune(input: { io: Io; json: boolean; apply: boolean; sources: 
       error: null,
     });
   }
+  // The claim is read again after the markers are listed. A delivery may publish a newer claim
+  // between the first read and the listing, and the marker it writes right after is already in
+  // that listing: calling that marker superseded would remove the one marker a retry still owes.
+  // A claim that did not hold across the whole read retires nothing and says so. A claim
+  // published after this check cannot slip a marker into the listing, because a claim is written
+  // before its marker.
+  if (files.length > 0) {
+    const after = currentClaimIn(loaded.root, session, seat);
+    if (after === null) {
+      return pruneRefused(io, json, "the seat's current brief claim can't be read, so nothing was retired");
+    }
+    if (after.id !== claim.id) {
+      return pruneRefused(io, json, "the seat's current brief claim changed while the run read its markers, so nothing was retired; run it again");
+    }
+  }
   if (apply) {
     for (const file of files) {
       clearPending(dropDir, file.id);

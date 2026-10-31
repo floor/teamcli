@@ -94,6 +94,12 @@ name is gone, so a removal that fails is reported as failed rather than counted 
 folder is guarded the way `team drops` guards it: a step that is a link or a file refuses the run
 instead of reading through it, and a claim that cannot be read retires nothing.
 
+The claim is read again after the folder listing, before any marker is removed. A launch that
+publishes a newer claim while the run lists the folder writes that claim's marker right after it,
+and the marker is already in the listing; retiring it as superseded would remove the delivery the
+retry owes. A claim that changed retires nothing, and the run says so. A claim is written before
+its marker, so a claim published after this check cannot slip a marker into the listing.
+
 ## Who may run it
 
 The owner reads any team file it names. Everyone else is held to the read gate: a seat whose own
@@ -147,6 +153,7 @@ The prune prints one line per marker, then a count:
 | prune's dry run lists markers to retire | the `would retire` rows and `N files to retire` | 1 |
 | prune's `--apply` leaves a marker unremoved | the failed row and `N files not removed` | 1 |
 | prune's caller is not the seat, or not on its recorded pane | `team brief prune: <why>` | 1 |
+| prune's current brief claim changed while the run read its markers | `team brief prune: <why>`, and nothing retired | 1 |
 | the invocation can't be read | `team brief: <problem>`, with the usage | 2 |
 | a caller who may not read this team asks | `team brief: this team is not yours to read` | 2 |
 | the team file can't be read or parsed | `team brief: <problem>` | 2 |

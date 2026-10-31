@@ -845,7 +845,7 @@
       "code": 1,
       "command": "brief",
       "id": "brief.prune-refused",
-      "meaning": "the caller is not a seat of this team on the pane the state records for it",
+      "meaning": "the caller is not a seat of this team on the pane the state records for it, the drop folder is not a real folder, or the seat's current brief claim can't be read or changed while the run read its markers",
       "trigger": "team brief prune"
     },
     {
