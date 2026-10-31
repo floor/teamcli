@@ -87,7 +87,7 @@ export function registerInbox(input: {
   cwd: string;
   /** The team file the seat's launch read: the registration and the server it names resolve
    *  the team from it, so a seat whose folder is a lobby registers like any other. Absent: the
-   *  folder's own team file, read as the server reads it. */
+   *  folder's own team file, read here to name the session and the epoch. */
   file?: string;
   /** The runtime epoch the launch delivered the seat's brief under, when the caller has it.
    *  Absent: read from the claim the launch's state holds for this seat. */
@@ -105,9 +105,8 @@ export function registerInbox(input: {
     folder = '';
   }
   if (!folder) return { ok: false, reason: 'its folder could not be read' };
-  // The launch's own team file when it names one; otherwise the folder's, read the way the
-  // server itself reads it. A folder with no team file makes the server refuse, so nothing is
-  // registered there: the seat stays on its drop and typed legs.
+  // The launch's own team file when it names one; otherwise the folder's own. A folder with no
+  // team file leaves nothing to register, so the seat stays on its drop and typed legs.
   const loaded = input.file === undefined ? readTeamConfig(folder) : readTeamConfig(folder, { file: input.file });
   if (!loaded.ok) {
     return { ok: false, reason: input.file === undefined ? 'no team file could be read from its folder' : 'the team file its launch read could not be read' };

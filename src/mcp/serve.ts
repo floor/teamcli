@@ -27,6 +27,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
+import { readTeams } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { readRecord, verifyRecord } from '../send/record.ts';
 import { wakeHead } from '../send/native.ts';
@@ -535,11 +536,43 @@ export function handleLine(line: string, serving: Serving): string | null {
 }
 
 /**
+ * The root of the registered team that holds `seat`: the server's placement when no `--file` was
+ * given. The folder the server started in says nothing about the team — a seat starts in a lobby,
+ * which is not a work tree of any checkout — so the registry's roster is what names the team.
+ * `--session` narrows between teams that hold the same seat name, and a lone holder is returned
+ * even when its session differs, so the caller's own session check can name the difference.
+ */
+function registeredRoot(
+  home: string,
+  seat: string,
+  session: string | undefined,
+): { ok: true; root: string } | { ok: false; message: string } {
+  let teams: ReturnType<typeof readTeams>;
+  try {
+    teams = readTeams(home);
+  } catch (error) {
+    return { ok: false, message: `the team registry cannot be read: ${(error as Error).message}` };
+  }
+  const holders = Object.values(teams).filter((team) => team.roster.some((line) => line.seat === seat));
+  if (holders.length === 0) return { ok: false, message: `no registered team holds seat ${JSON.stringify(seat)}; pass --file` };
+  const matching = session === undefined
+    ? holders
+    : holders.filter((team) => team.session === session || team.lobbies[session] !== undefined);
+  const candidates = matching.length > 0 ? matching : holders;
+  if (candidates.length > 1) {
+    const ids = candidates.map((team) => team.id ?? team.project).sort();
+    return { ok: false, message: `seat ${JSON.stringify(seat)} is on ${String(candidates.length)} registered teams (${ids.join(', ')}); pass --file to say which` };
+  }
+  return { ok: true, root: candidates[0]!.root };
+}
+
+/**
  * Runs the stdio server for one seat and returns the process exit code. The seat must be one the
  * team file declares, and `--session`, when given, must be the team's own session: the server
  * serves exactly one inbox. `--file` is the team file the seat's launch read: a seat that starts
  * in a lobby has no team file in its folder, so the registration names the launch's file and the
- * server reads that instead of its own folder.
+ * server reads that instead of its own folder. Without `--file` the team comes from the registry
+ * record that holds the seat (narrowed by `--session`), never from the folder the server starts in.
  */
 export async function runMcpServe(
   options: ServeOptions,
@@ -556,7 +589,15 @@ export async function runMcpServe(
   if (options.epoch !== undefined && !isBriefEpoch(options.epoch)) {
     return refuse(`--epoch ${JSON.stringify(options.epoch)} is not a runtime epoch`);
   }
-  const loaded = readTeamConfig(io.cwd, { ...(options.file === undefined ? {} : { file: options.file }), home: host.home });
+  // A named file is the launch's own team file, read as given. Without one the team is the
+  // registry's record for this seat: the folder the server starts in is a lobby for most seats,
+  // and reading a team file from it would be reading the checkout's folder, not the seat's team.
+  const registered = options.file === undefined ? registeredRoot(host.home, options.seat, options.session) : null;
+  if (registered !== null && !registered.ok) return refuse(registered.message);
+  const loaded = readTeamConfig(registered === null ? io.cwd : registered.root, {
+    ...(options.file === undefined ? {} : { file: options.file }),
+    home: host.home,
+  });
   if (!loaded.ok) return refuse(loaded.errors[0]?.message ?? 'the team file could not be read');
   const team = loaded.team;
   const session = options.session ?? team.session;

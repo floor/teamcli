@@ -13,6 +13,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { channelPushPath } from '../src/mcp/channel.ts';
 import { listenerPath } from '../src/mcp/inbox.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
 import { testIo } from './helpers.ts';
 
@@ -58,6 +59,16 @@ function place(): Place {
   mkdirSync(join(home, '.config', 'team', 'lobby'), { recursive: true, mode: 0o700 });
   execFileSync('git', ['init', '-q'], { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
+  // A server started with no --file resolves its team from the registry record holding the seat.
+  upsertTeam(home, teamIdOf(root), {
+    project: 'acme',
+    session: SESSION,
+    root,
+    roster: [
+      { agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' },
+      { agent: 'agt_000000000002', seat: 'worker', role: 'worker' },
+    ],
+  });
   cleanups.push(() => rmSync(base, { recursive: true, force: true }));
   return { root, home };
 }

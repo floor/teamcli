@@ -27,7 +27,9 @@ own folder, before the launch command runs, so the client starts with the server
 team the registration serves is the team file the launch read, passed to the registration; a
 file route runs `mcp add ... --file <path>`, and a launch-line route puts the same pair in the
 server arguments it configures, because a seat whose folder is a lobby has no team file of its
-own. With no launch file the registration reads the folder's own team file, as the server does.
+own. With no launch file the registration reads the folder's own team file to name the session
+and the epoch, and names no file to the server; that server resolves its team from the registry
+record that holds the seat.
 
 ## What launch writes, and where it refuses
 

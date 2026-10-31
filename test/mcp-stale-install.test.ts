@@ -23,6 +23,7 @@ import {
 } from '../src/mcp/inbox.ts';
 import { restartSelf, runMcpServe } from '../src/mcp/serve.ts';
 import { selfRunner } from '../src/mcp/register.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import type { BuildIdentity, InstallIdentity } from '../src/version.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
@@ -60,6 +61,17 @@ afterEach(() => {
 /** A channel seat's world: no declared delivery order, and the lead's launch carries the flag. */
 function channelWorld(): World {
   const made = world(null, [], { lead: CHANNEL_LAUNCH });
+  // A server started with no --file resolves its team from the registry record holding the seat.
+  upsertTeam(made.home, teamIdOf(made.root), {
+    project: 'acme',
+    session: SESSION,
+    root: made.root,
+    roster: [
+      { agent: 'agt_000000000001', seat: 'lead', role: 'coordinator' },
+      { agent: 'agt_000000000002', seat: 'helper', role: 'implementer' },
+      { agent: 'agt_000000000003', seat: 'native', role: 'reviewer' },
+    ],
+  });
   cleanup = made.cleanup;
   return made;
 }
