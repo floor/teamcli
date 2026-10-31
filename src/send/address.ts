@@ -85,6 +85,43 @@ export function liveSocketOf(
   return socketOfProcesses(processes, sockets);
 }
 
+/** The address a send tries: the registry's recorded one while it is still live — its pid among
+ *  the pane's, its socket present — else the pane's own processes (`socketOfProcesses`).
+ *  `recorded` marks the difference: only the recorded address gets the live re-resolution after
+ *  its write refuses. A pane that cannot be read leaves a recorded address as the only thing the
+ *  run has, unless the socket it names is not there: a record of a socket that no longer exists
+ *  is stale, and an attempt to dial it cannot land. */
+export type SocketAddress =
+  | { kind: 'path'; path: string; recorded: boolean }
+  | { kind: 'stale'; path: string };
+
+/**
+ * The one choice of address, shared by the send walk and the status read so neither can pick a
+ * socket the other would not. The recorded address is read against the first folder only — the
+ * folder `liveSocketOf` has always discovered it in — and a pane whose processes are readable
+ * falls back to discovery over every folder given, in their order. The spelling is the walk's
+ * own, unchanged: a caller that hands in the wrong pid set or folder list gets a wrong address
+ * here exactly as it would from the walk.
+ */
+export function socketAddressOf(
+  recorded: string | null,
+  processes: PaneProcesses | null,
+  sockets: string | readonly string[] = defaultSocketsDirs(),
+): SocketAddress | null {
+  const dirs = dirsOf(sockets);
+  const primary = dirs[0] ?? defaultSocketsDir();
+  if (recorded !== null) {
+    const live = liveSocketOf(recorded, processes, primary);
+    if (live !== null) return { kind: 'path', path: live, recorded: live === recorded };
+    if (processes === null) {
+      return existsSync(recorded) ? { kind: 'path', path: recorded, recorded: true } : { kind: 'stale', path: recorded };
+    }
+  }
+  if (processes === null) return null;
+  const path = socketOfProcesses(processes, dirs);
+  return path === null ? null : { kind: 'path', path, recorded: false };
+}
+
 /** The live socket of a pane, read through herdr; null when the pane does not answer or none of
  *  its processes carries a socket. */
 export function paneSocket(pane: string, session?: string, sockets: string | readonly string[] = defaultSocketsDirs()): string | null {

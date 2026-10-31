@@ -61,23 +61,28 @@ not walk up, and `--file` is the owner's, so a seat in a child folder cannot aim
       claude-beacon  working  Claude Opus 5.5  w1:p1  socket
 
 The columns are the seat, its state, the model, the pane, and the word for the channel a send would
-take to reach the seat. The word is the send's own gate (`socketIneligibleReason` in
-`src/send/inbound.ts`), not a separate reading: `socket` only while the seat is a `cli: claude-code`
-one, the receiving session's launch-effective settings declare `crossSessionInbound: accept`, the
-team file authorizes the route (its `inbound: accept`, or the generated settings file this build
-writes onto a launch it started), its box holds no frame the declaration has not since re-confirmed,
-and the pane's own processes carry a session socket no older than that declaration; `typed`
-otherwise — another CLI, a launch that does not admit the frame, a pane that is gone, one the
-terminal host could not read. The two readers cannot disagree: a row never promises a socket the
-walk would refuse. No path opens a cross-session socket directly; `--wait` writes the signed
-record through the receiving seat's delivery walk and awaits a reply record on the thread. The word is
-read from the processes the comparison already holds, so no extra terminal-host call is
-made. The state is what herdr says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
+take to reach the seat. The word is read with the send's own readings, not a separate one: its gate
+(`socketIneligibleReason` in `src/send/inbound.ts`) and its choice of address (`socketAddressOf` in
+`src/send/address.ts`) — `socket` only while the seat is a `cli: claude-code` one, the receiving
+session's launch-effective settings declare `crossSessionInbound: accept`, the team file authorizes
+the route (its `inbound: accept`, or the generated settings file this build writes onto a launch it
+started), its box holds no frame the declaration has not since re-confirmed, and the address the
+walk would dial — the registry's recorded socket where a send resolves the seat's agent record, the
+pane's own processes otherwise — is no older than that declaration; `typed` otherwise — another CLI,
+a launch that does not admit the frame, a pane that is gone, one the terminal host could not read,
+or a recorded socket the walk would find stale. A temporary seat is not in the file: its agent
+record is its identity and address, and its declaration is the generated settings file its launch
+left, read exactly as a send reads them. The two readers cannot disagree: a row never promises a
+socket the walk would refuse. No path opens a cross-session socket directly; `--wait` writes the
+signed record through the receiving seat's delivery walk and awaits a reply record on the thread.
+The word is read from the processes the comparison already holds, so no extra terminal-host call is
+made; the seat's own files and the agent record a send would resolve are read from disk.
+The state is what the terminal host says (`idle`, `working`, `blocked`…), with `, parked` added for a seat
 the file parks and `, temporary`
 for a temporary one; or `<state> (unsent text)` when an idle or done seat — the two states `team`
 types into — holds text in its input box that was never sent; or `<state> (screen not recognised)`
-when an idle or done seat's screen is not one its profile reads: herdr's word alone would read a
-stall as settled, so the row says what could not be read; or `missing` when the seat is in the
+when an idle or done seat's screen is not one its profile reads: the terminal host's word alone
+would read a stall as settled, so the row says what could not be read; or `missing` when the seat is in the
 file and nothing is running for it, or when the pane the state recorded for it runs no CLI — the
 CLI ended, or the session was restored, and the pane is back at its shell; or `restored, not
 launched by team` when its pane runs a process `team` did not launch — another session's restore,

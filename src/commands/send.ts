@@ -32,7 +32,7 @@ import { getAgent, readAgents, type Agent } from '../registry/agents.ts';
 import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
-import { liveSocketOf } from '../send/address.ts';
+import { socketAddressOf, type SocketAddress } from '../send/address.ts';
 import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
 import { deliverCompose } from '../send/compose.ts';
 import { readSendGrants } from '../send/grants.ts';
@@ -4507,30 +4507,14 @@ export async function redeliverChannelOnSocket(input: {
   return { ok: false, reason: attempt.reason };
 }
 
-/** The address a send tries: the registry's recorded one while it is still live — its pid among
- *  the pane's, its socket present — else the pane's own processes (`socketOf`). `recorded` marks
- *  the difference — only the recorded address gets the live re-resolution after its write
- *  refuses. A pane that cannot be read leaves a recorded address as the only thing this run has,
- *  unless the socket it names is not there: a record of a socket that no longer exists is stale,
- *  and an attempt to dial it cannot land. */
-type SocketAddress =
-  | { kind: 'path'; path: string; recorded: boolean }
-  | { kind: 'stale'; path: string };
-
+/** The address this walk tries, read by the shared choice (`socketAddressOf`): the registry's
+ *  recorded one while it is still live, else the pane's own processes. The host's folders are
+ *  handed in the order discovery walks them — the primary one, then the alt folder when the
+ *  holder has one — so the recorded address is read against the primary folder exactly as this
+ *  walk always read it. */
 function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | null {
-  const processes = host.processInfo(to.session, pane);
-  if (to.address !== null) {
-    const live = liveSocketOf(to.address, processes, host.socketsDir);
-    if (live !== null) return { kind: 'path', path: live, recorded: live === to.address };
-    if (processes === null) {
-      return existsSync(to.address)
-        ? { kind: 'path', path: to.address, recorded: true }
-        : { kind: 'stale', path: to.address };
-    }
-  }
-  if (processes === null) return null;
-  const path = socketOf(host, processes);
-  return path === null ? null : { kind: 'path', path, recorded: false };
+  const sockets = host.socketsDirAlt === undefined ? host.socketsDir : [host.socketsDir, host.socketsDirAlt];
+  return socketAddressOf(to.address, host.processInfo(to.session, pane), sockets);
 }
 
 /** The class the receiving seat reads under once the walk proved its socket unusable: the socket

@@ -454,9 +454,11 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
       return agent ? [[seat.name, agent.signing] as const] : [];
     })),
     continuityIds,
-    // The reach column reads the same gate the send walks: the seats' launch-effective settings
-    // and held-frame marks live under the state folder, relative launch paths under the root.
-    { dir, root },
+    // The reach column reads the same readings a send walks: its gate, and its address choice —
+    // the store the seat's agent record (with its recorded socket) is resolved under, the
+    // launch-effective settings and held-frame marks under the state folder, and relative launch
+    // paths under the root.
+    { dir, root, ...(sources.home === undefined ? {} : { home: sources.home }) },
   );
   const queues = readQueueDepths(team, root, sources.home, Object.keys(state.seats).filter((name) => state.seats[name]?.temporary));
   const backlog = queues ? readBacklogDepth(team, root, sources.home) : null;

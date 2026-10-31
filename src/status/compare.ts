@@ -7,10 +7,12 @@ import { paneHoldsShell, replacedSeat, seatProcessVerdict } from '../launch/iden
 import { isLeadSeat, relaunchRepair, unidentifiedRepair } from '../file/sections/lead.ts';
 import { observedEffort } from '../labels/observe.ts';
 import { usesLauncher } from '../launch/line.ts';
-import { defaultSocketsDirs, socketOfProcesses } from '../send/address.ts';
+import { defaultSocketsDirs, socketAddressOf } from '../send/address.ts';
 import {
   declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketHeldReason, socketIneligibleReason,
 } from '../send/inbound.ts';
+import { seatAgent } from '../send/resolve.ts';
+import { findTeam, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { pluralCount, type DifferenceWho } from '../output/text.ts';
@@ -46,8 +48,10 @@ export type Row = {
 
 /** What reading a row's reach needs beyond the comparison: the receiving team's state folder and
  *  root, for the seat's launch-effective `crossSessionInbound` declaration and the mark a held
- *  frame leaves. */
-export type ReachRoute = { dir: string; root: string };
+ *  frame leaves, and — named — the store folder a send resolves the seat's agent record under,
+ *  whose CLI and recorded address the walk reads first. Left out, the reading walks the pane's
+ *  own processes alone, as a send the registry cannot answer would. */
+export type ReachRoute = { dir: string; root: string; home?: string };
 
 /** The repair of the one precondition `status` knows: the file's approval is not in force. The
  *  approval differences carry it, and a repair that waits on it is marked with it. */
@@ -175,6 +179,16 @@ export function paneShowsSeat(
   if (continuity !== 'restored' && (verdict === 'gone' || verdict === 'replaced')) return false;
   if (recorded !== undefined && !recorded.launched && paneHoldsShell(processes)) return false;
   return true;
+}
+
+/**
+ * The team's registry record, read the way a plain-seat send reads it (`resolveTarget` in
+ * src/send/resolve.ts): by the id its root keys, then by project or session. Null when the store
+ * holds none — the send then takes the file's own seat, with no recorded address.
+ */
+function registryTeamOf(home: string, root: string, team: TeamFile): TeamRecord | null {
+  const id = teamIdOf(root);
+  return findTeam(home, id) ?? findTeam(home, team.project) ?? findTeam(home, team.session);
 }
 
 // Compares the file and the state with the live session. Pure over what is handed in, but for
@@ -611,32 +625,53 @@ export function compare(
     }
   }
 
-  // How a send would reach each seat, read by the send's OWN gate (`socketIneligibleReason` in
-  // src/send/inbound.ts): `socket` only while the receiving session's launch-effective settings
-  // declare `crossSessionInbound: accept`, the team file authorizes that route (its `inbound:
-  // accept`, or this build's generated settings file on the line), its box holds no unconfirmed
-  // frame, and its pane carries a socket the session accepts now (the rule address.ts records
-  // with, and `inboundIsLive`'s age check). `typed` for every other seat: a seat that is not a
-  // Claude Code one, one whose files do not admit the frame, a pane that is gone, or one the
-  // terminal host could not read. Reading only the CLI and a pane socket promised the socket leg
-  // on launches the walk never dialed — a line whose own `--settings` file declares accept with no
-  // team-file word — and the two readers must agree. No extra terminal-host call: the reading is
-  // the row's own pane.
+  // How a send would reach each seat, read by the send's OWN readings: its gate
+  // (`socketIneligibleReason` in src/send/inbound.ts) and its address choice (`socketAddressOf`
+  // in src/send/address.ts). `socket` only while a send to the seat would be dialed: the
+  // receiving session's launch-effective settings declare `crossSessionInbound: accept`, the team
+  // file authorizes that route (its `inbound: accept`, or this build's generated settings file on
+  // the line), its box holds no unconfirmed frame, and the address the walk would pick — the
+  // registry's recorded one where the store holds it, else the pane's own socket — is live for
+  // the declaration (`inboundIsLive`'s age check). `typed` for every other row: another CLI, a
+  // launch whose files do not admit the frame, a pane that is gone or the terminal host could not
+  // read, an address the walk would find stale, or a temporary seat no send can resolve. The
+  // identity is the one a plain-name send resolves: the seat's agent record when the team has a
+  // registry record, else the file's own seat. A temporary seat has no file line, so its record
+  // is its whole identity and its declaration is read with no launch — exactly the send's read.
+  // Reading only the CLI and a pane socket promised the socket leg on launches the walk never
+  // dialed and picked an address it would not; the two readers must agree. No extra
+  // terminal-host call: the reading is the row's own pane.
   if (route !== undefined) {
+    const home = route.home;
+    const record = home === undefined ? null : registryTeamOf(home, route.root, team);
+    const teamKeys = record === null ? [] : [teamIdOf(record.root), record.project, record.session];
     for (const row of rows) {
       const declared = team.seats.find((seat) => seat.name === row.name);
-      if (declared === undefined) continue;
+      const temporary = declared === undefined && state.seats[row.name]?.temporary !== undefined;
+      if (declared === undefined && !temporary) continue;
+      const agent = home === undefined || record === null ? null : seatAgent(home, teamKeys, row.name);
+      if (declared === undefined && agent === null) {
+        // A temporary seat is not in the file: with no record behind it a send has no identity to
+        // address and refuses, so there is no route to promise.
+        row.reach = 'typed';
+        continue;
+      }
       const declaration = declaredInboundOf({
         dir: route.dir,
         root: route.root,
         session,
-        seat: declared.name,
-        launch: declared.launch,
+        seat: row.name,
+        ...(declared?.launch !== undefined ? { launch: declared.launch } : {}),
       });
-      const held = socketHeldReason(readHeldSocket(heldSocketPath(route.dir, session, declared.name)), declaration);
-      const socket = socketOfProcesses(live.processes?.[row.pane] ?? null, sockets);
-      const gate = socketIneligibleReason(declared.cli, declared.inbound, declaration, held);
-      row.reach = gate === null && socket !== null && inboundIsLive(declaration, socket) ? 'socket' : 'typed';
+      const held = socketHeldReason(readHeldSocket(heldSocketPath(route.dir, session, row.name)), declaration);
+      // The recorded address is the one the send reads the pane for in this session; a record
+      // that names another session leaves this row with the pane's own discovery.
+      const recorded = agent !== null && agent.reach.session === session ? agent.reach.address : null;
+      const selected = socketAddressOf(recorded, live.processes?.[row.pane] ?? null, sockets);
+      const gate = socketIneligibleReason(agent?.cli ?? declared?.cli ?? '', declared?.inbound, declaration, held);
+      row.reach = gate === null && selected !== null && selected.kind === 'path' && inboundIsLive(declaration, selected.path)
+        ? 'socket'
+        : 'typed';
     }
   }
 

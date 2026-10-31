@@ -201,17 +201,22 @@ second line. `--json` is the one text not cleaned: the document carries each str
 escaped where JSON requires it, for a parser rather than a terminal.
 
 Every row of the seats table ends with the word for the channel a send would take to reach that
-seat. The word is the send's own rule, so the table never promises a route the send would refuse:
-`socket` only while the seat is a `claude-code` one, the receiving session's launch-effective
-settings declare `crossSessionInbound: accept`, the team file authorizes the route (its `inbound:
-accept`, or the generated settings file this build writes onto a launch it started), its box holds
-no frame the declaration has not since re-confirmed, and the pane's own processes carry a session
-socket no older than that declaration; and `typed` otherwise — another CLI, a launch that does not
-admit the frame, a pane that is gone, one the terminal host could not read. No path opens a
-cross-session socket directly; `--wait` writes the signed record through the receiving seat's
-delivery walk and awaits a reply record on the thread. The word is read from the processes the
-comparison already holds, so no extra terminal-host call is made; only the seat's own files are
-looked up on disk. `--json` rows carry no such word: `reach` is the plain table's alone.
+seat. The word is read with the send's own readings — its gate and its choice of address — so the
+table never promises a route the send would refuse: `socket` only while the seat is a `claude-code`
+one, the receiving session's launch-effective settings declare `crossSessionInbound: accept`, the
+team file authorizes the route (its `inbound: accept`, or the generated settings file this build
+writes onto a launch it started), its box holds no frame the declaration has not since re-confirmed,
+and the address the send would dial — the registry's recorded socket where the store holds the
+seat's agent record, the pane's own processes otherwise — is no older than that declaration; and
+`typed` otherwise — another CLI, a launch that does not admit the frame, a pane that is gone, one
+the terminal host could not read, a recorded socket the walk would find stale. A temporary seat has
+no file line: its agent record is its identity and address, and its declaration is the generated
+settings file its launch left, read exactly as a send reads them. No path opens a cross-session
+socket directly; `--wait` writes the signed record through the receiving seat's delivery walk and
+awaits a reply record on the thread. The word is read from the processes the comparison already
+holds, so no extra terminal-host call is made; the seat's own files and the agent record a send
+would resolve are read from disk. `--json` rows carry no such word: `reach` is the plain table's
+alone.
 
 ## Example
 

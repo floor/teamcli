@@ -1,19 +1,23 @@
 // A wrapper-launched seat: the launch line starts with an environment assignment, runs `zsh
 // <script>`, and passes a settings file of its own; the script execs the CLI, so the pane's
-// process name changes while its pid stays. TeamCLI reads the CLI from the team file and the
-// address from the pane's own processes, so neither the assignment nor the shell in front defeats
-// them. What decides the socket is the declaration the line names and the team file's
-// authorization: a launch this build did not write (its own `--settings` file is on the line) is
-// not attested, so its accept alone authorizes nothing — the team file's `inbound: accept` is
-// what admits the route. `team status` reads the send's own gate, so its reach column can never
-// promise a socket the send would not dial.
+// process name changes while its pid stays. Neither the assignment nor the shell in front defeats
+// the readings: the CLI is the seat's agent record where the registry holds one and the team file
+// otherwise, and the address is the record's when it names a live socket, the pane's own
+// processes otherwise. What decides the socket is the declaration the line names and the team
+// file's authorization: a launch this build did not write (its own `--settings` file is on the
+// line) is not attested, so its accept alone authorizes nothing — the team file's `inbound:
+// accept` is what admits the route. `team status` reads the send's own gate and address choice,
+// so its reach column can never promise a socket the send would not dial.
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { readTeamConfig } from '../src/file/team-config.ts';
+import { cliHookSettingsPath } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
-import { emptySession } from '../src/state.ts';
+import { registerAgent } from '../src/registry/agents.ts';
+import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
+import { emptySession, type SessionState } from '../src/state.ts';
 import { compare, type Live } from '../src/status/compare.ts';
 import { NOW, fake, owner, world, type World } from './send-native-fixtures.ts';
 
@@ -71,9 +75,42 @@ function socketOf(made: World): string {
   return join(made.sockets, `${String(CLI_PID)}.sock`);
 }
 
+/** The registry chain a send resolves a plain seat name through: this team's record and the
+ *  seat's agent record, carrying the address the send reads first. */
+function recordSeat(made: World, seat: string, address: string | null): void {
+  const id = teamIdOf(made.root);
+  const agent = registerAgent(made.home, {
+    name: seat,
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: id, seat, session: 'acme', pane: PANE, address },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(made.home, id, {
+    project: 'acme',
+    entity: 'floor',
+    session: 'acme',
+    root: made.root,
+    lobby: resolveLobby(made.home, { entity: 'floor' }),
+    roster: [{ agent: agent.id, seat, role: 'implementer', leads: false }],
+    lifecycle: 'running',
+  });
+}
+
 /** What `team status` reads for the seat: the comparison's own reach word, with the route's files
- *  named the way the command names them (its state folder and root). */
-function reachOf(made: World, seat: string): 'socket' | 'typed' | undefined {
+ *  named the way the command names them (its state folder and root, and — for a run that reads
+ *  the registry — its home). `state` carries the temporary record a row needs. */
+function reachOf(
+  made: World,
+  seat: string,
+  options: { store?: true; state?: SessionState } = {},
+): 'socket' | 'typed' | undefined {
   const loaded = readTeamConfig(made.root, { home: made.home });
   if (!loaded.ok) throw new Error('the fixture team file does not load');
   const live: Live = {
@@ -83,9 +120,12 @@ function reachOf(made: World, seat: string): 'socket' | 'typed' | undefined {
     screens: {},
     processes: { [PANE]: { shell: 111, foreground: [CLI_PID] } },
   };
+  const route = options.store === true
+    ? { dir: made.dir, root: made.root, home: made.home }
+    : { dir: made.dir, root: made.root };
   const rows = compare(
-    loaded.team, 'acme', emptySession(), live, NOW, loaded.team.watch, made.sockets,
-    false, undefined, undefined, { dir: made.dir, root: made.root },
+    loaded.team, 'acme', options.state ?? emptySession(), live, NOW, loaded.team.watch, made.sockets,
+    false, undefined, undefined, route,
   ).rows;
   return rows.find((row) => row.name === seat)?.reach;
 }
@@ -141,4 +181,90 @@ test('a wrapper line with its own settings is unattested: no socket is dialed, a
   expect(host.frames).toEqual([]);
   // The status reader answers the same word: never a socket the send would refuse.
   expect(reachOf(made, 'wrapped')).toBe('typed');
+});
+
+test('a recorded socket older than the declaration: the send refuses it and the row reads typed', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made);
+  setLaunch(made, 'helper', wrapperLine(made));
+  // The pane carries two sockets: the shell's, which the registry recorded and which still
+  // stands, and the foreground CLI's, written after the declaration. The walk reads the recorded
+  // address first and refuses it as older than the declaration; a discovery-only row would have
+  // promised the foreground one.
+  writeFileSync(socketOf(made), '');
+  const recorded = join(made.sockets, '111.sock');
+  writeFileSync(recorded, '');
+  const older = new Date(Date.now() - 120_000);
+  utimesSync(recorded, older, older);
+  recordSeat(made, 'helper', recorded);
+  const io = owner(made.root);
+  const host = fake(made, { agents: () => [{ name: 'helper', pane: PANE }] });
+
+  const code = await runSend(['helper', 'a note', '--json'], io, host);
+
+  expect(code).toBe(0);
+  const sent = JSON.parse(io.out) as { channel?: string };
+  expect(sent.channel).toBe('drop');
+  expect(host.frames).toEqual([]);
+  expect(reachOf(made, 'helper', { store: true })).toBe('typed');
+});
+
+test('a recorded socket outside the discovery folders: the send dials it and the row reads socket', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made);
+  setLaunch(made, 'helper', wrapperLine(made));
+  // The address the registry holds lives in the seat's own folder, not in either folder
+  // discovery walks. Its pid is the pane's foreground CLI, and it was written after the
+  // declaration: the walk dials it, and the row must read the same address.
+  const held = join(made.root, '.agents', 'recorded-sockets');
+  mkdirSync(held);
+  const recorded = join(held, `${String(CLI_PID)}.sock`);
+  writeFileSync(recorded, '');
+  recordSeat(made, 'helper', recorded);
+  const io = owner(made.root);
+  const host = fake(made, { agents: () => [{ name: 'helper', pane: PANE }] });
+
+  const code = await runSend(['helper', 'a note', '--json'], io, host);
+
+  expect(code).toBe(0);
+  const sent = JSON.parse(io.out) as { channel?: string };
+  expect(sent.channel).toBe('socket');
+  expect(host.frames.length).toBe(1);
+  expect(reachOf(made, 'helper', { store: true })).toBe('socket');
+});
+
+test('a temporary seat: its agent record and generated declaration give the row the same socket the send dials', async () => {
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made);
+  const seat = 'helper-temp';
+  // A temporary seat has no file line: the launch this build ran left its generated settings
+  // file declaring accept, and the registry holds the seat's record and recorded socket.
+  const settings = cliHookSettingsPath(made.dir, 'acme', seat);
+  if (settings === null) throw new Error('the fixture declares no generated settings path');
+  mkdirSync(dirname(settings), { recursive: true });
+  writeFileSync(settings, JSON.stringify({ crossSessionInbound: 'accept' }));
+  const declared = new Date(Date.now() - 60_000);
+  utimesSync(settings, declared, declared);
+  writeFileSync(socketOf(made), '');
+  recordSeat(made, seat, socketOf(made));
+  const state = emptySession();
+  state.seats[seat] = {
+    stage: 'ready',
+    cli: 'claude-code',
+    pane: PANE,
+    temporary: { like: 'helper', until: '2027-01-01T00:00:00Z' },
+  };
+  const io = owner(made.root);
+  const host = fake(made, { agents: () => [{ name: seat, pane: PANE }] });
+
+  const code = await runSend([seat, 'a note', '--json'], io, host);
+
+  expect(code).toBe(0);
+  const sent = JSON.parse(io.out) as { channel?: string };
+  expect(sent.channel).toBe('socket');
+  expect(host.frames.length).toBe(1);
+  expect(reachOf(made, seat, { store: true, state })).toBe('socket');
 });
