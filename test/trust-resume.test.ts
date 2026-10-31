@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { runApprove } from '../src/approve/command.ts';
 import { runTeamCheck } from '../src/check/team.ts';
 import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
-import { runRegister, type RegisterSources } from '../src/commands/register.ts';
+import { rulesWrittenLine, runRegister, type RegisterSources } from '../src/commands/register.ts';
 import { runUp, type UpSources } from '../src/commands/up.ts';
 import { displayAgent, workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -341,8 +341,8 @@ describe('trust dialog resume and pane naming', () => {
         seats: {
           'operator-1': {
             stage: 'launched',
-            pane: 'w46:p1',
-            workspace: 'w46',
+            pane: 'pane-adopted',
+            workspace: 'ws-adopted',
             launched: { shell: 200, cli: [201] },
             waiting: { state: 'waiting-owner', classification: 'trust' },
           },
@@ -360,7 +360,7 @@ describe('trust dialog resume and pane naming', () => {
       standing: (r) => approvalStanding(r, w.home),
       sessionState: () => 'running',
       agents: () => [
-        { name: null, agent: 'agy', pane: 'w46:p1', workspace: 'w46', status: 'idle', cwd: null },
+        { name: null, agent: 'agy', pane: 'pane-adopted', workspace: 'ws-adopted', status: 'idle', cwd: null },
       ],
       processInfo: () => ({ shell: 200, foreground: [201] }),
       foreground: () => ['agy'],
@@ -388,16 +388,16 @@ describe('trust dialog resume and pane naming', () => {
     expect(io.out).toContain(
       'operator-1: its rules file is written; nothing is typed: its rules ride its next launch (run team restart operator-1 to carry them)\n',
     );
-    expect(io.out).toContain('operator-1: registered — pane w46:p1; nothing was launched\n');
-    expect(renames).toEqual(['acme:w46:p1:operator-1']);
-    expect(titles).toEqual([`acme:w46:${workspaceLabel(operatorSeat)}`]);
-    expect(displays).toEqual([`acme:w46:p1:${displayAgent(operatorSeat)}`]);
+    expect(io.out).toContain('operator-1: registered — pane pane-adopted; nothing was launched\n');
+    expect(renames).toEqual(['acme:pane-adopted:operator-1']);
+    expect(titles).toEqual([`acme:ws-adopted:${workspaceLabel(operatorSeat)}`]);
+    expect(displays).toEqual([`acme:pane-adopted:${displayAgent(operatorSeat)}`]);
 
     const recorded = readState(w.dir).sessions.acme?.seats['operator-1'];
     expect(recorded?.stage).toBe('ready');
     expect(recorded?.waiting).toBeUndefined();
     expect(recorded?.rules).toBe('undelivered');
-    expect(recorded?.pane).toBe('w46:p1');
+    expect(recorded?.pane).toBe('pane-adopted');
     expect(existsSync(rulesFilePath('acme', w.root, w.home, 'operator-1')!)).toBe(true);
     expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain('operator-1: its rules file is written; nothing is typed');
   });
@@ -458,6 +458,23 @@ describe('trust dialog resume and pane naming', () => {
     // The mark spares the pane: no typed line and no rules file to point at.
     expect(existsSync(rulesFilePath('acme', w.root, w.home, 'operator-1')!)).toBe(false);
     expect(readFileSync(join(w.dir, LOG_FILE), 'utf8')).toContain("operator-1: no rules line; the pane is a human's");
+  });
+
+  test("(1b3) the register written-rules line names a restart only when the launch line takes a rules prompt", () => {
+    // A first-message profile with a launch prompt: the rules ride the next launch, and the
+    // line tells the caller which command carries them.
+    expect(rulesWrittenLine('operator-1', { rulesPrompt: '' })).toBe(
+      'its rules file is written; nothing is typed: its rules ride its next launch (run team restart operator-1 to carry them)',
+    );
+    expect(rulesWrittenLine('operator-1', { rulesPrompt: '-i' })).toBe(
+      'its rules file is written; nothing is typed: its rules ride its next launch (run team restart operator-1 to carry them)',
+    );
+    // A CLI whose launch line takes no initial prompt: no launch can carry the line, so the
+    // wording names no restart that would change nothing.
+    expect(rulesWrittenLine('operator-1', { rulesPrompt: null })).toBe(
+      "its rules file is written; this CLI's launch line carries no rules line, so no launch can carry them",
+    );
+    expect(rulesWrittenLine('operator-1', { rulesPrompt: null })).not.toContain('run team restart');
   });
 
   test('(1c) answer finds a waiting-for-trust seat by its recorded pane when paused before rename, renames it, and delivers rules', async () => {

@@ -1,8 +1,8 @@
 // A launch line's own permission options and the profile's unattended defaults. A default is
 // added as one complete option — its flag and its value — so a line that already carries the
 // option keeps its own value and suppresses the whole default, while a line without it still
-// receives the pair. These scenes cover the short, long and equals spellings, quoting, the `--`
-// terminator, the other profiles, the codex daemon policy and the resume path.
+// receives the pair. These scenes cover the short, long, equals and attached short spellings,
+// quoting, the `--` terminator, the other profiles, the codex daemon policy and the resume path.
 import { describe, expect, test } from 'bun:test';
 import { codexEndpointConfig, remoteCodexCommand } from '../../src/launch/plan.ts';
 import { profileFor } from '../../src/profiles/index.ts';
@@ -56,6 +56,33 @@ describe('an explicit Codex permission option keeps its value and suppresses the
   });
 });
 
+describe('an attached short value is the same permission option', () => {
+  // Measured on codex-cli 0.161.0: `codex -abogus --version` exits 2 with "invalid value
+  // 'bogus' for '--ask-for-approval <APPROVAL_POLICY>'", and `codex -aon-request
+  // -sworkspace-write completion bash` exits 0 — the attached short value is the flag's own
+  // value, not an unknown word.
+  test('both attached shorts suppress both default pairs', () => {
+    expect(launched(codex, 'codex -aon-request -sworkspace-write')).toBe(
+      'AGENT_UNATTENDED=1 codex -aon-request -sworkspace-write --no-alt-screen',
+    );
+  });
+
+  test('one attached short suppresses only its own default', () => {
+    expect(launched(codex, 'codex -aon-request')).toBe(
+      'AGENT_UNATTENDED=1 codex -aon-request -s danger-full-access --no-alt-screen',
+    );
+    expect(launched(codex, 'codex -sworkspace-write')).toBe(
+      'AGENT_UNATTENDED=1 codex -sworkspace-write -a never --no-alt-screen',
+    );
+  });
+
+  test('a quoted prompt naming an attached short does not suppress the default', () => {
+    expect(launched(codex, 'codex "use -aon-request"')).toBe(
+      'AGENT_UNATTENDED=1 codex "use -aon-request" -a never -s danger-full-access --no-alt-screen',
+    );
+  });
+});
+
 describe('a line without permission flags receives the complete defaults', () => {
   test('no flags at all', () => {
     expect(launched(codex, 'codex -m gpt-6.1-sol')).toBe(
@@ -78,6 +105,15 @@ describe('a line without permission flags receives the complete defaults', () =>
   test('an argument after -- is positional and does not suppress defaults', () => {
     expect(launched(codex, 'codex -- -a on-request')).toBe(
       'AGENT_UNATTENDED=1 codex -- -a on-request -a never -s danger-full-access --no-alt-screen',
+    );
+  });
+
+  test('an attached-looking word after -- does not suppress the defaults either', () => {
+    expect(launched(codex, 'codex -- -sdanger-full-access')).toBe(
+      'AGENT_UNATTENDED=1 codex -- -sdanger-full-access -a never -s danger-full-access --no-alt-screen',
+    );
+    expect(launched(codex, 'codex -- -anever -sworkspace-write')).toBe(
+      'AGENT_UNATTENDED=1 codex -- -anever -sworkspace-write -a never -s danger-full-access --no-alt-screen',
     );
   });
 });
@@ -140,6 +176,29 @@ describe('the resume path keeps one set of permission values', () => {
     expect(command).toBe(
       'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol --ask-for-approval on-request --sandbox workspace-write resume ses_abc --no-alt-screen',
     );
+    expect(codexEndpointConfig(command)).toEqual([
+      '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"',
+    ]);
+    expect(remoteCodexCommand(command)).toBe(
+      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen',
+    );
+  });
+
+  test('an attached short value reaches the endpoint and sheds from the remote line', () => {
+    const command = resumed('codex -m gpt-6.1-sol -aon-request -sworkspace-write');
+    expect(command).toBe(
+      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -aon-request -sworkspace-write resume ses_abc --no-alt-screen',
+    );
+    expect(codexEndpointConfig(command)).toEqual([
+      '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"',
+    ]);
+    expect(remoteCodexCommand(command)).toBe(
+      'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol resume ses_abc --no-alt-screen',
+    );
+  });
+
+  test('a short equals value reaches the endpoint too', () => {
+    const command = 'AGENT_UNATTENDED=1 codex -m gpt-6.1-sol -a=on-request -s=workspace-write resume ses_abc --no-alt-screen';
     expect(codexEndpointConfig(command)).toEqual([
       '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="workspace-write"',
     ]);

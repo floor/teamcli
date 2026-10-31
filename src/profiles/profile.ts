@@ -217,15 +217,22 @@ export function fillInboxPlace(text: string, place: InboxPlace): string {
 }
 
 /** Add defaults as complete options: a line's own flag keeps its value, including when the
- *  flag uses an alias or the value is joined with `=`. Quoted arguments are kept whole so a
- *  flag appearing inside a prompt or config value does not suppress a default. */
+ *  flag uses an alias or the value is joined with `=` or attached to a short flag. Quoted
+ *  arguments are kept whole so a flag appearing inside a prompt or config value does not
+ *  suppress a default. */
 function unattendedOptions(profile: Profile, launch: string): string[] {
   const aliases: Record<string, string> = profile.cli === 'codex'
     ? { '-a': '--ask-for-approval', '-s': '--sandbox' }
     : {};
   const key = (word: string): string => {
     const flag = word.split('=', 1)[0]!;
-    return aliases[flag] ?? flag;
+    const alias = aliases[flag];
+    if (alias !== undefined) return alias;
+    // A codex short option takes its value attached as well: measured on codex-cli 0.161.0,
+    // `codex -abogus --version` exits 2 with "invalid value 'bogus' for '--ask-for-approval
+    // <APPROVAL_POLICY>'" and `codex -aon-request -sworkspace-write completion bash` exits 0.
+    const attached = /^-([as]).+$/.exec(flag);
+    return (attached === null ? undefined : aliases[`-${attached[1]!}`]) ?? flag;
   };
   const words = launch.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
   const flags = new Set<string>();

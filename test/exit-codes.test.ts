@@ -2413,6 +2413,30 @@ scene('seats.not-yours', async (place) => {
   }
   scene('config.usage', async (place) => show(await recordRun(place, ['set', 'watch']), 'a value is required'));
   scene('config.no-team', async (place) => show(await recordRun(place, ['get', 'project']), 'no team is registered'));
+  scene('config.no-record', async (place) => {
+    // Two shapes the team file's reader refuses: a block scalar, and a flow map that continues
+    // on the next line. The command says the record cannot be read and leaves the file as it
+    // was; an uncaught parse error would end the run as a stack trace instead.
+    const block = `${TEAM}note: |\n  a block scalar the reader cannot take\n`;
+    write(place, block);
+    const getBlock = await recordRun(place, ['get', 'project']);
+    expect(getBlock.code, 'block scalar: get exit').toBe(2);
+    expect(getBlock.err, 'block scalar: get reason').toContain('cannot be read');
+    const readBlock = await recordRun(place, ['set', 'project', 'other']);
+    expect(readBlock.code, 'block scalar: exit').toBe(2);
+    expect(readBlock.err, 'block scalar: reason').toContain('block scalars ("|", ">") are not supported');
+    expect(readFileSync(place.file, 'utf8'), 'block scalar: nothing written').toBe(block);
+    const flow = `${TEAM}budgets: {\n  accounts: {}\n}\n`;
+    write(place, flow);
+    const getFlow = await recordRun(place, ['get', 'project']);
+    expect(getFlow.code, 'flow map: get exit').toBe(2);
+    expect(getFlow.err, 'flow map: get reason').toContain('cannot be read');
+    const readFlow = await recordRun(place, ['set', 'project', 'other']);
+    expect(readFlow.code, 'flow map: exit').toBe(2);
+    expect(readFlow.err, 'flow map: reason').toContain('"{" is not closed on its line');
+    expect(readFileSync(place.file, 'utf8'), 'flow map: nothing written').toBe(flow);
+    return show(readFlow, 'cannot be read');
+  });
   scene('config.unreadable', async (place) => {
     write(place, TEAM);
     await imported(place, 'migrate', []);
@@ -6635,7 +6659,7 @@ function analyze(...args: Parameters<typeof analyzeSource>): ReturnType<typeof a
   return analyzed;
 }
 
-const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'config.no-record', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed',
+const defensive = new Set(['migrate.round-trip', 'import.round-trip', 'add.prepared', 'add.locked', 'add.not-restored', 'add.no-profile', 'register.no-profile', 'remove.no-profile', 'answer.action', 'up.delegate-placement', 'settings.write', 'team.mcp-serve-handed-over', 'team.mcp-serve-restart-failed',
   // No pane messaging: these were the typed leg's own outcomes; with nothing typed, an unreached
   // seat's message waits in its bus inbox (exit 0), so no scene can take them any more.
   'send.queued', 'send.held', 'send.not-submitted', 'send.unreachable']);

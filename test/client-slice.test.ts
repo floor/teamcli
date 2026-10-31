@@ -53,6 +53,11 @@ const TEAM_ID = 'aaaaaaaaaaaa';
 const OTHER_TEAM_ID = 'bbbbbbbbbbbb';
 const CLIENT_ID = 'grok-bot';
 const NOW = new Date('2026-10-19T12:00:00.000Z');
+// A client key is used from the client's own shell, outside the terminal host. Each send scene
+// pins that caller: the walk reads this process tree, and a run from a seat's pane would
+// otherwise be placed inside a team pane, where the client-key guard refuses the send before
+// its subject.
+const owner = { kind: 'owner' } as const;
 
 type Fixture = {
   base: string;
@@ -469,7 +474,7 @@ describe('client grant and key records', () => {
 describe('client send', () => {
   test('a delivery walk that throws is logged in the receiving team log and warned on stderr, not swallowed', async () => {
     const f = fixture('walk-throws');
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     const host = { home: f.home, now: () => NOW, sendId: () => 'drop-1' } as unknown as SendHost;
     const deliver = async (): Promise<void> => {
       throw new Error('boom in the walk');
@@ -486,7 +491,7 @@ describe('client send', () => {
 
   test('a delivery walk that returns logs its ending in the receiving team log', async () => {
     const f = fixture('walk-ends');
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     const host = { home: f.home, now: () => NOW, sendId: () => 'drop-1' } as unknown as SendHost;
     const code = await runClientSend(readArgs(clientArgs(f), ['file', 'client', 'key', 'request-id'], ['json']), io.io, host, false, async () => {});
     expect(code).toBe(0);
@@ -497,7 +502,7 @@ describe('client send', () => {
 
   test('writes one signed drop as the client, prints the declared limitation, and never reads a caller', async () => {
     const f = fixture('happy');
-    const io = capture(f, { tty: true, caller: { kind: 'owner' } as Caller });
+    const io = capture(f, { tty: true, caller: owner });
     const code = await sendClient(f, clientArgs(f), io.io, { sendId: 'drop-1' });
     expect(code).toBe(0);
     expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
@@ -520,9 +525,9 @@ describe('client send', () => {
   test('refuses a request id used twice and writes no second drop', async () => {
     const f = fixture('replay');
     const args = [...clientArgs(f), '--request-id', 'rq_once'];
-    const first = capture(f);
+    const first = capture(f, { caller: owner });
     expect(await sendClient(f, args, first.io, { sendId: 'drop-1' })).toBe(0);
-    const second = capture(f);
+    const second = capture(f, { caller: owner });
     expect(await sendClient(f, args, second.io, { sendId: 'drop-2' })).toBe(1);
     expect(second.err()).toContain('was already used for client "grok-bot"');
     expect(second.out()).toBe('');
@@ -536,7 +541,7 @@ describe('client send', () => {
     const read = clientRevocations(f.home, f.grant.grantId);
     expect(read.ok).toBe(true);
     if (read.ok) expect(read.records).toHaveLength(1);
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     expect(await sendClient(f, clientArgs(f), io.io)).toBe(1);
     expect(io.err()).toContain(`the grant ${f.grant.grantId} was revoked at ${NOW.toISOString()}`);
     expect(existsSync(f.dropDir)).toBe(false);
@@ -549,7 +554,7 @@ describe('client send', () => {
     writeFileSync(join(clientGrantsFolder(f.home), `revoke-${f.grant.grantId}-0123456789abcdef.json`), 'not json');
     const read = clientRevocations(f.home, f.grant.grantId);
     expect(read.ok).toBe(false);
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     expect(await sendClient(f, clientArgs(f), io.io)).toBe(1);
     expect(io.err()).toContain('is not whole JSON');
     expect(existsSync(f.dropDir)).toBe(false);
@@ -561,7 +566,7 @@ describe('client send', () => {
     const otherDir = clientKeyDir(f.home, 'other-bot');
     const written = writeClientKeyFiles(otherDir, otherPair);
     expect(written.ok).toBe(true);
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     const args = ['--client', f.grantPath, '--key', join(otherDir, 'client.key'), 'orchestrator@floor', 'hello'];
     expect(await sendClient(f, args, io.io)).toBe(1);
     expect(io.err()).toContain('is not the app key the grant');
@@ -569,10 +574,10 @@ describe('client send', () => {
 
   test('any destination but orchestrator@<entity> is refused', async () => {
     const f = fixture('destination');
-    const seat = capture(f);
+    const seat = capture(f, { caller: owner });
     expect(await sendClient(f, clientArgs(f, ['builder-4@floor', 'hello']), seat.io)).toBe(1);
     expect(seat.err()).toContain('addresses only orchestrator@floor');
-    const entity = capture(f);
+    const entity = capture(f, { caller: owner });
     expect(await sendClient(f, clientArgs(f, ['orchestrator@elsewhere', 'hello']), entity.io)).toBe(1);
     expect(entity.err()).toContain('addresses only orchestrator@floor');
   });
@@ -583,14 +588,14 @@ describe('client send', () => {
     record.client_grant.allowed_roles = ['owner'];
     const copy = join(f.base, 'copy.json');
     writeFileSync(copy, JSON.stringify(record));
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     expect(await sendClient(f, ['--client', copy, '--key', f.keyPath, 'orchestrator@floor', 'hello'], io.io)).toBe(1);
     expect(io.err()).toContain('not a verified owner-signed client grant');
   });
 
   test('a grant past its expiry refuses the send', async () => {
     const f = fixture('expired');
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     const later = new Date(Date.parse(f.grant.expires!) + 1000);
     expect(await sendClient(f, clientArgs(f), io.io, { now: later })).toBe(1);
     expect(io.err()).toContain('expired at');
@@ -653,12 +658,12 @@ describe('client send', () => {
     const floor = resolveClientTarget(f.home, 'orchestrator@floor', issued.grant);
     expect(floor.ok).toBe(false);
     if (!floor.ok) expect(floor.why).toContain('addresses only orchestrator@teamcli');
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     const words = ['--client', issued.path, '--key', join(keyDir, 'client.key'), 'orchestrator@teamcli', 'hello'];
     expect(await sendClient(f, words, io.io, { sendId: 'drop-t' })).toBe(0);
     expect(io.out()).toContain('sent: orchestrator@teamcli (drop drop-t)');
     expect(existsSync(join(teamcliRoot, '.agents', 'send-drops', 'teamcli', 'orchestrator', 'drop-t'))).toBe(true);
-    const refused = capture(f);
+    const refused = capture(f, { caller: owner });
     expect(await sendClient(f, [...words.slice(0, 4), 'orchestrator@floor', 'hello'], refused.io, { sendId: 'drop-u' })).toBe(1);
     // The legacy grant, with no team field, still reaches the floor orchestrator.
     expect(JSON.parse(readFileSync(f.grantPath, 'utf8')).client_grant.team).toBeUndefined();
@@ -681,7 +686,7 @@ describe('client send', () => {
 
   test('an owner caller on a TTY still writes the client drop, never an owner send', async () => {
     const f = fixture('never-owner');
-    const io = capture(f, { tty: true, caller: { kind: 'owner' } as Caller });
+    const io = capture(f, { tty: true, caller: owner });
     expect(await sendClient(f, clientArgs(f), io.io, { sendId: 'drop-client' })).toBe(0);
     const parsed = signedRecordOf(JSON.parse(readFileSync(join(f.dropDir, 'drop-client'), 'utf8')));
     expect(parsed?.payload.from).toBe(`client:${CLIENT_ID}`);
@@ -719,7 +724,7 @@ describe('client send', () => {
     const f = fixture('detached');
     const detached = join(f.base, 'detached-grant.json');
     renameSync(f.grantPath, detached);
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     expect(await sendClient(f, ['--client', detached, '--key', f.keyPath, 'orchestrator@floor', 'hello'], io.io)).toBe(1);
     expect(io.err()).toContain('cannot be read');
     expect(existsSync(f.dropDir)).toBe(false);
@@ -730,7 +735,7 @@ describe('client send', () => {
     const lockPath = join(clientGrantsFolder(f.home), '.client.lock');
     const held = `${JSON.stringify({ pid: 999999, token: 'held-by-tests', at: '2000-01-01T00:00:00.000Z' })}\n`;
     writeFileSync(lockPath, held);
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     const code = await sendClient(f, clientArgs(f), io.io, { clientLockWaitMs: 1 });
     expect(code).toBe(1);
     expect(io.err()).toContain('another command holds the client grant lock');
@@ -742,7 +747,7 @@ describe('client send', () => {
 
   test('JSON send keeps valid stdout and still prints the declared limitation on stderr', async () => {
     const f = fixture('json-send');
-    const io = capture(f);
+    const io = capture(f, { caller: owner });
     const code = await sendClient(f, [...clientArgs(f), '--json'], io.io, { sendId: 'drop-json' });
     expect(code).toBe(0);
     expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
@@ -1056,7 +1061,7 @@ describe('the client send walk', () => {
     const w = walkFixture('walk-inbox');
     liveInboxIn(w);
     const host = walkHost(w);
-    const io = capture(w);
+    const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     // The client contract is unchanged by the walk: one confirmation line, one key-isolation line.
     expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
@@ -1074,7 +1079,7 @@ describe('the client send walk', () => {
     const w = walkFixture('walk-socket');
     acceptInbound(w);
     const host = walkHost(w);
-    const io = capture(w);
+    const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
     expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
@@ -1102,7 +1107,7 @@ describe('the client send walk', () => {
     const host = walkHost(w, {
       dial: async () => ({ ok: false, reason: 'the session closed the connection before it took the frame' }),
     });
-    const io = capture(w);
+    const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     expect(io.out()).toBe('sent: orchestrator@floor (drop drop-1)\n');
     expect(io.err()).toBe(`${KEY_ISOLATION_LINE}\n`);
@@ -1119,7 +1124,7 @@ describe('the client send walk', () => {
   test('with no channel and no inbound declaration, the typed trigger wakes the seat', async () => {
     const w = walkFixture('walk-typed');
     const host = walkHost(w);
-    const io = capture(w);
+    const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     expect(host.dials()).toBe(0);
     expect(host.frames).toEqual([]);
@@ -1133,7 +1138,7 @@ describe('the client send walk', () => {
     const w = walkFixture('walk-declared');
     liveInboxIn(w);
     const host = walkHost(w, { delivery: { seat: ['typed', 'mcp-inbox'] } });
-    const io = capture(w);
+    const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     // The typed leg is first in the receiver's own word and is refused (no pane messaging); the
     // walk goes on in the declared order to the live inbox, which takes it.
@@ -1147,7 +1152,7 @@ describe('the client send walk', () => {
     liveInboxIn(w);
     // `drop` is the durable copy the grant already wrote; the walk skips it and takes the channel.
     const host = walkHost(w, { delivery: { seat: ['drop', 'mcp-inbox'] } });
-    const io = capture(w);
+    const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     expect(host.typed).toEqual([]);
     expect(host.frames).toEqual([]);
@@ -1167,7 +1172,7 @@ describe('the client send walk', () => {
         };
       },
     });
-    const io = capture(w);
+    const io = capture(w, { caller: owner });
     expect(await runSend(clientArgs(w), io.io, host)).toBe(0);
     // The record was on disk, alone, before the frame was dialed; the walk did not rewrite it.
     expect(atDial.names).toEqual(['drop-1']);

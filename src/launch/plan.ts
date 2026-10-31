@@ -502,19 +502,42 @@ function unquoteWord(word: string): string {
  * (the seat loses its team inbox server), and a resumed thread's permissions are the
  * app-server's (a danger-full-access thread read "Workspace" under a default app-server and
  * "Full Access" under one started with `-c sandbox_mode="danger-full-access"`). So every `-c`
- * pair of the line, and its `-a`/`-s` overrides as their config keys, go to the endpoint.
+ * pair of the line, and its `-a`/`-s` overrides as their config keys — however the line spells
+ * them (spaced, `=`-joined, or attached short) — go to the endpoint. A bare `--` ends option
+ * parsing as it does for the CLI: every word after the first one is positional (a prompt), so a
+ * prompt word shaped like an option never becomes an endpoint permission.
  */
 export function codexEndpointConfig(command: string): string[] {
   const words: string[] = command.match(/(?:[^\s'"\\]+|\\.|'[^']*'|"(?:[^"\\]|\\.)*")+/g) ?? [];
   const config: string[] = [];
   const toml = (value: string): string => JSON.stringify(value);
+  // A joined value is part of its flag's own word: `--flag=value`, and a short option's
+  // `-a=value` or `-avalue`. Measured on codex-cli 0.161.0: `codex -abogus --version` exits 2
+  // with "invalid value 'bogus' for '--ask-for-approval <APPROVAL_POLICY>'" and `codex
+  // -aon-request -sworkspace-write completion bash` exits 0, so the attached forms name the
+  // same options as the spaced ones.
+  const joined = (raw: string): { flag: string; value: string } | null => {
+    const long = /^(--[a-z-]+)=(.*)$/.exec(raw);
+    if (long !== null) return { flag: long[1]!, value: unquoteWord(long[2]!) };
+    const short = /^-([as])=(.*)$/.exec(raw);
+    if (short !== null) return { flag: `-${short[1]!}`, value: unquoteWord(short[2]!) };
+    const attached = /^-([as])(.+)$/.exec(raw);
+    if (attached !== null) return { flag: `-${attached[1]!}`, value: unquoteWord(attached[2]!) };
+    return null;
+  };
+  // A bare `--` ends option parsing, as it does for the CLI: every later word is positional (the
+  // prompt), in every spelling — spaced, `=`-joined, attached short or long. An attached-looking
+  // prompt word such as `-sdanger-full-access` after it names no sandbox.
+  let positional = false;
   for (let i = 0; i < words.length; i++) {
     const word = words[i]!;
+    if (word === '--') { positional = true; continue; }
+    if (positional) continue;
     const next = i + 1 < words.length ? unquoteWord(words[i + 1]!) : undefined;
-    const eq = /^(--[a-z-]+)=(.*)$/.exec(word);
-    const flag = eq ? eq[1]! : word;
-    const value = eq ? unquoteWord(eq[2]!) : next;
-    const took = eq ? 0 : 1;
+    const own = joined(word);
+    const flag = own === null ? word : own.flag;
+    const value = own === null ? next : own.value;
+    const took = own === null ? 1 : 0;
     if ((flag === '-c' || flag === '--config') && value !== undefined) {
       config.push('-c', value); i += took;
     } else if ((flag === '-a' || flag === '--ask-for-approval') && value !== undefined && !value.startsWith('-')) {
@@ -558,7 +581,11 @@ export function remoteCodexCommand(command: string): string {
       break;
     }
     if (['--full-auto', '--dangerously-bypass-approvals-and-sandbox'].includes(word)
-      || /^--(ask-for-approval|sandbox)=/.test(word)) continue;
+      || /^--(ask-for-approval|sandbox)=/.test(word)
+      // A short option's joined value: `-a=value` or the attached `-avalue` (measured on
+      // codex-cli 0.161.0: `-abogus` is refused as `--ask-for-approval`'s invalid value and
+      // the valid attached forms run). Both are permission overrides for the endpoint.
+      || /^-[as]=?.+/.test(word)) continue;
     if (['-a', '-s', '--ask-for-approval', '--sandbox'].includes(word)) {
       if (words[i + 1] !== undefined && !words[i + 1]!.startsWith('-')) i++;
       continue;

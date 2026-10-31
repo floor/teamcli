@@ -16,13 +16,36 @@ function files(dir: string): string[] {
   });
 }
 
+// An import of a pane writer from herdr, under whatever local name: `sendKey as keys` is the
+// same writer as `sendKey`, and the scan reads the alias too, so a renamed import cannot carry
+// a pane writer past it.
+const PANE_WRITERS: ReadonlySet<string> = new Set(['typeText', 'pressEnter', 'sendKey']);
+function importsPaneWriter(text: string): boolean {
+  for (const match of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]\.\.\/herdr\.ts['"]/g)) {
+    for (const specifier of (match[1] ?? '').split(',')) {
+      const name = specifier.trim().replace(/^type\s+/u, '').split(/\s+as\s+/u)[0]?.trim();
+      if (name !== undefined && PANE_WRITERS.has(name)) return true;
+    }
+  }
+  return false;
+}
+
+test('the pane-writer scan reads an import alias as the writer it names', () => {
+  expect(importsPaneWriter("import { sendKey } from '../herdr.ts';")).toBe(true);
+  expect(importsPaneWriter("import { sendKey as keys } from '../herdr.ts';")).toBe(true);
+  expect(importsPaneWriter("import { typeText as write } from '../herdr.ts';")).toBe(true);
+  expect(importsPaneWriter("import {\n  readAnsi,\n  pressEnter as enter,\n} from '../herdr.ts';")).toBe(true);
+  expect(importsPaneWriter("import { paneRead, agentList } from '../herdr.ts';")).toBe(false);
+  expect(importsPaneWriter("import { sendKey } from '../other.ts';")).toBe(false);
+});
+
 test('no messaging module types into a pane with herdr directly', () => {
   const messaging = [...files(join(root, 'src', 'send')), ...files(join(root, 'src', 'watch')), ...files(join(root, 'src', 'mcp')), join(root, 'src', 'daemon', 'watch-run.ts'), join(root, 'src', 'launch', 'deliver.ts'), join(root, 'src', 'commands', 'send.ts')];
   const offenders: string[] = [];
   for (const path of messaging) {
     const text = readFileSync(path, 'utf8');
     if (/['"]send-(text|keys)['"]/.test(text)) offenders.push(`${relative(root, path)}: herdr send-text/send-keys`);
-    if (/from ['"]\.\.\/herdr\.ts['"]/.test(text) && /\b(typeText|pressEnter|sendKey)\b[^:]*,?[^}]*\}\s*from ['"]\.\.\/herdr\.ts/.test(text)) offenders.push(`${relative(root, path)}: imports a herdr pane writer`);
+    if (importsPaneWriter(text)) offenders.push(`${relative(root, path)}: imports a herdr pane writer`);
   }
   expect(offenders).toEqual([]);
 });
@@ -50,19 +73,19 @@ test('a command outside the pane acts imports no herdr pane writer and names no 
     if (allowed.has(basename(path))) continue;
     const text = readFileSync(path, 'utf8');
     if (/['"]send-(text|keys)['"]/.test(text)) offenders.push(`${relative(root, path)}: herdr send-text/send-keys`);
-    if (/from ['"]\.\.\/herdr\.ts['"]/.test(text) && /\b(typeText|pressEnter)\b[^}]*\}\s*from ['"]\.\.\/herdr\.ts/.test(text)) {
+    if (importsPaneWriter(text)) {
       offenders.push(`${relative(root, path)}: imports a herdr pane writer`);
     }
   }
   expect(offenders).toEqual([]);
 });
 
-test('the send and watch bind no pane writer: their typeText and pressEnter refuse', () => {
+test('the send and watch bind no pane writer: their typeText, pressEnter and sendKey refuse', () => {
   for (const rel of ['src/commands/send.ts', 'src/send/daemon.ts', 'src/commands/watch.ts']) {
     const text = readFileSync(join(root, rel), 'utf8');
     expect(text, rel).toContain('typeText: refuseTyping');
     expect(text, rel).toContain('pressEnter: refuseTyping');
-    if (rel !== 'src/commands/watch.ts') expect(text, rel).toContain('sendKey: refuseTyping');
+    expect(text, rel).toContain('sendKey: refuseTyping');
   }
 });
 
