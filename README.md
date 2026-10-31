@@ -66,25 +66,28 @@ edge. Approvals guard against mistakes, not against a hostile process running as
 Every command, flag, refusal and exit code is in
 [the command reference](https://github.com/floor/teamcli/blob/main/docs/commands/README.md).
 
-## What's new in 0.5.5
+## What's new in 0.5.10
 
-0.5.5 moves the team's definition out of the project and into the registry
-(`~/.config/team/team-config/`). Run `team migrate` once in each project: it imports
-`.agents/team.yaml`, verifies the import, and moves the file to the Trash (`--keep-file` keeps
-it). From then on, `team config get|set|unset|edit` edits the team. Approvals are signed over
-one canonical team record, so they stay in force across the move. See
+0.5.10 makes one rule absolute: nothing is ever typed into a seat. A message reaches its
+recipient through the seat's own event adapters — a channel push, a socket frame, its runtime's
+queue — through its inbox, or through its drop folder for its next read. No send presses a key in
+a pane, and the watch never nudges one by typing. A seat that no route can wake still gets the
+message: it waits in the bus inbox, and the command says so in plain words.
+
+Each seat has a delivery class — `push`, `between-turns`, `pull-on-turn` or `none` — measured from
+its CLI's profile and refined by what its launch installed. `team send` appends the receiving
+seat's class to its outcome line, `team status`'s REACH column says whether a send's socket leg is
+eligible, and `team check` names a seat whose live socket a send would skip, with the repair. A
+Claude seat behind a provider wrapper is read as the model and version the file declares.
+`team restart <seat>` resumes the recorded conversation, and `team up` after `team down` resumes
+what `down` retained. `team config set --request` and `team add --request` file an owner request
+from a folder that is not a checkout, keyed by the team's registry record. `team config set` and
+`team config unset` rewrite only their key's lines, so the record's comments stay, and
+`team agents prune` and `team brief prune` retire stale records.
+
+0.5.5 moved the team's definition into the registry: run `team migrate` once in each project,
+then `team config` edits the team. See
 [UPGRADE-0.5.5.md](https://github.com/floor/teamcli/blob/main/UPGRADE-0.5.5.md).
-
-A team that names an `entity` and no `session:` now runs in the session `<entity>-<project>`;
-`team check` names the move, and the team is approved again once.
-
-Clients gain the `observer`, `operator`, `manager` and `developer` grant bundles, replies through
-`team reply` and `team messages --client`, and a pane guard that refuses client commands inside a
-team pane. A seat stopped at a usage wall reads as `blocked: quota`, and `team pause` can pause one
-seat.
-
-Downgrading to 0.5.3 after a team has been migrated is NOT supported: 0.5.3 reads only the file.
-Keep the file with `team migrate --keep-file` if you may need to go back.
 
 The full list is in [CHANGELOG.md](https://github.com/floor/teamcli/blob/main/CHANGELOG.md).
 
