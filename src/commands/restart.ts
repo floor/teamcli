@@ -67,16 +67,17 @@ import { progressWriter, type Progress } from '../launch/progress.ts';
 import { rulesFileHash, rulesFileHolds, seatDeliveryOf, typeablePath, writeRulesFile } from '../launch/rules-file.ts';
 import { rulesOf, rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import { unreadAdvice, unreadIdle } from '../launch/unread.ts';
-import { acquireRunLock, runLockText } from '../launch/run-lock.ts';
+import { acquireRunLockWithin, runLockText } from '../launch/run-lock.ts';
 import { logLine } from '../log.ts';
 import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
+import { nativePushBindingFor } from '../send/push.ts';
 import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
-import { recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
+import { recordedSeatContinuity, recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
@@ -510,6 +511,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
         team.project,
         session,
         notes,
+        performed.pullOnly,
       );
     default: {
       // Every result the launch sequence returns is handled above. This arm is the contract the
@@ -607,6 +609,9 @@ export type PerformResult =
       /** The handover file the launch was actually given. Absent when no file was there to read,
        *  so a caller never reports a handover the launch did not get. */
       handover?: string;
+      /** Why the registry holds no record binding this seat, when it does not: the seat runs,
+       *  but native delivery cannot resolve it and only pull reaches it. */
+      pullOnly?: string;
     };
 
 export async function performRestart(input: PerformInput): Promise<PerformResult> {
@@ -767,7 +772,10 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
     };
   }
 
-  const runLock = acquireRunLock(dir, session);
+  // The stop below is this run's first effect, so the session mutator lock is taken before it —
+  // standing aside while another run (the watch's restore, a launch) holds it, and refusing with
+  // the holder named and nothing stopped once the wait is spent.
+  const runLock = await acquireRunLockWithin(dir, session, { sleep: (ms) => sources.upLaunch.sleep(ms) });
   if ('held' in runLock) {
     return { kind: 'run-lock', held: runLock.held };
   }
@@ -1108,12 +1116,29 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
         logLine(dir, input.command, who, said, sources.now());
       }
     }
+    // The state this run wrote is ready; the registry write that binds the seat to it may not
+    // have landed. The record is read back with the binding the seat's native route needs: a
+    // route addressed by the conversation the CLI holds needs the recorded agent session as well,
+    // so a pane that has not reported one yet is pull-only; where the seat record is enough, a
+    // missing or refused record alone says so. The result names the reason rather than calling a
+    // restart done whose record was never written.
+    const lookedUp = {
+      home,
+      root,
+      herdrSession: session,
+      seat: launching,
+      state: afterwards,
+    };
+    const record = nativePushBindingFor(launching.cli) === 'conversation'
+      ? recordedSeatSession(lookedUp)
+      : recordedSeatRecord(lookedUp);
     return {
       kind: 'ready',
       oldPane,
       pane: afterwards.pane,
       readBack: readBackOf(launching, sources.screenText(session, afterwards.pane, next.cli)),
       ...(handoverPath === undefined ? {} : { handover: handoverPath }),
+      ...(record.kind === 'bound' ? {} : { pullOnly: record.why }),
     };
   } finally {
     runLock.release();
@@ -1620,7 +1645,12 @@ function hostOf(input: {
           // the same agent session, never a second derivation of either.
           const kept = readState(dir).sessions[session]?.seats[name];
           const made = registerLaunch(
-            { home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner },
+            {
+              home: input.home, team: input.team, root: input.root, by: input.caller, session, devMode: input.devMode, owner: input.owner,
+              // This run launched the seat standing on the state id it just wrote: a record left
+              // holding another incarnation's handle is bound to the live seat here.
+              rebindSeatHandle: true,
+            },
             seat,
             patch.pane,
             kept?.id,
@@ -1977,9 +2007,10 @@ function readyExit(
   project: string,
   session: string,
   notes: readonly string[],
+  pullOnly?: string,
 ): number {
   logLine(dir, 'restart', who, `restarted ${name}; pane ${fromPane} -> ${toPane}`, now);
-  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}`;
+  const summary = `team restart: restarted ${plainLine(name)}; pane ${plainLine(fromPane)} -> ${plainLine(toPane)}${pullOnly === undefined ? '' : `; pull-only: ${plainLine(pullOnly)}`}`;
   if (json) {
     writeJson(out, 'team.restart', {
       format: 1 as const,
@@ -1991,6 +2022,7 @@ function readyExit(
       seat: name,
       pane: toPane,
       notes,
+      ...(pullOnly === undefined ? {} : { pull_only: pullOnly }),
     });
   } else {
     out.stdout(`${summary}\n`);

@@ -16,7 +16,7 @@ import { registerAgent, updateAgent } from '../../src/registry/agents.ts';
 import { upsertProject } from '../../src/registry/projects.ts';
 import { teamIdOf } from '../../src/registry/teams.ts';
 import { TRIGGER_MAX } from '../../src/send/native.ts';
-import { pushAdapterFor, pushPointer, type RuntimePushRequest } from '../../src/send/push.ts';
+import { nativePushBindingFor, pushAdapterFor, pushPointer, type RuntimePushRequest } from '../../src/send/push.ts';
 import { RUNTIME_PUSH_ADAPTERS } from '../../src/send/push-adapters.ts';
 import {
   CODEX_DAEMON_OFF_REASON,
@@ -90,6 +90,18 @@ describe('codexPushAdapter (OpenAI Codex 0.161.0 runtime-push adapter)', () => {
     expect(pushAdapterFor('claude-code')).toBeNull();
     expect(pushAdapterFor('gemini')).toBeNull();
     expect(pushPointer(SAMPLE_ID, { seat: 'tester-2', team: 'teamcli' })).toBe(SAMPLE_POINTER);
+  });
+
+  // A launch reads back the same binding its seat's route resolves, and the adapter is the one
+  // declaration of it: the queue is addressed by the recorded conversation, and a CLI this
+  // native registry does not serve has no native route to require anything beyond the seat.
+  // (A CLI whose route sits on another leg — the headless resume — is not read here.)
+  test('declares the binding its native route needs, and the lookup answers per CLI', () => {
+    expect(CODEX_PUSH_ADAPTER.binding).toBe('conversation');
+    expect(nativePushBindingFor('codex')).toBe('conversation');
+    expect(nativePushBindingFor('claude-code')).toBe('seat');
+    expect(nativePushBindingFor('gemini')).toBe('seat');
+    expect(nativePushBindingFor('codex', [])).toBe('seat');
   });
 
   test('pushPointer derives From <seat>@<team>: strictly from signed sender metadata (sender-forgery resistance)', () => {

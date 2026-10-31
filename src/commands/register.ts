@@ -32,7 +32,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { reportedLiveAgent } from '../launch/agent.ts';
 import { currentBriefClaim, deliverBriefForAttribution, walkBriefDeliveries } from '../launch/general-brief.ts';
 import { GENERAL_BRIEF_SHA256 } from '../launch/general-brief-text.ts';
-import { launchedIdentity } from '../launch/identity.ts';
+import { launchedIdentity, seatProcessVerdict } from '../launch/identity.ts';
 import { resetCliHookState } from '../launch/cli-hook.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
 import { rulesOriginOf } from '../launch/rules.ts';
@@ -43,8 +43,12 @@ import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict, rosterOf } from '../permissions/who.ts';
 import { profileFor } from '../profiles/index.ts';
 import { shellQuote, type Profile } from '../profiles/profile.ts';
+import { readAgents } from '../registry/agents.ts';
+import { recordedSeatRecord, recordedSeatSession } from '../registry/resume.ts';
 import { registerLaunch } from '../registry/sync.ts';
+import { teamIdOf } from '../registry/teams.ts';
 import { refreshAgentAddress } from '../send/address.ts';
+import { nativePushBindingFor } from '../send/push.ts';
 import { emptySession, mintSeatId, readState, seatOfFile, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { readScreen, type Screen } from '../watch/screen.ts';
@@ -330,6 +334,42 @@ function cliRefused(out: Io, json: boolean, name: string, pane: string, cli: str
   return 1;
 }
 
+function replacedProcessRefused(out: Io, json: boolean, name: string, pane: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.replaced',
+    message: `${plainLine(name)}: pane ${plainLine(pane)} holds a process other than the one its record's launch started; the record was not refreshed`,
+    repair: null,
+  });
+  // exit: register.replaced
+  return 1;
+}
+
+function handleHeldRefused(out: Io, json: boolean, name: string, id: string, holder: string): number {
+  refuse(out, json, 'register', {
+    id: 'register.handle-held',
+    message: `${plainLine(name)}: the id its record holds (${plainLine(id)}) is ${plainLine(holder)}'s handle; the record was not refreshed`,
+    repair: null,
+  });
+  // exit: register.handle-held
+  return 1;
+}
+
+/** The seat whose live agent record already holds `id`, or null. Only the registry can hold one
+ *  handle twice: the state's read door de-duplicates seat ids in a session (a later seat that
+ *  repeats an id is read without it), while the registry is written by every launch and stop and
+ *  has no such door. This seat's own records are not holders — the handle being rebound is the
+ *  one its record may already carry under an earlier incarnation. A retired record holds nothing:
+ *  `findAgent` never binds a seat to one. */
+function handleHolder(home: string, root: string, name: string, id: string): string | null {
+  const team = teamIdOf(root);
+  for (const agent of readAgents(home)) {
+    if (agent.lifecycle === 'retired') continue;
+    if (agent.reach.team !== team || agent.reach.seat === name) continue;
+    if (agent.seat_handle === id) return agent.reach.seat;
+  }
+  return null;
+}
+
 function screenRefused(out: Io, json: boolean, name: string, kind: string): number {
   refuse(out, json, 'register', {
     id: 'register.screen',
@@ -612,6 +652,24 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
   // signing since the launch reaches the registry. The session's own record is left exactly as
   // it is, save for a launch's id and process identity it is missing, which this run completes.
   if (held !== undefined && held.pane === pane && held.stage === 'ready' && held.waiting === undefined) {
+    // What this refresh may bind. The record it writes carries the handle the native route binds
+    // the agent by, so the live pane must first prove it is the launch this record made: the
+    // recorded process identity is compared with the pane's, and only a match — the recorded
+    // shell with one of its recorded CLI pids in front — is continuity. A record that predates
+    // the identity has none to compare, and the refresh completes it below. Ready on the same
+    // pane is not proof.
+    const continuity = seatProcessVerdict(held.launched, procs);
+    if (held.launched !== undefined && continuity !== 'same') {
+      return replacedProcessRefused(io, json, name, pane);
+    }
+    // The id the record would carry is this seat's, and only this seat's: the session's read
+    // door already gives one seat per id, so the holder left to refuse is a live agent record of
+    // this team carrying it under another seat's name. It is never written onto this seat.
+    const carriedId = held.id ?? recorded.retained_seats?.[name]?.id;
+    const holder = carriedId === undefined ? null : handleHolder(sources.home, root, name, carriedId);
+    if (carriedId !== undefined && holder !== null) {
+      return handleHeldRefused(io, json, name, carriedId, holder);
+    }
     // One more repair from the same run, and a dry run paints nothing for it either: the seat's
     // two sidebar lines are re-applied from the file, so a label or display that drifted is put
     // back where the seat stands.
@@ -629,6 +687,9 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
     const unlisted = roster.kind !== 'listed' || !roster.roster.some((line) => line.seat === name);
     let refreshed = false;
     let wroteRoster = false;
+    // Why the registry holds no record binding this seat, when it does not: the seat stands, but
+    // native delivery cannot resolve it and only pull reaches it.
+    let pullOnly: string | null = null;
     if (!dry) {
       const refreshedAt = sources.now();
       // The launch's own record, completed where this version reads a gap a launch that predates
@@ -638,7 +699,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // holds both is left byte for byte as it is — unless herdr reports a session id the record
       // does not hold. That reading is measured now, and the registry write below keeps the same
       // id, so the record takes it too rather than keeping a reading the registry no longer has.
-      const seatId = held.id ?? recorded.retained_seats?.[name]?.id ?? mintSeatId();
+      const seatId = carriedId ?? mintSeatId();
       const liveSession = listed?.session;
       const sessionMoved = liveSession !== undefined && held.agent_session !== liveSession;
       if (held.id === undefined || held.launched === undefined || sessionMoved) {
@@ -662,7 +723,22 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       // The record names the caller the run admitted, not the process the walk saw: a seat under
       // a pane override walks as unplaced and is judged as the seat its pane proves it is, and
       // `registered_by` must say the seat.
-      const wrote = registerLaunch({ home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner' }, seat, pane, seatId, listed?.session);
+      const wrote = registerLaunch(
+        {
+          home: sources.home, team, root, by: callerLabel(caller), session, devMode: devModeMark(dev, devFolded || warning.length > 0), owner: walked.kind === 'owner',
+          // An existing handle is rewritten only under the continuity proven above: the live
+          // process is the one this record's launch started. Then a record holding another
+          // incarnation's handle is bound to the live seat, not only the file's fields, and the
+          // native route binds the agent again. A record that predates the identity is not
+          // rebound from here: ready on the same pane is not proof, and the id below only fills
+          // the handle such a record never had (the repair `team doctor` names).
+          ...(continuity === 'same' ? { rebindSeatHandle: true } : {}),
+        },
+        seat,
+        pane,
+        seatId,
+        listed?.session,
+      );
       if ('note' in wrote) logLine(dir, 'register', callerLabel(walked), wrote.note, refreshedAt);
       else {
         refreshed = true;
@@ -673,6 +749,22 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
         logLine(dir, 'register', callerLabel(walked), `${name}: refreshed ${seatId} — pane ${pane}`, refreshedAt);
         if (wroteRoster) logLine(dir, 'register', callerLabel(walked), `${name}: roster line written — pane ${pane}`, refreshedAt);
       }
+      // The record the seat's native route resolves the seat by, read back where it now stands
+      // and with the binding that route needs: a conversation-addressed route also needs the
+      // recorded agent session, while the seat record alone is enough where the route only places
+      // the seat. A write that failed, or a record the checks refuse, leaves the seat reachable
+      // only by pull; the run's own result says so rather than reporting the refresh as done.
+      const lookedUp = {
+        home: sources.home,
+        root,
+        herdrSession: session,
+        seat,
+        state: readState(dir).sessions[session]?.seats[name],
+      };
+      const record = nativePushBindingFor(seat.cli) === 'conversation'
+        ? recordedSeatSession(lookedUp)
+        : recordedSeatRecord(lookedUp);
+      if (record.kind !== 'bound') pullOnly = record.why;
       // The general seat brief, through the one boundary every attribution path calls. This run
       // attributed no seat — the record was already here — so the boundary writes a fresh
       // lifetime for nobody; it delivers where a live seat's claim is missing or another build's,
@@ -708,13 +800,14 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
       }
     }
     const ended = `already registered — pane ${plainLine(pane)}`;
+    const pull = pullOnly === null ? '' : `; pull-only: ${plainLine(pullOnly)}`;
     const line = wroteRoster
-      ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written`
+      ? `${plainLine(name)}: ${ended}; the team registry's roster did not list it, and was written${pull}`
       : unlisted && dry
-        ? `${plainLine(name)}: ${ended}; the team registry's roster would be written`
+        ? `${plainLine(name)}: ${ended}; the team registry's roster would be written${pull}`
         : dry || refreshed
-          ? `${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched`
-          : `${plainLine(name)}: ${ended}; nothing was written`;
+          ? `${plainLine(name)}: ${ended}; the record ${dry ? 'would be' : 'was'} refreshed from the file, nothing relaunched${pull}`
+          : `${plainLine(name)}: ${ended}; nothing was written${pull}`;
     if (json) {
       if (dry) {
         // A dry run's document is its plan whatever the real run would find, the already path
@@ -745,6 +838,7 @@ export async function runRegister(argv: string[], io: Io, sources: RegisterSourc
           seat: name,
           pane,
           notes: jsonNotes,
+          ...(pullOnly === null ? {} : { pull_only: pullOnly }),
         });
       }
     } else {

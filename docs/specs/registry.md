@@ -35,7 +35,11 @@ something the code does not hold, §3.5, §3.7 and §7 say so, the planned store
   (`defined`, `running`, `stopped`, `archived`).
 - **provenance**: who wrote a record, when, and under what marks.
 - **seat handle**: `seat_` plus twelve lowercase hex digits, minted by the state and kept on the
-  agent record for continuity across a stop and a relaunch.
+  agent record for continuity across a stop and a relaunch. A launch that finds the state naming
+  another id rewrites it to the live id — the record of an earlier incarnation is stale. `team
+  register`'s live refresh rewrites it only on proof: the pane's live processes are the ones the
+  record's `launched` identity names, and no other seat's live record already carries the id.
+  An ordinary write never rewrites a stable handle.
 - **retired**: the agent lifecycle word for a removed seat; its record stays readable.
 
 ## 3. Formats

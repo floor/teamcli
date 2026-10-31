@@ -13,9 +13,42 @@ import { acquireSeatLock, seatLockPath, type SeatLock } from './seat-lock.ts';
  */
 export const RUN_LOCK = '.run';
 
+/** How long a caller that cannot begin its first effect under another run's mutation stands
+ *  aside before it refuses: long enough for a stop-and-launch to finish, short enough that a
+ *  person is not left waiting on a whole session restore. */
+export const RUN_LOCK_WAIT_MS = 15_000;
+
+/** The step the wait checks the lock at. */
+export const RUN_LOCK_POLL_MS = 200;
+
 /** Takes the session mutator lock for `session`, or reports who holds it. */
 export function acquireRunLock(dir: string, session: string): SeatLock {
   return acquireSeatLock(dir, session, RUN_LOCK);
+}
+
+/**
+ * Takes the session mutator lock, standing aside while another run holds it, and reports the
+ * last holder it read once `waitMs` is spent. A second real run is still refused, never queued:
+ * the wait is bounded and the refusal that follows is the one `acquireRunLock` gives. `restart`
+ * is the caller that waits — its stop is its first effect, the watch's restore holds this lock
+ * for a whole restore, and a refusal at the first reading is not a fair answer to a run that
+ * arrived while another was merely busy. The time is counted in `pollMs` sleeps, the run's own
+ * injectable sleep, so a scene that supplies one waits the counted time rather than a wall.
+ */
+export async function acquireRunLockWithin(
+  dir: string,
+  session: string,
+  options: { waitMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<SeatLock> {
+  const waitMs = options.waitMs ?? RUN_LOCK_WAIT_MS;
+  const pollMs = options.pollMs ?? RUN_LOCK_POLL_MS;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  let lock = acquireRunLock(dir, session);
+  for (let waited = 0; 'held' in lock && waited < waitMs; waited += pollMs) {
+    await sleep(Math.min(pollMs, waitMs - waited));
+    lock = acquireRunLock(dir, session);
+  }
+  return lock;
 }
 
 /**

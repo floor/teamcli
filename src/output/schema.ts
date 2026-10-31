@@ -1667,6 +1667,9 @@ export const RESTART_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     seat: { type: 'string', minLength: 1 },
     pane: { type: ['string', 'null'] },
     notes: { type: 'array', items: { type: 'string' } },
+    // Why the registry holds no record binding the seat, when it does not: the seat runs, but
+    // native delivery cannot resolve it and only pull reaches it.
+    pull_only: { type: 'string', minLength: 1 },
   },
 });
 
@@ -1761,6 +1764,9 @@ export const REGISTER_OUTPUT_SCHEMA: CommandSchemaSpec = buildActionSchemaSpec({
     seat: { type: 'string', minLength: 1 },
     pane: { type: ['string', 'null'] },
     notes: { type: 'array', items: { type: 'string' } },
+    // Why the registry holds no record binding the seat, when it does not: the seat stands, but
+    // native delivery cannot resolve it and only pull reaches it.
+    pull_only: { type: 'string', minLength: 1 },
   },
 });
 

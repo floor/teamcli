@@ -77,6 +77,22 @@ save for a launch's id and process identity it is missing: a record a launch tha
 left short is completed where the seat stands — the id `team seats` shows, and the identity
 `team doctor`'s "launched before team recorded its process" note names — and nothing is launched.
 
+The record a refresh writes carries the seat's stable handle, the id the native route binds the
+agent by, so the refresh rebinds one only on proof: the pane's live processes must be the ones the
+record's `launched` identity names — the same shell with one of its recorded CLI pids in front.
+Ready on the same pane is not proof. A pane holding any other process is refused, and a record
+that predates the identity keeps its handle as it is; the completion above only fills a handle it
+never had. The handle must also be the seat's own: a live agent record of this team that already
+carries that id under another seat's name refuses the refresh, and the run says whose handle it
+is. A seat whose record has left its handle in doubt is rebound by a launch — `team restart`, or
+`team down` then `team up` — which writes the record itself.
+
+When the write leaves the seat where its native route cannot address it — no agent record, or,
+for a CLI whose runtime is addressed by the conversation it holds, no recorded conversation yet
+— the run does not report the refresh as done: the closing line ends `pull-only: <reason>`, and
+`--json` carries the same text as `pull_only`. The seat stands, but native delivery cannot
+resolve it, and only pull reaches it.
+
 A team the registry holds no record of — a team started before this version kept registry
 records — is written by the repair too: the team record, the seat's agent record and its roster
 line, exactly as a launch writes them, and the run says so. Where the registry holds a record of
@@ -104,6 +120,7 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 | the seat was already recorded on that pane | `<seat>: already registered — pane <pane>; the record was refreshed from the file, nothing relaunched` | 0 |
 | the seat was already recorded, and the team registry's roster does not list it | `<seat>: already registered — pane <pane>; the team registry's roster did not list it, and was written` | 0 |
 | the seat was already recorded and the roster does not list it, under `--dry-run` | `<seat>: already registered — pane <pane>; the team registry's roster would be written` | 0 |
+| the refresh left the seat where its native route cannot address it — no record, or no recorded conversation for a CLI whose runtime needs one | any `already registered — pane <pane>` line above, ending `; pull-only: <reason>`; the seat stands, and only pull reaches it | 0 |
 | `--pane` named the pane as the seat and wrote the record | `<seat>: registered — pane <pane>; the pane was named <seat>, nothing was launched` — `herdr did not take the name, nothing was launched` when the rename did not land; the record is written either way | 0 |
 | `--dry-run` succeeded | `<seat>: would register — pane <pane>; nothing would be launched`; with `--pane`, `the pane would be named <seat> and recorded` stands before `, nothing would be launched` | 0 |
 | the run was refused | `team register: <reason>` | 1 |
@@ -112,7 +129,8 @@ declares, and every gate wired to the bridge refuses it what the file says it ho
 `--json` prints one `team.register` document instead: `project`, `session`, the seat name as
 `seat`, the pane as `pane`, the working lines the run printed as `notes`, and the closing line as
 `action_summary`; `dry_run` is `false` and `status` says what the run did — `ready` (the record
-was written) or `already` (the pane already held it ready). On `--dry-run` the document carries
+was written) or `already` (the pane already held it ready) — and `pull_only` carries the reason
+when the refresh left no agent record binding the seat. On `--dry-run` the document carries
 `dry_run: true`, `status: "dry-run"`, `action_summary: "dry run: nothing was run"`, and a `plan`
 with one step — `{ "step": "register", "seat": <seat>, "detail": <the line the real run would
 print>, "prefix": "+" }`. A refusal under `--json` prints the `team.error` document on stdout —
@@ -142,6 +160,8 @@ its `id` is the contract row for that refusal (`register.caller`, `register.no-s
 | ``team register: <name> is already recorded on pane <pane>, not on <pane>; a lead stops the team and starts it again (`team down`, then `team up`); the seat's own team registers it`` | 1 |
 | `team register: <name>: pane <pane> holds no process in front of its shell; nothing was registered` | 1 |
 | `team register: <name>: pane <pane> holds no \`<cli>\` process; nothing was registered` | 1 |
+| `team register: <name>: pane <pane> holds a process other than the one its record's launch started; the record was not refreshed` — the refresh has no proven continuity to rebind the record's handle on | 1 |
+| `team register: <name>: the id its record holds (<id>) is <seat>'s handle; the record was not refreshed` — another seat's live agent record already carries it | 1 |
 | `team register: <name>: its pane is not the seat at its prompt (<reading>); nothing was registered` | 1 |
 | `team register: pane <pane> is named <other agent> in session "<session>"; --pane names a pane herdr never named, nothing was registered` — `--pane` named a pane herdr already names as another agent | 1 |
 | `team register: pane <pane> is <other seat>'s in session "<session>"; nothing was registered` — the pane this run would record is one another seat's record already holds | 1 |
