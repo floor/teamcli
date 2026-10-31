@@ -49,7 +49,7 @@ import { realSources, runMcp, type McpSources } from '../src/commands/mcp.ts';
 import { runInit } from '../src/commands/init.ts';
 import { runRoute } from '../src/commands/route.ts';
 import { historyPath, readHistory } from '../src/send/history.ts';
-import { pendingPath } from '../src/send/pending.ts';
+import { markPending, pendingPath } from '../src/send/pending.ts';
 import { plantMessage, plantRecord, recordDir, runMessages, type MessagePayload } from '../src/commands/messages.ts';
 import { clientInboxFolder } from '../src/client/inbox.ts';
 import { signRecord, type RecordPayload } from '../src/send/record.ts';
@@ -104,6 +104,7 @@ import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { GENERAL_BRIEF_FROM, generalBriefBody, generalBriefId } from '../src/launch/general-brief.ts';
 import { acquireRunLock } from '../src/launch/run-lock.ts';
 import { seatLockPath } from '../src/launch/seat-lock.ts';
 import { lockDirectory, type LockIdentity, type LockSources } from '../src/lock/machine.ts';
@@ -968,6 +969,54 @@ scene('brief.file', async (place) => show(await briefed(place, ['rollout', '--fi
 scene('brief.file-invalid', async (place) => {
   invalid(place);
   return show(await briefed(place, ['rollout', '--file', 'team.yaml'], owner), 'line');
+});
+
+/** A launch-brief retry marker beside a delivery: what a walk leaves when it is held. */
+function launchMarker(place: Place, seat: string, id: string): string {
+  const folder = join(place.root, '.agents', 'send-drops', 'acme', seat);
+  mkdirSync(folder, { recursive: true });
+  markPending(folder, { id, from: GENERAL_BRIEF_FROM, to: seat, body: 'the brief\n', ts: NOW.toISOString() });
+  return join(folder, `${id}.pending`);
+}
+
+/** A marker of a delivery the settled seat's claim no longer names. */
+function supersededMarker(place: Place, seat: string): string {
+  return launchMarker(place, seat, generalBriefId('inc_ffffffffffff', generalBriefBody()));
+}
+
+scene('brief.prune-clean', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['prune'], leadSeat), '0 files to retire');
+});
+scene('brief.prune-due', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  supersededMarker(place, 'lead');
+  return show(await briefed(place, ['prune'], leadSeat), 'would retire');
+});
+scene('brief.prune-applied', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  supersededMarker(place, 'lead');
+  return show(await briefed(place, ['prune', '--apply'], leadSeat), '1 file retired');
+});
+scene('brief.prune-incomplete', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  const marker = supersededMarker(place, 'lead');
+  // The folder without its write bit: the marker lists, and its removal fails.
+  chmodSync(dirname(marker), 0o555);
+  try {
+    return show(await briefed(place, ['prune', '--apply'], leadSeat), 'could not be removed');
+  } finally {
+    chmodSync(dirname(marker), 0o755);
+  }
+});
+scene('brief.prune-refused', async (place) => {
+  write(place, TEAM);
+  settledLead(place);
+  return show(await briefed(place, ['prune'], owner), 'only a seat of this team');
 });
 
 async function checked(place: Place, argv: string[], caller: Caller, sources: CheckSources): Promise<Ran> {

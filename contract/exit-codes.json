@@ -849,6 +849,20 @@
       "trigger": "team brief rollout"
     },
     {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.prune-applied",
+      "meaning": "prune's --apply removed every launch-brief retry marker it listed",
+      "trigger": "team brief prune --apply"
+    },
+    {
+      "code": 0,
+      "command": "brief",
+      "id": "brief.prune-clean",
+      "meaning": "prune's dry run found no launch-brief retry marker to retire",
+      "trigger": "team brief prune"
+    },
+    {
       "code": 1,
       "command": "brief",
       "id": "brief.file-owner",
@@ -861,6 +875,27 @@
       "id": "brief.incomplete",
       "meaning": "--apply left a seat stale or failed",
       "trigger": "team brief rollout --apply"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.prune-due",
+      "meaning": "prune's dry run listed launch-brief retry markers to retire",
+      "trigger": "team brief prune"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.prune-incomplete",
+      "meaning": "prune's --apply left a launch-brief retry marker unremoved",
+      "trigger": "team brief prune --apply"
+    },
+    {
+      "code": 1,
+      "command": "brief",
+      "id": "brief.prune-refused",
+      "meaning": "the caller is not a seat of this team on the pane the state records for it, the drop folder is not a real folder, or the seat's current brief claim can't be read or changed while the run read its markers",
+      "trigger": "team brief prune"
     },
     {
       "code": 1,

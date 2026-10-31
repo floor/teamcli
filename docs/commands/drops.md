@@ -4,7 +4,10 @@ Lists the drop files waiting in the calling seat's own drop folder. A drop is wh
 seat's `team send` writes under `.agents/send-drops/<session>/<seat>/` when its delivery ends on
 the drop leg: the file is one signed message record — the sender, the rule that admitted it, the
 thread, and the body — and the file is the message. `team drops` reads the folder and never
-moves, deletes, or marks a drop. `team drops --follow` prints each drop that appears while it
+moves, deletes, or marks a drop. The retry sidecars beside a delivery are not drops, and this
+command removes none of them: a launch-brief retry marker the seat has moved past or read is
+[`team brief prune`](brief.md)'s to retire, from the seat's own pane. `team drops --follow`
+prints each drop that appears while it
 runs, one line per file, so a Claude Code Monitor in the receiving seat can turn each arrival
 into a notification.
 
@@ -83,7 +86,9 @@ folder that is not a repository, this folder's own team root — a team whose fi
 any checkout reads exactly the same way. A drop's file name is the send's id. A record's payload
 names its sender; a raw body file an earlier build wrote still names one on its first line.
 Names with a dot in them — `<id>.pending`, `<id>.taken`, `<id>.read.json`,
-`<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. A listing read for a placed seat
+`<id>.<hex>.tmp` — are sidecars, not drops, and are not listed. No read removes a sidecar: the
+retry markers are the watch's records, and [`team brief prune`](brief.md) is the seat's own way to
+retire the launch-brief ones that no retry can still owe. A listing read for a placed seat
 skips the current brief claim's superseded ids by name, and a verified launch record whose digest
 or incarnation is not that claim's is not listed. Nothing is written
 or removed, and the folder is not created: a folder that does not exist yet is an empty one.

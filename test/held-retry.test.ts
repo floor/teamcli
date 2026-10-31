@@ -21,6 +21,15 @@ import { installCliHooks } from '../src/launch/cli-hook.ts';
 import { lobbyDir } from '../src/lobby/gate.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import { readHistory } from '../src/send/history.ts';
+import {
+  GENERAL_BRIEF_FROM,
+  GENERAL_BRIEF_RULE,
+  GENERAL_BRIEF_SHA256,
+  generalBriefBody,
+  generalBriefId,
+} from '../src/launch/general-brief.ts';
+import { mintBriefEpoch, mintBriefIncarnation } from '../src/launch/brief-id.ts';
+import { emptySession, updateState } from '../src/state.ts';
 import { dropMessage, readTriggerLine, type NativePane } from '../src/send/native.ts';
 import {
   clearPending,
@@ -70,7 +79,7 @@ afterEach(() => {
   base = '';
 });
 
-function teamText(root: string, lobby: string): string {
+function teamText(root: string, lobby: string, humanLead = false): string {
   return `format: 1
 project: acme
 coordinator: lead
@@ -89,7 +98,7 @@ seats:
     model: Test
     version: "1"
     launch: claude
-  - role: implementer
+${humanLead ? '    human: true\n' : ''}  - role: implementer
     name: helper
     cli: claude-code
     vendor: test
@@ -234,8 +243,17 @@ function seedDropped(at: SeedWorld, session: string, seat: string, id: string, b
 
 /** The receipt the turn-start read writes: the signed status receipt the inbox server writes
  *  too, naming this message, seat, checkout and session. The end-to-end scene runs the installed
- *  hook command itself instead. */
-function readByHook(at: SeedWorld, dropDir: string, id: string, seat: string, session: string): void {
+ *  hook command itself instead. `brief` is the claim binding the seat's own server writes when
+ *  it serves the seat's general brief; a receipt without it is an earlier build's read and
+ *  proves nothing for a claim. */
+function readByHook(
+  at: SeedWorld,
+  dropDir: string,
+  id: string,
+  seat: string,
+  session: string,
+  brief?: { sha256: string; incarnation: string; epoch: string },
+): void {
   const written = writeReceipt(dropDir, signReceiptPayload({
     kind: 'receipt',
     status: 'read',
@@ -244,8 +262,67 @@ function readByHook(at: SeedWorld, dropDir: string, id: string, seat: string, se
     root: realpathSync(at.root),
     session,
     at: NOW.toISOString(),
+    ...(brief === undefined ? {} : { brief_sha256: brief.sha256, incarnation: brief.incarnation, brief_epoch: brief.epoch }),
   }, at.home), at.home);
   if (!written.ok) throw new Error(written.reason);
+}
+
+/** The seat's current general-brief claim, as a launch's own delivery writes it: one lifetime's
+ *  id, the delivered body's digest, and the epoch the runtime started under. */
+function seedClaim(at: SeedWorld, session: string, seat: string) {
+  const incarnation = mintBriefIncarnation();
+  const epoch = mintBriefEpoch();
+  const id = generalBriefId(incarnation, generalBriefBody(), 0);
+  updateState(at.dir, (state) => {
+    const sessionState = (state.sessions[session] ??= emptySession());
+    sessionState.briefs = {
+      ...sessionState.briefs,
+      [seat]: {
+        id,
+        at: NOW.toISOString(),
+        incarnation,
+        epoch,
+        sha256: GENERAL_BRIEF_SHA256,
+        attempt: 0,
+        stage: 'claimed',
+      },
+    };
+  });
+  return { id, incarnation, epoch, sha256: GENERAL_BRIEF_SHA256 };
+}
+
+/** A launch-brief retry sidecar: the signed record a launch's delivery left, and the typed
+ *  marker a held walk wrote beside it. */
+function seedLaunchSidecar(
+  at: SeedWorld,
+  session: string,
+  seat: string,
+  incarnation: string,
+  attempt = 0,
+  ts = NOW,
+): { dropDir: string; id: string } {
+  const dropDir = join(at.dir, 'send-drops', session, seat);
+  const body = generalBriefBody();
+  const id = generalBriefId(incarnation, body, attempt);
+  const record = signRecord({
+    kind: 'message',
+    id,
+    to: seat,
+    to_id: null,
+    root: realpathSync(at.root),
+    session,
+    at: ts.toISOString(),
+    body,
+    from: GENERAL_BRIEF_FROM,
+    from_id: null,
+    rule: GENERAL_BRIEF_RULE,
+    thread: id,
+    brief_sha256: GENERAL_BRIEF_SHA256,
+    incarnation,
+  }, at.home);
+  dropMessage(dropDir, id, `${JSON.stringify(record, null, 2)}\n`);
+  markPending(dropDir, { id, from: GENERAL_BRIEF_FROM, to: seat, body, ts: ts.toISOString() });
+  return { dropDir, id };
 }
 
 describe('retryHeldDrops', () => {
@@ -1503,5 +1580,230 @@ describe('retryHeldDrops and a stale channel', () => {
     expect(existsSync(channelPushPath(dropDir, id))).toBe(false);
     // The drop is still unread, so its marker stays pending for the seat's own read.
     expect(readPending(dropDir)).toHaveLength(1);
+  });
+});
+
+describe('launch-brief retry sidecars', () => {
+  test('a marker its newer claim supersedes is retired with one line, and the delivery stays', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', mintBriefIncarnation());
+    // The seat's claim names a newer delivery: this marker's record is one the seat's own
+    // reader refuses as superseded, so no retry could ever be right for it.
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    // Only the marker: the signed delivery it named is still the seat's to read.
+    expect(existsSync(join(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was superseded by the seat\'s newer brief delivery')).toHaveLength(1);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a human seat\'s superseded marker is retired without a pane or a keystroke', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home), true));
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', mintBriefIncarnation());
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was superseded by the seat\'s newer brief delivery')).toHaveLength(1);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a held seat\'s superseded marker is retired too: the hold is about typing, not about the marker', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', mintBriefIncarnation());
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was superseded by the seat\'s newer brief delivery')).toHaveLength(1);
+  });
+
+  test('the current claim\'s marker is not retired by a receipt an earlier build wrote', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', claim.incarnation);
+    // The sidecar is the claim's own delivery: the same id.
+    expect(sidecar.id).toBe(claim.id);
+    // A read receipt with no claim binding — what a build from before the binding wrote — proves
+    // nothing for this claim, so the marker waits; the native hold keeps the pane untouched.
+    readByHook(made, sidecar.dropDir, sidecar.id, 'lead', 'acme');
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+  });
+
+  test('a receipt bound to the current claim retires its typed marker as a read delivery', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', claim.incarnation, 0);
+    expect(sidecar.id).toBe(claim.id);
+    readByHook(made, sidecar.dropDir, sidecar.id, 'lead', 'acme', claim);
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(false);
+    expect(said.filter((line) => line === 'lead: a dropped send from the launch was read in its drop folder')).toHaveLength(1);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('the current claim\'s unread marker is not given up when it outlives the retry window', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(
+      made,
+      'acme',
+      'lead',
+      claim.incarnation,
+      0,
+      new Date(NOW.getTime() - PENDING_MAX_AGE_MS - 1),
+    );
+    expect(sidecar.id).toBe(claim.id);
+    // No native hold: the marker is the claim's own unread delivery, and a retry still owes it
+    // however long the seat takes to read it.
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('a human seat\'s current unread marker waits for the person\'s read, not a cleanup', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home), true));
+    const claim = seedClaim(made, 'acme', 'lead');
+    const sidecar = seedLaunchSidecar(made, 'acme', 'lead', claim.incarnation);
+    expect(sidecar.id).toBe(claim.id);
+    // Nothing is typed at a human's pane, and the current claim's marker is not given up either:
+    // a person's read is what retires it.
+    const one = pane(claudeBox(''));
+    const said: string[] = [];
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      say: (text: string) => said.push(text),
+    });
+
+    expect(existsSync(pendingDropPath(sidecar.dropDir, sidecar.id))).toBe(true);
+    expect(said).toEqual([]);
+    expect(one.typed).toEqual([]);
+  });
+
+  test('another send\'s marker is never retired, whatever the seat\'s claim names', async () => {
+    const made = world();
+    const team = teamOf(teamText(made.root, lobbyDir(made.home)));
+    const dropDir = seedHeld(made, 'acme', 'lead', 'drop-ordinary', 'from the owner — admitted by: the owner\n\nhello');
+    seedClaim(made, 'acme', 'lead');
+    const one = pane(claudeBox(''));
+    await retryHeldDrops({
+      dir: made.dir,
+      session: 'acme',
+      root: made.root,
+      home: made.home,
+      team,
+      live: liveWith('lead', 'fixture-pane-1'),
+      ownPane: null,
+      sources: scripts(one),
+      now: NOW,
+      nativeHeld: new Set(['lead']),
+      say: () => {},
+    });
+
+    expect(existsSync(pendingDropPath(dropDir, 'drop-ordinary'))).toBe(true);
   });
 });
