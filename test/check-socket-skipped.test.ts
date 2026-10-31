@@ -203,8 +203,8 @@ function writeSocket(w: World, seat: Ready, at: Date = new Date()): string {
   return path;
 }
 
-/** The registry record a plain-name send resolves, carrying the recorded socket address: the
- *  delivery class reads this address, so a held seat still classed push is this shape. */
+/** The registry record a plain-name send resolves, carrying the recorded socket address the
+ *  delivery class and the send's own leg both read. */
 function register(w: World, seat: Ready, address: string): void {
   registerAgent(w.home, {
     name: seat.name,
@@ -305,12 +305,13 @@ describe('team check names a live seat whose socket a send would skip', () => {
     expect(code).toBe(1);
   });
 
-  test('a registered seat whose held box still supplies its push class: the socket gate decides, not the class', () => {
+  test('a registered seat whose box held a frame: the hold is named, and a restart re-confirms it', () => {
     const w = world([{ name: 'heldreg', role: 'orchestrator', launch: 'claude', inbound: 'accept', leads: true }]);
     const seat = { name: 'heldreg', pane: PANE_ONE, launch: 'claude --model claude-opus-5-5', pid: SESSION_PID };
     declare(w, 'heldreg');
-    // The registry names a recorded socket, so the class reader sees push even though the box
-    // would hold the frame. The finding must come from the send's gate, not the class.
+    // The registry names a recorded socket, and the box held a frame under the declaration in
+    // force: the seat's class is no wake, and the send's own gate must still name the hold, so
+    // the finding never depends on which class the seat reads.
     register(w, seat, writeSocket(w, seat));
     const declaration = declaredInboundOf({ dir: w.dir, root: w.root, session: 'acme', seat: 'heldreg', launch: seat.launch });
     recordHeldSocket(heldSocketPath(w.dir, 'acme', 'heldreg'), declaration, NOW);

@@ -20,6 +20,7 @@ import { NEXT_OUTPUT_SCHEMA } from '../src/output/index.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import type { Fetch } from '../src/release/http.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { enqueueSwap } from '../src/swap/queue.ts';
 import type { TaskAdapter } from '../src/tasks/adapter.ts';
@@ -375,6 +376,26 @@ describe('team next', () => {
     expect((await run([], worker)).out).toBe(
       `${CTX}urgent  the time-bound title\n  deadline: 2026-12-31T00:00:00Z\nteam next: claimed urgent\n`,
     );
+  });
+
+  test('a socket whose box already held a frame is no wake: the time-bound record is not offered', async () => {
+    // The launch declares accept, the address stands — and the last frame the send dialed there
+    // was held at the box, under a declaration that has not been re-confirmed since. The send
+    // would not dial it again, so `next` must not treat the seat as wakeable while idle.
+    launchingSocket(WITH_BOTH, true);
+    // The mark sits under the state folder the command reads, named the way the send's own
+    // prologue names it: the folder holding the loaded team file, whose path git reports resolved.
+    const dir = realpathSync(join(root, '.agents'));
+    recordHeldSocket(
+      heldSocketPath(dir, 'acme', 'worker'),
+      declaredInboundOf({ dir, root, session: 'acme', seat: 'worker', launch: 'claude --model claude-opus-5-5' }),
+      new Date(now),
+    );
+    expect(await run([], worker)).toEqual({
+      code: 0,
+      out: `${CTX}plain  the ordinary title\nteam next: claimed plain\n`,
+      err: '',
+    });
   });
 
   test('the team file’s own inbound word keeps even a standing socket out of the class', async () => {

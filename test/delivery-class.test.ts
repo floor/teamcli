@@ -3,7 +3,7 @@
 // pinned case by case because dispatch and `up` now refuse or warn on it: a seat read as
 // wakeable when it is not would spend an attempt on a message nothing delivers.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -17,6 +17,7 @@ import {
 import { DELIVERY_CLASSES, profileFor } from '../src/profiles/profile.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 
 const FACTS: DeliveryFacts = {
   declared: 'push',
@@ -252,6 +253,41 @@ describe('a seat read from its records', () => {
     });
     expect(read_.evidence.socket).toBe(false);
     expect(read_.class).toBe('pull-on-turn');
+  });
+
+  test('the box’s held-frame mark is no evidence either, until its declaration is re-confirmed', () => {
+    // The send walked this seat's socket, the receiver's box held the frame, and the mark under
+    // `send-held/` says so. The address still stands and the settings still accept, but the class
+    // a dispatch reads must agree with the walk that would not dial: the seat is pull-on-turn.
+    const { home } = socketSeat();
+    const settings = join(dir, 'hooks', 'acme', 'helper.json');
+    const declaration = declaredInboundOf({ dir, root: dir, session: 'acme', seat: 'helper', launch: 'claude' });
+    recordHeldSocket(heldSocketPath(dir, 'acme', 'helper'), declaration, new Date());
+    const held = read({
+      declared: { cli: 'claude-code', launch: 'claude' },
+      state: { cli: 'claude-code', watcher: 'hook' },
+      home,
+    });
+    expect(held.evidence.socket).toBe(false);
+    expect(held.class).toBe('pull-on-turn');
+    expect(wakeableWhileIdle(held.class)).toBe(false);
+
+    // The declaration is re-confirmed by a restarted launch: the settings file is rewritten, and
+    // the session's fresh socket is newer than it. The mark no longer stands, and the class is
+    // push again — the same reading the send's walk makes.
+    const rewrote = new Date(Math.max(Date.now(), (declaration.declaredAt ?? 0) + 2000));
+    writeFileSync(settings, '{"crossSessionInbound":"accept"}\n');
+    utimesSync(settings, rewrote, rewrote);
+    const socket = join(dir, 'helper.sock');
+    const fresh = new Date(rewrote.getTime() + 1000);
+    utimesSync(socket, fresh, fresh);
+    const confirmed = read({
+      declared: { cli: 'claude-code', launch: 'claude' },
+      state: { cli: 'claude-code', watcher: 'hook' },
+      home,
+    });
+    expect(confirmed.evidence.socket).toBe(true);
+    expect(confirmed.class).toBe('push');
   });
 
   test('a codex seat reads between turns only while its endpoint and its conversation are bound', () => {

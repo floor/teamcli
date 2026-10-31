@@ -26,7 +26,7 @@ import { DELIVERY_CLASSES, profileFor, type DeliveryClass } from '../profiles/pr
 import { findAgent } from '../registry/agents.ts';
 import { recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { declaredInboundOf, inboundIsLive, socketEligible } from '../send/inbound.ts';
+import { declaredInboundOf, heldSocketPath, inboundIsLive, readHeldSocket, socketEligible, socketHeldReason } from '../send/inbound.ts';
 import { webhookRouteOf } from '../send/webhook.ts';
 import type { SeatState } from '../state.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
@@ -247,12 +247,18 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
   const endpoint = endpointRecorded && conversation;
   const human = input.declared?.human === true;
   // The socket is the route the send itself admits: the effective settings' accept, the team
-  // file's own `inbound` word, and the address the launch recorded still standing. A
-  // declaration alone is no evidence that a socket exists; without a recorded address that is
-  // there, nothing can be dialed, and a dispatch must not spend time-bound work on it.
+  // file's own `inbound` word, the address the launch recorded still standing, and no held-frame
+  // mark the box left under the declaration in force. A declaration alone is no evidence that a
+  // socket exists, and a mark the walk would obey is no evidence either: without a dialable
+  // address nothing can be woken, and a dispatch must not spend time-bound work on it.
   const address = recordedSocketAddress(input);
+  const held = socketHeldReason(
+    readHeldSocket(heldSocketPath(input.dir, input.session, input.seat)),
+    inbound,
+  );
   const socket =
     socketEligible(input.declared?.inbound, inbound) &&
+    held === null &&
     address !== null &&
     existsSync(address) &&
     inboundIsLive(inbound, address);

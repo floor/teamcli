@@ -16,7 +16,7 @@ import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { replyLine } from '../src/send/frame.ts';
 import { readHistory } from '../src/send/history.ts';
-import { declaredInboundOf } from '../src/send/inbound.ts';
+import { declaredInboundOf, heldSocketPath, recordHeldSocket } from '../src/send/inbound.ts';
 import { testIo } from './helpers.ts';
 import { NOW, dropDir, fake, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
@@ -855,6 +855,42 @@ test('a held frame is marked once, and the socket stays out until the declaratio
   expect(await runSend(['lead', 'third'], owner(made.root), host)).toBe(0);
   expect(dials).toHaveLength(2);
   expect(pane.typed).toHaveLength(0);
+});
+
+test('a held socket is no wake the send reports either: the class it appends is pull-only', async () => {
+  // The receiver accepts its socket and the registry names the address standing in its pane. The
+  // box held the last frame under the declaration now in force: the walk skips the socket, and
+  // the class a console line appends must agree with the walk rather than promise a wake.
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declare(made, 'accept');
+  const socket = join(made.sockets, '222.sock');
+  registerAgent(made.home, {
+    name: 'lead',
+    signing: { model: 'Test', version: '1', role: 'coordinator' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: teamIdOf(made.root), seat: 'lead', session: 'acme', pane: 'fixture-pane-lead', address: socket },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  recordHeldSocket(
+    heldSocketPath(made.dir, 'acme', 'lead'),
+    declaredInboundOf({ dir: made.dir, root: made.root, session: 'acme', seat: 'lead', launch: 'claude' }),
+    new Date(NOW),
+  );
+  const host = fake(made);
+  const io = owner(made.root);
+  expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(io.out).toBe(
+    'team acme, session "acme"\nlead: sent (unconfirmed) (drop, 0 ms); queued; lead reads it at its next turn (pull-only)\n',
+  );
 });
 
 test('no pane messaging: a declared order whose wake word is typed reaches an accepting seat by its socket', async () => {
