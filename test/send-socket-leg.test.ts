@@ -4,13 +4,14 @@ import { NO_PANE_MESSAGING } from '../src/send/no-pane-messaging.ts';
 // declared order is walked as written. No live pane and no real socket: the host's deliver is a
 // fake, and the socket file only has to stand where `socketOf` looks.
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { cliHookSettings, cliHookSettingsPath, installCliHooks } from '../src/launch/cli-hook.ts';
 import { lobbyDir, resolveLobby } from '../src/lobby/gate.ts';
 import { writePolicySet } from '../src/policy/index.ts';
+import { registerAgent } from '../src/registry/agents.ts';
 import { upsertProject } from '../src/registry/projects.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { replyLine } from '../src/send/frame.ts';
@@ -651,6 +652,70 @@ test('a launch with no accept word is never dialed, whatever the team file omits
     `typed: ${NO_PANE_MESSAGING}`,
     'socket: the receiving Claude session does not declare crossSessionInbound accept',
   ]);
+});
+
+test('a socket recorded for a seat that no longer exists is reported under its real class, never dialed', async () => {
+  // The registry's record names the socket the seat's last session listened on; that file is
+  // gone, and the pane answers no processes, as a closed session's pane would. The address is
+  // not an attempt: the send says the seat can only be reached at its next turn and leaves the
+  // message where that turn reads it.
+  const made = world(['socket', 'typed'], [{ name: 'plain', role: 'implementer' }]);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  declareSeat(made, 'plain', 'accept');
+  const gone = join(made.sockets, '424242.sock');
+  const pane = 'fixture-pane-1';
+  const id = teamIdOf(made.root);
+  const record = registerAgent(made.home, {
+    name: 'plain',
+    signing: { model: 'Test', version: '1', role: 'implementer' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude',
+    reach: { team: id, seat: 'plain', session: 'acme', pane, address: gone },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(made.home, id, {
+    project: 'acme',
+    entity: 'floor',
+    session: 'acme',
+    root: made.root,
+    lobby: resolveLobby(made.home, { entity: 'floor' }),
+    roster: [{ agent: record.id, seat: 'plain', role: 'implementer', leads: false }],
+    lifecycle: 'running',
+  });
+  let dialed = 0;
+  const host = fake(made, {
+    agents: () => [{ name: 'plain', pane }],
+    processInfo: () => null,
+    deliver: async () => {
+      dialed += 1;
+      return { ok: true };
+    },
+  });
+  const outside = join(made.root, '..', 'nowhere');
+  mkdirSync(outside, { recursive: true });
+
+  const code = await runSend(['plain@acme', 'hello'], testIo(outside, { kind: 'owner' }), host);
+
+  expect(code).toBe(0);
+  // The recorded path was never opened, and no frame left the sender.
+  expect(dialed).toBe(0);
+  expect(host.frames).toEqual([]);
+  expect(existsSync(gone)).toBe(false);
+  const history = readHistory('acme', made.root, made.home);
+  expect(history.ok).toBe(true);
+  if (!history.ok) return;
+  expect(history.entries.at(-1)?.failed).toEqual([
+    `typed: ${NO_PANE_MESSAGING}`,
+    `socket: the socket recorded for plain (${gone}) is gone; queued; plain reads it at its next turn (pull-only)`,
+  ]);
+  // The message still waits where the seat's next turn reads it.
+  expect(readdirSync(dropDir(made.dir, 'plain')).filter((name) => !name.includes('.')).length).toBe(1);
 });
 
 test('a held frame is marked once, and the socket stays out until the declaration is re-confirmed', async () => {

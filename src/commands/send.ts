@@ -18,6 +18,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
 import type { Command, Io } from '../io.ts';
+import { deliveryWords, effectiveDeliveryClass, seatDeliveryClass, type DeliveryClass } from '../launch/delivery-class.ts';
 import { rulesOf, rulesOriginOf } from '../launch/rules.ts';
 import { acquireSeatLock, seatLockPath } from '../launch/seat-lock.ts';
 import { logLine } from '../log.ts';
@@ -41,6 +42,7 @@ import { verifiedPayloadOf } from '../send/wake.ts';
 import { daemonSocketPath, isBareShellPane, requestDaemon, type DaemonSendResponse } from '../send/daemon.ts';
 import { deliveryChainOf } from '../send/delivery.ts';
 import { namingFor, senderDisplayName, senderNickname, type SenderNaming } from '../send/names.ts';
+import { readState, type SeatState } from '../state.ts';
 import {
   deliverCodexNativeRoute,
   deliverHeadlessResumeRoute,
@@ -2207,9 +2209,8 @@ async function handOff(
   const found = findAgent(host, to.session, to.seat);
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   const at = socketPathFor(host, to, found.pane);
-  if (at === null) {
-    return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
-  }
+  if (at === null) return { kind: 'fallback', reason: noSocketReason(host) };
+  if (at.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, at.path) };
   const id = host.newId?.() ?? randomUUID();
   if (!PENDING_ID.test(id)) {
     return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
@@ -4271,9 +4272,8 @@ async function deliverSocketFrame(
     return { kind: 'fallback', reason: 'another command holds the seat' };
   }
   const first = socketPathFor(host, to, found.pane);
-  if (first === null) {
-    return { kind: 'fallback', reason: `no socket was found for its pane's processes (looked in ${socketDirs(host)})` };
-  }
+  if (first === null) return { kind: 'fallback', reason: noSocketReason(host) };
+  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path) };
   // A session started before the file that declares `accept` changed was launched without the
   // setting in force: the frame would be held at its box, so the walk passes this leg over until
   // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
@@ -4422,18 +4422,67 @@ export async function redeliverChannelOnSocket(input: {
 /** The address a send tries: the registry's recorded one while it is still live — its pid among
  *  the pane's, its socket present — else the pane's own processes (`socketOf`). `recorded` marks
  *  the difference — only the recorded address gets the live re-resolution after its write
- *  refuses. A pane that cannot be read leaves a recorded address as the only thing this run has;
- *  a write that refuses still falls back to the typed trigger. */
-function socketPathFor(host: SendHost, to: Aim, pane: string): { path: string; recorded: boolean } | null {
+ *  refuses. A pane that cannot be read leaves a recorded address as the only thing this run has,
+ *  unless the socket it names is not there: a record of a socket that no longer exists is stale,
+ *  and an attempt to dial it cannot land. */
+type SocketAddress =
+  | { kind: 'path'; path: string; recorded: boolean }
+  | { kind: 'stale'; path: string };
+
+function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | null {
   const processes = host.processInfo(to.session, pane);
   if (to.address !== null) {
     const live = liveSocketOf(to.address, processes, host.socketsDir);
-    if (live !== null) return { path: live, recorded: live === to.address };
-    if (processes === null) return { path: to.address, recorded: true };
+    if (live !== null) return { kind: 'path', path: live, recorded: live === to.address };
+    if (processes === null) {
+      return existsSync(to.address)
+        ? { kind: 'path', path: to.address, recorded: true }
+        : { kind: 'stale', path: to.address };
+    }
   }
   if (processes === null) return null;
   const path = socketOf(host, processes);
-  return path === null ? null : { path, recorded: false };
+  return path === null ? null : { kind: 'path', path, recorded: false };
+}
+
+/** The class the receiving seat reads under once its recorded address is known to be gone: the
+ *  socket is no evidence of a way to wake the seat any more, so the words say what will actually
+ *  reach it — its runtime queue, its next turn, or nothing. A record that cannot be read keeps
+ *  the class the launch line the registry carries implies. */
+function classWithoutGoneSocket(to: Aim): DeliveryClass {
+  let record: Pick<SeatState, 'cli' | 'launch_line' | 'watcher' | 'codex_endpoint' | 'presence_binding'> | undefined;
+  try {
+    record = readState(to.dir).sessions[to.session]?.seats[to.seat];
+  } catch {
+    record = undefined;
+  }
+  const read = seatDeliveryClass({
+    dir: to.dir,
+    root: to.root,
+    session: to.session,
+    seat: to.seat,
+    declared: { cli: to.cli, launch: record?.launch_line ?? '' },
+    ...(record === undefined ? {} : { state: record }),
+  });
+  return effectiveDeliveryClass({
+    declared: read.evidence.declared,
+    watcher: read.evidence.watcher,
+    channel: read.evidence.channel,
+    socket: false,
+    endpoint: read.evidence.endpoint,
+    ...(read.evidence.human ? { human: true } : {}),
+  });
+}
+
+/** The two endings an address that cannot take a frame has, in the words a person reads: nothing
+ *  was found for the pane, or the record names a socket that is gone — the second reported under
+ *  the seat's real class, never dialed. */
+function noSocketReason(host: SendHost): string {
+  return `no socket was found for its pane's processes (looked in ${socketDirs(host)})`;
+}
+
+function staleSocketReason(to: Aim, path: string): string {
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${deliveryWords(classWithoutGoneSocket(to), to.seat)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the
