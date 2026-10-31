@@ -183,6 +183,11 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   while idle)` after its title, and `team up` warns that `<seat> is a lead seat and <cli>
   cannot be woken while it is idle; time-bound work is never dispatched to it` (a reviewer
   seat says so as a reviewer; a person's seat is left out).
+- **A pull-only seat checks its inbox at the start and the end of every turn.** The standing
+  rule and the `inbox_check` tool description name both ends, with an `inbox_read` for each
+  message the check lists, so a message that arrived while the seat was working is acted on in
+  the same turn instead of waiting for the next one. Only a profile with a measured inbox route
+  adds the rule; every other seat's rules stay as they were.
 
 ### Fixed
 
