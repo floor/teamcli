@@ -169,7 +169,9 @@ function stringScalar(node: YamlNode, where: string): string {
 /** A map name → string. Values may be empty strings; the runner passes them through unchanged. */
 function stringMap(node: YamlNode, where: string): Record<string, string> {
   const map = asMap(node, where);
-  const out: Record<string, string> = {};
+  // No prototype: a fixture key named `__proto__` is an ordinary own key of the map, never a
+  // write that replaces the map's prototype and drops the field from what the fixture holds.
+  const out: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const entry of map.entries) {
     if (entry.key === '') refuse(`line ${entry.line}: ${where} has an empty name`);
     if (Object.prototype.hasOwnProperty.call(out, entry.key)) {
@@ -209,7 +211,7 @@ function artifactRef(node: YamlNode, where: string): ArtifactRef {
 /** ref → fixture. A fixture must be a mapping; field types are the core's to refuse. */
 function evidenceBlock(node: YamlNode): EvidenceDocument {
   const map = asMap(node, 'evidence');
-  const out: EvidenceDocument = {};
+  const out: EvidenceDocument = Object.create(null) as EvidenceDocument;
   for (const entry of map.entries) {
     if (entry.key === '') refuse(`line ${entry.line}: evidence has an empty ref`);
     if (Object.prototype.hasOwnProperty.call(out, entry.key)) {
@@ -224,7 +226,7 @@ function evidenceBlock(node: YamlNode): EvidenceDocument {
 }
 
 function toRecord(node: MapNode): EvidenceRecord {
-  const record: Record<string, unknown> = {};
+  const record: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const entry of node.entries) {
     if (entry.key === '' || Object.prototype.hasOwnProperty.call(record, entry.key)) {
       refuseEvidence(`line ${entry.line}: evidence fixture: key "${entry.key}" is empty or repeated`);
@@ -238,7 +240,7 @@ function toRecord(node: MapNode): EvidenceRecord {
 function toScalar(node: YamlNode, where: string): unknown {
   if (node.kind === 'scalar') return node.value;
   if (node.kind === 'seq') return node.items.map((item) => toScalar(item, where));
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const entry of node.entries) {
     if (Object.prototype.hasOwnProperty.call(out, entry.key)) {
       refuseEvidence(`line ${entry.line}: ${where}: key "${entry.key}" appears twice`);
