@@ -31,6 +31,10 @@ export function mintSeatId(): string {
 export type RetainedSeat = {
   id: string;
   last_active?: string;
+  /** The conversation the seat ran when `team down` stopped it: the state's half of the resume
+   *  binding (`recordedSeatSession`), so the next `up` resumes the registry's recorded session
+   *  rather than minting a fresh one. */
+  agent_session?: string;
 };
 
 /**
@@ -679,6 +683,9 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
         seenIds.add(retained.id);
         if (retained.last_active !== undefined && typeof retained.last_active !== 'string') {
           delete retained.last_active;
+        }
+        if (retained.agent_session !== undefined && (typeof retained.agent_session !== 'string' || retained.agent_session === '')) {
+          delete retained.agent_session;
         }
       }
     } else if (session.retained_seats !== undefined) {

@@ -95,7 +95,7 @@ import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
 import { forgetLaunchedPane, noteLaunchedPane } from '../file/launched-file.ts';
-import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, type SeatState, type WaitingRecord } from '../state.ts';
+import { emptySession, liveHold, mintSeatId, pidAlive, readState, seatOfFile, updateState, type RetainedSeat, type SeatState, type WaitingRecord } from '../state.ts';
 import { seatBudget } from '../budgets/gate.ts';
 import { loadReadings, loadSpendReadings } from '../budgets/readings.ts';
 import { blocksLaunch, doctorFindings, realSources as doctorSources, type DoctorSources } from './doctor.ts';
@@ -549,16 +549,23 @@ function seatPlan(
   callerSeat: string | null = null,
   /** Registry wording when this run read the registry; file wording for a real team.yaml. */
   origin: RulesOrigin = 'file',
+  /** What `team down` kept of a seat it stopped: its handle and the conversation it ran. */
+  retained?: RetainedSeat,
 ): UpSeat {
-  const binding = recorded
-    ? recordedSeatSession({ home, root, herdrSession: session, seat, state: recorded })
+  // After `team down` the seat has no state record, only what down retained. That is still the
+  // state's half of the resume binding: without it the registry's recorded conversation was
+  // never offered, and every seat came back on a fresh session (seen live on material).
+  const bindingState: SeatState | undefined = recorded
+    ?? (retained?.agent_session === undefined ? undefined : ({ id: retained.id, agent_session: retained.agent_session } as SeatState));
+  const binding = bindingState
+    ? recordedSeatSession({ home, root, herdrSession: session, seat, state: bindingState })
     : { kind: 'none' as const, why: 'no state record' };
   // The registry's own binding, for recognition and for the recipe a relaunch runs: a state
   // copy that names no session does not withhold it, so a restored seat a CLI without a resume
   // flag left behind is still proven by the record. The resume id above stays the one the
   // state agrees with; this read never resumes by itself.
-  const bound = recorded
-    ? recordedSeatContinuity({ home, root, herdrSession: session, seat, state: recorded })
+  const bound = bindingState
+    ? recordedSeatContinuity({ home, root, herdrSession: session, seat, state: bindingState })
     : { kind: 'none' as const, why: 'no state record' };
   const registry = bound.kind === 'bound' && bound.recorded.launch && bound.recorded.model && bound.recorded.version
     ? bound.recorded as typeof bound.recorded & { launch: string; model: string; version: string }
@@ -1652,6 +1659,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
       // before any close can reach the pane that holds this process.
       caller.kind === 'seat' ? caller.name : null,
       rulesOriginOf(loaded.source),
+      recorded?.seats[seat.name] === undefined ? recorded?.retained_seats?.[seat.name] : undefined,
     );
     // The granted seat's own pane is not relaunched and not closed. The skip is the whole of
     // that seat's plan, including a repair the owner's `up` would have performed.

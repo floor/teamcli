@@ -1446,6 +1446,9 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
             (current.retained_seats ??= {})[name] = {
               id: prior.id,
               ...(prior.last_active ? { last_active: prior.last_active } : {}),
+              // The conversation goes with the seat's handle: the next `up` resumes it when the
+              // registry's record still names the same session.
+              ...(prior.agent_session ? { agent_session: prior.agent_session } : {}),
             };
           }
           delete current.seats[name];

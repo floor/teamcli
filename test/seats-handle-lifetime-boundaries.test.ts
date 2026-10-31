@@ -338,6 +338,21 @@ describe('the stable seat handle', () => {
     expect(session().retained_seats ?? {}).toEqual({});
   });
 
+  test('down parks the conversation with the handle, so the next up can resume it', async () => {
+    await mounted();
+    updateState(dir, (file) => {
+      for (const [at, name] of NAMES.entries()) {
+        file.sessions.acme!.seats[name]!.agent_session = `ses_${at.toString(16).padStart(2, '0')}bbbbbbbbbb`;
+      }
+    });
+    const io = testIo(root, owner);
+    expect(await runDown([], io, downSources()), `down said:\n${io.out}\n${io.err}`).toBe(0);
+    const parked = session().retained_seats ?? {};
+    for (const [at, name] of NAMES.entries()) {
+      expect(parked[name]?.agent_session).toBe(`ses_${at.toString(16).padStart(2, '0')}bbbbbbbbbb`);
+    }
+  });
+
   test('remove --keep parks it and add records the same handle again', async () => {
     const ids = await mounted();
     const io = testIo(root, owner);
