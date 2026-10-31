@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
@@ -359,6 +359,61 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     } finally {
       await started.daemon.close();
       idle.destroy();
+    }
+  });
+
+  test('a close during an in-flight endpoint refresh waits for it and leaves nothing written after it', async () => {
+    const { base, root, home } = scratch();
+    // A socket that accepts the heartbeat's ping and never answers holds the refresh in flight
+    // for the whole probe timeout, so a close started while it is pending is the case under
+    // test: its late answer used to mark the closed daemon's bus failed and append one line
+    // after the machine folder had been released.
+    const silentPath = join(base, 'silent.sock');
+    const held: Socket[] = [];
+    let accepted = false;
+    const silent = createServer((socket) => {
+      held.push(socket);
+      socket.on('error', () => undefined);
+      accepted = true;
+    });
+    try {
+      await new Promise<void>((resolve) => silent.listen(silentPath, resolve));
+      const sendStart = async (): Promise<{ kind: 'already-running'; socketPath: string; pid: null }> => ({
+        kind: 'already-running',
+        socketPath: silentPath,
+        pid: null,
+      });
+      const started = await startMachineDaemon({
+        home,
+        roots: [root],
+        startedBy: 'manual',
+        version: '0.5.3-daemon-test',
+        heartbeatMs: 25,
+        sendStart,
+      });
+      expect(started.kind).toBe('serving');
+      if (started.kind !== 'serving') return;
+      try {
+        await waitFor(() => accepted, 3_000);
+        const at = Date.now();
+        await started.daemon.close();
+        const closeMs = Date.now() - at;
+        // Ownership is released: the close removed its socket and record, and the machine
+        // folder is now free to go. A refresh that settled after the close would recreate it
+        // to append its late line; the late answer's own timeout is the send probe's 2 s.
+        rmSync(machineConfigDir(home), { recursive: true, force: true });
+        const settleBy = at + 2_700;
+        if (Date.now() < settleBy) await new Promise((resolve) => setTimeout(resolve, settleBy - Date.now()));
+        expect(existsSync(machineConfigDir(home))).toBe(false);
+        // The close admitted the refresh it found in flight and waited for it before releasing
+        // ownership, so the probe had settled when the close answered, not after it.
+        expect(closeMs).toBeGreaterThanOrEqual(1_000);
+      } finally {
+        await started.daemon.close();
+      }
+    } finally {
+      for (const socket of held.splice(0)) socket.destroy();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
     }
   });
 
