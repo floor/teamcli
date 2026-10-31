@@ -203,6 +203,7 @@ function health(over: Partial<DaemonHealth> = {}): DaemonHealth {
     since: '2026-10-03T13:00:00Z',
     startedBy: 'service-manager',
     version: '0.5.4',
+    gitHead: null,
     heartbeatAt: '2026-10-03T14:01:58Z',
     features: { broker: 'absent' },
     stuck: [],

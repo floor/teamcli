@@ -38,6 +38,7 @@ function health(over: Partial<DaemonHealth> = {}): DaemonHealth {
     since: '2026-10-19T08:00:00.000Z',
     startedBy: 'service-manager',
     version: '0.5.4',
+    gitHead: null,
     heartbeatAt: '2026-10-19T08:59:58.000Z',
     features: { broker: 'absent' },
     stuck: [],
@@ -437,11 +438,16 @@ const BLOCKED =
   'watch: outbound effects blocked (no verified admitted sender is injected); it is not enforcing anything';
 
 test('a hosted watch is silent when the record carries none, and says its own phase when it does', () => {
+  const RUNNING = 'watch: running in the daemon since 2026-10-19T08:00:00.000Z, version 0.5.4';
   expect(hostedWatchNotes(health(), NOW)).toEqual([]);
-  expect(hostedWatchNotes(watched(), NOW)).toEqual(['watch: in daemon, last cycle 3m ago']);
-  // A running watch with no completed pass never borrows a last-cycle time.
+  expect(hostedWatchNotes(watched(), NOW)).toEqual([RUNNING]);
+  // A running watch names the instant it started and the daemon's build, never a borrowed
+  // last-cycle time; a reading with no version says so rather than inventing one.
   expect(hostedWatchNotes(watched({ lastCycleAt: null, lastCycleOutcome: null, cycles: 0 }), NOW)).toEqual([
-    'watch: in daemon, not yet cycled',
+    RUNNING,
+  ]);
+  expect(hostedWatchNotes(health({ version: null, roots: [root({ watch: watch() })] }), NOW)).toEqual([
+    'watch: running in the daemon since 2026-10-19T08:00:00.000Z, version unknown',
   ]);
   expect(hostedWatchNotes(watched({ phase: 'starting', lastCycleAt: null }), NOW)).toEqual([
     'watch: starting in the daemon, not yet cycled',
@@ -473,7 +479,7 @@ test('a standing-down watch names the pane watch and claims no daemon cycle', ()
 
 test('a closed outbound gate is said as blocked, never as enforcing', () => {
   expect(hostedWatchNotes(watched({ effects: 'blocked' }), NOW)).toEqual([
-    'watch: in daemon, last cycle 3m ago',
+    'watch: running in the daemon since 2026-10-19T08:00:00.000Z, version 0.5.4',
     BLOCKED,
   ]);
   expect(BLOCKED).toContain('not enforcing anything');
@@ -499,7 +505,7 @@ test('several watched routes each name their own root, so one failure reads besi
     ],
   });
   expect(hostedWatchNotes(two, NOW)).toEqual([
-    'watch: in daemon, last cycle 3m ago (/work/acme)',
+    'watch: running in the daemon since 2026-10-19T08:00:00.000Z, version 0.5.4 (/work/acme)',
     'watch: failed in the daemon (the send endpoint failed) (/work/beta)',
   ]);
 });
@@ -552,7 +558,8 @@ test('status prints a watched route beside the daemon line, and the document car
     notes: string[];
     daemon: { roots: Array<{ watch?: { phase: string; lastCycleAt: string | null } }> };
   };
-  expect(doc.notes).toContain('watch: in daemon, last cycle 3m ago');
+  const RUNNING = 'watch: running in the daemon since 2026-10-19T08:00:00.000Z, version 0.5.4';
+  expect(doc.notes).toContain(RUNNING);
   expect(doc.daemon.roots[0]?.watch?.phase).toBe('running');
   expect(doc.daemon.roots[0]?.watch?.lastCycleAt).toBe('2026-10-19T08:57:00.000Z');
 
@@ -560,7 +567,9 @@ test('status prints a watched route beside the daemon line, and the document car
   expect(
     await runStatus([], text, statusSources(at, async () => health({ roots: [root({ watch: watch() })] }))),
   ).toBe(0);
-  expect(text.out).toContain('watch: in daemon, last cycle 3m ago');
+  expect(text.out).toContain(
+    'watch: running in the daemon since 2026-10-19T08:00:00.000Z, version 0.5.4',
+  );
 });
 
 test('a failed required watch is a check note, and a healthy one leaves no trace', () => {

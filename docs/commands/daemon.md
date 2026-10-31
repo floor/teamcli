@@ -106,9 +106,9 @@ the route and writes nothing. `fault-watch --json` prints the `team.daemon-fault
 ## What it reads and writes
 
 Under the machine folder `~/.config/team`: the daemon's state record
-`daemon.state.json` (pid, uid, start time, launcher, version, heartbeat, hosted features and
-stuck requests), the Unix socket `daemon.sock` (mode 0600 in a 0700 folder), the one log
-`daemon.log`, and the single-instance lock `daemon.lock`. `install` and `uninstall` write and
+`daemon.state.json` (pid, uid, start time, launcher, version and packaged commit, heartbeat,
+hosted features and stuck requests), the local socket `daemon.sock` (mode 0600 in a 0700 folder),
+the one log `daemon.log`, and the single-instance lock `daemon.lock`. `install` and `uninstall` write and
 remove the user service unit the platform adapter owns; no command prints that path as prose
 except under `--json`. Each hosted checkout's team file is read to find its send and bus
 endpoints. Under `run --presence` the daemon additionally reads each hosted checkout's presence
@@ -156,7 +156,9 @@ no-terminal start admitted; every other no-terminal caller is refused (`daemon.r
 
 `status --json` prints `{"schema": {"name": "team.daemon-status", "version": 1}, "format": 1,
 "daemon": …}` with the health reading's fields: `state`, `running`, `pid`, `uid`, `since`,
-`startedBy`, `version`, `heartbeatAt`, `features`, `stuck`, `probe`, `why` and `socket`.
+`startedBy`, `version`, `gitHead`, `heartbeatAt`, `features`, `stuck`, `probe`, `why` and
+`socket`. `gitHead` is the commit a packaged install was built from; it is `null` in a source
+checkout, and an install that changes the version or the packaged commit is a new daemon identity.
 `install --json` and `uninstall --json` print `team.daemon-install` with `command`, `dry_run`,
 `installed`, `unit_path`, `program` and `roots` (`install`), or `unit_path` and `removed`
 (`uninstall`). A refusal under `--json` prints the `team.error` document with its `daemon.*` id.
