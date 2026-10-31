@@ -12,7 +12,7 @@ import type { EndpointStopRead, ManagedEndpointRead } from '../../src/launch/cod
 const STATE_DIR = '/tmp/acme/.agents';
 const URL = 'unix:///tmp/acme/.agents/presence/scratch/coder/ab12cd34ef56.sock';
 
-type Seen = { dir: string; session: string; seat: string; cwd?: string; config?: string[] };
+type Seen = { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string };
 
 function launchStep(codexEndpoint?: { dir: string }): Step[] {
   return [
@@ -96,7 +96,7 @@ describe('the launch and the managed Codex endpoint', () => {
       managed: (input) => { seen = input; return { kind: 'up', url: URL, started: true }; },
     });
     await executePlan(launchStep({ dir: STATE_DIR }), 'acme', host);
-    expect(seen).toEqual({ dir: STATE_DIR, session: 'acme', seat: 'coder', cwd: '/seat/folder', config: [] });
+    expect(seen).toEqual({ dir: STATE_DIR, session: 'acme', seat: 'coder', cwd: '/seat/folder', config: [], pane: 'p1' });
     expect(calls).toEqual(['managed', `paneRun:codex --remote ${URL}`]);
     expect(said.join('')).not.toContain('managed Codex endpoint');
   });

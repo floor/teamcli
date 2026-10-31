@@ -214,6 +214,60 @@ describe('ensuring the endpoint', () => {
     }
   });
 
+  test('starts the server with the seat\'s config and the herdr hook environment of its pane', async () => {
+    // With the TUI attached by --remote, Codex loads config and runs hooks in the app-server:
+    // the seat's -c pairs and herdr's pane environment must reach that process.
+    const dir = scratch();
+    try {
+      seed(dir);
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      let listening = false;
+      const spawned: { config?: string[]; env?: Record<string, string> }[] = [];
+      const asked: string[] = [];
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, pane: 'w9:p1', config: ['-c', 'sandbox_mode="danger-full-access"'],
+        deps: {
+          spawn: (input) => { spawned.push({ config: input.config, env: input.env }); listening = true; return { pid: 9031 }; },
+          herdrEnv: (session, pane) => { asked.push(`${session} ${pane}`); return { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/h/herdr.sock', HERDR_PANE_ID: pane }; },
+          isPlainDir: () => true,
+          isSocket: (path) => listening && path === socketPath,
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer).toEqual({ kind: 'up', url: `unix://${socketPath}`, started: true });
+      expect(asked).toEqual([`${SESSION} w9:p1`]);
+      expect(spawned).toEqual([{
+        config: ['-c', 'sandbox_mode="danger-full-access"'],
+        env: { HERDR_ENV: '1', HERDR_SOCKET_PATH: '/h/herdr.sock', HERDR_PANE_ID: 'w9:p1' },
+      }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a pane herdr cannot name a socket for still starts the server, and says so', async () => {
+    const dir = scratch();
+    try {
+      seed(dir);
+      const socketPath = join(rootOf(dir), `${BINDING}.sock`);
+      let listening = false;
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, pane: 'w9:p1',
+        deps: {
+          spawn: (input) => { expect(input.env).toBeUndefined(); listening = true; return { pid: 9032 }; },
+          herdrEnv: () => null,
+          isPlainDir: () => true,
+          isSocket: (path) => listening && path === socketPath,
+          sleep: async () => {},
+        },
+      });
+      expect(answer).toMatchObject({ kind: 'up', started: true, notes: [expect.stringContaining('turn hooks cannot report this seat')] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('reuses the recorded server only while the full ownership proof holds', async () => {
     const dir = scratch();
     try {

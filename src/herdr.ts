@@ -214,6 +214,8 @@ export type HerdrSession = {
   running: boolean;
   /** `<session_dir>` from the list, or null when herdr did not name one. */
   sessionDir: string | null;
+  /** `<socket_path>` from the list, or null when herdr did not name one. */
+  socketPath?: string | null;
 };
 
 // Every session herdr lists, or null when herdr can't be asked. Herdr 0.7.1, captured on a scratch
@@ -242,12 +244,13 @@ export function sessionList(): HerdrSession[] | null {
     const listed: HerdrSession[] = [];
     for (const entry of body.sessions) {
       if (!entry || typeof entry !== 'object') continue;
-      const session = entry as { name?: unknown; running?: unknown; session_dir?: unknown };
+      const session = entry as { name?: unknown; running?: unknown; session_dir?: unknown; socket_path?: unknown };
       if (typeof session.name !== 'string' || session.name === '') continue;
       listed.push({
         name: session.name,
         running: session.running === true,
         sessionDir: typeof session.session_dir === 'string' ? session.session_dir : null,
+        socketPath: typeof session.socket_path === 'string' ? session.socket_path : null,
       });
     }
     return listed;

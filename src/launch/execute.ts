@@ -73,7 +73,7 @@ export type Host = {
    * when this answers `up`. Absent on a host that starts no endpoint: the seat then launches on
    * its own line and its presence stays unproven.
    */
-  managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[] }): Promise<ManagedEndpointRead>;
+  managedCodexEndpoint?(input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string }): Promise<ManagedEndpointRead>;
   /**
    * Stops the endpoint a launch this run started when its pane never ran, so a partial launch
    * leaves no orphaned server. The record is cleared only after a proven stop.
@@ -1129,7 +1129,7 @@ export async function executePlan(
         if (op.codexEndpoint !== undefined) {
           const read = host.managedCodexEndpoint === undefined
             ? { kind: 'unmanaged' as const, why: 'this launch starts no managed Codex endpoint' }
-            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
+            : await host.managedCodexEndpoint({ dir: op.codexEndpoint.dir, session, seat: op.seat, config: codexEndpointConfig(op.command), ...(here ? { pane: here.pane } : {}), ...(op.cwd === undefined ? {} : { cwd: op.cwd }) });
           if (read.kind === 'up') {
             const attached = remoteCodexCommand(command);
             if (attached !== command) {

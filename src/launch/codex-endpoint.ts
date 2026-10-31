@@ -25,6 +25,7 @@
 //   ended it with exit 143 and empty stdout/stderr. The launch spawns the same command with the
 //   state folder's own path, never a path derived from HOME.
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
+import { sessionList } from '../herdr.ts';
 import { lstatSync, mkdirSync, readdirSync, readlinkSync, statSync, unlinkSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
@@ -207,7 +208,9 @@ function socketsLeftAlone(
 
 export type CodexEndpointDeps = {
   /** Starts `codex app-server --listen <url>` detached; null when the process did not start. */
-  spawn?: (input: { url: string; cwd?: string; config?: string[] }) => { pid: number } | null;
+  spawn?: (input: { url: string; cwd?: string; config?: string[]; env?: Record<string, string> }) => { pid: number } | null;
+  /** The herdr hook environment for the seat's pane, or null when herdr cannot name it. */
+  herdrEnv?: (session: string, pane: string) => Record<string, string> | null;
   alive?: (pid: number) => boolean;
   /** The proof a signal requires: the pid's full command line, or null when its executable name
    *  is not `codex`. Injected in scenes so no test reads another process. */
@@ -224,12 +227,27 @@ export type CodexEndpointDeps = {
   waitMs?: number;
 };
 
-function spawnAppServer(input: { url: string; cwd?: string; config?: string[] }): { pid: number } | null {
+/**
+ * The environment herdr's Codex hook needs to report the seat's turns. Measured: with the TUI
+ * attached by `--remote`, Codex runs its hooks in the app-server process, and herdr's hook
+ * (`~/.codex/herdr-agent-state.sh`, integration 6) exits unless `HERDR_ENV=1`,
+ * `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` are set; an endpoint started outside the pane left the
+ * seat reading `working` after its first turn, so restart refused it. The values are herdr's own
+ * listing of the session's socket and the pane the launch placed the seat in.
+ */
+export function herdrHookEnv(session: string, pane: string): Record<string, string> | null {
+  const listed = sessionList()?.find((one) => one.name === session);
+  if (listed === undefined || typeof listed.socketPath !== 'string' || listed.socketPath === '') return null;
+  return { HERDR_ENV: '1', HERDR_SOCKET_PATH: listed.socketPath, HERDR_PANE_ID: pane };
+}
+
+function spawnAppServer(input: { url: string; cwd?: string; config?: string[]; env?: Record<string, string> }): { pid: number } | null {
   // The seat's configuration follows the listen words, so the ownership proof's exact
   // `app-server --listen <url>` still reads from the command line.
   const child = nodeSpawn('codex', ['app-server', '--listen', input.url, ...(input.config ?? [])], {
     detached: true,
     stdio: 'ignore',
+    ...(input.env === undefined ? {} : { env: { ...process.env, ...input.env } }),
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
   });
   // A spawn failure arrives as an event, never as a thrown error from `spawn`; without a listener
@@ -346,6 +364,8 @@ export async function ensureCodexEndpoint(
     cwd?: string;
     /** `-c key=value` words from the seat's line (`codexEndpointConfig`). */
     config?: string[];
+    /** The herdr pane the seat runs in, for the hook environment. */
+    pane?: string;
     deps?: CodexEndpointDeps;
   },
 ): Promise<ManagedEndpointRead> {
@@ -428,7 +448,9 @@ export async function ensureCodexEndpoint(
   if (leftAlone.length > 0) {
     notes.push(`an endpoint socket no record names was left in place: ${leftAlone.join(', ')}; nothing proves its process has gone`);
   }
-  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }), ...(input.config === undefined ? {} : { config: input.config }) });
+  const hookEnv = input.pane === undefined ? null : (deps.herdrEnv ?? herdrHookEnv)(input.session, input.pane);
+  if (input.pane !== undefined && hookEnv === null) notes.push('herdr did not name the session\'s socket, so its turn hooks cannot report this seat');
+  const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }), ...(input.config === undefined ? {} : { config: input.config }), ...(hookEnv === null ? {} : { env: hookEnv }) });
   if (started === null) {
     return { kind: 'unmanaged', why: 'the Codex app-server did not start' };
   }
@@ -484,7 +506,7 @@ export async function ensureCodexEndpoint(
  * nothing, and the endpoint read then says why.
  */
 export async function launchCodexEndpoint(
-  input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; deps?: CodexEndpointDeps },
+  input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string; deps?: CodexEndpointDeps },
 ): Promise<ManagedEndpointRead> {
   if (isPresenceSeatName(input.seat)) {
     try {
