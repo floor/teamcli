@@ -1829,8 +1829,10 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // The seats' own state hooks: a settings file per seat, named at the end of its launch line.
   // A dry run plans the map it would write; the real run writes the files below, before the
   // plan is built, and a seat whose file did not land launches exactly as the file declares.
+  const inboundOf = (name: string) => team.seats.find((item) => item.name === name)?.inbound;
   const hookSeats = (fresh: readonly string[] = []) => seats.map(({ name, cli, launch, human }) => ({
     name, cli, launch,
+    ...(inboundOf(name) === undefined ? {} : { inbound: inboundOf(name) }),
     ...(human ? { human: true as const } : {}),
     ...(fresh.includes(name) ? { fresh: true as const } : {}),
   }));

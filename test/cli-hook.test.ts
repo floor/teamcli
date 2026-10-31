@@ -143,6 +143,16 @@ describe('what a run plans and what it installs', () => {
     expect((JSON.parse(readFileSync(path, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBe('accept');
   });
 
+  test('a team-file inbound accept is written into the settings when the launch declares no word', () => {
+    // No pane messaging: the socket is a Claude seat's event adapter, so an owner who accepts
+    // cross-session frames in the team file launches the seat able to take them.
+    const landed = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'accept' }]);
+    const settings = JSON.parse(readFileSync(landed.worker!, 'utf8')) as { crossSessionInbound?: string };
+    expect(settings.crossSessionInbound).toBe('accept');
+    const plain = installCliHooks(dir, SESSION, [{ ...seat('worker'), inbound: 'hold' }]);
+    expect((JSON.parse(readFileSync(plain.worker!, 'utf8')) as { crossSessionInbound?: string }).crossSessionInbound).toBeUndefined();
+  });
+
   test('a link where a settings file would go is refused and its target left alone', () => {
     mkdirSync(join(dir, 'hooks', SESSION), { recursive: true, mode: 0o700 });
     mkdirSync(join(dir, 'seat-state', SESSION), { recursive: true, mode: 0o700 });

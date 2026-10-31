@@ -1105,7 +1105,19 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     : !declaredOrder && to.cli === 'codex'
       ? codexWakeOrder
       : order;
-  const ordered: readonly DeliveryLeg[] = channelFirst ? ['channel', ...impliedFirst] : impliedFirst;
+  const declaredWithWake = channelFirst ? ['channel', ...impliedFirst] as DeliveryLeg[] : [...impliedFirst];
+  // No pane messaging: a declared order's `typed` word asked for a wake. With typing retired, the
+  // seat's own event adapters stand where it stood — the live channel, then the socket its launch
+  // accepts — so a declared order is not left with the bus inbox alone when an adapter is there.
+  if (declaredOrder && to.cli === 'claude-code' && !human0(overrides, declared) && declaredWithWake.includes('typed')) {
+    const at = declaredWithWake.indexOf('typed');
+    const wake: DeliveryLeg[] = [];
+    const pushLive = channelProbe !== null && channelProbe.live === true && channelProbe.listener.channel === true;
+    if (pushLive && !declaredWithWake.includes('channel')) wake.push('channel');
+    if (socketNow && !declaredWithWake.includes('socket')) wake.push('socket');
+    declaredWithWake.splice(at, 0, ...wake);
+  }
+  const ordered: readonly DeliveryLeg[] = declaredWithWake;
   // A human's pane never takes typing, whatever its order says — and the ruling goes further: its
   // walk is the drop leg alone, whatever the order or the default holds. Every other leg the
   // order names is kept out, and each one's human reason is recorded on the history line, so a
@@ -1921,6 +1933,11 @@ function dryDeliveryPlan(input: {
     : input.walk;
   for (const leg of legs) entries.push(candidate(leg));
   return entries;
+}
+
+/** Whether the receiver is a human seat, read the way the walk reads it below. */
+function human0(overrides: { human?: boolean }, declared: { human?: boolean } | undefined | null): boolean {
+  return overrides.human ?? (declared?.human === true);
 }
 
 /** The channel a dry run names: the legs of the order this build can actually walk, in words.

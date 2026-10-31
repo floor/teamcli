@@ -722,3 +722,24 @@ test('a held frame is marked once, and the socket stays out until the declaratio
   expect(dials).toHaveLength(2);
   expect(pane.typed).toHaveLength(0);
 });
+
+test('no pane messaging: a declared order whose wake word is typed reaches an accepting seat by its socket', async () => {
+  // The order names typed for the wake; typing is retired, so the seat's own event adapter, the
+  // socket its launch accepts, stands where typed stood. Nothing is typed into the pane.
+  const made = world(null);
+  cleanup = made.cleanup;
+  declareEntity(made, 'floor');
+  setOrder(made, 'team', made.root, ['mcp-inbox', 'typed']);
+  declare(made, 'accept');
+  const pane = scripted(['idle', 'working']);
+  const host = fake(made, { native: pane });
+  const io = owner(made.root);
+
+  const code = await runSend(['lead', 'a note'], io, host);
+
+  expect(code).toBe(0);
+  expect(io.out).toContain('lead: delivered (socket)');
+  expect(io.err).not.toContain('queued, no event adapter');
+  expect(host.frames.length).toBe(1);
+  expect(pane.typed).toEqual([]);
+});

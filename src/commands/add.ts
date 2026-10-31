@@ -1149,7 +1149,7 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // launch only if the plan runs the seat's line, and a refusal before that puts this back.
     const priorBinding = readState(dir).sessions[session]?.seats[planSeat.name]?.presence_binding;
     const plannedHooks = plannedCliHooks(dir, session, [planSeat]);
-    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true }], { project: prepared.team.project, root, home: sources.home });
+    const installed = installCliHooks(dir, session, [{ ...planSeat, fresh: true, ...(prepared.team.seats.find((item) => item.name === planSeat.name)?.inbound === undefined ? {} : { inbound: prepared.team.seats.find((item) => item.name === planSeat.name)!.inbound! }) }], { project: prepared.team.project, root, home: sources.home });
     if (plannedHooks[planSeat.name] !== undefined && installed[planSeat.name] === undefined) {
       logLine(dir, 'add', who, `${planSeat.name}: no state hook written; its launch line is the file's own`, sources.now());
     }
