@@ -237,6 +237,10 @@ not a message) are unchanged.
   it is that socket. A live pid that cannot be proved is never signalled. A record that is
   present but unreadable reads as unproven, not absent: the stop says why it cannot act, and a
   removal that needs it is refused while the seat and its record stay.
+- **A failed launch stops the managed Codex endpoint it started.** Cleanup stops the endpoint
+  this run started before it clears the seat's workspace and record. An endpoint the launch
+  reused is not its to stop: the launch record is kept, and the run holds with the reason,
+  rather than dropping the identity of a live server.
 
 ## [0.5.5] - 2026-10-26
 
