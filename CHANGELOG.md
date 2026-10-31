@@ -124,6 +124,12 @@ not a message) are unchanged.
 - **`team config set` writes a value with its unit as plain text.**
 - **The watch pushes idle work only to a seat's own records**, and holds direct work when it
   holds no verified watch authority.
+- **A hosted watch's `team up` closes the legacy watch workspaces it replaced.** Only when the
+  machine daemon's hosted watch owns the route, `up` closes each leftover workspace labelled as
+  the team's watch whose terminals are readable and hold nothing but their own shell, and says
+  how many on stderr and in the log. A terminal a process still holds, or one that cannot be
+  read, is left alone; with no hosted watch owning the route nothing is closed, and a dry run
+  only says what it would close.
 
 ### Fixed
 
