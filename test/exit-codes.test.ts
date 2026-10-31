@@ -5014,10 +5014,11 @@ scene('messages.client-none', async (place) => {
 
 scene('messages.client-key', async (place) => {
   const world = clientWorld(place, { inbox: true });
+  const key = join(world.base, 'missing.key');
   try {
     return show(
-      await readClient(place, world.home, ['--client', world.grantPath, '--key', join(world.base, 'missing.key')]),
-      'team messages:',
+      await readClient(place, world.home, ['--client', world.grantPath, '--key', key], owner),
+      `team messages: the key file "${key}" cannot be read`,
     );
   } finally {
     rmSync(world.base, { recursive: true, force: true });
@@ -5038,8 +5039,8 @@ scene('messages.client-pane', async (place) => {
 
 scene('messages.client-refused', async (place) => {
   return show(
-    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')]),
-    'team messages: refused:',
+    await readClient(place, place.home, ['--client', join(place.base, 'missing.json'), '--key', join(place.base, 'missing.key')], owner),
+    'the owner signing key is absent or unreadable: no client grant can verify',
   );
 });
 
