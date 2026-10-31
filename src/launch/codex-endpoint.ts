@@ -517,7 +517,10 @@ export async function ensureCodexEndpoint(
  * gets its binding from the settings file its launch installs; a Codex seat has no such file,
  * and without this it never held a binding, so no managed endpoint could ever start for it and
  * its thread stayed out of the native queue's reach. A state that cannot be written mints
- * nothing, and the endpoint read then says why.
+ * nothing, and the launch fails managed: the binding the seat still records belongs to the
+ * predecessor incarnation, and reusing the endpoint under it would attach this launch's seat to
+ * a server started for the old pane's hook environment. The seat launches unmanaged instead,
+ * with the line saying why.
  */
 export async function launchCodexEndpoint(
   input: { dir: string; session: string; seat: string; cwd?: string; config?: string[]; pane?: string; deps?: CodexEndpointDeps },
@@ -531,7 +534,10 @@ export async function launchCodexEndpoint(
         if (current !== undefined) current.presence_binding = binding;
       });
     } catch {
-      // The endpoint read below names the missing binding.
+      return {
+        kind: 'unmanaged',
+        why: "the seat's fresh presence binding could not be recorded; the endpoint under an older binding is not reused",
+      };
     }
   }
   return ensureCodexEndpoint(input);

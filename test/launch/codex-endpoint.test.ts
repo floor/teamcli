@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, wri
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emptySession, readState, updateState } from '../../src/state.ts';
+import { emptySession, LOCK_FILE, readState, updateState } from '../../src/state.ts';
 import { presenceSessionFolder } from '../../src/daemon/presence/spool.ts';
 import {
   codexEndpointSocket,
@@ -159,6 +159,47 @@ describe('the launch side mints the binding a Codex seat has no settings file to
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('a binding write that fails fails the managed launch instead of reusing the predecessor endpoint', async () => {
+    const dir = scratch();
+    try {
+      // A prior incarnation whose endpoint is still provably up under the old binding: exactly
+      // the state the reuse branch would attach to if the failed mint went unnoticed.
+      const prior = ownedRecord(dir);
+      seedRecord(dir, prior);
+      // A live holder of the state lock, this test's own pid, makes the mint's write wait out
+      // its lock and time out. The deps below never start, read or signal a process.
+      writeFileSync(join(dir, LOCK_FILE), `${process.pid}\n`);
+      let spawned = 0;
+      let hookReads = 0;
+      let signals = 0;
+      const answer = await launchCodexEndpoint({
+        dir, session: SESSION, seat: SEAT, pane: 'w9:p1',
+        deps: {
+          alive: () => true,
+          commandOf: () => `codex app-server --listen ${prior.url}`,
+          startOf: () => T0_MS + 500,
+          isSocket: () => true,
+          isPlainDir: () => true,
+          herdrEnv: () => { hookReads++; return { HERDR_PANE_ID: 'w9:p1' }; },
+          spawn: () => { spawned++; return { pid: 9002 }; },
+          terminate: () => { signals++; },
+        },
+      });
+      expect(answer.kind).toBe('unmanaged');
+      if (answer.kind === 'unmanaged') {
+        expect(answer.why).toContain('fresh presence binding could not be recorded');
+      }
+      // Nothing was reused, started, hooked or signalled, and the predecessor's record stands.
+      expect(spawned).toBe(0);
+      expect(hookReads).toBe(0);
+      expect(signals).toBe(0);
+      expect(recordedAt(dir)).toEqual(prior);
+      expect(readState(dir).sessions[SESSION]?.seats[SEAT]?.presence_binding).toBe(BINDING);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
 });
 
 describe('ensuring the endpoint', () => {
