@@ -221,6 +221,14 @@ function localProgram(sources: DaemonCommandSources): { execPath: string; entry:
   }
 }
 
+/**
+ * The owner's gate of the daemon's three owner-only verbs — install, uninstall and fault-watch.
+ * The owner's widening (OD-20261019-49) admits a placed team orchestrator here, through the same
+ * central admission every owner-only command shares; the admission is the file's lead on the pane
+ * its team's state records, never a bare name or a role claim. `run` is not this gate: a
+ * no-terminal start by the service manager is `runAllowed`'s separate answer, and no dev-mode
+ * setting admits a seat or a pane to it.
+ */
 function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean): boolean {
   const caller = callerOf(io);
   if (isOwner(caller)) return true;
@@ -571,6 +579,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     return 0;
   }
 
+  // The three verbs left here are owner-only: install, uninstall and fault-watch. The owner's
+  // widening admits a placed orchestrator under dev mode (OD-20261019-49), through `ownerAllows`'s
+  // one admission; status returned above, and run has its own gate.
   if (!ownerAllows(io, sources, parsed.json)) {
     // exit: daemon.not-owner
     return 1;
