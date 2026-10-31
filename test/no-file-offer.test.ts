@@ -70,6 +70,7 @@ afterAll(() => rmSync(base, { recursive: true, force: true }));
 const REACHED = [
   'ack',
   'broker',
+  'brief prune',
   'bus',
   'delegate',
   'drops',
