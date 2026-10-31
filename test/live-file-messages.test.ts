@@ -94,7 +94,7 @@ const ALLOWED: ReadonlyArray<{ literal: RegExp; why: string }> = [
   { literal: /^team init: approval mode(?:s$| for team-create is )/, why: "init's owner-signed approval mode for team-create, not an approval copy" },
   // `team migrate` reports the approval's standing across the move: the signed record's standing,
   // never a copy of the live file.
-  { literal: /^the approval (?:is still in force: it is signed over the canonical record|no longer verifies \(\$\{after\}\); approve the team again)\\n$/, why: "migrate's line on the approval standing across the move" },
+  { literal: /^the approval (?:is still in force: it is signed over the canonical record|no longer verifies \(\$\{after\}\); the change was applied, and the stored team approval still describes an earlier record; this version has no command to refresh that snapshot)\\n$/, why: "migrate's line on the approval standing across the move" },
 ];
 
 function sources(dir: string): string[] {

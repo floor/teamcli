@@ -406,7 +406,7 @@ export async function runTeamImport(
     io.stdout(`${TEAM_FILE} was kept (--keep-file); it is no longer read, and team migrate moves it later\n`);
   }
   if (mode === 'migrate' && before === 'verified') {
-    io.stdout(after === 'verified' ? 'the approval is still in force: it is signed over the canonical record\n' : `the approval no longer verifies (${after}); approve the team again\n`);
+    io.stdout(after === 'verified' ? 'the approval is still in force: it is signed over the canonical record\n' : `the approval no longer verifies (${after}); the change was applied, and the stored team approval still describes an earlier record; this version has no command to refresh that snapshot\n`);
   }
   return 'done';
 }
