@@ -47,6 +47,9 @@ function agent(name: string | null, workspace: string, status = 'idle', kind = '
   return { name, agent: kind, pane: `${workspace}:p1`, workspace, status, cwd: null };
 }
 
+/** A seat's pane as the fixture shows it, so a scene names the pane without writing its shape. */
+const paneOf = (live: Live, name: string): string => live.agents.find((one) => one.name === name)?.pane ?? '';
+
 // The example's team as herdr would show it, fully built: grok-acme is stopped in the file.
 function built(): Live {
   return {
@@ -119,7 +122,7 @@ function approveOnDisk() {
 }
 
 describe('team status', () => {
-  test('a registry DeepSeek baseline reads the Claude Code status line and reports drift', () => {
+  test('a registry DeepSeek baseline is never read as the Claude CLI\'s default model', () => {
     const parsed = validateTeamFile(example);
     if (!parsed.ok) throw new Error('the example fixture does not validate');
     const live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
@@ -134,9 +137,14 @@ describe('team status', () => {
       false,
       new Map([['deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1' }]]),
     );
-    expect(result.differences.some((difference) => difference.what.includes(
-      'deepseek-acme: running Claude Opus 5.5, registry says deepseek flash v4.1',
-    ))).toBe(true);
+    // The wrapper's pane prints Claude Code's own default family whatever the launcher selected:
+    // that reading is not the seat's model, so it is never a drift against the signed record —
+    // the record's own declaration is, like for like.
+    expect(result.differences.some((difference) => difference.what.includes("deepseek-acme: running Claude Opus 5.5"))).toBe(false);
+    const row = result.rows.find((candidate) => candidate.name === 'deepseek-acme');
+    // The row keeps the registry's own label for the signed declaration.
+    expect(row?.model).toBe('deepseek flash v4.1');
+    expect(result.notes.some((note) => note.startsWith('deepseek-acme:'))).toBe(false);
   });
 
   test('a team that matches its file reads clean, hides stopped seats by default, shows them under --all, and exits 0', async () => {
@@ -368,13 +376,118 @@ describe('team status', () => {
   });
 
   // Claude Code's line names Claude's families only: the DeepSeek seat's own status line says
-  // nothing to compare, so it is unread rather than wrong.
-  test('a seat that runs another maker\'s model through Claude Code is unread, never a mismatch', async () => {
-    live = { ...built(), screens: { ...built().screens, 'w3:p1': claudeScreen('Opus 5.5') } };
+  // nothing to compare, so it is never wrong — the launcher's declaration is the reading the
+  // row shows, without the unread suffix a version the caller does not know would keep.
+  test('a seat that runs another maker\'s model through Claude Code shows its declaration, never a mismatch', async () => {
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
     const { code, out } = await status();
-    expect(out).toContain('note: deepseek-acme: its screen shows no model; the declared DeepSeek V4.1 Flash stands, and the screen reading is unread');
+    expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+DeepSeek V4\\.1 Flash\\s+${pane}`));
     expect(out).not.toContain('deepseek-acme runs');
+    expect(out).not.toContain('note: deepseek-acme:');
     expect(code).toBe(0);
+  });
+
+  // The launcher's own script is the wrapper: Claude Code's status line prints its default
+  // family whatever GLM the launcher selected, and the column shows the declared model instead.
+  test('a claude-glm.sh launcher reads its declared model, never the Claude CLI default', async () => {
+    writeFileSync(file, example.replace(
+      '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+      '    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: claude-glm.sh',
+    ));
+    approveOnDisk();
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    const second = paneOf(shown, 'deepseek-acme-2');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { code, out } = await status();
+    // Both count instances carry the wrapper; the one with a screen shows the declaration, and
+    // the one with no screen keeps the unread suffix the caller's missing version earns it.
+    expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+GLM 5\\.3\\s+${pane}`));
+    expect(out).toMatch(new RegExp(`deepseek-acme-2\\s+idle \\(screen not recognised\\)\\s+GLM 5\\.3 \\(declared, unread\\)\\s+${second}`));
+    expect(out).not.toMatch(/deepseek-acme\s+done\s+Claude/);
+    expect(out).not.toContain('note: deepseek-acme:');
+    expect(code).toBe(0);
+  });
+
+  // The CLI's own binary reached by a path, through env, or quoted is still a plain CLI launch:
+  // no launcher there selects a model, so the declaration cannot be shown as a reading of the
+  // pane — it keeps the unread suffix and the note.
+  test('a plain CLI launch by path, env or quotes marks the declaration unread, never as the reading', async () => {
+    for (const launch of ['/opt/fixture/bin/claude', 'env claude', '"claude"']) {
+      writeFileSync(file, example.replace(
+        '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+        `    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: ${launch}`,
+      ));
+      approveOnDisk();
+      const shown = built();
+      const pane = paneOf(shown, 'deepseek-acme');
+      live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+      const { code, out } = await status();
+      expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+GLM 5\\.3 \\(declared, unread\\)\\s+${pane}`));
+      expect(out).toContain('note: deepseek-acme: its screen shows no model; the declared GLM 5.3 stands, and the screen reading is unread');
+      expect(code).toBe(0);
+    }
+  });
+
+  // A launcher this reader cannot follow proves nothing: the declaration is a declaration, and
+  // the column says so rather than passing it off as the pane's model.
+  test('an unrecognized launcher leaves the declaration unread in the column', async () => {
+    writeFileSync(file, example.replace(
+      '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+      '    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: unknown-wrapper',
+    ));
+    approveOnDisk();
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { code, out } = await status();
+    expect(out).toMatch(new RegExp(`deepseek-acme\\s+done\\s+GLM 5\\.3 \\(declared, unread\\)\\s+${pane}`));
+    expect(out).toContain('note: deepseek-acme: its screen shows no model; the declared GLM 5.3 stands, and the screen reading is unread');
+    expect(code).toBe(0);
+  });
+
+  // The family test ignores case: `claude fable` is Claude's own family, so its screen is read
+  // like any other Claude model's, and the CLI's Opus default is a drift.
+  test('a Claude family spelled in lower case is read off the CLI screen', async () => {
+    writeFileSync(file, example.replace(
+      '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+      '    model: claude fable\n    version: "5.1"\n    display: claude fable 5.1\n    launch: /opt/fixture/bin/claude',
+    ));
+    approveOnDisk();
+    const shown = built();
+    const pane = paneOf(shown, 'deepseek-acme');
+    live = { ...shown, screens: { ...shown.screens, [pane]: claudeScreen('Opus 5.5') } };
+    const { code, out } = await status();
+    expect(out).toContain('difference: deepseek-acme: running Claude Opus 5.5, file says claude fable 5.1');
+    expect(code).toBe(1);
+  });
+
+  // A provider's id is its own spelling of the same model: the version's number inside the
+  // model's name, a variant word after the version, an alphanumeric version family. An id
+  // naming the declared model is the reading, and the column keeps the declaration.
+  test('a wrapper banner naming the declared model in its own words is not a drift', async () => {
+    const cases = [
+      { block: '    model: GLM 5\n    version: "5.3"\n    display: GLM 5.3\n    launch: claude-glm.sh', banner: 'glm-5.3', row: 'GLM 5\\.3' },
+      { block: '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: claude-deepseek.sh', banner: 'deepseek-v4.1-flash', row: 'DeepSeek V4\\.1 Flash' },
+    ];
+    for (const one of cases) {
+      writeFileSync(file, example.replace(
+        '    model: DeepSeek Flash\n    version: "V4.1"\n    display: DeepSeek V4.1 Flash\n    launch: team-deepseek',
+        one.block,
+      ));
+      approveOnDisk();
+      const shown = built();
+      const pane = paneOf(shown, 'deepseek-acme');
+      live = { ...shown, screens: { ...shown.screens, [pane]: `  ${one.banner} · API Usage Billing\n${claudeScreen('Opus 5.5')}` } };
+      const { code, out } = await status();
+      // The banner line is not the composer, so the row's state word alone is unread; the model
+      // column is the reading this scene is about.
+      expect(out).toMatch(new RegExp(`deepseek-acme\\s+done \\(screen not recognised\\)\\s+${one.row}\\s+${pane}`));
+      expect(out).not.toContain('difference: deepseek-acme:');
+      expect(code).toBe(0);
+    }
   });
 
   test('a stored classification outside the closed list reads unknown in the row and the difference', async () => {

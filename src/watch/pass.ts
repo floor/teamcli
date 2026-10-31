@@ -23,7 +23,7 @@ import type { Tempo } from '../file/sections/tempo.ts';
 import { pauseText, type PauseRecord, type SessionState } from '../state.ts';
 import type { Live } from '../status/compare.ts';
 import { workspaceLabel } from '../file/sections/seats.ts';
-import { runningModel, seatModel } from '../status/statusline.ts';
+import { recordSignedModel, runningModel, seatModel } from '../status/statusline.ts';
 import { liveDisplayAgent } from './seat-label.ts';
 import {
   ALWAYS_ON,
@@ -276,8 +276,9 @@ export type PassInput = {
   // its pane's reading: `gone`/`replaced` is no longer the seat. A null, or a pane the map
   // doesn't hold, is exactly a seat with no record: the restored check reports nothing.
   processes?: Readonly<Record<string, PaneProcesses | null>>;
-  /** Registry signing model/version by seat; null means no current registry record. */
-  signing?: ReadonlyMap<string, { model: string; version: string } | null>;
+  /** Registry signing model/version by seat, with the record's own cli and launch for the
+   *  provenance the signed reader takes; null means no current registry record. */
+  signing?: ReadonlyMap<string, { model: string; version: string; cli?: string; launch?: string } | null>;
   /** The continuity each declared seat's records bind, by seat: the registry's session where a
    *  record exists, the state's own copy where none does, null where a record refuses. A caller
    *  that read no registry leaves it out, and the state's copy stands. */
@@ -487,10 +488,11 @@ export function pass({
     }
 
     const verdict = seatProcessVerdict(state.seats[name]?.launched, processes?.[agent.pane] ?? null);
+    const signed = signing?.get(name);
     observations.push({
       name,
       seat,
-      ...(signing === undefined ? {} : { signing: signing.get(name) ?? null }),
+      ...(signing === undefined ? {} : { signing: signed ?? null }),
       rule: rule !== null && rule.ok ? rule.breaches.get(name) : undefined,
       agent,
       herdr: live.running,
@@ -516,10 +518,16 @@ export function pass({
       parked,
       stopped,
       attention: attentionOf(screen, agent.status, quiet, theirWord),
+      // The observation is read off the pane, except for a wrapper: Claude Code prints its own
+      // default family whatever the launcher selected, so the model that seat runs is the
+      // declaration it was launched from — the registry's signing where a record names one, the
+      // file's otherwise. Neither reader ever says the CLI's default for another maker's model.
+      // A record's own cli and launch are the provenance the signed reader takes: the file's
+      // launch is only what it declares now, never what this seat started.
       model: seat
-        ? signing?.get(name)
-          ? runningModel(seat.cli, live.screens[agent.pane] ?? '')
-          : seatModel(seat, live.screens[agent.pane])
+        ? signed == null
+          ? seatModel(seat, live.screens[agent.pane])
+          : recordSignedModel({ ...seat, model: signed.model, version: signed.version }, signed, live.screens[agent.pane])
         : null,
       history: { lastWorking: history.lastWorking, idleSince: history.idleSince },
       liveness,

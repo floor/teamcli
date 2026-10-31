@@ -746,6 +746,19 @@ describe('a pass of the watch', () => {
     ]);
   });
 
+  test('a signed wrapper whose banner reorders the version is reported as another model', () => {
+    // The pane's own id holds the signed version's parts in another order: `v1.4` is 1.4, not
+    // the 4.1 the record signs, so the pass reports the wrapper as running another model.
+    const seen = live({ 'deepseek-acme': { screen: `deepseek-v1.4-flash · API Usage Billing\n${busy}` } });
+    const result = pass({
+      team: team(), watch: team().watch, state: emptySession(), live: seen, machine: fine, now: 0, memory: newMemory(),
+      signing: new Map([['deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', cli: 'claude-code', launch: 'team-deepseek' }]]),
+    });
+    expect(result.reports.map((report) => report.text)).toEqual([
+      'deepseek-acme runs deepseek v1.4.flash; the registry says DeepSeek Flash V4.1: it signs with the wrong model — team remove deepseek-acme --keep, then team add deepseek-acme',
+    ]);
+  });
+
   test('a reading herdr can\'t give is no change: it never clears the report-once mark', () => {
     const state = emptySession();
     state.seats['deepseek-acme'] = { stage: 'ready', pane: 'w3:p1', workspace: 'w3', launched: { shell: 400, cli: [401] } };

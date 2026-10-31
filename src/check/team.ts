@@ -85,7 +85,7 @@ import { compare, orderAndAnnotateDifferences, paneShowsSeat, type Difference, t
 import { observeLabel } from '../labels/observe.ts';
 import { toolTrace } from '../labels/traces.ts';
 import { heldAt } from '../launch/rules-file.ts';
-import { modelDiffers, runningModel } from '../status/statusline.ts';
+import { modelDiffers, recordSignedModel } from '../status/statusline.ts';
 import { messageKeyState } from '../store/keys.ts';
 import type { Standing } from '../store/store.ts';
 import { listModelRuleBreaches, type RuleLookup } from '../swap/rule.ts';
@@ -824,11 +824,20 @@ function signingDifferences(team: TeamFile, state: SessionState, live: Live, roo
     const recorded = state.seats[seat.name]?.pane;
     const agent = live.agents.find((candidate) => candidate.name === seat.name);
     if (!agent || agent.pane !== recorded) continue;
-    const running = runningModel(seat.cli, live.screens[agent.pane] ?? '');
-    if (!running) continue;
     const record = findAgent(home, { team: teamId, seat: seat.name });
     if (!record) continue;
     const { model, version } = record.signing;
+    // A model Claude Code cannot name is never read off its own default family: a provider
+    // wrapper is compared with its own banner id, or the signing where it prints none, and a
+    // bare launch keeps the screen its Claude family is a contradiction against. The provenance
+    // is the record's own cli and launch — the line the running process was started from; a team
+    // file edited after the launch cannot prove what it started.
+    const running = recordSignedModel(
+      { cli: seat.cli, model, version, launch: seat.launch, modelFrom: seat.modelFrom },
+      record,
+      live.screens[agent.pane],
+    );
+    if (!running) continue;
     // The comparison is the file's own (`modelDiffers`): a name in another word order, or a
     // version spelled inside the record's model name, is the model the pane runs.
     if (!modelDiffers(running, { model, version })) continue;

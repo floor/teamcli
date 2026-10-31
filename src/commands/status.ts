@@ -451,7 +451,7 @@ export async function runStatus(argv: string[], io: Io, sources: StatusSources):
     dialogsTrustInForce(sources.home ?? homedir(), root, now),
     sources.home === undefined ? undefined : new Map(team.seats.flatMap((seat) => {
       const agent = findAgent(sources.home!, { team: teamIdOf(root), seat: seat.name });
-      return agent ? [[seat.name, agent.signing] as const] : [];
+      return agent ? [[seat.name, { ...agent.signing, cli: agent.cli, launch: agent.launch }] as const] : [];
     })),
     continuityIds,
   );
