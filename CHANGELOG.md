@@ -301,6 +301,25 @@ a terminal, its exit keys and `team answer` (a permission dialog, not a message)
   not yet carrying that session leaves the seat reachable by pull alone: the closing line ends
   `; pull-only: <reason>` and `--json` carries `pull_only`, rather than reporting a restart done
   whose record was never written.
+- **A Claude seat launched through a provider wrapper reads its declared model.** Its model is
+  the launcher's declaration, checked against the provider id its start banner prints — the
+  version kept in its written order — never the Claude CLI's own default family: `team status`
+  labels the seat with the model it runs, and a send is not held for a false drift. A wrapper is
+  proved from the launch line, never guessed — a plain `claude` line, with a path, an environment
+  prefix or quotes, stays plain Claude, and a launcher the reader cannot follow reads unread —
+  and `team check`, the watch and `team up` read a live seat's model from its recorded launch,
+  not the team file's current line.
+- **`team status` reports the route a send will take.** The REACH column reads the send's own
+  socket rule — the same gate (the launch's inbound declaration, the team file's word, a held
+  frame, the socket's age) and the same address choice (the recorded address first, the pane's
+  own socket otherwise) — so a row says `socket` only while a send to that seat would dial it,
+  and a temporary seat gets its REACH from its record. The agreement holds for the same registry
+  and the same moment; it says nothing about a socket that goes away later.
+- **`team config set`, `unset` and `team add` file an owner request from a team root that is not
+  a git repository.** They resolve the team's root the way `team config get` does — a checkout's
+  root, or the plain folder itself, whose registry record holds the team — so the request and
+  its approval work in the team's own folder. The approval rules are unchanged: a request writes
+  nothing, and only the owner's signature for its words applies it.
 
 ## [0.5.5] - 2026-10-26
 
