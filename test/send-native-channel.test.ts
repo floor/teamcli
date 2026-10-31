@@ -287,6 +287,60 @@ test('a wrapper banner holding the signed version in another order is held', asy
   }
 });
 
+// A declaration may spell the family inside its model name as well as in its version — `Kimi
+// K2.5` with version `2.5`, `GLM 5.3` with version `5.3` — and the provider writes the model and
+// its version as one string: the same words, a version word repeated in the model counted once, so
+// the id names the declaration and the leg walks. (At the merged head `k2` was one word, which no
+// `kimi-k2.5` id carried, so this declaration held its own banner as a drift.)
+test('a declaration that spells the family inside its model matches the banner', async () => {
+  const cases = [
+    { signing: { model: 'Kimi K2.5', version: '2.5' }, launch: 'claude-kimi.sh', banner: 'kimi-k2.5' },
+    { signing: { model: 'GLM 5.3', version: '5.3' }, launch: 'claude-glm.sh', banner: 'glm-5.3' },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, one.signing, one.launch);
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
+    expect(io.err).not.toContain('model drift');
+    const drops = dropDir(made.dir, 'lead');
+    expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    made.cleanup();
+  }
+});
+
+// The same declaration still holds another version: spelling the family in the model name does
+// not turn the version into a bag of words. The pair is the scene — `kimi-k2.5` names the
+// declaration and `kimi-k2.6` is another version — so at the merged head, where this declaration
+// drifted on every id, the matching half is red and the scene with it.
+test('a declaration that spells the family inside its model holds another version', async () => {
+  const cases = [
+    { banner: 'kimi-k2.5', held: false },
+    { banner: 'kimi-k2.6', held: true },
+  ];
+  for (const one of cases) {
+    const made = world(['typed']);
+    const pane = scripted(['idle', 'working'], `${OPUS_SCREEN}  ${one.banner} · API Usage Billing\n`);
+    const host = fake(made, { native: pane });
+    registerLeadWith(made, host, { model: 'Kimi K2.5', version: '2.5' }, 'claude-kimi.sh');
+    const io = owner(made.root);
+
+    expect(await runSend(['lead', 'hello'], io, host)).toBe(one.held ? 1 : 0);
+    if (one.held) {
+      expect(io.err).toContain('model drift: Kimi K2.5 2.5 vs');
+      expect(existsSync(dropDir(made.dir, 'lead'))).toBe(false);
+    } else {
+      expect(io.err).not.toContain('model drift');
+      const drops = dropDir(made.dir, 'lead');
+      expect(readdirSync(drops).filter((name) => !name.includes('.')).length).toBe(1);
+    }
+    made.cleanup();
+  }
+});
+
 test('the direct typed leg names the signed sender and the team it wrote from', async () => {
   const made = nativeWorld();
   cleanup = made.cleanup;

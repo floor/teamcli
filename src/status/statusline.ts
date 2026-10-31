@@ -125,25 +125,26 @@ export function bannerModel(screen: string | undefined): string | null {
   return null;
 }
 
-/** A provider id or a declaration as the comparison's words: lowercased, split where the id uses
- *  its own separators, and a leading `v` before a digit dropped — `v4` and `4` are the same
+/** A provider id or a declaration as the comparison's words: lowercased, split where letters and
+ *  digits meet as well as where the id uses its own separators — `K2.5` and `K 2.5` are the same
+ *  three words, so a family a declaration spells inside its model name compares with the version
+ *  written on its own — and a leading `v` before a digit dropped — `v4` and `4` are the same
  *  version word, so `deepseek-v4.1-flash` and DeepSeek Flash V4.1 spell the same model. */
 function idWords(text: string): string[] {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word !== '')
-    .map((word) => word.replace(/^v(?=[0-9])/, ''));
+  const runs = text.toLowerCase().match(/[a-z]+|[0-9]+/g) ?? [];
+  return runs.filter((run, index) => !(run === 'v' && /^[0-9]/.test(runs[index + 1] ?? '')));
 }
 
 /** Whether the banner id names the declared model. A provider writes the same model its own way —
  *  `glm-5.3` for GLM 5 5.3 (the version's number written inside the model name too),
  *  `deepseek-v4.1-flash` for DeepSeek Flash V4.1 (a variant word after the version), `kimi-k2.5`
- *  for Kimi K2.5 (an alphanumeric version family) — so the id's name and variant words are
- *  compared as a set, the declaration's version words taken out of its model's, while its version
- *  words are compared as the order they are written in: `glm-3.5` names 3.5, not 5.3. An id with
- *  no version part names the family alone (`deepseek-flash`), and is compared with the model's
- *  words. */
+ *  for Kimi K2.5 (an alphanumeric version family) — so the declaration's model and version are
+ *  read as one string, a version word it spells inside its model name counted once: `Kimi K2.5`
+ *  with version `2.5` is the same three words as `Kimi` with version `K2.5`. The id's name and
+ *  variant words are compared as a set, the declaration's version words taken out of its model's,
+ *  while its version words are compared as the order they are written in: `glm-3.5` names 3.5,
+ *  not 5.3. An id with no version part names the family alone (`deepseek-flash`), and is compared
+ *  with the model's words. */
 function bannerNames(id: string, declared: Running): boolean {
   const shown = idWords(id);
   const version = idWords(declared.version);
