@@ -11,11 +11,12 @@
 import { homedir } from 'node:os';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner, type Caller } from '../caller.ts';
+import { readGeneralGrant } from '../client/general-grant.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { hasJsonFlag, pluralCount, refuse, renderTable, ttyStyle, writeJson } from '../output/index.ts';
 import { readAgents, updateAgent, type Agent } from '../registry/agents.ts';
-import { readTeams, type TeamRecord } from '../registry/teams.ts';
+import { readTeams, withTeamsLock, type TeamRecord } from '../registry/teams.ts';
 
 export const USAGE = `Usage: team agents prune [--apply] [--json]
 
@@ -118,17 +119,64 @@ function declaredSeats(root: string, home: string, cache: Map<string, Declared>)
   return read;
 }
 
+/** Which teams a run may list and retire: every team for the owner's own run, or the entities a
+ *  general grant names. A team that names no entity is outside every grant; only the owner's own
+ *  run — no grant — reaches it, so machine-wide retirement never passes through a scoped grant. */
+type Scope = { kind: 'machine' } | { kind: 'entities'; entities: readonly string[] };
+
+function inScope(scope: Scope, team: TeamRecord | undefined): boolean {
+  if (scope.kind === 'machine') return true;
+  if (team === undefined || team.entity === null) return false;
+  return scope.entities.includes('*') || scope.entities.includes(team.entity);
+}
+
+/** The scope a run carries. `io.general` is set only after the general door verified the grant;
+ *  the record is read again here so the run acts on the entity list that was signed, and a grant
+ *  that no longer reads is no proof of the owner: the run refuses rather than widens. */
+type ScopeRead = { kind: 'scoped'; scope: Scope } | { kind: 'refused'; why: string };
+
+function scopeOf(out: Io, home: string, now: () => Date): ScopeRead {
+  const general = out.general;
+  if (general === undefined) return { kind: 'scoped', scope: { kind: 'machine' } };
+  let read: ReturnType<typeof readGeneralGrant>;
+  try {
+    read = readGeneralGrant(home, general.grant, now());
+  } catch (error) {
+    return { kind: 'refused', why: `the general grant could not be read again: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!read.ok) return { kind: 'refused', why: `the general grant could not be read again: ${read.why}` };
+  return { kind: 'scoped', scope: { kind: 'entities', entities: read.grant.entities } };
+}
+
+/** Every agent ID any registered team's roster names. A record one roster names holds a seat
+ *  somewhere, so no run retires it; its own team's roster is not the only one that can name it. */
+function namedAgents(teams: Record<string, TeamRecord>): Set<string> {
+  const named = new Set<string>();
+  for (const team of Object.values(teams)) for (const line of team.roster) named.add(line.agent);
+  return named;
+}
+
 /** The records no roster names, one row each, in the order the agents folder lists them. */
-export function classify(agents: readonly Agent[], teams: Record<string, TeamRecord>, home: string): AgentRow[] {
+export function classify(
+  agents: readonly Agent[],
+  teams: Record<string, TeamRecord>,
+  home: string,
+  scope: Scope = { kind: 'machine' },
+): AgentRow[] {
   const cache = new Map<string, Declared>();
+  const named = namedAgents(teams);
   const rows: AgentRow[] = [];
   for (const agent of agents) {
     const team = teams[agent.reach.team];
+    // The listing follows the run's scope: a record outside it is not this run's to report.
+    if (!inScope(scope, team)) continue;
+    // A roster line in any registered team protects the record. A registry read that cannot
+    // vouch for every roster refuses before this point, so "not named" here is a verified fact.
+    if (named.has(agent.id)) continue;
     if (team === undefined) {
       rows.push({ agent, team: null, state: 'unregistered', action: 'none', reason: REASONS.unregistered });
       continue;
     }
-    if (team.roster.some((line) => line.agent === agent.id)) continue;
     const retired = agent.lifecycle === 'retired' ? 'none' : 'retire';
     if (team.roster.some((line) => line.seat === agent.reach.seat)) {
       rows.push({ agent, team, state: 'superseded', action: retired, reason: REASONS.superseded });
@@ -206,43 +254,75 @@ export async function runAgents(argv: string[], io: Io, sources: AgentsSources =
     return 2;
   }
   const apply = args.flags.has('apply');
-  let teams: Record<string, TeamRecord>;
+  // The registry is read strictly: a roster this read cannot vouch for refuses the whole run,
+  // dry run included, because "no roster names this record" is the ground prune retires on.
+  let teams: Record<string, TeamRecord> | null = null;
+  let registryProblem: string | null = null;
   try {
-    teams = readTeams(sources.home);
+    teams = readTeams(sources.home, { strictRoster: true });
   } catch (error) {
-    refuse(out, json, 'agents', {
-      id: 'agents.registry',
-      message: error instanceof Error ? error.message : String(error),
-      repair: null,
-    });
-    // exit: agents.registry
-    return 1;
+    registryProblem = error instanceof Error ? error.message : String(error);
   }
-  if (apply) {
-    const denied = applyProblem(callerOf(out));
-    if (denied !== null) {
-      refuse(out, json, 'agents', { id: 'agents.owner', message: denied, repair: null });
+  let rows: AgentRow[] = [];
+  let retired = 0;
+  let failed = 0;
+  if (registryProblem === null && teams !== null) {
+    const scopeRead = scopeOf(out, sources.home, sources.now);
+    const denied = apply ? applyProblem(callerOf(out)) : null;
+    const refusal = denied ?? (scopeRead.kind === 'refused' ? scopeRead.why : null);
+    if (refusal !== null) {
+      refuse(out, json, 'agents', { id: 'agents.owner', message: refusal, repair: null });
       // exit: agents.owner
       return 1;
     }
-  }
-  const rows = classify(readAgents(sources.home), teams, sources.home);
-  let retired = 0;
-  let failed = 0;
-  if (apply) {
-    for (const row of rows) {
-      if (row.action !== 'retire') continue;
+    const scope: Scope = scopeRead.kind === 'scoped' ? scopeRead.scope : { kind: 'machine' };
+    if (apply) {
+      // Taken before the lock: a reader of this run's clock may write the registry (a roster line
+      // landing just before the retirement write), and that write must finish before this run
+      // takes the lock, never while it holds it.
+      const at = sources.now().toISOString();
       try {
-        row.agent = updateAgent(sources.home, row.agent.id, {
-          lifecycle: 'retired',
-          reach: { pane: null },
-          ...(row.state === 'orphaned' && row.agent.orphaned_at == null ? { orphaned_at: sources.now().toISOString() } : {}),
+        // Every roster is read again under the lock that roster writes take, and every retirement
+        // is written while it is held: a line naming a record cannot land between the reading that
+        // clears it and the write that retires it.
+        const done = withTeamsLock(sources.home, () => {
+          const lockedTeams = readTeams(sources.home, { strictRoster: true });
+          const lockedRows = classify(readAgents(sources.home), lockedTeams, sources.home, scope);
+          const named = namedAgents(lockedTeams);
+          let written = 0;
+          let missed = 0;
+          for (const row of lockedRows) {
+            if (row.action !== 'retire') continue;
+            // Re-validated inside the lock: a roster line that names the record holds it, and no
+            // write can have named it since these rosters were read.
+            if (named.has(row.agent.id)) continue;
+            try {
+              row.agent = updateAgent(sources.home, row.agent.id, {
+                lifecycle: 'retired',
+                reach: { pane: null },
+                ...(row.state === 'orphaned' && row.agent.orphaned_at == null ? { orphaned_at: at } : {}),
+              });
+              written += 1;
+            } catch {
+              missed += 1;
+            }
+          }
+          return { rows: lockedRows, retired: written, failed: missed };
         });
-        retired += 1;
-      } catch {
-        failed += 1;
+        rows = done.rows;
+        retired = done.retired;
+        failed = done.failed;
+      } catch (error) {
+        registryProblem = error instanceof Error ? error.message : String(error);
       }
+    } else {
+      rows = classify(readAgents(sources.home), teams, sources.home, scope);
     }
+  }
+  if (registryProblem !== null) {
+    refuse(out, json, 'agents', { id: 'agents.registry', message: registryProblem, repair: null });
+    // exit: agents.registry
+    return 1;
   }
   if (!json) {
     const style = ttyStyle(io, { json: false });

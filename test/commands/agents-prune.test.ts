@@ -7,10 +7,14 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
+import { generalDoor } from '../../src/client/general-door.ts';
+import { issueOwnerGeneralGrant } from '../../src/client/general-grant.ts';
+import { newClientKeyPair, writeClientKeyFiles } from '../../src/client/records.ts';
 import { runAgents, type AgentsJson } from '../../src/commands/agents.ts';
 import { agentsDir, getAgent, registerAgent, type Agent, type AgentLifecycle } from '../../src/registry/agents.ts';
 import { teamIdOf, teamsFile, upsertTeam } from '../../src/registry/teams.ts';
 import type { Io } from '../../src/io.ts';
+import { installKey } from '../../src/store/keys.ts';
 import { testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-31T09:00:00.000Z');
@@ -43,6 +47,25 @@ seats:
     version: "5.5"
     launch: claude --model claude-opus-5-5
 `;
+
+const ALPHA = TEAM.replace('project: acme', 'project: alpha\nentity: alpha');
+const BETA = TEAM.replace('project: acme', 'project: beta\nentity: beta');
+
+/** The owner key the fixture installs, and one owner-signed general grant over `entities`. */
+function grantOver(home: string, entities: string[]): string {
+  installKey(home, JSON.parse(readFileSync(join(import.meta.dir, '..', 'fixtures', 'key.json'), 'utf8')));
+  const pair = newClientKeyPair();
+  const issued = issueOwnerGeneralGrant(home, {
+    clientId: 'probe',
+    publicKey: pair.publicKey,
+    entities,
+    ops: ['*'],
+    mayIssue: false,
+    expires: new Date(NOW.getTime() + 86_400_000),
+  }, NOW);
+  if (!issued.ok) throw new Error(issued.why);
+  return issued.path;
+}
 
 type Place = { base: string; home: string; root: string };
 
@@ -97,6 +120,13 @@ type Ran = { code: number; out: string; err: string };
 
 async function run(where: Place, argv: string[], caller: Caller = owner): Promise<Ran> {
   const io: Io & { out: string; err: string } = testIo(where.root, caller);
+  return { code: await runAgents(argv, io, { home: where.home, now: () => NOW }), out: io.out, err: io.err };
+}
+
+/** A run the dispatcher's general door admitted: the verified grant's path rides on io.general. */
+async function runGranted(where: Place, argv: string[], grant: string): Promise<Ran> {
+  const io: Io & { out: string; err: string } = testIo(where.root, owner);
+  io.general = { grant, key: join(where.base, 'client.key') };
   return { code: await runAgents(argv, io, { home: where.home, now: () => NOW }), out: io.out, err: io.err };
 }
 
@@ -322,5 +352,124 @@ describe('team agents prune', () => {
     expect(doc.apply).toBe(true);
     expect(doc.records[0]).toMatchObject({ state: 'orphaned', action: 'retire', orphaned_at: NOW.toISOString(), lifecycle: 'retired' });
     expect(doc.counts).toMatchObject({ listed: 1, to_retire: 1, retired: 1, failed: 0 });
+  });
+
+  test('a general grant scoped to one entity lists and retires only that entity', async () => {
+    const where = place(ALPHA);
+    // The world sits in the OS temp directory, outside every repository. A client key may not sit
+    // in the OS temp directory, so for the door calls the OS temp directory is another, empty
+    // folder; the world stays where it was made.
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'agents-prune-scratch-')));
+    made.push(scratch);
+    const savedTmp = process.env.TMPDIR;
+    process.env.TMPDIR = scratch;
+    try {
+      const alpha = teamIdOf(where.root);
+      upsertTeam(where.home, alpha, { project: 'alpha', entity: 'alpha', session: 'acme', root: where.root, by: 'test' });
+      const betaRoot = join(where.base, 'beta');
+      mkdirSync(join(betaRoot, '.agents'), { recursive: true });
+      writeFileSync(join(betaRoot, '.agents', 'team.yaml'), BETA);
+      const beta = teamIdOf(betaRoot);
+      upsertTeam(where.home, beta, { project: 'beta', entity: 'beta', session: 'acme', root: betaRoot, by: 'test' });
+      const inside = record(where.home, alpha, 'ghost');
+      const outside = record(where.home, beta, 'ghost');
+      const pair = newClientKeyPair();
+      const files = writeClientKeyFiles(join(where.home, '.config', 'team-client', 'probe'), pair);
+      if (!files.ok) throw new Error(files.why);
+      installKey(where.home, JSON.parse(readFileSync(join(import.meta.dir, '..', 'fixtures', 'key.json'), 'utf8')));
+      const issued = issueOwnerGeneralGrant(where.home, {
+        clientId: 'probe',
+        publicKey: pair.publicKey,
+        entities: ['alpha'],
+        ops: ['*'],
+        mayIssue: false,
+        expires: new Date(NOW.getTime() + 86_400_000),
+      }, NOW);
+      if (!issued.ok) throw new Error(issued.why);
+      const io = testIo(where.root, { kind: 'owner-no-tty' });
+      io.env.HOME = where.home;
+      const dryDoor = generalDoor('agents', ['prune', '--json', '--general', issued.path, '--key', files.keyPath], io, NOW);
+      expect(dryDoor.kind).toBe('admitted');
+      if (dryDoor.kind !== 'admitted') return;
+      io.out = '';
+      io.err = '';
+      const dry = await runAgents(dryDoor.argv, dryDoor.io, { home: where.home, now: () => NOW });
+      const plan = JSON.parse(io.out) as AgentsJson;
+      expect(dry).toBe(1);
+      expect(plan.records.map((one) => one.id)).toEqual([inside.id]);
+      const applyDoor = generalDoor('agents', ['prune', '--apply', '--general', issued.path, '--key', files.keyPath], io, NOW);
+      expect(applyDoor.kind).toBe('admitted');
+      if (applyDoor.kind !== 'admitted') return;
+      io.out = '';
+      io.err = '';
+      const code = await runAgents(applyDoor.argv, applyDoor.io, { home: where.home, now: () => NOW });
+      expect(code).toBe(0);
+      expect(getAgent(where.home, inside.id)?.lifecycle).toBe('retired');
+      expect(getAgent(where.home, outside.id)?.lifecycle).toBe('stopped');
+      expect(getAgent(where.home, outside.id)?.orphaned_at ?? null).toBeNull();
+    } finally {
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+    }
+  });
+
+  test('a grant naming every entity still leaves a team that names no entity to the owner', async () => {
+    const where = place();
+    const team = teamRecord(where);
+    const ghost = record(where.home, team, 'ghost');
+    const grant = grantOver(where.home, ['*']);
+    const ran = await runGranted(where, ['prune', '--apply'], grant);
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('no agent record stands without a roster line');
+    expect(getAgent(where.home, ghost.id)?.lifecycle).toBe('stopped');
+  });
+
+  test("another team's roster protects a record its own team does not name", async () => {
+    const where = place();
+    const own = teamRecord(where);
+    const ghost = record(where.home, own, 'ghost');
+    upsertTeam(where.home, 'bbbbbbbbbbbb', {
+      project: 'other',
+      session: 'other',
+      root: join(where.base, 'other'),
+      by: 'test',
+      roster: [{ agent: ghost.id, seat: 'held', role: 'worker' }],
+    });
+    const ran = await run(where, ['prune', '--apply']);
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('no agent record stands without a roster line');
+    expect(getAgent(where.home, ghost.id)?.lifecycle).toBe('stopped');
+  });
+
+  test('a roster the registry cannot verify refuses the run and retires nothing', async () => {
+    const where = place();
+    const team = teamRecord(where);
+    const ghost = record(where.home, team, 'ghost');
+    const registry = teamsFile(where.home);
+    writeFileSync(registry, readFileSync(registry, 'utf8').replace('roster: []', 'roster: null'));
+    const apply = await run(where, ['prune', '--apply']);
+    expect(apply.code).toBe(1);
+    expect(apply.err).toContain('"roster" must be a list');
+    expect(getAgent(where.home, ghost.id)?.lifecycle).toBe('stopped');
+    const dry = await run(where, ['prune']);
+    expect(dry.code).toBe(1);
+    expect(dry.err).toContain('"roster" must be a list');
+  });
+
+  test('a roster line written just before the retirement write is seen under the lock', async () => {
+    const where = place();
+    const team = teamRecord(where);
+    const ghost = record(where.home, team, 'ghost');
+    const io = testIo(where.root, owner);
+    const code = await runAgents(['prune', '--apply'], io, {
+      home: where.home,
+      now: () => {
+        upsertTeam(where.home, team, { roster: [{ agent: ghost.id, seat: 'ghost', role: 'implementer' }] });
+        return NOW;
+      },
+    });
+    expect(code).toBe(0);
+    expect(io.out).toContain('no agent record stands without a roster line');
+    expect(getAgent(where.home, ghost.id)?.lifecycle).toBe('stopped');
   });
 });
