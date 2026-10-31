@@ -11,9 +11,14 @@ Stops the team: asks every running seat the approved copy names to exit, closes 
 stops the herdr session. A pane herdr names with something that copy does not carry is closed when
 the state records that pane and that workspace for one seat, and left running when no seat record
 accounts for it. A pane with no name is closed on that same record. The watch is stopped by its
-pid only when the state records that pid and no pane: a watch recorded in a pane is not signalled
-here — its pane is how it is verified, and `up` stops one it can prove — and a record fenced by the
-session's epoch names the session host's own process, which is never signalled. The event bus
+pid only when the state records that pid and no pane, and the live process proves it is that
+watch: its command line is this session's `team watch`, and its start instant is the one the watch
+recorded as `started_at`. A pid alone is never signalled — after a watch exits the OS can hand its
+pid to an unrelated process — so a reused pid, a command line that cannot be read or does not name
+this session's watch, and a legacy record with no start instant are left alone, named, and their
+record kept. A watch recorded in a pane is not signalled here — its pane is how it is verified, and
+`up` stops one it can prove — and a record fenced by the session's epoch names the session
+host's own process, which is never signalled. The event bus
 `team up` started goes with the team: the workspace its record names is closed after the seats
 and the watch and before the session, and the bus record is cleared once that close succeeds
 (`bus: stopped`); a close that does not succeed prints `bus: its workspace did not close` and
@@ -36,8 +41,8 @@ force still names the seats it named when it was approved, with those seats' CLI
 ## What it reads and writes
 
 Reads the team file, this machine's approval store (the copy in force is the stop list), the
-session's state (`.agents/team.state.json`: the seats it drops after they stop, the watch's pid,
-each seat's managed endpoint, and the bus's pane and workspace), and herdr:
+session's state (`.agents/team.state.json`: the seats it drops after they stop, the watch's pid
+and start instant, each seat's managed endpoint, and the bus's pane and workspace), and herdr:
 whether the session is running, its agents, each pane's screen and status, and each pane's
 foreground processes. Writes `.agents/team.state.json` (the seats it stopped are dropped, and a
 bus workspace it closed has its record cleared),
@@ -124,10 +129,13 @@ than the seat's name is closed the same way when one seat records that pane and 
 and the line names the title. Neither close happens for the orchestrator's or the operator's
 seat when a seat calls: that seat is left running, whatever herdr calls its pane, and the skip
 line is the one in the table below. A name no seat record accounts for is left running. A watch
-whose pid the state records and no pane does, and which is alive, is stopped by pid and prints
-`watch: the stop signal was sent`; one that does not stop prints `watch: pid <pid> did not stop`
-and holds the run. A watch recorded in a pane is not signalled here, and a record fenced by the
-session's epoch is the session host's own process and is never signalled. The session prints
+whose pid the state records and no pane does, and which is alive, is stopped only when the live
+process proves it is this session's watch — its command line and its start instant against
+`started_at` — and prints `watch: the stop signal was sent`; one that does not stop prints
+`watch: pid <pid> did not stop` and holds the run. A pid that cannot be proved is left alone and
+prints `watch: <why>; it was not signalled and the record is kept`, and the run goes on. A watch
+recorded in a pane is not signalled here, and a record fenced by the session's epoch is the
+session host's own process and is never signalled. The session prints
 `session <session>: stopped and cleared` — herdr keeps a stopped session listed until it is
 deleted, so `down` clears the one it has itself just stopped, retrying while herdr still reports
 it running, and the next `up` starts from the beginning. A clear that does not happen prints

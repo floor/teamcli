@@ -55,7 +55,7 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
-import { isWatchEpoch } from '../watch/epoch.ts';
+import { processCommandOf, processStartOf, watchStopRead } from '../watch/pane.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -64,6 +64,11 @@ export type DownSources = {
   sessionRunning(session: string): boolean | null;
   agents(session: string): HerdrAgent[] | null;
   alive(pid: number): boolean;
+  /** The command line of the process at a pid, and the instant it started (epoch ms). The watch
+   *  stop's ownership proof reads both; absent, a pane-less watch pid is unproven and left
+   *  alone. */
+  commandOf?(pid: number): string | null;
+  startOf?(pid: number): number | null;
   /** Herdr's status is not enough: a permission prompt is reported as idle. */
   screen(session: string, pane: string, cli: string, cwd?: string | null): Screen;
   /** The pane's raw text, for reading the input box back before any Enter. */
@@ -166,6 +171,8 @@ export const realSources: DownSources = {
       return false;
     }
   },
+  commandOf: processCommandOf,
+  startOf: processStartOf,
   screen(session, pane, cli, cwd) {
     return readScreen(cli, paneRead(pane, 200, aim(session)) ?? undefined, {
       cwd: cwd ?? undefined,
@@ -1206,17 +1213,25 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
     });
   }
 
-  const watch = state?.watch;
   // A watch whose pid the state records and no pane does — a watch started outside a herdr pane
-  // of this team — is stopped by pid. A record carrying a well-formed epoch is the session host's
-  // own process, never a watch to signal: killing it would stop the host. A record with a pane is
-  // left alone here — `up` verifies through that pane — and stopping the session takes it with
-  // the session. A record whose process is dead, or whose pane's first pass has not written a
-  // pid yet, has nothing to stop.
-  const watchPid = watch !== undefined && watch.pid !== undefined && watch.pane === undefined
-    && !isWatchEpoch(watch.epoch) && sources.alive(watch.pid)
-    ? watch.pid
-    : null;
+  // of this team — is stopped only under the full ownership proof: the live process's command
+  // line is this team's `team watch` for this session, and its start instant is the one the
+  // watch recorded. A pid alone is never signalled: after the watch exited the OS can hand its
+  // pid to an unrelated process, and a record an older build wrote names no start instant to
+  // check. An unproven pid is left alone, named, and its record is kept. A record carrying a
+  // well-formed epoch is the session host's own process, never a watch to signal: killing it
+  // would stop the host. A record with a pane is left alone here — `up` verifies through that
+  // pane — and stopping the session takes it with the session. A record whose process is dead,
+  // or whose pane's first pass has not written a pid yet, has nothing to stop.
+  const watchStop = watchStopRead(state?.watch, session, {
+    alive: (pid) => sources.alive(pid),
+    commandOf: (pid) => sources.commandOf?.(pid) ?? null,
+    startOf: (pid) => sources.startOf?.(pid) ?? null,
+  });
+  const watchPid = watchStop.kind === 'proven' ? watchStop.pid : null;
+  if (watchStop.kind === 'unproven' && refusals.length === 0) {
+    notes.push(`watch: ${watchStop.why}; it was not signalled and the record is kept`);
+  }
   if (json) for (const line of notes) jsonNotes.push(line);
   else for (const line of notes) io.stdout(`${line}\n`);
   const plan = downPlan({

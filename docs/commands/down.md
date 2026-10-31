@@ -12,9 +12,12 @@ is free, so a working, blocked or half-typed seat is left running and named. A s
 typed into it; left running. A seat whose profile
 says herdr cannot report it (`herdr_status: unreliable`) is free when the profile's own screen
 reads idle, whatever herdr's status says, and it is stopped on its own exit key at that screen.
-A watch the state records by pid alone — one started outside a pane of the team — is stopped by
-that pid; a watch recorded in a pane is not signalled here, its pane being how it is verified, and
-a record that belongs to the session's own host process is never signalled. A seat whose launch
+A watch the state records by pid alone — one started outside a pane of the team — is stopped only
+when the live process proves it is that watch: its command line is this session's `team watch`, and
+its start instant is the one the watch recorded. A pid alone is never signalled; an unprovable one
+is left alone, said, and its record is kept. A watch recorded in a pane is not signalled here, its
+pane being how it is verified, and a record that belongs to the session's own host process is never
+signalled. A seat whose launch
 started a managed Codex endpoint is stopped through the endpoint's recorded process, with the same
 proof `team remove` uses, before its state record goes; a seat that started none is not mentioned.
 The event bus `team up` started is closed with the team: the workspace its record names is shut

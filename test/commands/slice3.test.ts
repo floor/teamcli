@@ -809,7 +809,7 @@ describe('team down', () => {
     );
   });
 
-  test('--dry-run never closes an agent the file does not name, and stops a watch whose pid is only in the state', async () => {
+  test('--dry-run never closes an agent the file does not name, and stops a watch under the full proof', async () => {
     writeFileSync(
       join(root, '.agents/team.state.json'),
       JSON.stringify({
@@ -820,7 +820,7 @@ describe('team down', () => {
               'deepseek-acme-tmp-1': { stage: 'ready', temporary: { like: 'deepseek-acme', until: 'result:out.md' } },
             },
             worktrees: {},
-            watch: { pid: 4242, heartbeat: '2026-10-03T14:00:00Z' },
+            watch: { pid: 4242, heartbeat: '2026-10-03T14:00:00Z', started_at: '2026-10-03T13:59:00Z' },
           },
         },
       }),
@@ -828,6 +828,9 @@ describe('team down', () => {
     const state = readFileSync(join(root, '.agents/team.state.json'), 'utf8');
     const run = await down(['--dry-run'], OWNER, {
       agents: () => [agent('deepseek-acme-tmp-1'), agent('stranger'), agent(null), agent('codex-acme', 'blocked')],
+      // The watch proof: the live pid is this session's watch, started when the record says.
+      commandOf: () => 'node /opt/team/dist/cli.js watch --session acme-web',
+      startOf: () => Date.parse('2026-10-03T13:59:00Z'),
     });
     // None of these panes is recorded, so the plan must not claim a close. The first head
     // printed the unnamed pane's leave-line in front of this text and closed nothing.

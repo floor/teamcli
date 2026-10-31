@@ -2,9 +2,10 @@
 // records. A seat that records an endpoint for the presence binding it holds now is stopped
 // through the same proof `remove` uses, before the record that names it goes; a seat that
 // records none — every seat whose launch managed no endpoint — is never mentioned. A watch whose
-// pid the state records and whose pane is not is stopped by pid, while a record carrying a
-// well-formed epoch (the session host's own process) and a record with a pane are never
-// signalled here.
+// pid the state records and whose pane is not is stopped only when the live process's command
+// line is this session's watch and its start instant matches the one the watch recorded; a
+// reused pid, a record with no start instant, a record carrying a well-formed epoch (the session
+// host's own process) and a record with a pane are never signalled here.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -31,6 +32,9 @@ const ENDPOINT = {
   started_at: '2026-10-15T11:00:00Z',
 };
 const EPOCH = `watch_${'a'.repeat(32)}`;
+// The instant the watch process recorded when it started; the scenes' `ps` reads agree with it.
+const WATCH_STARTED = '2026-10-15T11:29:50Z';
+const WATCH_COMMAND = 'node /opt/team/dist/cli.js watch --session acme';
 
 type Place = { base: string; root: string; home: string; file: string; dir: string };
 
@@ -102,7 +106,7 @@ function seedSeat(at: Place, seat: Record<string, unknown>): void {
 
 function seedWatch(
   at: Place,
-  watch: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string },
+  watch: { pid?: number; heartbeat: string; pane?: string; workspace?: string; epoch?: string; started_at?: string },
 ): void {
   updateState(at.dir, (state) => {
     const session = (state.sessions.acme ??= emptySession());
@@ -143,6 +147,9 @@ function sourcesOf(
     sessionRunning: () => true,
     agents: () => [agent()],
     alive: () => true,
+    // The watch proof's two readings, for the one pid the watch scenes record.
+    commandOf: (pid) => (pid === 4242 ? WATCH_COMMAND : null),
+    startOf: (pid) => (pid === 4242 ? Date.parse(WATCH_STARTED) : null),
     // The seat's CLI has exited: its shell is back in front of it, so it is closed without
     // typing and the close is what carries the endpoint stop under test.
     screen: () => ({ kind: 'idle' }),
@@ -245,39 +252,81 @@ describe('a seat and its managed endpoint', () => {
 });
 
 describe('a watch whose pid is only in the state', () => {
-  function run(over: { watch?: Parameters<typeof seedWatch>[1]; alive?: (pid: number) => boolean } = {}) {
+  function run(over: {
+    watch?: Parameters<typeof seedWatch>[1];
+    alive?: (pid: number) => boolean;
+    commandOf?: (pid: number) => string | null;
+    startOf?: (pid: number) => number | null;
+  } = {}) {
     const at = place();
-    seedWatch(at, over.watch ?? { pid: 4242, heartbeat: NOW.toISOString() });
+    seedWatch(at, over.watch ?? { pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED });
     let running = true;
     const { sources, kills } = sourcesOf(at, {
       sessionRunning: () => running,
       agents: () => [],
       alive: over.alive ?? ((pid: number) => pid === 4242),
+      ...(over.commandOf === undefined ? {} : { commandOf: over.commandOf }),
+      ...(over.startOf === undefined ? {} : { startOf: over.startOf }),
       launch: launchOf({
         kill: (pid) => { kills.push(pid); return true; },
         stopSession: () => { running = false; return true; },
         deleteSession: () => { running = false; return true; },
       }),
     });
-    return down(at, sources).then((made) => ({ ...made, kills }));
+    return down(at, sources).then((made) => ({
+      ...made,
+      kills,
+      watchLeft: readState(at.dir).sessions.acme?.watch,
+    }));
   }
 
-  test('it is stopped by pid', async () => {
+  test('a proven watch is stopped by pid', async () => {
     const run0 = await run();
     expect(run0.code).toBe(0);
     expect(run0.kills).toEqual([4242]);
     expect(run0.out).toContain('watch: the stop signal was sent');
   });
 
+  test('a reused pid whose command line is not the watch is left alone, said, and kept', async () => {
+    const run0 = await run({ commandOf: () => 'node /srv/worker.js' });
+    expect(run0.code).toBe(0);
+    expect(run0.kills).toEqual([]);
+    expect(run0.out).toContain("watch: pid 4242 is not running this team's watch for session acme; it was not signalled and the record is kept");
+    expect(run0.watchLeft).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED });
+  });
+
+  test('a command line for another session is not this team\'s watch', async () => {
+    const run0 = await run({ commandOf: () => 'node /opt/team/dist/cli.js watch --session other' });
+    expect(run0.code).toBe(0);
+    expect(run0.kills).toEqual([]);
+    expect(run0.out).toContain('is not running this team\'s watch for session acme');
+  });
+
+  test('a reused pid that started after the record is left alone, said, and kept', async () => {
+    const run0 = await run({ startOf: () => Date.parse(WATCH_STARTED) + 60_000 });
+    expect(run0.code).toBe(0);
+    expect(run0.kills).toEqual([]);
+    expect(run0.out).toContain('watch: pid 4242 started at a time its record does not match; it was not signalled and the record is kept');
+    expect(run0.watchLeft).toEqual({ pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED });
+  });
+
+  test('a record an older build wrote with no start instant is left alone and kept', async () => {
+    const run0 = await run({ watch: { pid: 4242, heartbeat: NOW.toISOString() } });
+    expect(run0.code).toBe(0);
+    expect(run0.kills).toEqual([]);
+    expect(run0.out).toContain('watch: pid 4242 has no recorded start instant to match; it was not signalled and the record is kept');
+    expect(run0.watchLeft).toEqual({ pid: 4242, heartbeat: NOW.toISOString() });
+  });
+
   test('a record carrying an epoch names the session host and is never signalled', async () => {
-    const run0 = await run({ watch: { pid: 4242, heartbeat: NOW.toISOString(), epoch: EPOCH } });
+    const run0 = await run({ watch: { pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED, epoch: EPOCH } });
     expect(run0.code).toBe(0);
     expect(run0.kills).toEqual([]);
     expect(run0.out).not.toContain('watch: the stop signal was sent');
   });
 
   test('a record with a pane is left to `up` and to the session stop', async () => {
-    const run0 = await run({ watch: { pid: 4242, heartbeat: NOW.toISOString(), pane: 'w9:p1', workspace: 'w9' } });
+    const run0 = await run({ watch: { pid: 4242, heartbeat: NOW.toISOString(), started_at: WATCH_STARTED, pane: 'w9:p1', workspace: 'w9' } });
     expect(run0.code).toBe(0);
     expect(run0.kills).toEqual([]);
     expect(run0.out).not.toContain('watch: the stop signal was sent');

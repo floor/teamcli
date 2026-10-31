@@ -414,6 +414,11 @@ async function admittedWatchdog(
 const READINGS_EVERY = 600;
 
 export async function runWatch(argv: string[], io: Io, sources: WatchSources): Promise<number> {
+  // The instant this process reached its loop, recorded once on the first beat the record takes:
+  // `down` stops a pane-less watch only when the live process's command line and start instant
+  // prove it is this watch. Captured before any read, so it is this process's start, not the
+  // first pass's.
+  const watchStartedAt = sources.now().toISOString();
   // Raw argv, before the parser: `--json` is not a flag this daemon takes, and its refusal
   // must still answer with the structured error document when the flag is present.
   const json = hasJsonFlag(argv);
@@ -1284,7 +1289,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
           break;
         }
         paneGoneOnce = place === 'end';
-        beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place);
+        beatWatch(dir, session, sources.pid, sources.now().toISOString(), place === 'end' ? 'keep' : place, watchStartedAt);
       }
       // The label sweep, inside the wait: a running seat's own status line reaches line 2 in
       // about five seconds, not a whole interval. It repeats the pass's own rule on the panes
