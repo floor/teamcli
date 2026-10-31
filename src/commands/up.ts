@@ -83,7 +83,7 @@ import { recheckLobby, verifyLobby, type FsReader, type LobbySeen } from '../lob
 import { lobbyOf } from '../lobby/recorded.ts';
 import { logLine } from '../log.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
-import { namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor, shippedStartupReads } from '../profiles/index.ts';
 import { reachProjectionNote, writeReachProjection } from '../reach/projection.ts';
 import { registerRun } from '../registry/sync.ts';
@@ -161,6 +161,8 @@ export type UpSources = {
 };
 
 export type Launch = {
+  /** Whether a resume line's conversation is on disk; absent in fixtures, so nothing is read. */
+  conversationExists?(cli: string, cwd: string, id: string): boolean | null;
   sessionState(session: string): SessionState | null;
   startServer(session: string): boolean;
   sessionUp(session: string): boolean | null;
@@ -252,6 +254,7 @@ export function watchCommand(session: string): string {
 }
 
 const realLaunch: Launch = {
+  conversationExists: (cli, cwd, id) => conversationOnDisk(cli, cwd, id),
   sessionState,
   startServer,
   sessionUp: sessionRunning,
@@ -2249,6 +2252,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
         return lobbySeen ? recheckLobby(sources.home, lobbySeen, { getuid: sources.getuid, fs: sources.fs, reads: startupReads, lobby: teamLobby }) : null;
       },
       paneRun: launch.paneRun,
+      ...(launch.conversationExists === undefined ? {} : { conversationExists: launch.conversationExists }),
       ...(launch.codexEndpoint === undefined
         ? {}
         : {

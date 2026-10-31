@@ -74,7 +74,7 @@ import { registerInbox } from '../mcp/register.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { captureDraft, pasteDraftBack, type DeliverHost } from '../send/deliver.ts';
 import { dropMessage } from '../send/native.ts';
-import { namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
+import { conversationOnDisk, namedResumeTarget, resumeCarry, shellQuote } from '../profiles/profile.ts';
 import { profileFor } from '../profiles/index.ts';
 import { emptySession, mintSeatId, readState, updateState, type SeatState, type SessionState } from '../state.ts';
 import { recordedSeatContinuity, recordedSeatSession } from '../registry/resume.ts';
@@ -118,6 +118,7 @@ function aim(session: string): string | undefined {
 }
 
 const realUpLaunch: Launch = {
+  conversationExists: (cli, cwd, id) => conversationOnDisk(cli, cwd, id),
   sessionState,
   startServer,
   sessionUp: sessionRunning,

@@ -13,7 +13,7 @@ function saveTextFile(path: string, text: string): boolean {
 }
 import { reportedLiveAgent } from './agent.ts';
 import { refusalReport, type Refusal } from './deliver.ts';
-import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget } from '../profiles/profile.ts';
+import { profileFor, shellQuote, versionVerdict, withLaunchSession, namedResumeTarget, withoutResume, conversationMissingOnScreen } from '../profiles/profile.ts';
 import { canShowModel, modelDiffers, runningModel, seatModel, type Running } from '../status/statusline.ts';
 import { launchedIdentity, replacedSeat, seatProcessVerdict, type LaunchedIdentity } from './identity.ts';
 import type { CliWatcher } from './cli-hook.ts';
@@ -79,6 +79,8 @@ export type Host = {
    * leaves no orphaned server. The record is cleared only after a proven stop.
    */
   stopManagedCodexEndpoint?(input: { dir: string; session: string; seat: string }): EndpointStopRead;
+  /** Whether the conversation a resume line names is on disk for its CLI; null when unknown. */
+  conversationExists?(cli: string, cwd: string, id: string): boolean | null;
   /**
    * Registers the seat's team inbox with its CLI, run in the seat's folder directly before the
    * launch command. `teamFile` is the team file the launch read: the seat's folder may be a
@@ -704,6 +706,8 @@ export async function executePlan(
   // line resumes. The seat state records it (and the registry's reach from it), so the next
   // relaunch can resume it when herdr's reading after the launch has none (herdr's reading, when present, wins).
   const launchSessions = new Map<string, string>();
+  // The line each seat's pane actually ran this run, read again when its resume fails on screen.
+  const launchedCommands = new Map<string, string>();
   const finishReady = (seat: string) => {
     ready.add(seat);
     const verdict = relaunched.get(seat);
@@ -1142,9 +1146,20 @@ export async function executePlan(
             hold(op.seat, `${op.seat}: the managed Codex endpoint was not started: ${read.why}\n`);
           }
         }
+        // A resume of a conversation its CLI never wrote stops at the CLI's own error and leaves
+        // the pane at its shell: the seat is launched fresh instead, and says so.
+        const resumeTarget = namedResumeTarget(op.cli ?? '', command);
+        if (resumeTarget && op.cwd !== undefined && host.conversationExists?.(op.cli ?? '', op.cwd, resumeTarget) === false) {
+          const fresh = withoutResume(op.cli ?? '', command);
+          if (fresh !== null) {
+            hold(op.seat, `${op.seat}: its recorded conversation ${resumeTarget} is not on disk; launched a fresh one\n`);
+            command = fresh;
+          }
+        }
         // The session id is minted here, not in the plan: the plan's command stays the
         // deterministic line a dry run prints, and each launch gets its own id.
         const launch = withLaunchSession(op.cli ?? '', command);
+        launchedCommands.set(op.seat, launch.command);
         // The rules line rides this launch: its file is written first, so the CLI reads it on its
         // first turn. A file that cannot be written leaves the seat out before anything runs.
         const rulesOp = steps
@@ -1294,7 +1309,8 @@ export async function executePlan(
           break;
         }
         const startedAt = host.now();
-        const deadline = startedAt + op.seconds * 1000;
+        let deadline = startedAt + op.seconds * 1000;
+        let freshAfterMissing = false;
         const pollMs = IDLE_POLL_MS;
         let outcome: 'idle' | 'permission' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' = 'timeout';
         let last: ScreenKind = 'unknown';
@@ -1332,6 +1348,29 @@ export async function executePlan(
           }
           const kind = host.classify(session, here.pane, op.cli);
           last = kind;
+          // A resume the CLI refused at runtime ("No conversation found") is launched once more,
+          // fresh, in the same pane: the seat is never left at a bare shell for it.
+          if (kind === 'unknown' && !freshAfterMissing) {
+            const ran = launchedCommands.get(op.seat);
+            const fresh = ran !== undefined && namedResumeTarget(op.cli ?? '', ran) ? withoutResume(op.cli ?? '', ran) : null;
+            const screen = fresh === null ? null : (host.paneText?.(session, here.pane) ?? null);
+            if (fresh !== null && screen !== null && conversationMissingOnScreen(op.cli ?? '', plainPaneText(screen))) {
+              freshAfterMissing = true;
+              const relaunch = withLaunchSession(op.cli ?? '', fresh);
+              if (host.paneRun(session, here.pane, relaunch.command)) {
+                hold(op.seat, `${op.seat}: its recorded conversation was not found by the CLI; launched a fresh one\n`);
+                launchedCommands.set(op.seat, relaunch.command);
+                if (relaunch.sessionId !== undefined) launchSessions.set(op.seat, relaunch.sessionId);
+                else launchSessions.delete(op.seat);
+                shellBackSince = null;
+                shellBackFirst = null;
+                deadline = host.now() + op.seconds * 1000;
+                await sharedSleep(pollMs);
+                if (stopped || closing()) break;
+                continue;
+              }
+            }
+          }
           const back = host.shellBack?.(session, here.pane) ?? null;
           const at = host.now();
           if (kind === 'unknown' && back === true) {

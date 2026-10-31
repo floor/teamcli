@@ -392,3 +392,61 @@ test('after down, a retained handle with no conversation launches fresh, as befo
   expect(ran[0]?.command).not.toContain('--resume');
   expect(seatState()?.id).toBe(HANDLE);
 });
+
+test('a recorded conversation that is not on disk is launched fresh, with a note, never resumed', async () => {
+  recordDown({ id: HANDLE, agent_session: SES_A });
+  const made = makeWorld(null);
+  const asked: string[] = [];
+  made.sources.launch!.conversationExists = (_cli, _cwd, id) => { asked.push(id); return false; };
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+  expect(asked).toEqual([SES_A]);
+  const held = seatState();
+  const ran = workerRuns(made.trace, held?.pane);
+  expect(ran.length).toBe(1);
+  expect(ran[0]?.command).not.toContain('--resume');
+  expect(ran[0]?.command).toContain('--session-id');
+  expect(held?.stage).toBe('ready');
+  expect(held?.agent_session).toBe(sessionFor(ran[0]?.command ?? '') ?? undefined);
+  expect(`${io.out}${io.err}`).toContain(`its recorded conversation ${SES_A} is not on disk; launched a fresh one`);
+  expect(made.trace.typed).toEqual([]);
+});
+
+test('a conversation that is on disk is resumed', async () => {
+  recordDown({ id: HANDLE, agent_session: SES_A });
+  const made = makeWorld(null);
+  made.sources.launch!.conversationExists = () => true;
+  expect(await runUp([], testIo(root, { kind: 'owner' }), made.sources)).toBe(0);
+  const ran = workerRuns(made.trace, seatState()?.pane);
+  expect(ran.length).toBe(1);
+  expect(ran[0]?.command).toContain(`--resume ${SES_A}`);
+});
+
+test('a resume the CLI refuses at runtime is launched again fresh in the same pane, never left at the shell', async () => {
+  recordDown({ id: HANDLE, agent_session: SES_A });
+  const made = makeWorld(null);
+  const launch = made.sources.launch!;
+  const run = launch.paneRun;
+  launch.paneRun = (session, pane, command) => {
+    const ok = run(session, pane, command);
+    if (/--resume/.test(command)) {
+      const held = made.panes.get(pane)!;
+      held.screen = `${command}\nNo conversation found with session ID: ${SES_A}\n❯ `;
+      held.session = null;
+      held.status = 'unknown';
+    }
+    return ok;
+  };
+  const io = testIo(root, { kind: 'owner' });
+  expect(await runUp([], io, made.sources), `up said:\n${io.out}\n${io.err}`).toBe(0);
+  const held = seatState();
+  expect(held?.stage).toBe('ready');
+  const ran = workerRuns(made.trace, held?.pane);
+  expect(ran.length).toBe(2);
+  expect(ran[0]?.command).toContain(`--resume ${SES_A}`);
+  expect(ran[1]?.command).not.toContain('--resume');
+  expect(ran[1]?.command).toContain('--session-id');
+  expect(held?.agent_session).toBe(sessionFor(ran[1]?.command ?? '') ?? undefined);
+  expect(`${io.out}${io.err}`).toContain('its recorded conversation was not found by the CLI; launched a fresh one');
+  expect(made.trace.typed).toEqual([]);
+});

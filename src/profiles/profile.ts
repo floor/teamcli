@@ -1,6 +1,8 @@
 // A launch profile, read from the CLI's YAML file. The screen is loaded separately.
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { REACH_ROSTER_FILE, REACH_ROSTER_TEMP } from '../reach/rules.ts';
 import { DialectError, compilePattern } from '../watch/dialect.ts';
 import { loadProfileModule } from './module-loader.ts';
@@ -1475,4 +1477,33 @@ function optional(entries: YamlEntry[], key: string): YamlEntry | undefined {
 
 function fail(line: number, message: string): never {
   throw new YamlError(line, message);
+}
+
+/**
+ * Whether the conversation a resume line names is on disk for its CLI, read before the line
+ * runs: a resume of a conversation the CLI never wrote stops at the CLI's own error and leaves
+ * the pane at its shell. Claude Code keeps each conversation as
+ * `<config>/projects/<cwd with every non-alphanumeric character as "-">/<id>.jsonl`, written on
+ * the conversation's first turn (measured on the owner's Mac: a `--session-id` launch that never
+ * took a turn left no file, and `claude --resume <id>` then said "No conversation found with
+ * session ID"). Null for a CLI whose store is not measured: the resume goes ahead as before.
+ */
+export function conversationOnDisk(cli: string, cwd: string, id: string, env: NodeJS.ProcessEnv = process.env): boolean | null {
+  if (cli !== 'claude-code' || id === '' || cwd === '') return null;
+  const config = env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR !== '' ? env.CLAUDE_CONFIG_DIR : join(homedir(), '.claude');
+  return existsSync(join(config, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), `${id}.jsonl`));
+}
+
+/** The same launch line without its resume, for a CLI whose resume form is measured as a flag
+ *  and its id (`--resume <id>` / `-r <id>`, Claude Code). Null where it is not. */
+export function withoutResume(cli: string, command: string): string | null {
+  if (cli !== 'claude-code') return null;
+  const stripped = command.replace(/(^|\s)(?:--resume|-r)(?:=|\s+)[A-Za-z0-9._-]+(?=\s|$)/, '$1').replace(/\s+$/, '').replace(/ {2,}/g, ' ');
+  return stripped === command ? null : stripped;
+}
+
+/** The screen a resume of a missing conversation leaves (Claude Code 2.1.x: "No conversation
+ *  found with session ID: <id>", then the shell). */
+export function conversationMissingOnScreen(cli: string, screen: string): boolean {
+  return cli === 'claude-code' && /No conversation found with session ID/.test(screen);
 }
