@@ -708,6 +708,9 @@ export async function executePlan(
   const launchSessions = new Map<string, string>();
   // The line each seat's pane actually ran this run, read again when its resume fails on screen.
   const launchedCommands = new Map<string, string>();
+  // The seats this run launched: only a launch carries rules; a seat already running is never
+  // typed into to give it them.
+  const launchedThisRun = new Set<string>();
   const finishReady = (seat: string) => {
     ready.add(seat);
     const verdict = relaunched.get(seat);
@@ -1160,6 +1163,7 @@ export async function executePlan(
         // deterministic line a dry run prints, and each launch gets its own id.
         const launch = withLaunchSession(op.cli ?? '', command);
         launchedCommands.set(op.seat, launch.command);
+        launchedThisRun.add(op.seat);
         // The rules line rides this launch: its file is written first, so the CLI reads it on its
         // first turn. A file that cannot be written leaves the seat out before anything runs.
         const rulesOp = steps
@@ -1576,6 +1580,20 @@ export async function executePlan(
         const here = place(op.seat, op.pane);
         const file = { text: op.rules, path: op.path, line: op.line, seat: op.seat };
         // Rules that rode the launch line are delivered: the CLI took them as its initial prompt.
+        // A seat this run did not launch is never typed into to give it its rules (no pane
+        // messaging): its rules file is written, and the rules reach it with its next launch.
+        if (here && !launchedThisRun.has(op.seat)) {
+          const written = await host.deliverRules?.(session, here.pane, op.cli, { ...file, writeOnly: true }, op.seconds);
+          if (stopped) break;
+          dropped.add(op.seat);
+          final(op.seat, {
+            kind: 'left out',
+            reason: written === true
+              ? `its rules ride only a launch and nothing was typed; its rules file is written: run team restart ${op.seat} to carry them`
+              : `its rules ride only a launch and nothing was typed; run team restart ${op.seat} to carry them`,
+          });
+          break;
+        }
         const delivered = here && rulesAtLaunch.has(op.seat)
           ? true
           : here ? await host.deliverRules?.(session, here.pane, op.cli, file, op.seconds) : false;
@@ -1586,8 +1604,6 @@ export async function executePlan(
           break;
         }
         if (typeof delivered === 'object') {
-          // The specific reading goes into the log; a row of the screen itself is said on the
-          // terminal alone, stripped and cut, never logged.
           dropped.add(op.seat);
           if (delivered.row !== null) {
             hold(op.seat, `${op.seat}: first row of its box that is not the rules line: ${plainPaneText(delivered.row)}\n`);

@@ -93,3 +93,33 @@ describe('executing a launch that carries the rules line', () => {
     expect(events).not.toContain('typed');
   });
 });
+
+describe('a seat this run did not launch', () => {
+  test('is never typed into for its rules: its file is written and it is left out with the restart that carries them', async () => {
+    const events: string[] = [];
+    const host = {
+      sessionState: () => 'running' as const, startServer: () => true, sessionUp: () => true,
+      createWorkspace: () => ({ pane: 'p1', workspace: 'w1' }),
+      paneRun: () => { events.push('run'); return true; },
+      typeLine: () => { events.push('typed'); return true; },
+      deliverRules: async (_s: string, _p: string, _c: string, file: { writeOnly?: boolean }) => {
+        events.push(file.writeOnly === true ? 'write' : 'typed-rules');
+        return true;
+      },
+      renameAgent: () => true, closeWorkspace: () => true, stopSession: () => true, kill: () => true,
+      agentPanes: () => ['p1'], classify: () => 'idle' as const, sleep: async () => {}, now: () => 0,
+      allow: () => null, record: (_seat: string, rec: { stage?: string }) => { if (rec.stage) events.push(`stage:${rec.stage}`); },
+      running: () => {}, drop: () => {}, say: (line: string) => { events.push(`say:${line}`); }, log: () => {},
+    } as unknown as Host;
+    const steps: Step[] = [
+      { kind: 'run', argv: [], do: { do: 'deliver', seat: 'reviewer-cursor', label: 'reviewer-cursor', cli: 'cursor', rules: 'Rules.', path: PATH, line: LINE, seconds: 1, pane: 'p1' } },
+    ];
+    await executePlan(steps, 'acme', host);
+    expect(events).toContain('write');
+    expect(events).not.toContain('typed-rules');
+    expect(events).not.toContain('typed');
+    expect(events).not.toContain('run');
+    expect(events).not.toContain('stage:ready');
+    expect(events.join('\n')).toContain('run team restart reviewer-cursor to carry them');
+  });
+});

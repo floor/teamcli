@@ -690,7 +690,9 @@ describe('team up', () => {
     expect(run.out).toContain('AGENT_UNATTENDED=1 team-deepseek --dangerously-skip-permissions --name deepseek-acme --append-system-prompt');
     expect(run.out).toContain('+ herdr --session acme-web agent rename <pane of deepseek-acme-2> deepseek-acme-2\n');
     expect(run.out).toContain('AGENT_UNATTENDED=1 codex -m gpt-6-sol -c model_reasoning_effort=high -a never -s danger-full-access');
-    expect(run.out).toContain('pane send-text <pane of codex-acme>');
+    // The rules ride the launch line: no plan step types them into a pane.
+    expect(run.out).not.toContain('pane send-text');
+    expect(run.out).toContain('+ team rules --with-launch ');
     expect(run.out).toContain('  skip grok-acme: stopped in the file; start it with `team add grok-acme`\n');
     // The plan's last steps: the watch's own workspace, then its command in that pane.
     expect(run.out).toContain(`+ herdr --session acme-web workspace create --cwd ${root} --label 'Watch · acme-web' --no-focus\n`);

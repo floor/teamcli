@@ -988,7 +988,9 @@ describe('the row a stopped delivery prints', () => {
       say: (line) => { said.push(line); },
       log: (who, what) => { logged.push({ who, what }); },
     };
-    const steps: Step[] = [{
+    // The seat is launched by this run (the only seat a typed read-back can still reach): a seat
+    // already running is never typed into for its rules.
+    const steps: Step[] = [{ kind: 'run', argv: [], do: { do: 'launch', seat: 'coder', label: 'coder', command: 'codex', pane: 'p1', cli: 'codex', cwd: '.' } }, {
       kind: 'run',
       argv: [],
       do: {

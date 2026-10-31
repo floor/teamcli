@@ -962,10 +962,10 @@ export function upPlan(input: UpInput): Step[] {
       const file = seat.rulesFile;
       steps.push({
         kind: 'run',
-        argv: herdr(session, 'pane', 'send-text', pane, file.line),
+        argv: ['team', 'rules', '--with-launch', file.line],
         note: said
-          ? `${said}; the rules go to a per-seat file in the project state folder first; the line that points at it is typed only at an empty idle prompt, read back row by row, then Enter`
-          : 'the rules go to a per-seat file in the project state folder first; the line that points at it is typed only at an empty idle prompt, read back row by row, then Enter',
+          ? `${said}; the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them`
+          : 'the rules go to a per-seat file in the project state folder and ride the launch line; a seat this run does not launch is never typed into: it is left out until team restart carries them',
         do: {
           do: 'deliver',
           seat: seat.name,
