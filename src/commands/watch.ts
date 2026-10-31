@@ -40,7 +40,7 @@ import { expirePendingNative } from '../watch/native.ts';
 import { confirmTakenDrops } from '../watch/taken.ts';
 import { reportUnreadDrops, wakeUnreadDrops } from '../watch/unread.ts';
 import { readScreen } from '../watch/screen.ts';
-import { dispatchIdleWork, workPushResultOf, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
+import { dispatchIdleWork, type IdleDispatchResult, type WorkPush } from '../watch/dispatch.ts';
 import type { BrokerWorkSnapshot, BrokerWorkSource } from '../idle_work.ts';
 import { nativeHeldSeats } from '../watch/idle-work.ts';
 import { prefetchPresence } from '../watch/presence.ts';

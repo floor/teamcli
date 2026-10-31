@@ -59,7 +59,11 @@ export async function sendWatchDirect(
  *  watch context. With one, the send is the verified `sendWatchDirect` above; without one — a
  *  watch started by hand in a pane or a terminal, which records no epoch — the wake is held, and
  *  no transport, admission walk or sender identity is attempted. A placement is never used as the
- *  sender: an infrastructure pane is not a worker and is not registered as one. */
+ *  sender: an infrastructure pane is not a worker and is not registered as one.
+ *
+ *  This authority gate preserves the release's delivery policy: `sendDirect` uses event adapters
+ *  and excludes pane typing under `src/send/no-pane-messaging.ts`. Authority never enables a
+ *  typed fallback. */
 export function watchPushWork(context: WatchDirectContext | null, host: SendHost = realHost): WorkPush {
   if (context === null) {
     return async () => ({
