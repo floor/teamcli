@@ -1,22 +1,12 @@
 import { NO_PANE_MESSAGING } from './no-pane-messaging.ts';
-// A compose delivery: the profile's own module walks the CLI's screens and types the brief
-// where the CLI asks for it. The caller keeps the seat lock, writes the drop file and writes
-// the history; this file only builds what the module may see — the pane, the seat's folder,
-// the repo its folder names, and the repos the CLI itself lists — and turns the module's
-// answer into the send's three outcomes.
-//
-// The seat's folder is the pane's foreground cwd when herdr can name it and that folder has a
-// git origin, else the folder the seat's record carries: a non-lead seat is started in the
-// lobby, and a TUI that never changes folder keeps the lobby as its foreground cwd. `git -C
-// <folder> remote get-url origin` names the repo, and the profile's `reposArgs` run with its
-// binary list the account's repos; both are read here, never by the module, which may not run
-// a command.
-import { execFileSync } from 'node:child_process';
-import { stripSgr } from '../ansi.ts';
-import { ComposeError, type ComposeIo, type ComposeProfile, type ComposeSeat } from '../profiles/compose.ts';
+// A compose delivery would have the profile's own module walk the CLI's screens and type the
+// brief where the CLI asks for it. That is pane messaging, so it is never run: the entry point
+// refuses the delivery before the module sees the pane, and the send reports the seat as
+// unreachable. The caller keeps the seat lock, writes the drop record and the history.
+import type { ComposeProfile } from '../profiles/compose.ts';
 import type { NativePane } from './native.ts';
 
-/** What one compose delivery needs besides the pane. */
+/** What one compose delivery names besides the pane. The send glue still builds it. */
 export type ComposeRun = {
   profile: ComposeProfile;
   /** The profile's launch binary, for listing repos. */
@@ -45,73 +35,12 @@ export function repoFromUrl(url: string): string | null {
   return match === null ? null : match[1]!;
 }
 
-/** The origin repo of a folder, or null when the folder has no origin or git cannot be run. */
-export function originRepo(dir: string): string | null {
-  try {
-    const url = execFileSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 10_000,
-    });
-    return repoFromUrl(url);
-  } catch {
-    return null;
-  }
-}
-
-/** The repos the seat's CLI lists, in its own order, or null when it could not be asked. A line
- *  that is not `owner/repo` is not a repo and is dropped. */
-export function listedRepos(binary: string, args: readonly string[], dir: string): string[] | null {
-  try {
-    const out = execFileSync(binary, [...args], {
-      cwd: dir,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 20_000,
-    });
-    return out
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(line));
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Runs the profile's compose module against the pane. A module that returns its proof line
- * delivered the brief; a ComposeError after the module typed is `not-submitted` (the box may
- * hold the text), and one before it is `unreachable` (nothing was typed). Every refusal carries
- * the module's repair line, so the operator reads what to do next in the same sentence.
+ * A compose delivery is refused: a compose box is never typed into, so the module never runs and
+ * nothing is submitted. The walk reports it as unreachable and carries the rule's reason.
  */
 export async function deliverCompose(native: NativePane, run: ComposeRun): Promise<ComposeResult> {
-  // No pane messaging: a compose box is never typed into (src/send/no-pane-messaging.ts).
-  if (NO_PANE_MESSAGING.length > 0) return { outcome: 'unreachable', reason: NO_PANE_MESSAGING };
-  const foreground = native.foregroundCwd?.(run.session, run.pane) ?? null;
-  const foregroundRepo = foreground === null ? null : originRepo(foreground);
-  const cwd = foreground !== null && foregroundRepo !== null ? foreground : run.seatCwd;
-  const seat: ComposeSeat = {
-    cwd,
-    repo: foregroundRepo ?? originRepo(run.seatCwd),
-    repos: run.profile.repos.length === 0 ? null : listedRepos(run.binary, run.profile.repos, cwd),
-  };
-  const io: ComposeIo = {
-    text: () => {
-      const raw = native.paneText?.(run.session, run.pane);
-      return raw === null || raw === undefined ? null : stripSgr(raw);
-    },
-    type: (text) => native.typeText(run.session, run.pane, text),
-    key: (key) => native.sendKey?.(run.session, run.pane, key) ?? false,
-    wait: (ms) => native.wait(ms),
-    idleTimeout: run.idleTimeout,
-    seat,
-  };
-  try {
-    const proof = await run.profile.compose(io, run.message);
-    return { outcome: 'delivered', evidence: proof };
-  } catch (error) {
-    if (!(error instanceof ComposeError)) throw error;
-    const reason = `${error.message}; ${error.repair}`;
-    return error.typed ? { outcome: 'not-submitted', reason } : { outcome: 'unreachable', reason };
-  }
+  void native;
+  void run;
+  return { outcome: 'unreachable', reason: NO_PANE_MESSAGING };
 }
