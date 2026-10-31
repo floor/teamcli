@@ -61,6 +61,10 @@ workspace:
 const MOVED_APPROVED = MOVED.replace('entity: acme\n', 'entity: acme\nsession: acme\n');
 // The same team, one owner section further on than the copy the approval holds.
 const MOVED_FURTHER = MOVED.replace('seats:\n', 'limits:\n  temporary: 1\nseats:\n');
+// A fixed seat ceiling: taking the worker out moves no owner section, so the approval's own
+// comparison stays empty while the two records differ.
+const MOVED_FIXED = MOVED.replace('seats:\n', 'limits:\n  seats: 2\nseats:\n');
+const MOVED_FIXED_ONE = MOVED_FIXED.replace(/  - role: implementer\n(?:    [^\n]*\n)*/, '');
 
 const made: string[] = [];
 afterEach(() => {
@@ -247,6 +251,16 @@ test('a record that really differs is called an earlier record', async () => {
   expect(ran.code, ran.err).toBe(0);
   expect(ran.out).toContain('migration completed; the stored approval describes an earlier team record and no longer verifies');
   expect(ran.out).toContain('this version has no command to refresh that snapshot');
+});
+
+// An empty approval comparison is not record equality: the gate ignores a removed seat on
+// purpose, so with a fixed ceiling the records differ and the line may not call them equal.
+test('a removed seat under a fixed ceiling is not called unchanged', async () => {
+  const at = migratePlace(MOVED_FIXED, MOVED_FIXED_ONE);
+  const ran = await migrate(at, ['--keep-file'], tamperAfterReading(at));
+  expect(ran.code, ran.err).toBe(0);
+  expect(ran.out).not.toContain('the team record is unchanged');
+  expect(ran.out).toContain('the stored approval describes an earlier team record and no longer verifies');
 });
 
 // The second migrate finds the registry already holds the team: nothing was applied, and the

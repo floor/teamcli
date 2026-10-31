@@ -12,8 +12,7 @@ import { actionRequestsFolder } from '../client/team-create.ts';
 import { retireTeamFile, type Retired } from '../file/retire.ts';
 import { canonicalTeam, readTeamConfig } from '../file/team-config.ts';
 import { importTeamFile, type ImportMode, type ImportOutcome } from '../file/team-import.ts';
-import { approvalDifferencesOf } from '../approve/approval.ts';
-import { approvalStanding, type Standing } from '../store/store.ts';
+import { approvalStanding, approvedRecordOf, type Standing } from '../store/store.ts';
 import { sha256 } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import type { Command, Io } from '../io.ts';
@@ -411,15 +410,18 @@ export async function runTeamImport(
     if (afterStanding.kind === 'verified') {
       io.stdout('the approval is still in force: it is signed over the canonical record\n');
     } else {
-      // What the registry's record proves, never more: a record the approval's own comparison
-      // reads as unchanged names the approval itself (its signature, or its absence) as the
-      // failure; a record that differs is an earlier one; an unreadable record proves neither.
+      // What the registry's record proves, never more: the two canonical records are compared,
+      // never the gate's difference list, which ignores a removed seat on purpose — an empty
+      // list is not record equality. Equal records name the approval itself (its signature, or
+      // its absence) as the failure; records that differ are an earlier one; a record that
+      // cannot be compared proves neither.
       const live = readTeamConfig(io.cwd, { home, source: 'registry' });
-      const unchanged = live.ok && approvalDifferencesOf(beforeStanding, live.team).length === 0;
+      const approvedCopy = approvedRecordOf(beforeStanding.record.file);
+      const unchanged = live.ok && approvedCopy !== null && approvedCopy === canonicalTeam(live.team);
       const state = approvalStateWords(afterStanding);
       const repair = 'this version has no command to refresh that snapshot';
       if (unchanged) io.stdout(`migration completed; the team record is unchanged, and the stored approval ${state}; ${repair}\n`);
-      else if (live.ok) io.stdout(`migration completed; the stored approval describes an earlier team record and ${state}; ${repair}\n`);
+      else if (live.ok && approvedCopy !== null) io.stdout(`migration completed; the stored approval describes an earlier team record and ${state}; ${repair}\n`);
       else io.stdout(`migration completed; the stored approval ${state}; ${repair}\n`);
     }
   }
