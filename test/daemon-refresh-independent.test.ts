@@ -17,6 +17,8 @@ async function install(fixture: Fixture, flags: string[] = []) {
     home: fixture.home,
     program: fixture.program,
     service: fixture.manager,
+    health: fixture.health,
+    sleep: fixture.healthSleep,
   });
   return { code, io };
 }
@@ -191,7 +193,7 @@ for (const json of [false, true]) {
     const io = testIo(fixture.root, { kind: 'owner' });
     const code = await runDaemon(['install', '--root', fixture.root, '--presence', '--watch', ...(json ? ['--json'] : [])], {
       ...io, general: { key, grant },
-    }, { home: fixture.home, program: fixture.program, service: fixture.manager });
+    }, { home: fixture.home, program: fixture.program, service: fixture.manager, health: fixture.health, sleep: fixture.healthSleep });
 
     expect(code).toBe(1);
     expect(fixture.events.some((event) => event.unit.includes(key) && event.unit.includes(grant))).toBe(true);
@@ -206,5 +208,52 @@ for (const json of [false, true]) {
     expect(recovery).toContain('--watch');
     expect(readFileSync(key, 'utf8')).toBe(keyMaterial);
     expect(readFileSync(grant, 'utf8')).toBe(grantContents);
+  });
+}
+
+
+test('an in-place refresh restores old program bytes before the rollback load and health probe', async () => {
+  const fixture = refreshFixture(false, true);
+  const oldUnit = fixture.seedPrevious();
+  const oldBytes = readFileSync(fixture.previousEntry);
+  writeFileSync(fixture.nextEntry, 'synthetic replacement binary cannot start\n');
+  fixture.setPolicy('reject-new');
+  fixture.setProbeDelay(2);
+
+  const { code, io } = await install(fixture, ['--json']);
+
+  expect(code).toBe(1);
+  expect(JSON.parse(io.out).error.id).toBe('daemon.install-rolled-back');
+  expect(fixture.running()).toBe('previous');
+  expect(readFileSync(fixture.previousEntry)).toEqual(oldBytes);
+  expect(readFileSync(fixture.unitPath, 'utf8')).toBe(oldUnit);
+  const loads = fixture.events.filter((event) => event.kind === 'load');
+  expect(loads.some((event) => event.bytes?.includes('cannot start') && !event.accepted)).toBe(true);
+  expect(loads.at(-1)).toMatchObject({ accepted: true, bytes: oldBytes.toString() });
+  expect(fixture.healthReads).toHaveLength(3);
+  expect(fixture.healthReads.every((reading) => reading.running === 'previous' && reading.bytes === oldBytes.toString())).toBe(true);
+  expect(fixture.healthWaits.length).toBe(2);
+  expect(fixture.healthWaits.reduce((sum, wait) => sum + wait, 0)).toBeLessThanOrEqual(6_000);
+});
+
+for (const json of [false, true]) {
+  test(`a restored registration without an answering probe is bounded and gives recovery (${json ? 'structured' : 'plain'})`, async () => {
+    const fixture = refreshFixture();
+    fixture.seedPrevious();
+    fixture.setPolicy('reject-new');
+    fixture.setProbeDelay(Infinity);
+
+    const { code, io } = await install(fixture, json ? ['--json'] : []);
+
+    expect(code).toBe(1);
+    const error = json ? (JSON.parse(io.out) as ErrorDocument).error : null;
+    if (error !== null) expect(error.id).toBe('daemon.install-rollback-failed');
+    const message = error === null ? io.err : error.message + ' ' + error.repair;
+    expect(message).toContain('no daemon is running');
+    expect(message).toContain('team daemon install');
+    expect(fixture.healthReads.length).toBeGreaterThan(1);
+    expect(fixture.healthReads.length).toBeLessThanOrEqual(10);
+    expect(fixture.healthWaits.length).toBe(fixture.healthReads.length - 1);
+    expect(fixture.healthWaits.reduce((sum, wait) => sum + wait, 0)).toBeLessThanOrEqual(6_000);
   });
 }

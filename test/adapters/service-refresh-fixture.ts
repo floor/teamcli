@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { darwinServiceManager } from '../../src/daemon/service-darwin.ts';
+import type { DaemonHealth } from '../../src/daemon/health.ts';
 import type { ServiceProgram, ServiceRunResult, ServiceRunner } from '../../src/daemon/service.ts';
 
 const TEAM = `format: 1
@@ -35,7 +36,7 @@ export type RefreshPolicy = 'accept' | 'reject-new' | 'reject-all' | 'slow-stop'
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
 const REFUSED: ServiceRunResult = { status: 23, stdout: '', stderr: 'synthetic load refused' };
 
-export function refreshFixture(realWait = false) {
+export function refreshFixture(realWait = false, inPlace = false) {
   // Keep the synthetic files in temporary storage so a failing scene can be inspected.
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'service-refresh-scene-')));
   const root = join(base, 'repo');
@@ -45,16 +46,19 @@ export function refreshFixture(realWait = false) {
   execFileSync('git', ['init', '-q'], { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
   const previousEntry = join(base, 'previous-entry.js');
-  const nextEntry = join(base, 'next-entry.js');
+  const nextEntry = inPlace ? previousEntry : join(base, 'next-entry.js');
   writeFileSync(previousEntry, 'synthetic previous binary\n');
-  writeFileSync(nextEntry, 'synthetic replacement binary\n');
+  if (!inPlace) writeFileSync(nextEntry, 'synthetic replacement binary\n');
   const program: ServiceProgram = { execPath: '/synthetic/runtime', entry: nextEntry, roots: [root] };
   let policy: RefreshPolicy = 'accept';
   let running: 'previous' | 'next' | null = null;
   let clock = 0;
   let stoppingUntil = 0;
   const waits: number[] = [];
-  const events: { kind: 'load' | 'stop'; unit: string; accepted: boolean; at: number }[] = [];
+  const events: { kind: 'load' | 'stop'; unit: string; accepted: boolean; at: number; bytes?: string }[] = [];
+  const healthReads: { running: 'previous' | 'next' | null; bytes: string }[] = [];
+  const healthWaits: number[] = [];
+  let probeDelay = 0;
   const runner: ServiceRunner = (_command, argv) => {
     if (argv[0] === 'bootout') {
       running = null;
@@ -64,10 +68,12 @@ export function refreshFixture(realWait = false) {
     }
     if (argv[0] !== 'bootstrap' || argv[2] === undefined) throw new Error('unexpected synthetic manager operation');
     const unit = readFileSync(argv[2], 'utf8');
-    const identity = unit.includes(previousEntry) ? 'previous' : 'next';
+    const entry = unit.includes(previousEntry) ? previousEntry : nextEntry;
+    const bytes = readFileSync(entry, 'utf8');
+    const identity = inPlace ? (bytes === 'synthetic previous binary\n' ? 'previous' : 'next') : unit.includes(previousEntry) ? 'previous' : 'next';
     const accepted = running === null && clock >= stoppingUntil && policy !== 'reject-all' &&
       !(policy === 'reject-new' && identity === 'next');
-    events.push({ kind: 'load', unit, accepted, at: clock });
+    events.push({ kind: 'load', unit, accepted, at: clock, bytes });
     if (accepted) running = identity;
     return accepted ? OK : REFUSED;
   };
@@ -78,7 +84,20 @@ export function refreshFixture(realWait = false) {
   });
   const unitPath = manager.unitPath(home);
   return {
-    base, root, home, previousEntry, nextEntry, program, manager, unitPath, waits, events,
+    base, root, home, previousEntry, nextEntry, program, manager, unitPath, waits, events, healthReads, healthWaits,
+    setProbeDelay(value: number) { probeDelay = value; },
+    async health(): Promise<DaemonHealth> {
+      const bytes = readFileSync(running === 'previous' ? previousEntry : nextEntry, 'utf8');
+      healthReads.push({ running, bytes });
+      const answered = running !== null && healthReads.length > probeDelay;
+      return {
+        daemon: 'teamcli', socket: join(base, 'synthetic.sock'), state: running === null ? 'not-running' : 'running',
+        running: running !== null, pid: running === null ? null : 4242, uid: 4242, since: null, startedBy: 'synthetic-service-manager',
+        version: 'synthetic', gitHead: null, heartbeatAt: null, features: null, stuck: [], roots: [],
+        probe: answered ? { state: 'answered', at: new Date(0).toISOString() } : { state: 'unanswered', at: new Date(0).toISOString(), reason: 'closed' }, why: null,
+      };
+    },
+    async healthSleep(ms: number) { healthWaits.push(ms); },
     running: () => running,
     setPolicy(value: RefreshPolicy) { policy = value; },
     seedPrevious() {
