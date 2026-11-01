@@ -349,10 +349,15 @@ screen:
   # row names the field the question is about, never the question itself
   # (`claude-code/2.1.302/question.txt`, `2.1.289/question-plain.txt`); the sentence is the first
   # row under it that survives a blank, and the option rows below move with the selection.
+  # The choice question sits under the dialog's `☐ Name` header, and its block ends at the first
+  # option row (`❯ 1. …` or `  2. …`, 2.1.302/question.txt). The question wraps with the pane's
+  # width, so the walk reads up to the marker rather than one row; six rows is the cap this
+  # profile declares, and a block still going past it is reported cut, never answered part-way.
   question_text:
     question:
       after: '^\s*☐\s'
-      rows: 1
+      until: '^\s*(?:❯\s*)?[0-9]+\.\s'
+      rows: 6
     plan_approval:
       inline: '^\s*Claude has written up a plan and is ready to execute\.'
     confirmation:

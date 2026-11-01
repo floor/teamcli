@@ -225,9 +225,16 @@ screen:
   # Where each dialog's question sits, so a report can quote it. The question tool words its
   # question after the counter's colon (`antigravity/1.2.16/question-54.txt`); the unsent
   # confirmation asks on its own sentence row (`antigravity/1.2.16/question-unsent-54.txt`).
+  # The question is drawn inline after the tool's `Question N/N:` counter, and its block ends at
+  # the first option row (`> 1. alpha`, `  3. Write-in...`, 1.4.2/question.txt). A question wraps
+  # with the pane's width, so the walk reads up to the marker rather than one row; six rows is the
+  # cap this profile declares, and a block still going past it is reported cut, never answered
+  # part-way.
   question_text:
     question:
       inline: '^\s*Question [0-9]+/[0-9]+:'
+      until: '^\s*>?\s*[0-9]+\.\s'
+      rows: 6
       strip:
         - '^\s*Question [0-9]+/[0-9]+:\s*'
     confirmation:

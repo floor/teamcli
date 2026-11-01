@@ -315,10 +315,15 @@ screen:
   # (`cursor/2026.10.16/question.txt`); the frame and the option number are stripped, and the
   # row below the counter that survives them is the text. The mode switch asks its question on
   # its title row (`cursor/2026.10.01/permission-plan.txt`).
+  # The question's block starts under the box's `Question N of M` row and ends at the first option
+  # row (`› [ ] alpha`, `[ ] Other`, 2026.10.16/question.txt). A question wraps with the box's
+  # width, so the walk reads up to the marker rather than one row; six rows is the cap this
+  # profile declares, and a block still going past it is reported cut, never answered part-way.
   question_text:
     question:
       after: '^\s*│\s*Question [0-9]+ of [0-9]+\s*│\s*$'
-      rows: 1
+      until: '^\s*│\s*(?:›\s*)?\[[ x]\]'
+      rows: 6
       strip:
         - '^\s*│\s*'
         - '\s*│\s*$'

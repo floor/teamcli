@@ -4,7 +4,7 @@
 // is read before `permission`; a login screen is read after it, and only ever as a detection.
 import { describe, expect, test } from 'bun:test';
 import { DIALOG_KINDS, readDialog } from '../src/watch/dialog.ts';
-import { classify, questionText } from '../src/watch/screen.ts';
+import { classify, questionText, questionTextReading } from '../src/watch/screen.ts';
 import { loadScreen } from '../src/watch/screen-file.ts';
 
 const profile = (screen: string): string => `
@@ -132,8 +132,50 @@ describe('the question text a profile places', () => {
   });
 });
 
-describe('one fresh dialog reading', () => {
+describe('a question block read to its end', () => {
   const data = loadScreen(
+    profile(`  question:
+    - any: ['^Question 1/1']
+  question_text:
+    question:
+      after: '^Question [0-9]+/[0-9]+'
+      until: '^[0-9]+\\. '
+      rows: 2`),
+  );
+
+  test('a question the pane wraps is read whole, and two captures differing only in the wrapped row read differently', () => {
+    const one = 'Question 1/1\nWhich name do you\nwant to use?\n1. alpha\n2. beta\n';
+    const two = 'Question 1/1\nWhich name do you\nwant to reuse?\n1. alpha\n2. beta\n';
+    expect(questionTextReading(data, one)).toEqual({ text: 'Which name do you want to use?', complete: true });
+    expect(questionTextReading(data, two)).toEqual({ text: 'Which name do you want to reuse?', complete: true });
+  });
+
+  test('the row that ends the block is never part of the text', () => {
+    expect(questionTextReading(data, 'Question 1/1\nWhich name?\n1. alpha\n'))
+      .toEqual({ text: 'Which name?', complete: true });
+  });
+
+  test('a block still going when the supported rows run out reads cut, never part of the question', () => {
+    const screen = 'Question 1/1\nWhich name do you\nwant to use\nfor the seat\n1. alpha\n';
+    expect(questionTextReading(data, screen)).toEqual({ text: 'Which name do you want to use', complete: false });
+    expect(readDialog(data, screen)).toEqual({ dialog: 'question', text: 'Which name do you want to use', complete: false });
+  });
+
+  test('a profile that names no end marker declares no end, so it never reports a cut', () => {
+    const open = loadScreen(
+      profile(`  question:
+    - any: ['^Which name']
+  question_text:
+    question:
+      after: '^Which name'
+      rows: 1`),
+    );
+    expect(questionTextReading(open, 'Which name\nfirst row\nsecond row\n'))
+      .toEqual({ text: 'first row', complete: true });
+  });
+});
+
+describe('one fresh dialog reading', () => {  const data = loadScreen(
     profile(`  question:
     - any: ['^Which name']
   question_text:
@@ -143,7 +185,7 @@ describe('one fresh dialog reading', () => {
   );
 
   test('a dialog kind and its text', () => {
-    expect(readDialog(data, 'Which name do you want to use?\n> synthetic-note.txt\n')).toEqual({ dialog: 'question', text: 'synthetic-note.txt' });
+    expect(readDialog(data, 'Which name do you want to use?\n> synthetic-note.txt\n')).toEqual({ dialog: 'question', text: 'synthetic-note.txt', complete: true });
   });
 
   test('no dialog is no reading', () => {

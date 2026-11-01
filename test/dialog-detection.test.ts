@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { readDialog } from '../src/watch/dialog.ts';
-import { questionText, readScreen } from '../src/watch/screen.ts';
+import { questionText, readScreen, screenData } from '../src/watch/screen.ts';
 
 const fixture = (path: string): string => readFileSync(new URL(`./fixtures/${path}`, import.meta.url), 'utf8');
 
@@ -81,16 +81,28 @@ describe('the question a captured dialog shows', () => {
     expect(questionText('claude-code', fixture('claude-code/2.1.289/question-ansi.txt'))).not.toBeNull();
     expect(questionText('antigravity', fixture('antigravity/1.3.5/question.txt'))).not.toBeNull();
   });
+
+  test('every shipped profile that places a question names the row that ends its block', () => {
+    // A question wraps with the pane's width; a spec with no end marker cannot tell a cut from
+    // the dialog's own rows below, so it would answer on part of the question.
+    const names = ['claude-code', 'codex', 'cursor', 'gemini', 'grok', 'antigravity', 'muse', 'jules'];
+    const open: string[] = [];
+    for (const name of names) {
+      const spec = screenData(name)?.questionText?.question ?? null;
+      if (spec !== null && !spec.until) open.push(name);
+    }
+    expect(open).toEqual([]);
+  });
 });
 
 describe('one fresh dialog reading on the captures', () => {
   test('each dialog kind reads back with its question', () => {
     expect(readDialog('claude-code', fixture('claude-code/2.1.302/question.txt')))
-      .toEqual({ dialog: 'question', text: 'Which name do you want to use?' });
+      .toEqual({ dialog: 'question', text: 'Which name do you want to use?', complete: true });
     expect(readDialog('claude-code', fixture('claude-code/2.1.289/permission-plan-wide-plain.txt')))
-      .toEqual({ dialog: 'plan approval', text: 'Claude has written up a plan and is ready to execute. Would you like to proceed?' });
+      .toEqual({ dialog: 'plan approval', text: 'Claude has written up a plan and is ready to execute. Would you like to proceed?', complete: true });
     expect(readDialog('cursor', fixture('cursor/2026.10.01/permission-plan.txt')))
-      .toEqual({ dialog: 'confirmation', text: 'Switch to Plan mode?' });
+      .toEqual({ dialog: 'confirmation', text: 'Switch to Plan mode?', complete: true });
   });
 
   test('a screen that is not a dialog is no reading, for every CLI the team runs', () => {
