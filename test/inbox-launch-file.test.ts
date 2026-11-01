@@ -61,7 +61,7 @@ function place(options: { project: string; session: string; seats: readonly stri
 /** The real restart launch's own registration function. The launch object is the one `team
  *  restart` runs with: a missing function here is what leaves every file-route CLI unregistered
  *  on a real restart. */
-function restartRegister(): (cli: string, seat: string, cwd: string, teamFile?: string) => unknown {
+function restartRegister(): (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => unknown {
   const register = restartSources.upLaunch.registerInbox;
   if (typeof register !== 'function') throw new Error('the real restart launch carries no registerInbox');
   return register;
@@ -72,7 +72,7 @@ describe('the real restart launch registers a seat inbox', () => {
     const seatFolder = place({ project: 'elsewhere', session: 'elsewhere', seats: ['lead', 'worker'] });
     const chosen = place({ project: 'acme', session: 'acme', seats: ['lead', 'worker'] });
 
-    expect(restartRegister()('cursor', 'lead', seatFolder.root, chosen.teamFile)).toEqual({ ok: true });
+    expect(restartRegister()('cursor', 'lead', seatFolder.root, 'acme', chosen.teamFile)).toEqual({ ok: true });
 
     // The written config is the launch's: the chosen file's session and path, not the seat
     // folder's team.
@@ -95,7 +95,7 @@ describe('the real restart launch registers a seat inbox', () => {
   ] as const) {
     test(`${label} refuses, though the seat folder holds a valid team`, () => {
       const seatFolder = place({ project: 'elsewhere', session: 'elsewhere', seats: ['lead', 'worker'] });
-      expect(restartRegister()('cursor', 'lead', seatFolder.root, launchFile(seatFolder))).toEqual({
+      expect(restartRegister()('cursor', 'lead', seatFolder.root, 'acme', launchFile(seatFolder))).toEqual({
         ok: false,
         reason: 'the team file its launch read could not be read',
       });
@@ -109,7 +109,7 @@ describe('the real restart launch registers a seat inbox', () => {
     // A link to itself cannot be read; no chmod, no private state.
     const loop = join(seatFolder.root, 'loop.yaml');
     symlinkSync(loop, loop);
-    expect(restartRegister()('cursor', 'lead', seatFolder.root, loop)).toEqual({
+    expect(restartRegister()('cursor', 'lead', seatFolder.root, 'acme', loop)).toEqual({
       ok: false,
       reason: 'the team file its launch read could not be read',
     });

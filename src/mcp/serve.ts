@@ -27,7 +27,7 @@ import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
 import { isBriefEpoch } from '../launch/brief-id.ts';
 import { currentBriefClaim, isGeneralBriefRecord } from '../launch/general-brief.ts';
-import { readTeams } from '../registry/teams.ts';
+import { registeredRootOf } from '../registry/teams.ts';
 import { publishRecordRead } from '../send/read-receipt.ts';
 import { readSealedRecord, recordAuthOfSealed } from '../send/record.ts';
 import { wakeHead } from '../send/native.ts';
@@ -557,23 +557,16 @@ function registeredRoot(
   seat: string,
   session: string | undefined,
 ): { ok: true; root: string } | { ok: false; message: string } {
-  let teams: ReturnType<typeof readTeams>;
-  try {
-    teams = readTeams(home);
-  } catch (error) {
-    return { ok: false, message: `the team registry cannot be read: ${(error as Error).message}` };
+  const found = registeredRootOf(home, seat, session);
+  if (found.ok) return found;
+  switch (found.kind) {
+    case 'unreadable':
+      return { ok: false, message: `the team registry cannot be read: ${found.message}` };
+    case 'none':
+      return { ok: false, message: `no registered team holds seat ${JSON.stringify(seat)}; pass --file` };
+    case 'ambiguous':
+      return { ok: false, message: `seat ${JSON.stringify(seat)} is on ${String(found.ids.length)} registered teams (${found.ids.join(', ')}); pass --file to say which` };
   }
-  const holders = Object.values(teams).filter((team) => team.roster.some((line) => line.seat === seat));
-  if (holders.length === 0) return { ok: false, message: `no registered team holds seat ${JSON.stringify(seat)}; pass --file` };
-  const matching = session === undefined
-    ? holders
-    : holders.filter((team) => team.session === session || team.lobbies[session] !== undefined);
-  const candidates = matching.length > 0 ? matching : holders;
-  if (candidates.length > 1) {
-    const ids = candidates.map((team) => team.id ?? team.project).sort();
-    return { ok: false, message: `seat ${JSON.stringify(seat)} is on ${String(candidates.length)} registered teams (${ids.join(', ')}); pass --file to say which` };
-  }
-  return { ok: true, root: candidates[0]!.root };
 }
 
 /**

@@ -25,7 +25,7 @@ import {
 import { devModeCallerGate, devModeExpiryNote, devModeMark, logDevMode, logDevModeState, resolveDevMode, type DevModeRun } from '../dev_mode.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { forgetLaunchedPane, launchedTeamFile, noteLaunchedPane } from '../file/launched-file.ts';
-import { placedProblems } from '../file/load.ts';
+import { launchTeamFile, placedProblems } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { relaunchRepair } from '../file/sections/lead.ts';
 import { displayAgent, workspaceLabel } from '../file/sections/seats.ts';
@@ -129,8 +129,8 @@ const realUpLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd, teamFile) =>
-    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  registerInbox: (cli, seat, cwd, session, teamFile) =>
+    registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (endpoint) => launchCodexEndpoint(endpoint),
     stop: (endpoint) => stopSeatCodexEndpoint(endpoint),
@@ -460,6 +460,7 @@ export async function runRestart(argv: string[], io: Io, sources: RestartSources
     root,
     home,
     path,
+    launchFile: launchTeamFile(loaded),
     team,
     session,
     name,
@@ -544,6 +545,10 @@ export type PerformInput = {
   root: string;
   home: string;
   path: string;
+  /** The team file the launch names, when it names one: absent for a registry team, whose
+   *  record is the definition and whose file beside it need not exist. `path` stays the root's
+   *  file path for every read. */
+  launchFile?: string;
   team: TeamFile;
   session: string;
   name: string;
@@ -759,7 +764,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      teamFile: path,
+      teamFile: input.launchFile,
       cliHooks: plannedCliHooks(dir, session, [planSeat]),
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
@@ -1057,7 +1062,7 @@ export async function performRestart(input: PerformInput): Promise<PerformResult
       sessionRunning: true,
       seats: [planSeat],
       watchAlive: true,
-      teamFile: path,
+      teamFile: input.launchFile,
       cliHooks: installed,
       briefEpochs: currentBriefEpochs(dir, session),
       watchLabel: watchLabel(team.project),
@@ -1543,7 +1548,7 @@ function hostOf(input: {
           stopManagedCodexEndpoint: (endpoint: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(endpoint),
         }),
     ...(launch.registerInbox
-      ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+      ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
       : {}),
     ...(launch.reportDisplayAgent
       ? { reportDisplayAgent: (s: string, pane: string, text: string) => launch.reportDisplayAgent!(s, pane, text) }
