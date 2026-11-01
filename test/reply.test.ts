@@ -564,7 +564,7 @@ describe('a reply to the owner goes to its entity owner-reply endpoint', () => {
     expect(result.code).toBe(1);
     expect(result.err).toBe(
       `team reply: record ${SENT} was sent by the owner, and the owner's reply endpoint orchestrator@floor cannot be resolved: ` +
-        'orchestrator@floor: no team registry record matches "floor" (by id, project or session); nothing was written\n',
+        'orchestrator@floor: no team registry record matches "floor" (by id, name or session); nothing was written\n',
     );
   });
 

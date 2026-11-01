@@ -1,5 +1,5 @@
 // `team send`'s addressing: one spec — an agent id (`agt_…`), a `@nickname`, a `seat@team` (team
-// = id, project or session; `lead@team` is the team's lead), or a plain seat of the caller's own
+// = id, name or session; `lead@team` is the team's lead), or a plain seat of the caller's own
 // team — resolved through the registry, with the live herdr read as the fallback for a record
 // that carries no pane yet. The unit scenes pin each refusal; the last scenes run the whole
 // command, so the drop the receiver is pointed at carries the sender's header, and a spec the
@@ -214,7 +214,7 @@ describe('resolveTarget by seat@team', () => {
     const w = world('alpha', 'alpha', 'lead', [seatBlock('coordinator', 'lead', 'claude-code', 'anthropic')]);
     seatOf(w, 'alpha', 'alpha', 'lead', 'coordinator', 'pane-alpha-lead');
 
-    expect(resolveTarget(w.home, 'lead@ghost', { cwd: w.root })).toEqual({ error: 'lead@ghost: no team registry record matches "ghost" (by id, project or session)' });
+    expect(resolveTarget(w.home, 'lead@ghost', { cwd: w.root })).toEqual({ error: 'lead@ghost: no team registry record matches "ghost" (by id, name or session)' });
     expect(resolveTarget(w.home, 'ghost@alpha', { cwd: w.root })).toEqual({ error: 'ghost@alpha: no registered agent holds the seat or nickname "ghost" in that team; `team up` records a seat it launches, or `team register ghost` records one already running' });
     expect(resolveTarget(w.home, 'a@b@c', { cwd: w.root })).toEqual({ error: 'a@b@c: a spec is @<nickname>, <seat>@<team>, <nickname>@<team>, lead@<team>, or an agent id' });
     expect(resolveTarget(w.home, 'lead@', { cwd: w.root })).toEqual({ error: 'lead@: a spec is @<nickname>, <seat>@<team>, <nickname>@<team>, lead@<team>, or an agent id' });

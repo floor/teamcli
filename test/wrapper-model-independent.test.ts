@@ -22,7 +22,7 @@ import type { Live } from '../src/status/compare.ts';
 import { approvalStanding, type Standing } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { newMemory, pass } from '../src/watch/pass.ts';
-import { recordBody, testIo, type TestIo } from './helpers.ts';
+import { recordBody, testIo, wrapperPane, type TestIo } from './helpers.ts';
 import { dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 const STATUS_NOW = new Date('2026-10-31T09:00:00Z');
@@ -33,7 +33,6 @@ const DS_PANE = 'fixture-pane-ds';
 
 const claudeScreen = (model: string) =>
   `❯ \n${'─'.repeat(40)}\n  main · …/glow · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
-const banner = (id: string) => `  ${id} · API Usage Billing\n`;
 
 // A team of my own: a plain Claude Code lead, and two seats whose launch lines are provider
 // wrappers around Claude Code, each declaring another maker's model.
@@ -248,7 +247,7 @@ describe('team send behind a provider wrapper', () => {
     const made = world(['typed']);
     cleanup = made.cleanup;
     registerLead(made, { model: 'GLM', version: '5.3', launch: 'claude-glm.sh' });
-    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6') + banner('deepseek-v4.1'));
+    const { host, pane } = sendHost(made, wrapperPane('deepseek-v4.1') + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
@@ -262,7 +261,7 @@ describe('team send behind a provider wrapper', () => {
     const made = world(['typed']);
     cleanup = made.cleanup;
     registerLead(made, { model: 'GLM', version: '5.3', launch: 'claude-glm.sh' });
-    const { host } = sendHost(made, claudeScreen('Opus 4.6') + banner('glm-5.3'));
+    const { host } = sendHost(made, wrapperPane('glm-5.3') + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
@@ -317,7 +316,7 @@ describe('team send behind a provider wrapper', () => {
     const made = world(['typed']);
     cleanup = made.cleanup;
     registerLead(made, { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' });
-    const { host } = sendHost(made, claudeScreen('Opus 4.6') + banner('glm-5.3'));
+    const { host } = sendHost(made, wrapperPane('glm-5.3') + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
@@ -329,7 +328,7 @@ describe('team send behind a provider wrapper', () => {
     const made = world(['typed']);
     cleanup = made.cleanup;
     registerLead(made, { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' });
-    const { host } = sendHost(made, claudeScreen('Opus 4.6') + banner('deepseek-v4.1-flash'));
+    const { host } = sendHost(made, wrapperPane('deepseek-v4.1-flash') + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
@@ -344,7 +343,7 @@ describe('team send behind a provider wrapper', () => {
     const made = world(['typed']);
     cleanup = made.cleanup;
     registerLead(made, { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' });
-    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6') + banner('glm-3.5'));
+    const { host, pane } = sendHost(made, wrapperPane('glm-3.5') + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
@@ -357,7 +356,7 @@ describe('team send behind a provider wrapper', () => {
     const made = world(['typed']);
     cleanup = made.cleanup;
     registerLead(made, { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' });
-    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6') + banner('deepseek-v1.4-flash'));
+    const { host, pane } = sendHost(made, wrapperPane('deepseek-v1.4-flash') + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);
@@ -486,7 +485,7 @@ describe('team watch behind a provider wrapper', () => {
   test('the watch reports a banner id that writes the GLM version in another order', () => {
     const reports = reportsOf({
       signed: { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' },
-      screen: claudeScreen('Opus 4.6') + banner('glm-3.5'),
+      screen: wrapperPane('glm-3.5') + claudeScreen('Opus 4.6'),
     });
     expect(modelReports(reports).some((text) => text.includes('the registry says GLM 5 5.3:'))).toBe(true);
   });
@@ -494,7 +493,7 @@ describe('team watch behind a provider wrapper', () => {
   test('the watch reports a banner id that writes the DeepSeek version in another order', () => {
     const reports = reportsOf({
       signed: { model: 'DeepSeek Flash', version: 'V4.1', launch: 'claude-deepseek.sh' },
-      screen: claudeScreen('Opus 4.6') + banner('deepseek-v1.4-flash'),
+      screen: wrapperPane('deepseek-v1.4-flash') + claudeScreen('Opus 4.6'),
     });
     expect(modelReports(reports).some((text) => text.includes('the registry says DeepSeek Flash V4.1:'))).toBe(true);
   });
@@ -502,7 +501,7 @@ describe('team watch behind a provider wrapper', () => {
   test('the watch reports nothing for a banner id naming the signed model', () => {
     const reports = reportsOf({
       signed: { model: 'GLM 5', version: '5.3', launch: 'claude-glm.sh' },
-      screen: claudeScreen('Opus 4.6') + banner('glm-5.3'),
+      screen: wrapperPane('glm-5.3') + claudeScreen('Opus 4.6'),
     });
     expect(modelReports(reports)).toEqual([]);
   });

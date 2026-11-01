@@ -4,7 +4,7 @@
 // where the status alone says what happened.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runSend, type SendHost } from '../src/commands/send.ts';
@@ -98,14 +98,11 @@ delivery_order: [mcp-inbox, typed]
 `;
 }
 
-/** A short writable parent, or the platform temp root when neither short path exists. The
- *  daemon spells its trigger as the absolute path of the store drop, so a deep temp root can
- *  push that line past `TRIGGER_MAX` on a machine where the suite still has to pass. */
+/** The runtime temp folder itself, with no deeper folder of our own: the daemon spells its
+ *  trigger as the absolute path of the store drop, so this scene keeps the world as shallow as
+ *  the platform allows instead of assuming one fixed folder is short enough. */
 function shortTempBase(): string {
-  for (const candidate of ['/private/tmp', '/tmp']) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return tmpdir();
+  return realpathSync(tmpdir());
 }
 
 function setupWorld(baseDir: string = tmpdir()) {

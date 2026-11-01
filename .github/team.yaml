@@ -357,6 +357,15 @@ seats:
     display: GPT Sol 6.1
     launch: codex
 
+  - role: tester
+    name: tester-sol-6-1
+    cli: codex
+    vendor: openai
+    model: GPT Sol
+    version: "6.1"
+    display: GPT Sol 6.1
+    launch: codex
+
   - role: orchestrator
     name: orchestrator-luna
     cli: codex

@@ -5269,8 +5269,15 @@
       "code": 1,
       "command": "team",
       "id": "team.general-refused",
-      "meaning": "the general grant does not admit this command here (expired, another key, an op or entity it does not cover); nothing ran",
+      "meaning": "the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran",
       "trigger": "team status --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.general-target",
+      "meaning": "the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran",
+      "trigger": "team status --general <grant.json> --key <client.key> (a grant that lists entities)"
     },
     {
       "code": 1,
@@ -5304,8 +5311,8 @@
       "code": 2,
       "command": "team",
       "id": "team.general-usage",
-      "meaning": "--general is given without --key, or on the grant-issuing command",
-      "trigger": "team status --general <grant.json>"
+      "meaning": "--general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes)",
+      "trigger": "team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>"
     },
     {
       "code": 2,

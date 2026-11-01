@@ -3349,6 +3349,22 @@ scene('team.no-command', async (place) => show(await entry([], testIo(place.root
 scene('team.version', async (place) => show(await entry(['--version'], testIo(place.root, owner)), version()));
 scene('team.general-usage', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json')], testIo(place.root, owner)), '--general needs --key'));
 scene('team.general-refused', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], testIo(place.root, owner)), 'cannot be read as a general grant'));
+scene('team.general-target', async (place) => {
+  const home = clientHome('gg-target');
+  try {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const pair = newClientKeyPair();
+    const written = writeClientKeyFiles(clientKeyDir(home, 'a'), pair);
+    if (!written.ok) throw new Error(written.why);
+    const scoped = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pair.publicKey, entities: ['alpha'], ops: ['*'], mayIssue: false, expires: new Date(Date.now() + 86_400_000) });
+    if (!scoped.ok) throw new Error(scoped.why);
+    const io = testIo(place.root, owner);
+    io.env.HOME = home;
+    return show(await entry(['status', '--general', scoped.path, '--key', written.keyPath], io), 'scoped general grants arrive in 0.5.11; use a wildcard grant or the owner path');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 scene('team.unknown', async (place) => show(await entry(['nosuch'], testIo(place.root, owner)), 'unknown command'));
 scene('team.approve-removed', async (place) => show(await entry(['approve'], testIo(place.root, owner)), 'team approve was removed in 0.5.0'));
 scene('team.command-help', async (place) => show(await entry(['status', '--help'], testIo(place.root, owner)), 'Usage: team status'));

@@ -24,7 +24,7 @@ import type { Io } from '../src/io.ts';
 import { writePolicySet } from '../src/policy/sources.ts';
 import { readState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
-import { watchStopRead } from '../src/watch/pane.ts';
+import { watchLaunchOf, watchStopRead } from '../src/watch/pane.ts';
 import { claudeBox, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-14T09:00:00Z');
@@ -39,8 +39,21 @@ let home = '';
 let lobby = '';
 let file = '';
 
+// The runner configures no git identity, and the host's own guess is not something a scene can
+// rely on: every fixture commit names a synthetic author and committer. A failure keeps git's
+// stderr, so the cause is read next time, not guessed.
 function git(cwd: string, ...args: string[]): void {
-  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'ignore', env: gitEnv() });
+  const env = gitEnv();
+  env.GIT_AUTHOR_NAME = 'Fixture';
+  env.GIT_AUTHOR_EMAIL = 'fixture@example.invalid';
+  env.GIT_COMMITTER_NAME = 'Fixture';
+  env.GIT_COMMITTER_EMAIL = 'fixture@example.invalid';
+  try {
+    execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env });
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '').trim();
+    throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${stderr === '' ? (error as Error).message : stderr}`);
+  }
 }
 
 function checked(text: string): TeamFile {
@@ -463,22 +476,25 @@ describe('the watch reads its start instant after it is admitted', () => {
     expect(seen?.started_at).toBe(NOW.toISOString());
     expect(Date.parse(seen!.heartbeat)).toBeGreaterThan(NOW.getTime());
 
-    // Down proves a pane-less record by its start instant. The record a real watch writes
-    // matches a process that started just before that instant, and one that started well after
-    // it does not; a record with no instant is never signalled.
+    // Down proves a pane-less record by its start instant, under the team's own launch identity:
+    // this watch names no file, so its working folder is the folder this team is read from. The
+    // record a real watch writes matches a process that started just before that instant, and one
+    // that started well after it does not; a record with no instant is never signalled.
     const record = { pid: seen!.pid!, heartbeat: seen!.heartbeat, started_at: seen!.started_at };
     const cli = realpathSync(fileURLToPath(new URL('../src/cli.ts', import.meta.url)));
     const command = `bun ${cli} watch --session acme-web`;
+    const launch = watchLaunchOf(file, join(root, '.agents'));
     const recordedAt = Date.parse(record.started_at!);
-    const proven = watchStopRead(record, 'acme-web', { alive: () => true, commandOf: () => command, startOf: () => recordedAt - 1_000 });
+    const proven = watchStopRead(record, 'acme-web', { alive: () => true, commandOf: () => command, startOf: () => recordedAt - 1_000, cwdOf: () => root }, launch);
     expect(proven).toEqual({ kind: 'proven', pid: 4242 });
-    const mismatched = watchStopRead(record, 'acme-web', { alive: () => true, commandOf: () => command, startOf: () => recordedAt + 5_000 });
+    const mismatched = watchStopRead(record, 'acme-web', { alive: () => true, commandOf: () => command, startOf: () => recordedAt + 5_000, cwdOf: () => root }, launch);
     expect(mismatched).toEqual({ kind: 'unproven', pid: 4242, why: 'pid 4242 started at a time its record does not match' });
     const noStart = watchStopRead({ pid: 4242 }, 'acme-web', {
       alive: () => true,
       commandOf: () => command,
       startOf: boom('a start instant a record without one does not have') as unknown as () => number,
-    });
+      cwdOf: () => root,
+    }, launch);
     expect(noStart).toEqual({ kind: 'unproven', pid: 4242, why: 'pid 4242 has no recorded start instant to match' });
   });
 });
