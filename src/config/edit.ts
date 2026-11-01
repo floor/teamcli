@@ -22,6 +22,7 @@ import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.t
 import { validateTeamFile } from '../file/validate.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { nicknameChangeGate } from '../registry/names.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { refreshRoster } from '../registry/sync.ts';
@@ -257,6 +258,25 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     else io.stdout(`nothing changed in ${where}\n`);
     // exit: config.unchanged
     return 0;
+  }
+  // A nickname this write newly sets is held to the entity's `names.unique` word, before the
+  // record is touched: the same check for an owner's set, an edit and a general grant. A file
+  // that does not validate is left to the writer below, whose refusal names its own problems.
+  const namesAfter = validateTeamFile(next);
+  if (namesAfter.ok) {
+    const namesBefore = validateTeamFile(text);
+    const names = nicknameChangeGate({
+      home,
+      teamId: teamIdOf(root),
+      root,
+      before: namesBefore.ok ? namesBefore.team : null,
+      after: namesAfter.team,
+    });
+    if (!names.ok) {
+      refuse(io, json, 'config', { id: 'config.name-taken', message: names.message, repair: null });
+      // exit: config.name-taken
+      return 1;
+    }
   }
   const now = sources.now;
   const wrote = writeTeamText(file, next, { home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}) });
