@@ -963,13 +963,14 @@ function placedOnLaunchLine(command: string, addition: string, binary: string): 
  *  CLI, with the span of its body text. Every layer's source must be exactly the text this
  *  reader decoded, so a position in the body is a position in the line, and every layer's body
  *  must be one simple command ({@link provenScriptWord}) — a reader that rewrites words inside a
- *  script asks the same proof a placement and a word read ask. Null when the line has no shell
- *  command string, or one this reader cannot read through. */
+ *  script asks the same proof a placement and a word read ask. One nested shell is followed,
+ *  exactly as a placement follows it ({@link placementOf}); a line nested deeper has no body.
+ *  Null when the line has no shell command string, or one this reader cannot read through. */
 type CliBody = { text: string; start: number; end: number };
 function cliBodyOn(binary: string, command: string): CliBody | null {
   let text = command;
   let offset = 0;
-  for (let depth = 0; depth < 4; depth += 1) {
+  for (let depth = 0; depth < 2; depth += 1) {
     const found = shellScriptWordOf(text);
     if (found === null) return null;
     const shell = shellProgramOf(text);
@@ -997,12 +998,13 @@ function cliBodyOn(binary: string, command: string): CliBody | null {
  *  word the shell that parses it may rewrite, a body that is more than one simple command, or a
  *  shell whose syntax this reader does not model, names no word of this CLI, whatever its
  *  decoded words appear to say. The proof is the one the placement asks, so a reader is unknown
- *  exactly where a placement refuses. Reading needs no
+ *  exactly where a placement refuses: one nested shell is followed, and a line nested deeper
+ *  names no word either. Reading needs no
  *  source positions, so a line this tool has already written into — one whose inner quotes are
  *  spliced as `'\''` — still reads exactly as the CLI receives it. */
 function cliTextOf(binary: string, command: string): string | null {
   let text = command.trimEnd();
-  for (let depth = 0; depth < 4; depth += 1) {
+  for (let depth = 0; depth < 2; depth += 1) {
     const found = shellScriptWordOf(text);
     if (found === null) return null;
     const shell = shellProgramOf(text);

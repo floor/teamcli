@@ -24,6 +24,7 @@ import {
   cliWordList,
   cliWordsOf,
   launchCommand,
+  launchSessionId,
   namedResumeTarget,
   resumeCarry,
   withoutResume,
@@ -518,6 +519,11 @@ describe('an unprovable line proves no word, and every reader reads it as 0.5.10
   });
 });
 
+// A shell nested two levels down: one nesting is followed to the script it runs, and the proof
+// stops there for every reader.
+const THREE_SHELLS = `/bin/sh -c ${JSON.stringify(`sh -c 'sh -c "claude --resume known"'`)}`;
+const THREE_SHELLS_DECLARED = `/bin/sh -c ${JSON.stringify(`sh -c 'sh -c "claude --session-id declared-1"'`)}`;
+
 describe('one proof decides both: a reader is unknown exactly where the placement refuses', () => {
   const baseline = (line: string): string =>
     `AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt Rules.`;
@@ -552,6 +558,9 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
     // A shell whose syntax this reader does not model: the body may be one simple command in
     // POSIX terms and still mean something else to that shell, so no word is proved.
     { name: 'a shell this reader does not write inside', line: "/usr/bin/fish -c 'claude --model m'" },
+    // A shell nested two levels down: beyond the one nested shell the placement follows, so the
+    // line is unprovable however literal its body looks.
+    { name: 'a shell nested two levels down', line: `/bin/sh -c ${JSON.stringify(`sh -c 'sh -c "claude --model m"'`)}` },
   ];
   const PROVED = "/bin/sh -c 'claude --model m'";
 
@@ -626,6 +635,22 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
       expect(`${name}: reader unknown — ${readerUnknown}`).toBe(`${name}: reader unknown — false`);
       expect(`${name}: ${readerUnknown}`).toBe(`${name}: ${placementRefused}`);
     }
+  });
+});
+
+describe('a shell nested deeper than one level is unprovable for every reader', () => {
+  test('the words, the resume and the launch all read nothing, and the launch says so once', () => {
+    expect(cliWordList('claude-code', THREE_SHELLS)).toBeNull();
+    expect(cliWordsOf('claude-code', THREE_SHELLS)).toBe('');
+    expect(namedResumeTarget('claude-code', THREE_SHELLS)).toBeNull();
+    expect(withResume('claude-code', THREE_SHELLS, 'abc-1')).toBeNull();
+    expect(withoutResume('claude-code', THREE_SHELLS)).toBeNull();
+    expect(launchSessionId(THREE_SHELLS)).toBeUndefined();
+    expect(launchSessionId(THREE_SHELLS_DECLARED)).toBeUndefined();
+    const launch = withLaunchSession('claude-code', THREE_SHELLS);
+    expect(launch.command).toBe(THREE_SHELLS);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
   });
 });
 
