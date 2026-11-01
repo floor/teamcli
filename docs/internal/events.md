@@ -40,8 +40,15 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   whole retained log and rebuilds the checkpoint. A record altered earlier is therefore still
   caught: it changes the digest, and the read that sees the change falls back to the full verify
   that finds it. File boundaries are not part of the digest, so a rotation that keeps every byte
-  keeps the checkpoint, while a trim does not. The checkpoint lives in the bus process's memory: a
-  restart, or a read from another process, starts from a full verify.
+  keeps the checkpoint, while a trim does not. The process keeps its checkpoint in memory, and a
+  read that verified every retained record also writes it beside the log
+  (`verify-checkpoint.json`: format, key print, retained-file count, highest verified sequence,
+  digest), atomically. The file is written only when nothing in the read was unverified, because
+  it cannot record which prefix records were; and it is a candidate, never an answer — a different
+  key, another retained-file count, or a digest over different bytes is a miss, and the read
+  verifies in full. So a restart or another process verifies only the records appended since the
+  last clean read, and a record altered earlier is still caught. An unreadable, partial, or
+  foreign checkpoint file is ignored, never repaired into trust.
 - **No body, no instructions**: An event carries `v: 1`, `seq`, `ts`, `kind`, `session`,
   `record_id`, and optional routing/context tokens (`from`, `to`, `seat`, `subject`, `thread`,
   `via`, `reason`, `prompt`, `rule`). It never carries a message body.
