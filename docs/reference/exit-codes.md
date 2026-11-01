@@ -80,27 +80,35 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `agents.registry` | `agents` | 1 | the team registry cannot be read | `team agents prune` |
 | `agents.stale` | `agents` | 1 | the dry run found records to retire | `team agents prune` |
 | `agents.invocation` | `agents` | 2 | the invocation cannot be read | `team agents prune --nope` |
+| `answer.question` | `answer` | 0 | the question dialog was answered: dismissed with the recorded key, and the seat sent the decision line | `team answer lead question` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
 | `answer.ambiguous` | `answer` | 1 | herdr lists more than one agent of this name | `team answer lead trust` |
 | `answer.another-pane` | `answer` | 1 | the state records another pane for the caller's seat | `team answer lead trust` |
-| `answer.caller` | `answer` | 1 | the caller may not answer a trust dialog | `team answer lead trust` |
+| `answer.caller` | `answer` | 1 | the caller may not answer a dialog | `team answer lead trust` |
+| `answer.delivery` | `answer` | 1 | the dialog was dismissed, but the decision line could not be delivered; the recovery stays recorded | `team answer lead question` |
 | `answer.detached` | `answer` | 1 | a run with no terminal | `team answer lead trust` |
+| `answer.disagree` | `answer` | 1 | two fresh reads of the pane do not agree on the dialog | `team answer lead question` |
 | `answer.file-owner` | `answer` | 1 | --file is the owner's | `team answer lead trust --file .agents/team.yaml` |
 | `answer.folder` | `answer` | 1 | the dialog's folder is not the lobby's exact trust entry | `team answer lead trust` |
 | `answer.human` | `answer` | 1 | the seat is a human's pane; no dialog key is pressed and no rules line is typed | `team answer lead trust` |
+| `answer.identity` | `answer` | 1 | the seat's launched identity was not recorded; no process in its pane can be checked against it | `team answer lead question` |
+| `answer.incomplete` | `answer` | 1 | the question runs past the rows this version reads; it is not answered | `team answer lead question` |
 | `answer.label` | `answer` | 1 | the trust choice is not the recorded one | `team answer lead trust` |
+| `answer.login` | `answer` | 1 | the pane is at a login prompt; it is never answered | `team answer lead question` |
 | `answer.no-pane` | `answer` | 1 | the state records no pane for the caller's seat | `team answer lead trust` |
+| `answer.not-a-question` | `answer` | 1 | the pane is not at a question, plan approval or confirmation dialog | `team answer lead question` |
+| `answer.permission` | `answer` | 1 | the pane is at a permission prompt, including trust to run a command; it is never answered | `team answer lead question` |
 | `answer.policy` | `answer` | 1 | the dialogs.trust grant is not in force | `team answer lead trust` |
 | `answer.process` | `answer` | 1 | the process in the pane is not the one team launched | `team answer lead trust` |
-| `answer.recovery` | `answer` | 1 | the trust answer did not complete: the seat stays in recovery | `team answer lead trust` |
+| `answer.recovery` | `answer` | 1 | the answer did not complete: the seat stays in recovery | `team answer lead trust` |
 | `answer.screen` | `answer` | 1 | the pane is not the trust dialog | `team answer lead trust` |
 | `answer.session-owner` | `answer` | 1 | --session is the owner's | `team answer lead trust --session other` |
-| `answer.state` | `answer` | 1 | the seat is not waiting at a trust dialog | `team answer lead trust` |
+| `answer.state` | `answer` | 1 | the seat is not waiting at the dialog this word answers | `team answer lead trust` |
 | `answer.unverified` | `answer` | 1 | the name is not a declared seat | `team answer lead trust` |
-| `answer.version` | `answer` | 1 | this version has no trust answer | `team answer lead trust` |
-| `answer.configuration` | `answer` | 2 | the team file cannot be read | `team answer lead trust --file missing.yaml` |
-| `answer.usage` | `answer` | 2 | the invocation is not a seat and trust | `team answer` |
+| `answer.version` | `answer` | 1 | this version has no answer for the dialog | `team answer lead trust` |
+| `answer.configuration` | `answer` | 2 | the team file cannot be read, or the decision line would go to another team | `team answer lead trust --file missing.yaml` |
+| `answer.usage` | `answer` | 2 | the invocation is not a seat and trust or question | `team answer` |
 | `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id...> --request` |
 | `approvals.listed` | `approvals` | 0 | the always rules were listed | `team approvals list` |
 | `approvals.revoked` | `approvals` | 0 | the always rules were removed | `team approvals revoke <id...>` |

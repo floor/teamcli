@@ -119,7 +119,18 @@
     },
     "dialog": {
       "type": "string",
-      "const": "trust"
+      "enum": [
+        "trust",
+        "question"
+      ]
+    },
+    "dialog_kind": {
+      "type": "string",
+      "enum": [
+        "question",
+        "plan approval",
+        "confirmation"
+      ]
     },
     "state": {
       "type": "string",
