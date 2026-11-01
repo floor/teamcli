@@ -234,7 +234,7 @@ function makeWorld(
     sessionUp: () => true,
     createWorkspace(_session, _cwd, label) {
       made += 1;
-      const pane = `w${10 + made}:p1`;
+      const pane = `pane${10 + made}`;
       const workspace = `w${10 + made}`;
       trace.created.push(label);
       labels.set(workspace, label);
