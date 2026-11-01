@@ -963,6 +963,16 @@ function placedOnLaunchLine(command: string, addition: string, binary: string): 
   return placed.uncertain ? null : placed.line;
 }
 
+/** The whole line as the CLI's own body, when a word written after the line still reaches the
+ *  CLI ({@link takesAppendedWord}): the one place a reader or rewriter takes the whole line as
+ *  the CLI's text. Null when the line swallows its tail — a comment, an operator, a redirect, a
+ *  newline or an unclosed quote after the program word — because the words a tokenizer reads
+ *  there are not the words the CLI receives. */
+function plainBodyOf(command: string): CliBody | null {
+  const trimmed = command.trimEnd();
+  return takesAppendedWord(trimmed) ? { text: trimmed, start: 0, end: trimmed.length } : null;
+}
+
 /** Where a line's CLI words sit in the line's source: the innermost shell script that runs the
  *  CLI, with the span of its body text. Every layer's source must be exactly the text this
  *  reader decoded, so a position in the body is a position in the line, and every layer's body
@@ -1401,12 +1411,11 @@ type FlagRewrite = {
  *  the flag and a quoted value is the value, and the flag's word in source is replaced whole, so
  *  the closing quote of a script is never touched. A line that does not set the flag takes the
  *  addition where the CLI reads it, or after the line when this version cannot prove a place; a
- *  script this version cannot read through keeps 0.5.10's append, which changes no existing word. */
+ *  line this version cannot prove — a script it cannot read through, or a plain line that
+ *  swallows its tail — keeps 0.5.10's append, which changes no existing word. */
 function rewriteOnLaunchLine(profile: Profile, command: string, rewrite: FlagRewrite): string {
   const trimmed = command.trimEnd();
-  const body = shellScriptWordOf(trimmed) === null
-    ? { text: trimmed, start: 0, end: trimmed.length }
-    : cliBodyOn(profile.binary, trimmed);
+  const body = shellScriptWordOf(trimmed) === null ? plainBodyOf(trimmed) : cliBodyOn(profile.binary, trimmed);
   if (body === null) return trimmed === '' ? rewrite.addition : `${trimmed} ${rewrite.addition}`;
   const words = shellWords(body.text);
   const site = words === null ? null : flagValueSite(words, rewrite.flags, rewrite.wanted);
@@ -2330,15 +2339,14 @@ export function conversationOnDisk(cli: string, cwd: string, id: string, env: No
 /** The same launch line without its resume, for a CLI whose resume form is measured as a flag
  *  and its id (`--resume <id>` / `-r <id>`, Claude Code). Null where it is not. A resume inside
  *  a trailing quoted script is stripped there and the quotes stay: a word after the closing
- *  quote is the script's positional word, not the CLI's. */
+ *  quote is the script's positional word, not the CLI's. A plain line this version cannot prove
+ *  is null too: a word a tokenizer finds after a comment or an operator is not the CLI's. */
 export function withoutResume(cli: string, command: string): string | null {
   if (cli !== 'claude-code') return null;
   const trimmed = command.trimEnd();
   // A line whose quoting never closes has no knowable words: nothing may be stripped from it.
   if (shellWords(trimmed) === null) return null;
-  const body = shellScriptWordOf(trimmed) === null
-    ? { text: trimmed, start: 0, end: trimmed.length }
-    : cliBodyOn('claude', trimmed);
+  const body = shellScriptWordOf(trimmed) === null ? plainBodyOf(trimmed) : cliBodyOn('claude', trimmed);
   // A script this version cannot read through keeps its words: a resume is never stripped from
   // text whose quoting is not proved.
   if (body === null) return null;

@@ -636,6 +636,23 @@ describe('one proof decides both: a reader is unknown exactly where the placemen
       expect(`${name}: ${readerUnknown}`).toBe(`${name}: ${placementRefused}`);
     }
   });
+
+  // The span rewriters ask the same plain proof the placement and the word read ask: a refused
+  // plain line's words are not the CLI's, so nothing may be stripped from a comment or a later
+  // command, and no word inside the line may be replaced.
+  test('the span rewriters leave a refused plain line alone', () => {
+    const comment = 'claude --model m # --resume abc-1';
+    const laterCommand = 'claude --model m; echo --resume abc-1';
+    for (const line of [comment, laterCommand]) {
+      expect(cliWordList('claude-code', line)).toBeNull();
+      expect(withResume('claude-code', line, 'abc-2')).toBeNull();
+      expect(withoutResume('claude-code', line)).toBeNull();
+    }
+    expect(withLaunchOverrides(claude, comment, { modelId: 'synthetic-model' }))
+      .toBe(`${comment} --model synthetic-model`);
+    expect(withLaunchOverrides(claude, laterCommand, { modelId: 'synthetic-model' }))
+      .toBe(`${laterCommand} --model synthetic-model`);
+  });
 });
 
 describe('a shell nested deeper than one level is unprovable for every reader', () => {
