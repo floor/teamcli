@@ -1,0 +1,22 @@
+› Before writing the plan, ask me one question about
+  what the README line should say, then wait for my
+  answer.
+
+
+
+  Question 1/1 (1 unanswered)
+  What should the new README line say?
+
+  › 1. Project description  Add a one-line
+                            explanation of the
+                            project.
+    2. Usage instruction    Add a one-line
+                            instruction for using
+                            the project.
+    3. Contribution note    Add a one-line note for
+                            contributors.
+    4. None of the above    Optionally, add details
+                            in notes (tab)
+
+  tab to add notes | enter to submit answer
+  esc to interrupt

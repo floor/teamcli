@@ -24,6 +24,13 @@ The `.codex` config files the 0.157.0 permission capture needed were not needed 
 `-a on-request -s read-only` makes a write ask on its own. No vendor configuration was
 edited, no dialog was answered, and the update check was not overridden.
 
+The question capture was taken on 2026-11-01, in a scratch session created for the
+purpose and stopped afterwards, at 23 by 53. The launch was `codex -m gpt-6.1-sol
+--no-alt-screen -c check_for_update_on_startup=false` in this project's own checkout,
+which Codex already trusts, so no trust dialog was drawn; both `-c` values are the launch
+line's alone and nothing was written to a config file. The dialog was read while it stood,
+from the pane's visible source, and was then left with Escape.
+
 Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
 `<project-worktree>` and `<repository-root>`, and the resume id by `<session-id>`.
 
@@ -48,6 +55,11 @@ Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
   `› /exit  exit Codex` sits above the input row.
 - `exit.txt`: the pane after Enter, read `unknown`. Codex asks no exit question; the
   shell is back with the task's own advice above it.
+- `question.txt`: the question dialog, read `question`. The prompt asked for the question
+  to be put to the person first, and the dialog drew `Question 1/1 (1 unanswered)`,
+  `What should the new README line say?`, four numbered options and the footers `tab to
+  add notes | enter to submit answer` and `esc to interrupt`. Escape closed it and
+  interrupted that turn, the composer back over an empty box.
 - `idle-wide-warning.txt`: supplied by Floor, not captured here — a sanitized 8-line frame
   from a wide pane running the observed build (`»` prompt). The status row is
   `GPT-6.1-Sol ultra · Context 100% left · weekly 94% left`, with the account's
@@ -85,7 +97,5 @@ The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` 
 
 ## Not produced
 
-- `question`: not produced. Codex 0.161.0 asks none in its composer — the approval dialog
-  above is the only question it draws — and the profile declares no question stage.
 - `exit question`: not produced. 0.161.0 ends on `/exit` with no question; the profile
   declares no exit confirm.
