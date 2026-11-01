@@ -90,7 +90,7 @@ export function resolveClientTarget(
   }
   const admission = clientAdmission(home, grant.clientId, grant.entity);
   if (!admission.ok) return { ok: false, why: `the grant ${grant.grantId} is not admitted: ${admission.why}` };
-  const resolved = resolveEntityCoordinator(home, grant.entity, { seat: grant.recipientSeat, clientId: grant.clientId, ...(grant.team !== undefined ? { team: grant.team } : {}) });
+  const resolved = resolveEntityCoordinator(home, grant.entity, { seat: grant.recipientSeat, clientId: grant.clientId, teamId: grant.teamId, ...(grant.team !== undefined ? { team: grant.team } : {}) });
   if (!resolved.ok) return resolved;
   const coordinator = resolved.coordinator;
   if (

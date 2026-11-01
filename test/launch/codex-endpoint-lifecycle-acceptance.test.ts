@@ -27,8 +27,7 @@
 // command's ordering with the same injected endpoint stop.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { approvalOf } from '../../src/approve/approval.ts';
 import { runRemove, type RemoveSources } from '../../src/commands/remove.ts';
@@ -46,7 +45,7 @@ import {
 } from '../../src/launch/codex-endpoint.ts';
 import { emptySession, readState, updateState } from '../../src/state.ts';
 import { storePath, writeApproval } from '../../src/store/store.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from '../helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from '../helpers.ts';
 
 const SESSION = 'acme';
 const SEAT = 'worker';
@@ -56,10 +55,9 @@ const THIRD = 'prs_cccccccccccc';
 const STARTED_AT = '2026-10-20T07:59:00.000Z';
 const NOW = new Date('2026-10-20T08:00:00.000Z');
 
-// The endpoint path has a 100-byte contract limit, so the state folder has to be short: macOS's
-// own temporary folder is far too deep for a run/<session>/<seat>/<binding>.sock path. Linux's
-// `/tmp` is already short; the macOS short temp is `/private/tmp`.
-const SHORT_TMP = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+// The endpoint path has a 100-byte contract limit, so the state folder has to be short: these
+// scenes take the short socket base, and the endpoint a scene builds is measured against the limit.
+const SHORT_TMP = shortSocketBase();
 
 let dirs: string[] = [];
 afterEach(() => {
@@ -74,7 +72,11 @@ function stateDir(): string {
 }
 
 function socketOf(dir: string, binding = BINDING): string {
-  return join(dir, 'run', SESSION, SEAT, `${binding}.sock`);
+  const path = join(dir, 'run', SESSION, SEAT, `${binding}.sock`);
+  // Measured, not assumed: the runtime temp folder can be deep, and the build refuses a socket
+  // path over 100 bytes.
+  expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
+  return path;
 }
 
 function recordOf(dir: string, binding = BINDING, pid = 500): CodexEndpointRecord {

@@ -51,12 +51,13 @@ timeouts:
   exit: 30s
 # The dialog dismiss keys this project's own captures recorded, each the footer's cancel/skip
 # key pressed in a scratch session and the dialog left without an answer:
-# - `2026.10.01/question.txt` and `2026.10.16/question.txt`: the choice box, "Escape each time"
-#   and "Escape dismissed it".
+# - `2026.10.01/question.txt`, `2026.10.14/question.txt` and `2026.10.16/question.txt`: the choice
+#   box, "Escape each time" and "Escape dismissed it" on the two later captures.
 # - `2026.10.01/permission-plan.txt`: the mode switch, "then Escape rejected it".
 # Cursor prints its build suffix in the version (`cursor-agent --version` printed
-# `2026.10.16-e3cb207`, the print saved in its folder's README), so each record is the saved
-# printed version exactly — a range compares whole versions and would match no build. No record
+# `2026.10.14-0f9edde` and `2026.10.16-e3cb207`, both prints saved in their folders' READMEs), so
+# each record is the saved printed version exactly — a range compares whole versions and would
+# match neither build, and would also claim a version no capture pressed a key on. No record
 # claims `2026.10.01-14929f9`: its question box and mode switch were dismissed with Escape, but
 # its README only names the build; it saves no `cursor-agent --version` print, so the spelling
 # would be inferred, and the answer layer refuses that build rather than press one. The mode
@@ -65,23 +66,23 @@ timeouts:
 question_answer:
   - kind: question
     key: escape
+    from: '2026.10.14-0f9edde'
+    to: '2026.10.14-0f9edde'
+  - kind: question
+    key: escape
     from: '2026.10.16-e3cb207'
     to: '2026.10.16-e3cb207'
+# No record for `2026.10.01-14929f9`: its captures (`cursor/2026.10.01/trust.txt`,
+# `trust-54.txt`) show the workspace trust dialog, and none answered it — the README records
+# Escape returning to the shell and "No trust, login, settings, permission, or question dialog
+# was answered". A record that sends a key names one captured version that a run answered, so
+# there is none here: a seat printing that build is refused as a version with no trust answer
+# rather than pressed on a key no run pressed.
 # The predicate, label and extractor come from the registered
-# cursor/2026.10.01/trust.txt capture. That capture was taken in an untrusted temporary
-# directory, not the lobby, so the record claims no lobby evidence.
+# cursor/2026.10.14/trust.txt capture, which its README records "answered with `a`". That
+# capture was taken in an untrusted temporary directory, not the lobby, so the record claims
+# no lobby evidence.
 trust_answer:
-  - from: '2026.10.01-14929f9'
-    to: '2026.10.01-14929f9'
-    label: '[a] Trust this workspace'
-    action: '61'
-    capture: cursor/2026.10.01/trust.txt
-    extract:
-      after: 'directory?'
-      before: '[a] Trust this workspace'
-      box: true
-  # The same dialog on cursor-agent 2026.10.14-0f9edde (`cursor/2026.10.14/trust.txt`).
-  # The marked row is still `[a] Trust this workspace` and the key is still `a`.
   - from: '2026.10.14-0f9edde'
     to: '2026.10.14-0f9edde'
     label: '[a] Trust this workspace'

@@ -15,15 +15,18 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
 import { findRoot, TEAM_FILE } from '../file/load.ts';
+import { labelPersona, nicknameProblem, SEAT_NAME } from '../file/sections/seats.ts';
 import { readTeamText, teamTextTarget, writeTeamText } from '../file/team-text.ts';
 import { validateTeamFile } from '../file/validate.ts';
 import { cleanedIo, type Io } from '../io.ts';
 import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
+import { nicknameChangeGate } from '../registry/names.ts';
 import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
+import { refreshRoster } from '../registry/sync.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
-import { editedRecordText, getAt, parsePath, parseValue, reservedKeyIn, shownValue, withValue } from './team-record.ts';
+import { editedRecordText, getAt, parsePath, parseValue, reservedKeyIn, shownValue, withValue, type RecordPath } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
 
 function realRoot(cwd: string): string {
@@ -204,6 +207,8 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // Whether the change was made line by line, keeping the record's comments. An `edit` keeps
   // whatever the editor wrote, so it is not measured here.
   let commentsKept = true;
+  // The other name a seat's label or nickname set wrote in the same edit, for the report line.
+  let pairedNames: Array<{ seat: string; field: 'label' | 'nickname'; value: string }> = [];
   if (verb === 'edit') {
     const dir = mkdtempSync(join(tmpdir(), 'team-config-'));
     const draft = join(dir, 'team.yaml');
@@ -238,6 +243,12 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       const edited = editedRecordText(text, path, value, changed.root);
       next = edited.text;
       commentsKept = edited.kept;
+      // A set on one of a seat's two names writes the other in the same edit, so the label's
+      // persona and the record's nickname cannot be left apart by a config write.
+      const paired = syncSeatNames(next, path, changed.root);
+      next = paired.text;
+      commentsKept = commentsKept && paired.kept;
+      pairedNames = paired.changed;
     }
   }
   if (next === text) {
@@ -245,6 +256,25 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     else io.stdout(`nothing changed in ${where}\n`);
     // exit: config.unchanged
     return 0;
+  }
+  // A nickname this write newly sets is held to the entity's `names.unique` word, before the
+  // record is touched: the same check for an owner's set, an edit and a general grant. A file
+  // that does not validate is left to the writer below, whose refusal names its own problems.
+  const namesAfter = validateTeamFile(next);
+  if (namesAfter.ok) {
+    const namesBefore = validateTeamFile(text);
+    const names = nicknameChangeGate({
+      home,
+      teamId: teamIdOf(root),
+      root,
+      before: namesBefore.ok ? namesBefore.team : null,
+      after: namesAfter.team,
+    });
+    if (!names.ok) {
+      refuse(io, json, 'config', { id: 'config.name-taken', message: names.message, repair: null });
+      // exit: config.name-taken
+      return 1;
+    }
   }
   const now = sources.now;
   const wrote = writeTeamText(file, next, { home, env, command: `config ${verb}`, ...(now !== undefined ? { now } : {}) });
@@ -264,6 +294,17 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
   // next up or restart runs the line the team now declares, not the one the record kept.
   const synced = checked.ok ? syncAgentLaunches(home, teamIdOf(root), text, checked.team.seats) : [];
   if (!json) for (const name of synced) io.stdout(`agent record of ${name}: launch line updated to match\n`);
+  if (!json) for (const change of pairedNames) io.stdout(`seats.${change.seat}.${change.field} updated with it: ${change.value}\n`);
+  // The roster line the next message header reads is re-marked from the record just written, so a
+  // renamed seat sends under its new name at once, with no relaunch (src/registry/sync.ts).
+  const renamed = checked.ok ? refreshRoster(home, root, checked.team) : [];
+  if (!json) {
+    for (const seat of renamed) {
+      const found = checked.ok ? checked.team.seats.find((item) => item.name === seat) : undefined;
+      const name = found === undefined ? seat : labelPersona(found) ?? found.nickname ?? found.name;
+      io.stdout(`roster line of ${seat}: nickname now ${name}\n`);
+    }
+  }
   if (!commentsKept) io.stderr(`team config: the record was rewritten whole to change ${rawPath}; its comments were not kept\n`);
   if (json) {
     writeJson(io, 'team.config-edit', { format: 1, verb, path: rawPath ?? null, changed: true, source: wrote.target, comments_kept: commentsKept });
@@ -294,4 +335,73 @@ export function syncAgentLaunches(home: string, teamId: string, oldText: string,
     } catch {}
   }
   return updated;
+}
+
+/** A config path that writes one of a seat's two names: `seats.<name or index>.label`, or
+ *  `seats.<name or index>.nickname`. */
+function nameFieldOf(path: RecordPath): { seat: string; field: 'label' | 'nickname' } | null {
+  if (path.length !== 3 || path[0] !== 'seats') return null;
+  const field = path[2];
+  if (field !== 'label' && field !== 'nickname') return null;
+  return { seat: path[1] as string, field };
+}
+
+/**
+ * The record's other name written in the same edit: a set on a seat's label writes the nickname
+ * its persona names, and a set on its nickname rewrites the persona part of a written label. So
+ * the two cannot be left apart by a config write (the driver's finding: a renamed seat kept
+ * sending under its old name), and the roster line the next message header reads is re-marked
+ * from the same record (src/registry/sync.ts). A name the field cannot hold — a space or an
+ * accent (the nickname alphabet), the reserved `lead`, another seat's name or nickname — leaves
+ * the nickname field as it is: the label is still the workspace title, the field is still the
+ * address, and `team check` names the drift (src/check/team.ts:nicknameDriftNotes). Writing a
+ * label never refuses on the word before its dot; nothing is slugged or rewritten.
+ * Returns the text to write, whether its comments were kept, and what moved.
+ */
+function syncSeatNames(
+  text: string,
+  path: RecordPath,
+  root: YamlValue,
+): { text: string; kept: boolean; changed: Array<{ seat: string; field: 'label' | 'nickname'; value: string }> } {
+  const none = { text, kept: true, changed: [] as Array<{ seat: string; field: 'label' | 'nickname'; value: string }> };
+  const named = nameFieldOf(path);
+  if (named === null) return none;
+  const found = getAt(root, ['seats', named.seat]);
+  if (!found.found || found.value === null || typeof found.value !== 'object' || Array.isArray(found.value)) return none;
+  const seat = found.value as Record<string, YamlValue>;
+  const seatName = typeof seat.name === 'string' ? seat.name : null;
+  if (seatName === null) return none;
+  const label = typeof seat.label === 'string' ? seat.label : null;
+  const nickname = typeof seat.nickname === 'string' ? seat.nickname : undefined;
+  let field: 'label' | 'nickname';
+  let value: string;
+  if (named.field === 'label') {
+    const persona = labelPersona({ label: label ?? '', labelWritten: label !== null });
+    if (persona === null || persona === nickname) return none;
+    // A persona the nickname field could not hold is not projected: "Jane Doe" and "Inès" are
+    // ordinary display labels, and refusing the label edit for a name it cannot carry would make
+    // them unwritable. Nothing is slugged — the field keeps the name it had.
+    if (!SEAT_NAME.test(persona)) return none;
+    const parsed = validateTeamFile(text);
+    if (!parsed.ok) return none;
+    if (nicknameProblem(parsed.team.seats, persona, seatName) !== null) return none;
+    field = 'nickname';
+    value = persona;
+  } else {
+    // An unset leaves the label's persona: the label still names the seat, and its word stands.
+    if (nickname === undefined || label === null) return none;
+    // A written label with no middle dot is the persona whole (labelPersona), so the set replaces
+    // it: leaving the old word in front of the new nickname would keep launch and header on the
+    // old name until someone edited the label too.
+    const at = label.indexOf('·');
+    const rest = at < 0 ? '' : label.slice(at + 1).trim();
+    const nextLabel = rest === '' ? nickname : `${nickname} · ${rest}`;
+    if (nextLabel === label) return none;
+    field = 'label';
+    value = nextLabel;
+  }
+  const paired = withValue(root, ['seats', seatName, field], value);
+  if (!paired.ok || !paired.changed) return none;
+  const edited = editedRecordText(text, ['seats', seatName, field], value, paired.root);
+  return { text: edited.text, kept: edited.kept, changed: [{ seat: seatName, field, value }] };
 }

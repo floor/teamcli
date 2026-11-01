@@ -120,6 +120,16 @@ captures draw the box's two rules at one width (53 columns in `idle.txt`; 54 in
 `folded-rules.txt`), so a window whose rules differ is not the frame they draw: the read
 fails closed and nothing is entered.
 
+## No trust answer record for these captures
+
+`trust.txt` and `trust-54.txt` show the workspace trust question, and neither answered it:
+"The workspace was closed without answering the question", and `trust-54.txt` records "Escape
+was the only answer given". The profile ships no trust answer at 1.2.16 — a trust answer
+sends a key, and a key-sending record names one captured version a run answered. A seat at
+this dialog is refused as a version with no trust answer, never pressed on a key no run
+pressed. The measured answers are with the later captures: from `1.3.5/trust.txt` on, each
+README records its `idle.txt` as the same directory after Enter on the marked trust row.
+
 ## No question answer record: no saved `--version` print
 
 `question-54.txt` records the choice screen "Escape dismissed it; no option was chosen" — the

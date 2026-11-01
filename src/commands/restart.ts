@@ -85,7 +85,7 @@ import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
 import { bannerModel, modelDiffers, seatModel, wrapperSeat } from '../status/statusline.ts';
 import { approvalStanding, type Ceilings, type Standing } from '../store/store.ts';
-import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { launchLimit, readMachine, readingsText, type Machine, type SwapSample } from '../watch/machine.ts';
 import { watchLabel } from '../watch/pane.ts';
@@ -1482,12 +1482,11 @@ function buildUpSeat(
     // A human's pane: no launch, no key, no line. The plan skips it before any of that.
     ...(seat.human ? { human: true as const } : {}),
     rules: rulesOf(team, seat, root, undefined, origin),
-    sessionName: sessionDisplayName({
-      seat: seat.name,
-      nickname: seat.nickname ?? null,
+    sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+      seats: team.seats,
     }),
     ...seatDeliveryOf(standing, team, seat, root, home, live, origin),
     ...(start.lobby ? { lobby: true } : {}),

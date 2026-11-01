@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { isHerdrError, paneRead, sessionCleared, sessionStopped, setHerdrRun, setPaneExec, workspacePanes } from '../src/herdr.ts';
 
 const PANE_ONE = ['w1', 'p1'].join(':');
 const PANE_TWO = ['w1', 'p2'].join(':');
+// The captured entries name the runtime temp folder; the capture's own folder is not a value
+// any scene reads, so this machine's stands in.
+const TEMP = realpathSync(tmpdir());
 
 function capturedPaneEntry(paneId: string, workspaceId: string, terminalId: string) {
   return {
     agent_status: 'unknown',
-    cwd: '/private/tmp',
+    cwd: TEMP,
     focused: true,
-    foreground_cwd: '/private/tmp',
+    foreground_cwd: TEMP,
     pane_id: paneId,
     revision: 0,
     tab_id: `${workspaceId}:t1`,
@@ -133,7 +138,7 @@ describe('workspacePanes', () => {
     const watchWorkspace = {
       active_tab_id: ['w9', 't1'].join(':'),
       created_at: 1776221303,
-      cwd: '/private/tmp',
+      cwd: TEMP,
       focused: true,
       Focused: true,
       label: 'Watch · acme',
@@ -144,7 +149,7 @@ describe('workspacePanes', () => {
     const seatWorkspace = {
       active_tab_id: ['w1', 't1'].join(':'),
       created_at: 1776221300,
-      cwd: '/private/tmp',
+      cwd: TEMP,
       focused: false,
       Focused: false,
       label: 'seat',

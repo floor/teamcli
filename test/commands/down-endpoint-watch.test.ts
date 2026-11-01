@@ -154,9 +154,10 @@ function sourcesOf(
     sessionRunning: () => true,
     agents: () => [agent()],
     alive: () => true,
-    // The watch proof's two readings, for the one pid the watch scenes record.
+    // The watch proof's three readings, for the one pid the watch scenes record.
     commandOf: (pid) => (pid === 4242 ? WATCH_COMMAND : null),
     startOf: (pid) => (pid === 4242 ? Date.parse(WATCH_STARTED) : null),
+    cwdOf: () => at.root,
     // The seat's CLI has exited: its shell is back in front of it, so it is closed without
     // typing and the close is what carries the endpoint stop under test.
     screen: () => ({ kind: 'idle' }),

@@ -79,7 +79,7 @@ function buildGates(): Record<string, Gate> {
     },
     init: {
       kind: 'owner-only',
-      why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it for an entity the grant covers (`team init --general <grant> --key <client.key>`)',
+      why: 'writing a team where none exists is the owner\'s act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it (`team init --general <grant> --key <client.key>`), and a grant that lists entities is refused until 0.5.11',
     },
     up: {
       kind: 'owner-or-leads',
@@ -298,6 +298,10 @@ function buildGates(): Record<string, Gate> {
       kind: 'team-pause',
       why: 'a pause stops every seat\'s intake of new work, the orchestrator\'s own lever on the team: the owner or the orchestrator\'s seat, on its recorded pane; the operator is not admitted, and its own stop is `team hold`',
       terminal: { who: 'the owner or the orchestrator', where: 'a terminal outside herdr or its own seat' },
+    },
+    peek: {
+      kind: 'team-read',
+      why: 'the last lines of one seat\'s screen are read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; the screen is read and never typed into, the owner\'s own pane and a name the file does not declare are refused, and every attempt after the file loads is logged',
     },
     plan: {
       kind: 'seat-only',

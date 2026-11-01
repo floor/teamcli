@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { admitGeneral, GENERAL_OPS, type GeneralOp, generalGrantPath, issueHeldGeneralGrant, issueOwnerGeneralGrant, parseOps, readGeneralGrant } from '../src/client/general-grant.ts';
+import { admitGeneral, GENERAL_OPS, type GeneralOp, generalGrantPath, issueHeldGeneralGrant, issueOwnerGeneralGrant, parseOps, readGeneralGrant, SCOPED_GRANT_REFUSAL } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { installKey } from '../src/store/keys.ts';
 import { fixtureBase } from './helpers.ts';
@@ -32,12 +32,15 @@ test('an owner-signed general grant admits its ops on any entity, and nothing el
   expect(admitGeneral(w.home, g.path, w.b.path, 'config', 'material').ok).toBe(false);
 });
 
-test('a listed-entity grant refuses other entities', () => {
+test('a listed-entity grant is refused until 0.5.11, with the one sentence, whatever entity the run names', () => {
   const w = world();
   const g = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['material'], ops: ['config'], mayIssue: false, expires: later(1) });
   if (!g.ok) throw new Error(g.why);
-  expect(admitGeneral(w.home, g.path, w.a.path, 'config', 'material').ok).toBe(true);
-  expect(admitGeneral(w.home, g.path, w.a.path, 'config', 'floor').ok).toBe(false);
+  for (const entity of ['material', 'floor', null]) {
+    const held = admitGeneral(w.home, g.path, w.a.path, 'config', entity);
+    expect(held.ok).toBe(false);
+    if (!held.ok) expect(held.why).toBe(SCOPED_GRANT_REFUSAL);
+  }
 });
 
 test('a tampered grant does not verify', () => {
@@ -66,8 +69,10 @@ test('a holder issues only to another principal, never wider, and the chain veri
   expect(wrongKey.ok).toBe(false);
   const child = issueHeldGeneralGrant(w.home, root.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['material'], ops: ['send'], mayIssue: false, expires: later(1) });
   if (!child.ok) throw new Error(child.why);
-  expect(admitGeneral(w.home, child.path, w.b.path, 'send', 'material').ok).toBe(true);
-  expect(admitGeneral(w.home, child.path, w.b.path, 'send', 'floor').ok).toBe(false);
+  // The chain verifies; the child lists entities, so 0.5.10's door refuses it.
+  const held = admitGeneral(w.home, child.path, w.b.path, 'send', 'material');
+  expect(held.ok).toBe(false);
+  if (!held.ok) expect(held.why).toBe(SCOPED_GRANT_REFUSAL);
   // b's grant may not issue at all
   expect(issueHeldGeneralGrant(w.home, child.path, w.b.path, { clientId: 'c', publicKey: w.c.pub, entities: ['material'], ops: ['send'], mayIssue: false, expires: later(1) }).ok).toBe(false);
   expect(generalGrantPath(w.home, child.grant.grant_id)).toBe(child.path);
@@ -75,20 +80,20 @@ test('a holder issues only to another principal, never wider, and the chain veri
 
 test('init is a general-grant op; the wildcard covers it and every op, and never widens through a holder', () => {
   const w = world();
-  const listed = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['floor'], ops: ['config', 'up'], mayIssue: true, expires: later(5) });
+  const listed = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['config', 'up'], mayIssue: true, expires: later(5) });
   if (!listed.ok) throw new Error(listed.why);
   expect(admitGeneral(w.home, listed.path, w.a.path, 'init', 'floor').ok).toBe(false);
-  const all = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['floor'], ops: ['*'], mayIssue: true, expires: later(5) });
+  const all = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['*'], mayIssue: true, expires: later(5) });
   if (!all.ok) throw new Error(all.why);
   expect(admitGeneral(w.home, all.path, w.a.path, 'init', 'floor').ok).toBe(true);
   expect(admitGeneral(w.home, all.path, w.a.path, 'reply', 'floor').ok).toBe(true);
-  expect(admitGeneral(w.home, all.path, w.a.path, 'init', 'material').ok).toBe(false);
-  expect(admitGeneral(w.home, all.path, w.a.path, 'init', null).ok).toBe(false);
+  expect(admitGeneral(w.home, all.path, w.a.path, 'init', 'material').ok).toBe(true);
+  expect(admitGeneral(w.home, all.path, w.a.path, 'init', null).ok).toBe(true);
   // a listed holder never issues the wildcard; a wildcard holder still never issues to itself
-  expect(issueHeldGeneralGrant(w.home, listed.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['floor'], ops: ['*'], mayIssue: false, expires: later(1) }).ok).toBe(false);
-  expect(issueHeldGeneralGrant(w.home, listed.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: later(1) }).ok).toBe(false);
-  expect(issueHeldGeneralGrant(w.home, all.path, w.a.path, { clientId: 'a', publicKey: w.a.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: later(1) }).ok).toBe(false);
-  const child = issueHeldGeneralGrant(w.home, all.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: later(1) });
+  expect(issueHeldGeneralGrant(w.home, listed.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['*'], ops: ['*'], mayIssue: false, expires: later(1) }).ok).toBe(false);
+  expect(issueHeldGeneralGrant(w.home, listed.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['*'], ops: ['init'], mayIssue: false, expires: later(1) }).ok).toBe(false);
+  expect(issueHeldGeneralGrant(w.home, all.path, w.a.path, { clientId: 'a', publicKey: w.a.pub, entities: ['*'], ops: ['init'], mayIssue: false, expires: later(1) }).ok).toBe(false);
+  const child = issueHeldGeneralGrant(w.home, all.path, w.a.path, { clientId: 'b', publicKey: w.b.pub, entities: ['*'], ops: ['init'], mayIssue: false, expires: later(1) });
   if (!child.ok) throw new Error(child.why);
   expect(admitGeneral(w.home, child.path, w.b.path, 'init', 'floor').ok).toBe(true);
   expect(admitGeneral(w.home, child.path, w.b.path, 'up', 'floor').ok).toBe(false);
@@ -128,14 +133,16 @@ test('the wildcard admits an op added after it was signed; a listed grant does n
   expect(admitGeneral(w.home, listed.path, w.a.path, future, 'floor').ok).toBe(false);
 });
 
-test('a named-entity wildcard grant admits every op there and nowhere else', () => {
+test('a named-entity grant is refused until 0.5.11, whatever op or entity the run names', () => {
   const w = world();
   const g = issueOwnerGeneralGrant(w.home, { clientId: 'a', publicKey: w.a.pub, entities: ['floor'], ops: ['*'], mayIssue: false, expires: later(3) });
   if (!g.ok) throw new Error(g.why);
   for (const op of GENERAL_OPS) {
-    expect(admitGeneral(w.home, g.path, w.a.path, op, 'floor').ok).toBe(true);
-    expect(admitGeneral(w.home, g.path, w.a.path, op, 'material').ok).toBe(false);
-    expect(admitGeneral(w.home, g.path, w.a.path, op, null).ok).toBe(false);
+    for (const entity of ['floor', 'material', null]) {
+      const held = admitGeneral(w.home, g.path, w.a.path, op, entity);
+      expect(held.ok).toBe(false);
+      if (!held.ok) expect(held.why).toBe(SCOPED_GRANT_REFUSAL);
+    }
   }
 });
 

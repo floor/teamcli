@@ -12,11 +12,12 @@
 // This module is the one reader of that refinement. It reads the facts the launch left behind —
 // the recorded watcher (or the one its launch line implies), the development channel on the
 // line, the cross-session socket the send itself would dial (its declaration, the team file's
-// own word, and the address the registry recorded), and the managed app-server endpoint bound to
-// its current presence incarnation, together with the conversation that endpoint's queue is
-// addressed by — and answers one class plus the evidence it read, so a caller that skips a seat
-// can say why. The words a console prints come from the same class (`deliveryWords`), so the
-// report and the gating can never disagree.
+// own word, and the address the registry recorded), the managed app-server endpoint bound to its
+// current presence incarnation, together with the conversation that endpoint's queue is
+// addressed by, and the seat's webhook adapter when its row configures one (its two files read
+// at the same moment) — and answers one class plus the evidence it read, so a caller that skips
+// a seat can say why. The words a console prints come from the same class (`deliveryWords`), so
+// the report and the gating can never disagree.
 import { existsSync } from 'node:fs';
 import { inspectRecordedCodexEndpoint } from '../daemon/presence/endpoint-record.ts';
 import type { Seat } from '../file/types.ts';
@@ -26,6 +27,7 @@ import { findAgent } from '../registry/agents.ts';
 import { recordedSeatSession } from '../registry/resume.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { declaredInboundOf, inboundIsLive, socketEligible } from '../send/inbound.ts';
+import { webhookRouteOf } from '../send/webhook.ts';
 import type { SeatState } from '../state.ts';
 import { cliWatcher, type CliWatcher } from './cli-hook.ts';
 
@@ -53,6 +55,9 @@ export type DeliveryFacts = {
    *  presence incarnation, and the seat's own records name the conversation that queue is
    *  addressed by: only then does its runtime's own queue hold a message between turns. */
   endpoint: boolean;
+  /** Whether the seat configures a webhook adapter and both its files can be read right now:
+   *  the routine takes every accepted message, so it wakes an idle seat like the channel. */
+  webhook?: boolean;
 };
 
 /**
@@ -67,7 +72,7 @@ export type DeliveryFacts = {
  */
 export function effectiveDeliveryClass(facts: DeliveryFacts): DeliveryClass {
   if (facts.human === true) return 'none';
-  if (facts.channel || facts.socket) return 'push';
+  if (facts.channel || facts.socket || facts.webhook === true) return 'push';
   if (facts.endpoint) return 'between-turns';
   if (facts.watcher !== 'none') return 'pull-on-turn';
   return 'none';
@@ -122,6 +127,11 @@ export type DeliveryEvidence = {
   /** The endpoint record bound to the current presence incarnation, and a bound conversation. */
   endpoint: boolean;
   human: boolean;
+  /** Whether the seat's webhook adapter can post right now: its two files read, and the secret
+   *  file is the owner's own 0600 file. False when the seat configures none or cannot deliver. */
+  webhook: boolean;
+  /** Why a configured webhook adapter cannot deliver, when it cannot; null otherwise. */
+  webhookReason: string | null;
 };
 
 export type SeatDelivery = {
@@ -143,9 +153,9 @@ export type SeatDeliveryInput = {
   session: string;
   seat: string;
   /** The seat's row in the team file, when the caller has one: its `cli`, its launch line, its
-   *  `human` word, and its `inbound` word — the team's own opt-out the send admits by. A
-   *  temporary seat has none. */
-  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound'>;
+   *  `human` word, its `inbound` word — the team's own opt-out the send admits by — and its
+   *  `webhook` row when it configures an adapter. A temporary seat has none. */
+  declared?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>;
   /** The seat's runtime record, when the seat is launched. Its `launch_line` is what the
    *  launch actually ran, its `watcher` is what the launch actually installed, and its `id` and
    *  `agent_session` are the two facts a conversation binding is compared by. */
@@ -237,6 +247,11 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     address !== null &&
     existsSync(address) &&
     inboundIsLive(inbound, address);
+  // The webhook adapter is read from the two files its row names, right now: a route that cannot
+  // be read is no evidence the seat wakes, and the words say why in the same breath.
+  const webhookRoute = input.declared?.webhook === undefined ? null : webhookRouteOf(input.declared.webhook);
+  const webhook = webhookRoute?.ok === true;
+  const webhookReason = webhookRoute !== null && !webhookRoute.ok ? webhookRoute.reason : null;
   const facts: DeliveryFacts = {
     declared: declaredClass,
     watcher,
@@ -244,6 +259,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
     socket,
     endpoint,
     ...(human ? { human: true } : {}),
+    ...(webhook ? { webhook: true } : {}),
   };
   const cls = effectiveDeliveryClass(facts);
   return {
@@ -260,6 +276,8 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
       conversation,
       endpoint,
       human,
+      webhook,
+      webhookReason,
     },
   };
 }

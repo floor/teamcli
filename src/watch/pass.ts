@@ -59,7 +59,7 @@ import { idleQueueSummary, teamIdle } from './checks/team-idle.ts';
 import type { QueueDepths } from '../queues.ts';
 import { unsent } from './checks/unsent.ts';
 import type { Machine } from './machine.ts';
-import { readScreen, statusRow, type Screen } from './screen.ts';
+import { questionText, readScreen, statusRow, type Screen } from './screen.ts';
 export {
   classifyPromptKind,
   createSeatStatusEngine,
@@ -201,6 +201,8 @@ export const TEAM_CHECKS: TeamCheck[] = [extra, teamIdle, promptEscalation, appr
 export function attentionOf(screen: Screen, status: string, quiet: boolean, theirWord = false): Attention {
   if (screen.kind === 'permission' || screen.kind === 'trust') return 'permission';
   if (screen.kind === 'question' || screen.kind === 'exit question') return 'question';
+  if (screen.kind === 'plan approval') return 'plan approval';
+  if (screen.kind === 'confirmation') return 'confirmation';
   if (screen.kind === 'vendor notice') return 'vendor notice';
   if (theirWord) return screen.kind === 'unknown' ? 'unknown' : null;
   if (status === 'blocked') return 'blocked';
@@ -447,6 +449,7 @@ export function pass({
         parked,
         stopped,
         attention: null,
+        dialogText: null,
         model: null,
         history: { lastWorking: undefined, idleSince: undefined },
         liveness,
@@ -518,6 +521,7 @@ export function pass({
       parked,
       stopped,
       attention: attentionOf(screen, agent.status, quiet, theirWord),
+      dialogText: questionText(cli, pane),
       // The observation is read off the pane, except for a wrapper: Claude Code prints its own
       // default family whatever the launcher selected, so the model that seat runs is the
       // declaration it was launched from — the registry's signing where a record names one, the
@@ -658,6 +662,8 @@ export function pass({
   const attentionKeys: [prefix: string, check: string][] = [
     ['blocked:', 'attention'],
     ['question:', 'attention'],
+    ['plan approval:', 'attention'],
+    ['confirmation:', 'attention'],
     ['vendor notice:', 'attention'],
     ['unknown:', 'attention'],
     ['unsent:', 'unsent'],

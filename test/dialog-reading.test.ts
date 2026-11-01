@@ -178,6 +178,28 @@ describe('a question block read to its end', () => {
   });
 });
 
+// A `before` anchor sits at the block's last row and the walk climbs the pane to the end marker
+// above it. The text keeps the pane's order — the row higher on the pane reads first — because the
+// rows are what the agent drew, and joining them in walk order would reverse the question.
+describe('a before anchor reads the rows above it in the pane’s order', () => {
+  const data = loadScreen(
+    profile(`  question:
+    - any: ['^ANSWER$']
+  question_text:
+    question:
+      before: '^ANSWER$'
+      until: '^START$'
+      rows: 2`),
+  );
+
+  test('two rows above the anchor read in the order the pane draws them', () => {
+    expect(readDialog(data, 'START\nFirst question row\nSecond question row\nANSWER\n'))
+      .toEqual({ dialog: 'question', text: 'First question row Second question row', complete: true });
+    expect(readDialog(data, 'START\nChanged question row\nSecond question row\nANSWER\n'))
+      .toEqual({ dialog: 'question', text: 'Changed question row Second question row', complete: true });
+  });
+});
+
 // The pane draws the live dialog at its bottom; the transcript above it may quote an older
 // question with the same header. The reader anchors on the live block — the anchor nearest the
 // bottom whose block reaches the profile's end marker — so the copy above it never wins.
@@ -194,6 +216,34 @@ describe('the live dialog’s anchor, not a transcript copy above it', () => {
     // Changing only the live question changes the reading: the stale block never wins.
     expect(readDialog('codex', retained.replace('What should the new README line say?', 'Which live question changed?')))
       .toEqual({ dialog: 'question', text: 'Which live question changed?', complete: true });
+  });
+
+  // The live block is cut by the supported rows before it reaches its own option row. The copy a
+  // transcript quoted above it is whole; a whole block above a cut live block never certifies the
+  // current question, and the reading stays the live block's own visible text, cut.
+  test('operator-3’s cut probe: a live block cut past the row cap reads cut, never the whole copy above it', () => {
+    const clipped = [
+      'Question 1/1 (1 unanswered)',
+      'Old transcript question?',
+      '1. old option',
+      '',
+      'Question 1/1 (1 unanswered)',
+      'Current row one',
+      'Current row two',
+      'Current row three',
+      'Current row four',
+      'Current row five',
+      'Current row six',
+      'Current row seven',
+      '› 1. new option',
+      'esc to interrupt',
+      '',
+    ].join('\n');
+    expect(readDialog('codex', clipped)).toEqual({
+      dialog: 'question',
+      text: 'Current row one Current row two Current row three Current row four Current row five Current row six',
+      complete: false,
+    });
   });
 
   type StaleScene = { cli: string; path: string; withStale: (captured: string) => string; live: string };

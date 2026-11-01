@@ -46,7 +46,7 @@ import { readState } from '../state.ts';
 import { messageKeyState } from '../store/keys.ts';
 import { minutes } from './check.ts';
 import { notify as defaultNotify } from './notify.ts';
-import { readScreen, screenWord, type Screen, type ScreenOptions } from './screen.ts';
+import { questionText, readScreen, screenWord, type Screen, type ScreenOptions } from './screen.ts';
 
 export {
   HERDR_AGENT_STATUSES,
@@ -80,10 +80,17 @@ export type PromptKind =
   | 'trust'
   | 'guard'
   | 'question'
+  | 'plan approval'
+  | 'confirmation'
   | 'login'
   | 'vendor notice'
   | 'rate limit'
   | 'unknown';
+
+/** One read of a blocked seat's pane: the prompt's kind and the text the dialog shows, when the
+ *  profile places one. `text` is null for every kind whose dialog asks nothing a report can quote —
+ *  a permission screen, a trust screen, a notice — and for an unknown screen. */
+export type PromptReading = { kind: PromptKind; text: string | null };
 
 /** Backend-neutral status-source contract (workspace-adapters §6).
  *  Strictly read-only: no typing or key-sending method exists on this interface. */
@@ -97,8 +104,15 @@ export type StatusSource = {
   ): Promise<StatusWaitResult>;
   /** Reads the pane's screen once when a seat enters `blocked` to classify the prompt kind. */
   promptKind?(seat: StatusWaitSeat): PromptKind;
+  /** The same read, with the dialog's own question text when the profile places one. One call is
+   *  one pane read; a source that offers both must not read twice. */
+  promptReading?(seat: StatusWaitSeat): PromptReading;
   /** Reads the pane's screen for `herdr_status: unreliable` profiles (`jules`) or screen-verified statuses. */
   readUnreliableScreen?(seat: StatusWaitSeat): Screen;
+  /** Reads the pane's visible screen as plain text, the last `lines` lines at most, for a
+   *  read-only view of a seat's screen. Null when the pane cannot be read. It types nothing and
+   *  sends no key, like every other member of this contract. */
+  screenText?(seat: StatusWaitSeat, lines: number): string | null;
   /** Desktop notification when a prompt climbs to the owner. */
   notify?(title: string, body: string, sound?: string): void;
 };
@@ -114,6 +128,9 @@ export function classifyPromptKind(
   if (screen.kind === 'permission') return 'permission';
   if (screen.kind === 'trust') return 'trust';
   if (screen.kind === 'question' || screen.kind === 'exit question') return 'question';
+  if (screen.kind === 'plan approval') return 'plan approval';
+  if (screen.kind === 'confirmation') return 'confirmation';
+  if (screen.kind === 'login') return 'login';
   if (screen.kind === 'vendor notice') return 'vendor notice';
   if (screen.kind === 'rate limit') return 'rate limit';
   if (/\bguard\b.*\b(prompt|hook|refused|blocked|allow)\b/i.test(rawScreen)) return 'guard';
@@ -151,6 +168,8 @@ export function reconcileStatusWithScreen(
     || screen.kind === 'trust'
     || screen.kind === 'question'
     || screen.kind === 'exit question'
+    || screen.kind === 'plan approval'
+    || screen.kind === 'confirmation'
     || screen.kind === 'vendor notice'
     || screen.kind === 'rate limit'
   ) {
@@ -237,6 +256,16 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
   const waitFn = options.waitFn ?? waitAgentStatus;
   const notifyFn = options.notifyFn ?? defaultNotify;
 
+  // One pane read per call: the kind and the dialog's own text come from the same screen. A human
+  // seat is never read, and reads as the unknown no report is made from.
+  const readReading = (seat: StatusWaitSeat): PromptReading => {
+    if (seat.human === true) return { kind: 'unknown', text: null };
+    const raw = readPane(seat.pane, PANE_WINDOW, seat.session ?? options.session);
+    const kind = classifyPromptKind(seat.cli, raw, options.screenOptions);
+    const text = kind === 'unknown' || raw === null ? null : questionText(seat.cli, raw);
+    return { kind, text };
+  };
+
   return {
     async waitStatus(seat, target, timeoutMs, signal): Promise<StatusWaitResult> {
       if (seat.human === true) {
@@ -284,15 +313,24 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
     },
 
     promptKind(seat): PromptKind {
-      if (seat.human === true) return 'unknown';
-      const raw = readPane(seat.pane, PANE_WINDOW, seat.session ?? options.session);
-      return classifyPromptKind(seat.cli, raw, options.screenOptions);
+      return readReading(seat).kind;
+    },
+
+    promptReading(seat): PromptReading {
+      return readReading(seat);
     },
 
     readUnreliableScreen(seat): Screen {
       if (seat.human === true) return { kind: 'unknown' };
       const raw = readPane(seat.pane, PANE_WINDOW, seat.session ?? options.session);
       return readScreen(seat.cli, raw ?? undefined, options.screenOptions);
+    },
+
+    screenText(seat, lines): string | null {
+      // A human seat has no screen a tool reads: the same answer as promptKind and
+      // readUnreliableScreen, and no pane read at all.
+      if (seat.human === true) return null;
+      return readPane(seat.pane, lines, seat.session ?? options.session);
     },
 
     notify(title, body): void {
@@ -771,6 +809,8 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         || screen.kind === 'trust'
         || screen.kind === 'question'
         || screen.kind === 'exit question'
+        || screen.kind === 'plan approval'
+        || screen.kind === 'confirmation'
         || screen.kind === 'vendor notice'
         || screen.kind === 'rate limit'
       ) {
@@ -866,11 +906,14 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
       // 3. Fresh transition into `blocked`: read the screen once via `promptKind`.
       const target = seatTargetOf(seatName, pane)!;
       const fromScreen = rawScreen ? classifyPromptKind(seat.cli, rawScreen) : 'unknown';
-      const prompt = fromScreen !== 'unknown'
-        ? fromScreen
-        : source.promptKind
-          ? source.promptKind(target)
-          : 'unknown';
+      const reading: PromptReading = fromScreen !== 'unknown'
+        ? { kind: fromScreen, text: rawScreen === undefined ? null : questionText(seat.cli, rawScreen) }
+        : source.promptReading
+          ? source.promptReading(target)
+          : source.promptKind
+            ? { kind: source.promptKind(target), text: null }
+            : { kind: 'unknown', text: null };
+      const prompt = reading.kind;
       state.status = 'blocked';
       state.promptSpell = {
         prompt,
@@ -878,9 +921,10 @@ export function createSeatStatusEngine(input: SeatStatusEngineInput): SeatStatus
         escalated: isLead,
       };
       state.seq += 1;
+      const said = reading.text === null ? '' : ` — "${reading.text}"`;
       const reason = prompt === 'unknown'
         ? `${seatName} is blocked, and its screen is not one the watch recognises`
-        : `${seatName} waits at a ${prompt} prompt`;
+        : `${seatName} waits at a ${prompt} prompt${said}`;
 
       if (isLead) {
         // The blocked seat IS the lead: skip the first rung and escalate at once to entity's

@@ -25,7 +25,7 @@ import { registerLaunch } from '../src/registry/sync.ts';
 import { approvalStanding } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
-import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -207,9 +207,10 @@ describe('the real restart launch', () => {
 });
 
 function makeFixture(rawYaml = TEAM_YAML): Fixture {
-  // The state folder sits under a short base so the endpoint path a managed launch owns for this
-  // seat (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path limit.
-  const base = realpathSync(mkdtempSync('/private/tmp/team-restart-'));
+  // The state folder sits under the short socket base so the endpoint path a managed launch owns
+  // for this seat (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path
+  // limit; the scene below measures that path against the limit.
+  const base = realpathSync(mkdtempSync(join(shortSocketBase(), 'tr-')));
   made.push(base);
   const root = join(base, 'acme');
   const home = join(base, 'home');
@@ -428,7 +429,10 @@ function makeHarness(
  *  started. */
 function ownedEndpointUrl(fixture: Fixture, binding: string): string {
   const socket = codexEndpointSocket(fixture.dir, 'acme', 'worker', binding);
-  if (socket === null) throw new Error('the fixture state folder is too long for an owned endpoint path');
+  if (socket === null) {
+    const path = join(fixture.dir, 'run', 'acme', 'worker', `${binding}.sock`);
+    throw new Error(`the fixture state folder is too long for an owned endpoint path: ${String(Buffer.byteLength(path))} bytes against the 100-byte limit`);
+  }
   return socket.url;
 }
 
@@ -456,6 +460,17 @@ function managedEndpoint(fixture: Fixture, binding: string): NonNullable<Launch[
     stop: () => ({ stopped: true }),
   } as unknown as NonNullable<Launch['codexEndpoint']>;
 }
+
+describe('the fixture temp folder', () => {
+  // Measured, not assumed: the base comes from the runtime temp folder, and the endpoint a
+  // managed launch owns for this seat is a unix socket path the build refuses over 100 bytes.
+  test('keeps the owned endpoint inside the socket path limit', () => {
+    const fixture = makeFixture();
+    const path = join(fixture.dir, 'run', 'acme', 'worker', 'prs_0123456789ab.sock');
+    expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
+    expect(codexEndpointSocket(fixture.dir, 'acme', 'worker', 'prs_0123456789ab')).not.toBeNull();
+  });
+});
 
 describe('team restart <seat>', () => {
   test('owner restarts a free running seat, prints pre-close facts, updates state, and does not edit team.yaml', async () => {

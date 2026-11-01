@@ -636,6 +636,27 @@
             ],
             "$comment": "the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch's crossSessionInbound accept, and any other launch still needs accept here"
           },
+          "webhook": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "url_file": {
+                "type": "string",
+                "minLength": 1,
+                "$comment": "absolute; the file whose contents are the routine's URL, read at POST time; the URL itself is never written here, printed or logged"
+              },
+              "secret_file": {
+                "type": "string",
+                "minLength": 1,
+                "$comment": "absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path's value nor its contents are ever printed or logged"
+              }
+            },
+            "required": [
+              "url_file",
+              "secret_file"
+            ],
+            "$comment": "the seat's webhook delivery adapter: every accepted signed message for the seat is POSTed to the routine, a 2xx answer is delivered, and the drop file stays as the backup; the two values are named by path, never stored here"
+          },
           "count": {
             "type": "integer",
             "minimum": 1

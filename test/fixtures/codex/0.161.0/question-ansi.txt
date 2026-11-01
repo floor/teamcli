@@ -1,0 +1,23 @@
+[0m[1m[2m› [0mBefore writing the plan, ask me one question about
+  what the README line should say, then wait for my
+  answer.
+
+ 
+ 
+  [0m[2mQuestion 1/1 (1 unanswered)[0m
+  [0m[38;2;99;168;248mWhat should the new README line say?[0m
+ 
+  [0m[1m[7m› 1. Project description  [0m[7mAdd a one-line[0m[1m[7m         [0m
+  [0m[1m[7m                          [0m[7mexplanation of the[0m[1m[7m     [0m
+  [0m[1m[7m                          [0m[7mproject.[0m[1m[7m               [0m
+    2. Usage instruction    [0m[2mAdd a one-line[0m
+                            [0m[2minstruction for using[0m
+                            [0m[2mthe project.[0m
+    3. Contribution note    [0m[2mAdd a one-line note for[0m
+                            [0m[2mcontributors.[0m
+    4. None of the above    [0m[2mOptionally, add details[0m
+                            [0m[2min notes (tab)[0m
+ 
+  [0m[1mtab[0m to add notes[0m[2m | [0m[1menter[0m to submit answer
+  [0m[1mesc[0m to interrupt
+ 

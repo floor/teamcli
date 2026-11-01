@@ -47,8 +47,9 @@ describe('the question-answer records a profile lists', () => {
     // No record claims that build, of either kind, so it refuses rather than press an inferred key.
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.289 (Claude Code)')).toBeNull();
     expect(questionAnswerFor(claude.questionAnswers, 'plan approval', '2.1.289 (Claude Code)')).toBeNull();
-    // No record names 2.1.299 here, and a bare version is not the printed text.
-    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.299 (Claude Code)')).toBeNull();
+    // The 2.1.299 question capture records Escape dismissing it (`2.1.299/question.txt`), so
+    // the printed version answers; a bare version is not the printed text.
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.299 (Claude Code)')?.key).toBe('escape');
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302')).toBeNull();
     // The held frame was captured but never dismissed: no key is claimed, so the answer layer
     // refuses it rather than pressing a key the run did not record.
@@ -65,6 +66,9 @@ describe('the question-answer records a profile lists', () => {
     const cursor = profileFor('cursor');
     if (!cursor) throw new Error('no cursor profile');
     expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16-e3cb207')?.key).toBe('escape');
+    // The 2026.10.14 capture's README records `Esc to skip` and "Escape dismissed it", and its
+    // folder saves the `cursor-agent --version` print `2026.10.14-0f9edde`.
+    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.14-0f9edde')?.key).toBe('escape');
     // 2026.10.01's question box and mode switch were both dismissed with Escape, but its README
     // only names the build: it saves no `cursor-agent --version` print, so no record claims that
     // build, of either kind, and it refuses rather than press an inferred spelling.
@@ -95,6 +99,24 @@ describe('the question-answer records a profile lists', () => {
 
     // Grok's capture README records no dismissal key.
     expect(profileFor('grok')?.questionAnswers).toEqual([]);
+  });
+
+  test('every record that sends a key names one captured version, never a range', () => {
+    // A range admits versions no capture ever ran, and a record that presses a key is a claim
+    // about the run that pressed it. The only such record is an exact one: `from` is `to`.
+    const names = ['claude-code', 'codex', 'cursor', 'antigravity', 'grok', 'gemini', 'muse', 'jules'];
+    const ranged: string[] = [];
+    for (const name of names) {
+      const profile = profileFor(name);
+      if (!profile) continue;
+      for (const record of profile.questionAnswers) {
+        if (record.from !== record.to) ranged.push(`${name} question ${record.from}..${record.to}`);
+      }
+      for (const record of profile.answers) {
+        if (record.from !== record.to) ranged.push(`${name} trust ${record.from}..${record.to}`);
+      }
+    }
+    expect(ranged).toEqual([]);
   });
 
   test('the lookup takes the record that names the kind and the version printed', () => {

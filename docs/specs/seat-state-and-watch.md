@@ -146,7 +146,7 @@ switch off.
 | 1 | `missing` | seat | yes | the file has a seat herdr does not list |
 | 2 | `restored` | seat | no | the recorded process changed but the stored agent session came back |
 | 3 | `model-drift` | seat | yes | the running model or version differs from the file's |
-| 4 | `attention` | seat | yes | a permission prompt, question, vendor notice, or a blocked or unknown status |
+| 4 | `attention` | seat | yes | a permission prompt, question, plan approval, confirmation, vendor notice, or a blocked or unknown status |
 | 5 | `provider-error` | seat | no | a provider error or rate limit while the seat runs and is not working |
 | 6 | `unsent` | seat | no | text in the input box that was never sent |
 | 7 | `idle` | seat | no | quiet past the lead's window, then the owner's |
@@ -196,7 +196,9 @@ the pass.
 | `<seat> is no longer the process team launched (its session was restored, or its CLI was restarted)` | the pane runs no CLI, or a program the tool did not launch runs in it and the agent session is not the one stored at launch |
 | `<seat>: its launch line starts a launcher, and the process in its pane is not the one team launched — <repair>` | a launcher-started seat's pane holds a process the tool did not launch; a lead's own seat is never restarted alone, so its report is `<seat>: started by a launcher; team cannot tell its process from the one it launched`, with no repair |
 | `<seat> waits at a permission prompt: its owner's to answer` | a permission dialog or a trust question |
-| `<seat> asked a question: the operator's to act on` | a question the seat is waiting on |
+| `<seat> asked a question: the operator's to act on` | a question the seat is waiting on; the profile's placed question text is quoted after the em dash |
+| `<seat> waits at a plan approval prompt: the operator's to act on` | a plan the agent wrote and waits to execute; its headline is quoted the same way when the profile places it |
+| `<seat> waits at a confirmation prompt: the operator's to act on` | a dialog the CLI or the agent raises before acting; its text is quoted the same way when the profile places it |
 | `<seat> shows a vendor notice: its owner's to act on` | a captured vendor notice, such as an update screen |
 | `<seat> shows a provider error: connection lost, and no capture names a retry` | a provider's connection error; told to the operator and the owner, once, while the seat is not working |
 | `<seat> is out of quota on <account>: usage limit, resets at <time>` | a usage-limit screen that names its reset, as the screen words it — a clock after `at`, a span after `in` |

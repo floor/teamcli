@@ -116,6 +116,18 @@ drawn at the continuation column, two; none is drawn at the prompt column. This 
 the typed-newline proof the fix's comment named as still to be taken, and
 `src/watch/screen-core.ts` now names these fixtures where that clause stood.
 
+## No trust answer record for these captures
+
+The folder trust question is captured here (`trust-folder.txt` and
+`trust-folder-163.txt`), and neither capture answered it: Escape quit it back to the
+shell. Nor does any capture or note in this folder record `codex --version` at 0.157.0 —
+the printed form is recorded at 0.160.0 and 0.161.0 only. A trust answer sends a key,
+and a key-sending record names one captured version, spelled as that CLI prints it.
+Both are missing here, so the profile ships no trust answer for 0.157.0: a Codex seat
+at this dialog is refused as a version with no trust answer, never pressed on a key or
+a version no run measured. Recording one takes a capture that presses the key and a
+record of the `--version` print that goes with it.
+
 ## Constructed
 
 - `lobby-constructed.txt`: a one-line file that is not a screen, so a trust-answer record cannot cite it as lobby evidence.

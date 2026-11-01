@@ -5,7 +5,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands, main } from '../src/cli.ts';
-import { GENERAL_OPS, issueOwnerGeneralGrant, type GrantOp } from '../src/client/general-grant.ts';
+import { GENERAL_OPS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import type { Io } from '../src/io.ts';
 import { installKey } from '../src/store/keys.ts';
@@ -113,10 +113,13 @@ test('an expired grant is refused', async () => {
   expect(ran.err).toContain('has expired');
 });
 
-test('an entity the grant does not cover is refused', async () => {
+test('a grant that lists entities is refused until 0.5.11, before anything runs', async () => {
   const ran = await run(['status', '--general', grant(['*'], ['material']), '--key', a.path]);
   expect(ran.code).toBe(1);
-  expect(ran.err).toContain('entity');
+  expect(ran.err).toContain(SCOPED_GRANT_REFUSAL);
+  const json = await run(['status', '--json', '--general', grant(['*'], ['material']), '--key', a.path]);
+  expect(json.code).toBe(1);
+  expect(JSON.parse(json.out).error.id).toBe('team.general-target');
 });
 
 test('--general without --key is a usage error', async () => {
@@ -168,14 +171,16 @@ test('an admitted run carries the verified grant and key paths to the command (i
   expect(refused.kind).toBe('refused');
 });
 
-test('a unit installed under a general grant runs the daemon under the same grant, and a plain one does not', async () => {
+test('a unit never names the grant or key that admitted its install: the service-started run is its own admission', async () => {
   const { darwinServiceManager } = await import('../src/daemon/service-darwin.ts');
   const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
   const base = { execPath: '/bin/node', entry: '/x/cli.js', roots: ['/r'], presence: true, watch: true };
-  const granted = manager.plan(home, { ...base, general: { grant: all, key: a.path } }).program;
-  expect(granted.slice(-4)).toEqual(['--general', all, '--key', a.path]);
-  expect(granted).toContain('service-manager');
-  expect(manager.plan(home, base).program).not.toContain('--general');
+  const program = manager.plan(home, base).program;
+  expect(program).toContain('service-manager');
+  expect(program).not.toContain('--general');
+  expect(program).not.toContain('--key');
+  expect(program).not.toContain(all);
+  expect(program).not.toContain(a.path);
 });
 
 test('the service-started run line passes the door while the grant holds, and is refused once it does not', async () => {

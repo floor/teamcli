@@ -1418,6 +1418,27 @@
     {
       "code": 0,
       "command": "config",
+      "id": "config.entity.unchanged",
+      "meaning": "the entity already writes that names.unique word; nothing was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.entity.value",
+      "meaning": "the entity's names.unique word is printed",
+      "trigger": "team config get <entity>.names.unique"
+    },
+    {
+      "code": 0,
+      "command": "config",
+      "id": "config.entity.written",
+      "meaning": "the entity's names.unique word was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 0,
+      "command": "config",
       "id": "config.shown",
       "meaning": "the settings registry is printed",
       "trigger": "team config keys"
@@ -1467,6 +1488,48 @@
     {
       "code": 1,
       "command": "config",
+      "id": "config.entity.detached",
+      "meaning": "an entity's word was set with no terminal",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.general-refused",
+      "meaning": "the general grant does not cover this entity or admit this set; nothing was written",
+      "trigger": "team config set <entity>.names.unique off --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.names-value",
+      "meaning": "the word is not one of entity, project, team or off; nothing was written",
+      "trigger": "team config set <entity>.names.unique everywhere"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.no-value",
+      "meaning": "the entity's entry writes no names.unique word",
+      "trigger": "team config get <entity>.names.unique"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.not-owner",
+      "meaning": "an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.entity.path",
+      "meaning": "the entity's entry cannot be set (no such entry, or a value on the way); nothing was written",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 1,
+      "command": "config",
       "id": "config.general-refused",
       "meaning": "the general grant does not admit this edit; nothing was written",
       "trigger": "team config set <path> <value> --general <grant.json> --key <client.key>"
@@ -1477,6 +1540,13 @@
       "id": "config.invalid",
       "meaning": "the changed record does not validate; nothing was written",
       "trigger": "team config set seats.lead.cli nope"
+    },
+    {
+      "code": 1,
+      "command": "config",
+      "id": "config.name-taken",
+      "meaning": "a nickname the change sets is already held by another team's seat; nothing was written",
+      "trigger": "team config set seats.worker.label \"Cicero · implementer\""
     },
     {
       "code": 1,
@@ -1505,6 +1575,20 @@
       "id": "config.editor",
       "meaning": "the editor exited non-zero; nothing was written",
       "trigger": "team config edit"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.entity.unreadable",
+      "meaning": "the entities file cannot be read",
+      "trigger": "team config set <entity>.names.unique off"
+    },
+    {
+      "code": 2,
+      "command": "config",
+      "id": "config.entity.usage",
+      "meaning": "an entity-form invocation is not one of its forms",
+      "trigger": "team config set <entity>.names.unique"
     },
     {
       "code": 2,
@@ -1610,6 +1694,13 @@
       "id": "daemon.entry-missing",
       "meaning": "the CLI entry cannot be found, so the service unit cannot be written",
       "trigger": "team daemon install"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
+      "id": "daemon.fatal",
+      "meaning": "a hosted endpoint could not be kept alive, so the daemon exited for the system's service manager to restart it",
+      "trigger": "team daemon run"
     },
     {
       "code": 1,
@@ -2447,6 +2538,13 @@
     {
       "code": 1,
       "command": "init",
+      "id": "init.name-taken",
+      "meaning": "a nickname the restored team brings is already held by another team's seat; nothing was written",
+      "trigger": "team init --from-archive <folder>"
+    },
+    {
+      "code": 1,
+      "command": "init",
       "id": "init.not-owner",
       "meaning": "not the owner",
       "trigger": "team init"
@@ -3052,6 +3150,55 @@
       "id": "pause.team",
       "meaning": "the name is neither a declared seat nor a registered team, or names more than one",
       "trigger": "team pause other"
+    },
+    {
+      "code": 0,
+      "command": "peek",
+      "id": "peek.shown",
+      "meaning": "the seat's last lines were printed, masked where a line looks like a credential",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 1,
+      "command": "peek",
+      "id": "peek.owner-pane",
+      "meaning": "the named seat is a person's pane, and the owner's pane is never read",
+      "trigger": "team peek desk"
+    },
+    {
+      "code": 1,
+      "command": "peek",
+      "id": "peek.unknown",
+      "meaning": "the team declares no seat by that name",
+      "trigger": "team peek ghost"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.file",
+      "meaning": "the team file can't be read",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.invocation",
+      "meaning": "the invocation can't be read",
+      "trigger": "team peek lead --lines 0"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.no-screen",
+      "meaning": "no screen is readable: no pane is recorded, no reader stands, or the read failed",
+      "trigger": "team peek lead"
+    },
+    {
+      "code": 2,
+      "command": "peek",
+      "id": "peek.not-yours",
+      "meaning": "the caller is not the owner or a seat the read gate places on its recorded pane",
+      "trigger": "team peek lead"
     },
     {
       "code": 0,
@@ -4813,6 +4960,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.grant-invalid",
+      "meaning": "a send grant names this pair but is not signed by the owner (it is unsigned, or its signature does not verify); nothing was sent, and the refusal prints the record's name and the exact team grant --send line that recreates it signed",
+      "trigger": "team send native@other hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.held",
       "meaning": "the message is on disk and the pane was left untouched",
       "trigger": "team send worker hello"
@@ -5325,8 +5479,15 @@
       "code": 1,
       "command": "team",
       "id": "team.general-refused",
-      "meaning": "the general grant does not admit this command here (expired, another key, an op or entity it does not cover); nothing ran",
+      "meaning": "the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran",
       "trigger": "team status --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.general-target",
+      "meaning": "the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran",
+      "trigger": "team status --general <grant.json> --key <client.key> (a grant that lists entities)"
     },
     {
       "code": 1,
@@ -5360,8 +5521,8 @@
       "code": 2,
       "command": "team",
       "id": "team.general-usage",
-      "meaning": "--general is given without --key, or on the grant-issuing command",
-      "trigger": "team status --general <grant.json>"
+      "meaning": "--general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes)",
+      "trigger": "team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>"
     },
     {
       "code": 2,

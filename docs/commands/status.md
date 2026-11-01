@@ -88,9 +88,11 @@ cycled`, `watch: stopping in the daemon`, `watch: stopped in the daemon (<reason
 failed in the daemon (<reason>)`, with `no reason recorded` where the record gives none. A watch
 standing down for a live pane watch reads `watch: standing by; a live pane watch owns this session
 (<reason>)`: it leaves that session to the pane watch and touches nothing there. A watch whose
-outbound effects are closed adds `watch: outbound effects blocked (no verified admitted sender is
-injected); it is not enforcing anything` — it can cycle while those effects are closed, and the
-reading never prints it as enforcing. The phase line names the identity that is cycling, not
+outbound effects are closed adds `watch: outbound effects blocked; it is not enforcing anything`
+— it can cycle while those effects are closed, and the reading never prints it as enforcing. A
+hosted root needs no prior `up`: when the session records no watchdog file binding, the daemon
+records the route's own team file before the watch's first pass, and it never overwrites a record
+that names another file. The phase line names the identity that is cycling, not
 whether its last pass failed; the check names a failed pass. A stopped or failed watch is terminal
 in the record: nothing here restarts it, and the daemon does not bring it back by itself, so it
 runs again only when it is started again. A route the daemon records no watch for prints no such

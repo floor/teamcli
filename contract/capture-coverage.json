@@ -182,7 +182,7 @@
         "undocumented": 0
       },
       "question": {
-        "real": 0,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -212,7 +212,7 @@
         "undocumented": 0
       },
       "plan approval": {
-        "real": 0,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -1345,7 +1345,7 @@
             "undocumented": 0
           },
           "question": {
-            "real": 0,
+            "real": 2,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1375,7 +1375,7 @@
             "undocumented": 0
           },
           "plan approval": {
-            "real": 0,
+            "real": 2,
             "constructed": 0,
             "undocumented": 0
           },
@@ -2184,8 +2184,8 @@
       "unknown": "reason not stated"
     },
     "codex": {
-      "question": "reason not stated",
-      "exit question": "reason not stated"
+      "exit question": "reason not stated",
+      "confirmation": "reason not stated"
     },
     "cursor": {
       "idle": "reason not stated",
@@ -3103,6 +3103,30 @@
       "file": "codex/0.161.0/permission.txt",
       "cli": "codex",
       "kind": "permission",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/plan-approval-ansi.txt",
+      "cli": "codex",
+      "kind": "plan approval",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/plan-approval.txt",
+      "cli": "codex",
+      "kind": "plan approval",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question-ansi.txt",
+      "cli": "codex",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question.txt",
+      "cli": "codex",
+      "kind": "question",
       "provenance": "capture"
     },
     {
