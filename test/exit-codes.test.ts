@@ -3347,6 +3347,25 @@ scene('team.no-command', async (place) => show(await entry([], testIo(place.root
 scene('team.version', async (place) => show(await entry(['--version'], testIo(place.root, owner)), version()));
 scene('team.general-usage', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json')], testIo(place.root, owner)), '--general needs --key'));
 scene('team.general-refused', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], testIo(place.root, owner)), 'cannot be read as a general grant'));
+scene('team.general-target', async (place) => {
+  // A grant that lists entities makes the door resolve the team the line acts on first; a project
+  // the registry does not hold is one the grant cannot be checked against, so nothing runs.
+  const home = clientHome('general-target');
+  try {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const pair = newClientKeyPair();
+    const keyDir = clientKeyDir(home, 'a');
+    const written = writeClientKeyFiles(keyDir, pair);
+    if (!written.ok) throw new Error(written.why);
+    const issued = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pair.publicKey, entities: ['acme'], ops: ['status'], mayIssue: false, expires: new Date(Date.now() + 86_400_000) });
+    if (!issued.ok) throw new Error(issued.why);
+    const io = testIo(place.root, owner);
+    io.env.HOME = home;
+    return show(await entry(['status', '--project', 'no-such-project', '--general', issued.path, '--key', join(keyDir, 'client.key')], io), 'can be resolved');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 scene('team.unknown', async (place) => show(await entry(['nosuch'], testIo(place.root, owner)), 'unknown command'));
 scene('team.approve-removed', async (place) => show(await entry(['approve'], testIo(place.root, owner)), 'team approve was removed in 0.5.0'));
 scene('team.command-help', async (place) => show(await entry(['status', '--help'], testIo(place.root, owner)), 'Usage: team status'));
@@ -6681,6 +6700,23 @@ scene('up.approval-requested', async (place) => {
 scene('up.general-refused', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], other, upSources(place)), 'cannot be read as a general grant');
+});
+scene('up.general-target', async (place) => {
+  // The launch's own team is the file it names; a listed grant makes `up` resolve it before the
+  // run, and a file that cannot be read leaves the grant nothing to be checked against.
+  const home = clientHome('up-general-target');
+  try {
+    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+    const pair = newClientKeyPair();
+    const keyDir = clientKeyDir(home, 'a');
+    const written = writeClientKeyFiles(keyDir, pair);
+    if (!written.ok) throw new Error(written.why);
+    const issued = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pair.publicKey, entities: ['acme'], ops: ['up'], mayIssue: false, expires: new Date(Date.now() + 86_400_000) });
+    if (!issued.ok) throw new Error(issued.why);
+    return show(await up(place, ['--file', 'missing.yaml', '--general', issued.path, '--key', join(keyDir, 'client.key')], other, upSources(place, { home })), 'cannot be resolved');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 scene('up.approval-refused', async (place) => {
   approve(place, TEAM);
