@@ -135,15 +135,15 @@ function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
   if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
   const failed = roots.flatMap((root) => {
     const entries: string[] = [];
-    // A failed endpoint is one that was attempted and stamped its failure instant. A root that
-    // could not be set up is recorded failed without a stamp; it was never hosted, and the line
-    // says that rather than inventing an endpoint failure with no age.
-    if (stampedFailure(root.send, root.sendFailedAt)) {
+    // Every failed endpoint is named, with its reason. A record written before this build kept
+    // the failure instant has no age to show; losing the failure with the stamp would hide a
+    // real one, so only the age is optional.
+    if (root.send === 'failed') {
       entries.push(
         `send for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
       );
     }
-    if (stampedFailure(root.bus, root.busFailedAt)) {
+    if (root.bus === 'failed') {
       entries.push(
         `bus for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
       );
@@ -164,11 +164,6 @@ function rootsPhrase(roots: DaemonRootState[], at: string): string[] {
     parts.push(`${String(notHosted)} endpoint${notHosted === 1 ? '' : 's'} not hosted here`);
   }
   return parts;
-}
-
-/** The failure instant an attempted endpoint keeps. A root that never started has none. */
-function stampedFailure(state: string, failedAt: string | null | undefined): boolean {
-  return state === 'failed' && typeof failedAt === 'string' && failedAt !== '';
 }
 
 /** How long an endpoint has been failing, measured against this reading's own instant. Empty
@@ -201,14 +196,14 @@ export function daemonDifferences(health: DaemonHealth | null, now: Date): Diffe
   const at = now.toISOString();
   const rows: Difference[] = [];
   for (const root of health.roots) {
-    if (stampedFailure(root.send, root.sendFailedAt)) {
+    if (root.send === 'failed') {
       rows.push({
         what: `machine daemon send endpoint for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`,
         repair: 'team daemon install',
         owner: true,
       });
     }
-    if (stampedFailure(root.bus, root.busFailedAt)) {
+    if (root.bus === 'failed') {
       rows.push({
         what: `machine daemon bus endpoint for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`,
         repair: 'team daemon install',

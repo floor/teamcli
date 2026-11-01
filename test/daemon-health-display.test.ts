@@ -421,17 +421,20 @@ test('a hung daemon is a check note that changes no total and no exit', () => {
   expect(io.out).toContain('no differences');
 });
 
-test('a hosted endpoint that did not start is a check note, and machine health alone is not health', () => {
+test('a hosted endpoint that did not start is a check note and a difference, and machine health alone is not health', () => {
   const at = place();
   const io = testIo(at.root, { kind: 'owner' });
   const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
     ...checkSources(at, undefined),
     daemon: health({ roots: [root({ send: 'failed', why: 'address in use' })] }),
   });
-  expect(code).toBe(0);
+  // A record written before failures kept their instant still names the failure; only its age
+  // is missing, and the row is counted like any other failed endpoint.
+  expect(code).toBe(1);
   expect(io.out).toContain('roots 1 (send 0, bus 1)');
   expect(io.out).toContain('1 endpoint did not start here (send for /work/acme: address in use)');
-  expect(io.out).toContain('no differences');
+  expect(io.out).toContain('machine daemon send endpoint for /work/acme: address in use');
+  expect(io.out).toContain('team daemon install');
 });
 
 const BLOCKED =

@@ -209,7 +209,7 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
     }
   });
 
-  test('status names a checkout whose endpoints were not hosted', async () => {
+  test('status names a checkout whose endpoints failed to start', async () => {
     const { base, root, home } = scratch();
     const absent = join(base, 'absent');
     const started = await startMachineDaemon({
@@ -225,7 +225,10 @@ describe('one machine daemon hosts the existing send and bus endpoints in one pr
       const status = testIo(home, owner);
       expect(await runDaemon(['status'], status, sourcesOf(home))).toBe(0);
       expect(status.out).toContain('roots 2 (send 1, bus 1)');
-      expect(status.out).toContain('2 endpoints not hosted here');
+      // Both endpoints of the unreadable checkout failed to start, and the line names the
+      // checkout and the reason rather than counting them as merely not hosted.
+      expect(status.out).toContain(`2 endpoints failed (send for ${absent}: `);
+      expect(status.out).toContain(`bus for ${absent}: `);
       expect(status.out.trim().split('\n').length).toBe(1);
 
       const json = testIo(home, owner);
@@ -1262,7 +1265,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(io.out).toContain('team daemon: stopped');
   });
 
-  test('run names endpoints that were not hosted', async () => {
+  test('run names an endpoint that failed to start', async () => {
     const { root, home } = scratch();
     const io = testIo(root, owner);
     const code = await runDaemon(['run'], io, sourcesOf(home, {
@@ -1291,7 +1294,7 @@ describe('team daemon status, install, uninstall and run', () => {
     }));
     expect(code).toBe(0);
     expect(io.out).toContain('roots 1 (send 1, bus 0)');
-    expect(io.out).toContain('1 endpoint not hosted here');
+    expect(io.out).toContain(`1 endpoint failed (bus for ${root}: another bus server holds the project socket)`);
   });
 
   test('run reports an existing daemon and a held lock without starting a second one', async () => {

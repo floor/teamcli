@@ -292,12 +292,13 @@ function rootsSummary(roots: MachineRootStatus[], now: Date = new Date()): strin
   if (starting > 0) parts.push(`${String(starting)} endpoint${starting === 1 ? '' : 's'} starting`);
   const failed = roots.flatMap((root) => {
     const entries: string[] = [];
-    // Only an endpoint that was attempted and stamped its failure instant is a failed endpoint.
-    // A root recorded failed without a stamp was never hosted; the not-hosted count names it.
-    if (root.send === 'failed' && typeof root.sendFailedAt === 'string' && root.sendFailedAt !== '') {
+    // Every failed endpoint is named, with its reason. A record written before this build kept
+    // the failure instant has no age to show; losing the failure with the stamp would hide a
+    // real one, so only the age is optional.
+    if (root.send === 'failed') {
       entries.push(`send for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.sendFailedAt, at)}`);
     }
-    if (root.bus === 'failed' && typeof root.busFailedAt === 'string' && root.busFailedAt !== '') {
+    if (root.bus === 'failed') {
       entries.push(`bus for ${root.root}: ${root.why ?? 'no reason recorded'}${failureAge(root.busFailedAt, at)}`);
     }
     return entries;

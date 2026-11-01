@@ -593,6 +593,24 @@ describe('a failed endpoint is a difference a reader can act on', () => {
     expect(rows[0]?.repair).toBe('team daemon install');
     expect(rows[0]?.owner).toBe(true);
   });
+
+  test('a record written before the failure instant is kept still names the failure', () => {
+    const health = healthWithFailedSend();
+    const roots = health.roots as Array<Record<string, unknown>>;
+    const first = roots[0];
+    if (first === undefined) throw new Error('the fixture has one root');
+    delete first.sendFailedAt;
+    const [line] = daemonNotes(health);
+    // The age is optional; the failure is not. Losing the row with the stamp would let an old
+    // record report full health while its endpoint is still down.
+    expect(line).toContain('send for /synthetic/repo: the hosted send endpoint stopped answering');
+    expect(line).toContain('1 endpoint did not start here');
+    expect(line).not.toContain('failing for');
+    const rows = daemonDifferences(health, new Date('2026-11-01T00:00:12.000Z'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.what).toContain('machine daemon send endpoint for /synthetic/repo');
+    expect(rows[0]?.what).not.toContain('failing for');
+  });
 });
 
 // A health snapshot that is not running has no endpoint difference: absence is already said by
