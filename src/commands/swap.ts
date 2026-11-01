@@ -17,6 +17,7 @@ import {
 import { charterGate } from '../charter/check.ts';
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { currentTeam } from '../file/current.ts';
+import { launchTeamFile } from '../file/load.ts';
 import { rulesOriginOf, type RulesOrigin } from '../launch/rules.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -106,8 +107,11 @@ type RunPlan = {
   dir: string;
   root: string;
   home: string;
-  /** The team file's path: the run writes the new declaration there and launches from it. */
+  /** The team file's path: the run writes the new declaration there. */
   path: string;
+  /** The team file the launch names: the file `path` names when the load read a file, absent for
+   *  a registry team, whose record is the definition and whose file beside it need not exist. */
+  launchFile?: string;
   team: TeamFile;
   session: string;
   io: Io;
@@ -318,6 +322,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
         root,
         home,
         path: current.path,
+        launchFile: launchTeamFile(current),
         team,
         session: team.session,
         io,
@@ -383,6 +388,7 @@ function execute(argv: string[], rawIo: Io, options: SwapCommandOptions): Outcom
     home,
     // The check above refused `run` and `now` on an invalid file; a `queue` never hands this on.
     path: current.path as string,
+    launchFile: launchTeamFile(current),
     team,
     session: team.session,
     io,
@@ -523,7 +529,7 @@ function forcedPlan(
  * signed-off seat or a read-back mismatch is a failure and the exit says so.
  */
 async function performRun(origin: RunPlan): Promise<Outcome> {
-  const { dir, root, home, path, team, session, io, rawIo, json, base, by, owner, now, sources, presenceChannelHealthy, forcedSeat } = origin;
+  const { dir, root, home, path, launchFile, team, session, io, rawIo, json, base, by, owner, now, sources, presenceChannelHealthy, forcedSeat } = origin;
   if (sources.agents(session) === null) {
     const what = forcedSeat ? 'the forced swap cannot run' : 'no swap can be run';
     refuse(rawIo, io, json, 'swap.herdr', `herdr cannot be read, so ${what} now`, null, base.notice ?? undefined, null);
@@ -535,6 +541,7 @@ async function performRun(origin: RunPlan): Promise<Outcome> {
     root,
     home,
     path,
+    ...(launchFile === undefined ? {} : { launchFile }),
     team,
     session,
     io,

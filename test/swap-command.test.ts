@@ -169,7 +169,13 @@ const queue = () => readState(join(root, '.agents')).swaps ?? {};
 
 type FakeHerdr = {
   sources: RestartSources;
-  did: { typed: string[]; closed: string[]; runs: string[] };
+  did: {
+    typed: string[];
+    closed: string[];
+    runs: string[];
+    /** Each inbox registration the launch made, as its own arguments. */
+    inboxes: [string, string, string, string, string | undefined][];
+  };
 };
 
 /**
@@ -201,7 +207,7 @@ function fakeHerdr(
     doctorVersion?: string;
   } = {},
 ): FakeHerdr {
-  const did = { typed: [] as string[], closed: [] as string[], runs: [] as string[] };
+  const did = { typed: [] as string[], closed: [] as string[], runs: [] as string[], inboxes: [] as [string, string, string, string, string | undefined][] };
   let clock = NOW.getTime();
   const now = (): Date => new Date(clock);
   // A handover turn that is still finishing when its file lands: the old pane reads `working`
@@ -286,6 +292,12 @@ function fakeHerdr(
     sessionState: () => 'running',
     startServer: () => true,
     sessionUp: () => true,
+    // The registration the launch makes before the seat's command runs: the arguments are the
+    // binding this launch hands its CLI, so a scene reads the team file the seat will serve.
+    registerInbox(cli, seat, cwd, session, teamFile) {
+      did.inboxes.push([cli, seat, cwd, session, teamFile]);
+      return { ok: true };
+    },
     createWorkspace() {
       created += 1;
       const pane = `pane-new-${created}`;
@@ -594,6 +606,20 @@ describe('team swap now and --run', () => {
     expect(ran.code).toBe(0);
     expect(ran.out).toContain('swapped: lead in pane-new-1 (read-back unread)');
     expect(queue()).toEqual({});
+  });
+
+  // The file a swap's launch names is the file the command read. A launch that named no file
+  // would register the seat's inbox from the registry instead, so a file team's seat would serve
+  // whatever team holds its name there — the file's own declarations never reach it.
+  test('a swap on a file team registers the seat\'s inbox from the team file', async () => {
+    place();
+    setRule('*=!anthropic');
+    await swap(['queue', 'lead']);
+    const world = fakeHerdr();
+    const ran = await swap(['--run'], OWNER, { sources: world.sources });
+    expect(ran.code).toBe(0);
+    expect(ran.out).toContain('swapped: lead');
+    expect(world.did.inboxes.map((call) => call[4])).toEqual([join(root, '.agents', 'team.yaml')]);
   });
 
   // At the boundary, before the deadline could rescue it: herdr reads idle and the screen reads
