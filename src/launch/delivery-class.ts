@@ -119,6 +119,10 @@ export type DeliveryEvidence = {
    *  (`recordedSeatSession`), so a pointer can actually be handed over. Read only while an
    *  endpoint is recorded and bound; `false` there is what keeps the class off `between-turns`. */
   conversation: boolean;
+  /** The endpoint record bound to the current presence incarnation, before the conversation is
+   *  consulted. True with `conversation` false is an endpoint the class cannot use: there is a
+   *  queue, and no thread to hand a pointer for — the reading a status line shows separately. */
+  endpointRecorded: boolean;
   /** The endpoint record bound to the current presence incarnation, and a bound conversation. */
   endpoint: boolean;
   human: boolean;
@@ -258,6 +262,7 @@ export function seatDeliveryClass(input: SeatDeliveryInput): SeatDelivery {
       channel,
       socket: facts.socket,
       conversation,
+      endpointRecorded,
       endpoint,
       human,
     },
