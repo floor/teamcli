@@ -244,6 +244,39 @@ test('a receiver that never answers times out, keeps the drop, and the retries a
   expect(readFileSync(drop, 'utf8')).toBe('hello from the bus scene\n');
 });
 
+test('the default wait between attempts runs under the plain runtime', async () => {
+  // The installed CLI is the plain runtime, and the production build's types carry no bundler
+  // globals: this scene bundles the delivery for node and runs it there with no sleep injected,
+  // so a default that only a development runtime provides fails here rather than at the first
+  // retry in the field.
+  const base = scratch();
+  const outdir = join(base, 'bundle');
+  const built = await Bun.build({
+    entrypoints: [join(import.meta.dir, 'webhook-node-default-retry-run.ts')],
+    target: 'node',
+    format: 'esm',
+    outdir,
+  });
+  expect(built.success, built.logs.map((log) => log.message).join('\n')).toBe(true);
+  const entry = built.outputs.find((output) => output.kind === 'entry-point');
+  expect(entry).toBeDefined();
+  const proc = Bun.spawn(['node', entry!.path], {
+    cwd: new URL('..', import.meta.url).pathname,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exit = await proc.exited;
+  const out = await new Response(proc.stdout).text();
+  const err = await new Response(proc.stderr).text();
+  expect(exit, err || out).toBe(0);
+  const facts = JSON.parse(out) as { runtime: string; attempts: number; outcome: string; elapsedMs: number };
+  // Both attempts were made: the wait returned on a runtime that has no bundler sleep.
+  expect(facts.attempts).toBe(2);
+  expect(facts.outcome).toBe('failed');
+  // And it waited the policy's 60 ms backoff rather than spinning past it.
+  expect(facts.elapsedMs).toBeGreaterThanOrEqual(50);
+});
+
 test('a missing secret file is refused in plain words, with no POST at all', async () => {
   const base = scratch();
   const hook = files(base, '');
