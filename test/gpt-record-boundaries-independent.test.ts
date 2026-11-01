@@ -1,6 +1,7 @@
 // Independent synthetic record and canonicalization scenes; diagnostic names are neutral.
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -56,12 +57,33 @@ ${evidence}
 signals: []
 `;
 }
-for(let index=0;index<6;index++)test(`R4${index+1}: dry reader preserves owned fixture data`,()=>{
- const result=readScript(script(index));expect(result.ok).toBe(true);if(!result.ok)return;
- const s=result.script;
- const target=index===0?s.settings:index===1?s.inputs:index===2?s.evidence:index===3?s.evidence.item:index===4?s.evidence.item.nested:s.evidence.item.nested[0];
- expect(Object.prototype.hasOwnProperty.call(target,field)).toBe(true);
- expect(JSON.stringify(target).includes(JSON.stringify(field))).toBe(true);
+const shared=[Object.prototype,Function.prototype,Array.prototype,Object,Function,Array];
+function snapshotShared() {return shared.map(target=>({target,descriptors:Object.getOwnPropertyDescriptors(target)}));}
+function sharedUnchanged(before:ReturnType<typeof snapshotShared>) {
+ return before.every(({target,descriptors})=>{
+  const after=Object.getOwnPropertyDescriptors(target),keys=Reflect.ownKeys(descriptors);
+  return keys.length===Reflect.ownKeys(after).length&&keys.every(key=>{
+   const left=Reflect.get(descriptors,key),right=Reflect.get(after,key);
+   return right!==undefined&&['value','get','set','writable','enumerable','configurable'].every(part=>Object.is(left[part],right[part]));
+  });
+ });
+}
+function restoreShared(before:ReturnType<typeof snapshotShared>) {
+ for(const {target,descriptors} of before) {
+  for(const key of Reflect.ownKeys(target))if(!Object.prototype.hasOwnProperty.call(descriptors,key))Reflect.deleteProperty(target,key);
+  Object.defineProperties(target,descriptors);
+ }
+}
+for(let index=0;index<6;index++)test(`R4${index+1}: dry reader refuses an unsupported mapping field without effects`,()=>{
+ const before=snapshotShared(),writes:string[]=[];
+ const fileWrite=spyOn(fs,'writeFileSync').mockImplementation(()=>{writes.push('file');throw new Error('unexpected file write');});
+ const bunWrite=spyOn(Bun,'write').mockImplementation(()=>{writes.push('bun');throw new Error('unexpected file write');});
+ let result:ReturnType<typeof readScript>|undefined,unchanged=false;
+ try {result=readScript(script(index));unchanged=sharedUnchanged(before);}
+ finally {fileWrite.mockRestore();bunWrite.mockRestore();if(!sharedUnchanged(before))restoreShared(before);}
+ expect(result).toEqual({ok:false,code:'workflow.script',why:`line ${[5,7,9,10,11,11][index]}: a map key may not be "${field}"`});
+ expect(unchanged).toBe(true);
+ expect(writes).toEqual([]);
 });
 test('R90: ordinary record hashes and workflow digests keep their pinned values',()=>{
  expect(owner.ownerActionHash(params())).toBe('99a13204e0a284b52e9ca694144b3ba165aced045cc81b9d89e12518219a8b29');
