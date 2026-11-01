@@ -539,6 +539,59 @@ describe('a held event lock neither loses the event nor freezes the loop', () =>
       'message.arrived:defer-0002',
     ]);
   }, 15_000);
+
+  test('an abort scheduled from a fan-out lands during the yield and stops the next append', async () => {
+    const { root, home } = scratch();
+    const input = { project: 'acme', root, session: 'acme', home };
+    const state = createReconcileState();
+    const dir = dropsDir(root);
+    const count = 3;
+    const stop = new AbortController();
+    for (let n = 0; n < count; n += 1) {
+      dropMessage(dir, `defer-${String(n).padStart(4, '0')}`, 'from clerk — admitted by: lead\n\nhello');
+    }
+    const seed = appendEvent('acme', root, home, {
+      kind: 'message.arrived',
+      session: 'acme',
+      record_id: 'seed',
+      ts: BULK_TS,
+      to: 'worker-1',
+    });
+    if (!seed.ok) throw new Error(seed.reason);
+    const lock = holdEventLock(root, home);
+    let released = false;
+    const timer = setInterval(() => {
+      if (!released && state.deferred.length >= count) {
+        released = true;
+        try {
+          unlinkSync(lock);
+        } catch {}
+      }
+    }, 1);
+    let pass: ReconcileResult | null = null;
+    try {
+      pass = await reconcilePassAsync({
+        ...input,
+        state,
+        signal: stop.signal,
+        sliceMs: 0,
+        // The abort is scheduled, not raised in the callback: it runs on the drain's own yield,
+        // between the first record's append and the second's — a boundary a check at the loop's
+        // top, before the yield, cannot see.
+        onEvent: () => setImmediate(() => stop.abort()),
+      });
+    } finally {
+      clearInterval(timer);
+      try {
+        unlinkSync(lock);
+      } catch {}
+    }
+    if (pass === null) throw new Error('the pass did not return');
+    expect(released).toBe(true);
+    expect(stop.signal.aborted).toBe(true);
+    // The first record is written and fanned out; the abort the yield delivered stops the rest.
+    expect(raisedKeys(pass)).toHaveLength(1);
+  }, 15_000);
 });
 
 describe('closing the bus cancels the pass it started', () => {

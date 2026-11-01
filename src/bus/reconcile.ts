@@ -992,6 +992,14 @@ async function retryDeferredAppends(
         state.stats.yields += 1;
         await yieldTurn();
         since = performance.now();
+        // The turn the drain just gave can deliver an abort that was scheduled from the previous
+        // record's fan-out rather than raised in it: the check at the loop's top ran before that
+        // turn, so it is read again here, before this item's append, or the item the abort meant
+        // to stop still lands.
+        if (cancelled()) {
+          state.deferred = [];
+          return;
+        }
       }
       const outcome = tryDeferredAppend(options, item);
       if (outcome.state === 'busy') busy.push(item);
