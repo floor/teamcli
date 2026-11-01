@@ -1,11 +1,14 @@
 // A launch line whose last word is a quoted script (`/bin/sh -c 'claude …'`) hands its words to
 // the CLI through that script. The profile's options, the rules and a minted id go inside the
 // quotes, where the CLI reads them, and every "does the line already set this" reads the CLI's
-// words there too: a line that sets its own sandbox or approval keeps it. A line whose shape this
-// version cannot prove — unclosed quoting, a script file, a bare command word, a nested shell
-// deeper than one — keeps exactly its 0.5.10 placement, the options after the line, with one
-// plain warning, and is never refused. These scenes run the built line against a stub CLI and
-// read the argv the CLI was handed, so the words are measured, not matched in the line's text.
+// decoded words there too: a line that sets its own sandbox or approval keeps it, and a quoted
+// `--session-id` is the flag. One invariant closes the class: after any insertion the CLI's
+// decoded words are its words before, exactly, followed by exactly the inserted words in order.
+// A line whose shape this version cannot prove — unclosed quoting, a script file, a bare command
+// word, a nested shell deeper than one, an ANSI-C (`$'…'`) word — keeps exactly its 0.5.10
+// placement, the options after the line, with one plain warning, and is never refused. These
+// scenes run the built line against a stub CLI and read the argv the CLI was handed, so the words
+// are measured, not matched in the line's text.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,6 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { shellWords } from '../src/launch/shell-words.ts';
 import { profileFor } from '../src/profiles/index.ts';
 import {
+  cliWordList,
   launchCommand,
   namedResumeTarget,
   withoutResume,
@@ -375,6 +379,87 @@ describe('every 0.5.10 launch-line shape launches with the same words or more, n
   }
 });
 
+// One invariant closes the class: after any insertion into a script, re-tokenizing the result
+// must give the CLI's original decoded words, exactly, followed by exactly the inserted words,
+// in order. Every readable parity shape proves both halves at the CLI it actually runs; a shape
+// this version cannot read proves the fallback: the line untouched, one notice, the same argv.
+describe('the insertion invariant holds over every parity shape', () => {
+  for (const row of PARITY) {
+    const runner = row.runner ?? '/bin/sh';
+    const available = runner === '/bin/zsh' ? ZSH : runner === '/bin/bash' ? BASH : true;
+    test.skipIf(!available)(row.name, () => {
+      const profile = profileFor(row.cli)!;
+      const warnings: string[] = [];
+      const command = launchCommand(profile, row.line, RULES, undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      const argv = cliArgv(command, { binary: row.binary, runner, wrapper: row.wrapper });
+      if (warnings.length > 0) {
+        expect(command.startsWith(`AGENT_UNATTENDED=1 ${row.line.trimEnd()} `)).toBe(true);
+        expect(isOrderedSubsequence(row.baseline, argv)).toBe(true);
+        return;
+      }
+      const before = cliWordList(profile.cli, row.line);
+      const after = cliWordList(profile.cli, command);
+      expect(before).not.toBeNull();
+      expect(after).not.toBeNull();
+      // The environment word belongs to the line, not to the CLI.
+      const words = after![0] === 'AGENT_UNATTENDED=1' ? after!.slice(1) : after!;
+      expect(words.slice(0, before!.length)).toEqual(before!);
+      const inserted = words.slice(before!.length);
+      expect(inserted.length).toBeGreaterThan(0);
+      // The inserted words are whole CLI words at the end of its argv — never glued onto an
+      // original word, never split, never reordered.
+      expect(argv.slice(argv.length - inserted.length)).toEqual(inserted);
+      // Every word the CLI received before, it still receives first.
+      expect(argv.slice(0, row.baseline.length)).toEqual([...row.baseline]);
+    });
+  }
+});
+
+// The words builder-3's round-3 probes broke: each now keeps the line's own word whole and adds
+// exactly the profile's words after it. The ANSI-C NUL is unreadable, so it takes the fallback,
+// and the quoted `--session-id` is the flag, so no second id is minted.
+describe('the round-3 probe shapes satisfy the same invariant', () => {
+  const SHAPES = [
+    { name: 'an escaped space at the end of the script', line: String.raw`/bin/sh -c 'claude --model m\ '` },
+    { name: 'a line continuation at the end of the script', line: '/bin/sh -c "claude --model m\\\n"' },
+  ];
+  for (const shape of SHAPES) {
+    test(shape.name, () => {
+      const base = cliArgv(shape.line);
+      const warnings: string[] = [];
+      const command = launchCommand(claude, shape.line, RULES, undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      expect(warnings).toEqual([]);
+      const before = cliWordList('claude-code', shape.line)!;
+      const afterRaw = cliWordList('claude-code', command)!;
+      const after = afterRaw[0] === 'AGENT_UNATTENDED=1' ? afterRaw.slice(1) : afterRaw;
+      expect(after.slice(0, before.length)).toEqual(before);
+      const inserted = after.slice(before.length);
+      const argv = cliArgv(command);
+      expect(argv.slice(0, base.length)).toEqual(base);
+      expect(argv.slice(argv.length - inserted.length)).toEqual(inserted);
+      expect(inserted).toEqual(['--dangerously-skip-permissions', '--append-system-prompt', RULES]);
+    });
+  }
+
+  test('a quoted --session-id is the flag: the declared id is recorded, and none is minted', () => {
+    const id = '01234567-89ab-4cde-8fab-0123456789ab';
+    const line = `/bin/sh -c 'claude "--session-id" ${id}'`;
+    const launch = withLaunchSession('claude-code', line);
+    expect(launch).toEqual({ command: line, sessionId: id });
+    expect(cliArgv(launch.command)).toEqual(['--session-id', id]);
+  });
+
+  test('an ANSI-C NUL cannot certify a minted id: none is recorded, and the notice says so', () => {
+    if (!BASH) return;
+    const line = String.raw`/bin/bash -c $'claude --model m\x00'`;
+    const launch = withLaunchSession('claude-code', line);
+    expect(launch.command).toBe(line);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+    expect(cliArgv(launch.command, { runner: '/bin/bash' })).toEqual(['--model', 'm']);
+  });
+});
+
 describe('the words a launch line hides from a plain text scan are read as the CLI reads them', () => {
   test("an escaped newline inside the script does not hide the line's own sandbox and approval", () => {
     const line = '/bin/sh -c "codex --sand\\\nbox read-only --ask-for-approval on-request"';
@@ -399,11 +484,35 @@ describe("a script-file wrapper, an $'…' script and a nested shell all reach t
     expect(argv).toEqual(['--dangerously-skip-permissions', '--append-system-prompt', RULES]);
   });
 
-  test("an ANSI-C quoted script launches, and the option's quotes arrive as one rule word", () => {
-    const command = launchCommand(claude, "/bin/bash -c $'claude --model m'", RULES);
-    expect(command).toBe(`AGENT_UNATTENDED=1 /bin/bash -c $'claude --model m --dangerously-skip-permissions --append-system-prompt \\'${RULES}\\''`);
-    const argv = cliArgv(command, { runner: '/bin/bash' });
-    expect(argv).toEqual(['--model', 'm', '--dangerously-skip-permissions', '--append-system-prompt', RULES]);
+  test("an ANSI-C quoted script keeps 0.5.10's placement, for every escape class", () => {
+    // The two shells read the same `$'…'` word differently (the measured bytes are in
+    // src/launch/shell-words.ts), so no such word is decoded: the options stay after the line,
+    // where 0.5.10 wrote them, and the seat says so. One line per escape class — the escapes
+    // both shells read alike, and the ones they do not.
+    const LINES = [
+      String.raw`/bin/bash -c $'claude --model m'`,
+      String.raw`/bin/bash -c $'claude --model m\n'`,
+      String.raw`/bin/bash -c $'claude --model m\x41'`,
+      String.raw`/bin/bash -c $'claude --model m\u00e9'`,
+      String.raw`/bin/bash -c $'claude --model m\u00'`,
+      String.raw`/bin/bash -c $'claude --model m\x00'`,
+      String.raw`/bin/bash -c $'claude --model m\0'`,
+      String.raw`/bin/bash -c $'claude --model m\8'`,
+      String.raw`/bin/bash -c $'claude --model m\q'`,
+      String.raw`/bin/bash -c $'claude --model m\$'`,
+    ];
+    if (!BASH) return;
+    for (const line of LINES) {
+      const warnings: string[] = [];
+      const command = launchCommand(claude, line, RULES, undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      const before = cliArgv(line, { runner: '/bin/bash' });
+      expect(command).toBe(`AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt '${RULES}'`);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('after the line, where the CLI may not read them');
+      // The fallback changes no word the CLI receives: the options are the script's positional
+      // words, never the CLI's.
+      expect(cliArgv(command, { runner: '/bin/bash' })).toEqual(before);
+    }
   });
 
   test('a nested shell one level deep takes the rules, the id and a resume in its CLI script', () => {

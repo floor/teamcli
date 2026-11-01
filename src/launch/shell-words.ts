@@ -2,18 +2,19 @@
 // guessed from the last character: single quotes are literal, double quotes honour `\`, `"`,
 // `$` and a backtick, and a backslash outside quotes takes the next character. A backslash-newline
 // pair is removed outside single quotes — a line continuation, inside double quotes too, as a
-// shell removes it; inside single quotes the backslash is literal. `$'…'` is read as bash and zsh
-// write it (ANSI-C quoting), but only where both decode it the same way: measured here in bash
-// 3.2.57 and zsh 5.9, `\n` is a newline, `\'` a quote, `\\` a backslash, `\101` and `\x41` both
-// read `A`, a four-digit `\u` code reads its letter (`é` for the code the probe used), and the
-// control escapes `\a \b \e \E \f \r \t \v` agree. They do
-// not agree on an escape they do not know (`\q`: bash keeps `\q`, zsh reads `q`), on `\$` or
-// `` \` `` (bash keeps the backslash), on `\cA` (bash reads a control byte, zsh reads `cA`), on
-// `\0` (bash drops it, zsh keeps `\0`) or on a short `\u00` (bash keeps it, zsh reads `\0`). A
-// word using one of those is not knowable from the line alone: the line is null, and nothing
-// built on it may guess. The standard `'\''` splice — close the single quotes, an escaped quote,
-// reopen — reads as one word, as a shell reads it. A line with an unclosed quote or a trailing
-// backslash is null too.
+// shell removes it; inside single quotes the backslash is literal. The standard `'\''` splice —
+// close the single quotes, an escaped quote, reopen — reads as one word, as a shell reads it.
+//
+// `$'…'` (ANSI-C quoting) is not read at all. What it means depends on the shell that runs the
+// line, and the shells disagree: measured here on GNU bash 3.2.57(1)-release and zsh 5.9 with the
+// same `printf %s $'…'` probe, `x\u00e9y` is the literal text `x\u00e9y` in bash
+// (78 5c 75 30 30 65 39) and `xéy` in zsh (78 c3 a9 79); `x\x00y` is `x` in bash (78) and `x`,
+// a NUL, `y` in zsh (78 00 79); and `\0`, a short `\u00` and `\8` differ the same way. Even the
+// escapes the two shells read alike are not read here: one rule covers every `$'…'` word, so a
+// line holding one is unreadable at the `ansi` reason, and nothing built on it may guess — a
+// launch keeps 0.5.10's placement instead. A NUL byte is unreadable at the `nul` reason: no
+// shell can hand one to a program in a word. A line with an unclosed quote or a trailing
+// backslash is unreadable at the `unclosed` reason: no shell can run it.
 
 export type ShellWord = {
   /** The word as the shell hands it to the program, quotes removed and escapes resolved. */
@@ -24,65 +25,14 @@ export type ShellWord = {
   end: number;
 };
 
-/** The escapes both bash and zsh decode identically, measured escape by escape. `$'…'` text
- *  with any other escape decodes differently in the two shells, so the word is not knowable and
- *  the caller treats the line as unreadable. */
-const ANSI_SIMPLE: Record<string, string> = {
-  a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v',
-  '\\': '\\', "'": "'", '"': '"', '?': '?',
-};
+/** Why a line has no knowable words. `unclosed` is a line no shell can run; `ansi` and `nul`
+ *  are a line some shell may run, whose words this reader cannot know without guessing. */
+export type ShellWordsUnreadable = 'unclosed' | 'ansi' | 'nul';
 
-/** The text of one `$'…'` escape whose backslash is at `at`, and where the escape ends. Null for
- *  an escape the two shells do not decode alike: unknown escapes, `\$`, `` \` ``, `\cA`, `\0`
- *  and a short `\u`. */
-function ansiEscape(command: string, at: number): { text: string; end: number } | null {
-  const next = command[at];
-  if (next === undefined) return null;
-  const simple = ANSI_SIMPLE[next];
-  if (simple !== undefined) return { text: simple, end: at + 1 };
-  if (next === 'x') {
-    const digits = /^[0-9A-Fa-f]{1,2}/.exec(command.slice(at + 1, at + 3))?.[0] ?? '';
-    if (digits === '') return null;
-    return { text: String.fromCharCode(Number.parseInt(digits, 16)), end: at + 1 + digits.length };
-  }
-  if (next === 'u') {
-    const digits = /^[0-9A-Fa-f]{4}$/.exec(command.slice(at + 1, at + 5))?.[0];
-    if (digits === undefined) return null;
-    return { text: String.fromCodePoint(Number.parseInt(digits, 16)), end: at + 5 };
-  }
-  if (next >= '1' && next <= '7') {
-    const digits = /^[0-7]{1,3}/.exec(command.slice(at))![0];
-    const code = Number.parseInt(digits, 8);
-    if (code > 0xff) return null;
-    return { text: String.fromCharCode(code), end: at + digits.length };
-  }
-  return null;
-}
+type ShellWordsRead = { words: ShellWord[] } | { unreadable: ShellWordsUnreadable };
 
-/** The decoded text of a `$'…'` word whose `$` is at `at`, and where its closing quote ends.
- *  Null when the quote never closes, or when it holds an escape the two shells read differently. */
-function ansiWord(command: string, at: number): { text: string; end: number } | null {
-  let text = '';
-  let index = at + 2;
-  while (index < command.length) {
-    const char = command[index]!;
-    if (char === "'") return { text, end: index + 1 };
-    if (char !== '\\') {
-      text += char;
-      index += 1;
-      continue;
-    }
-    const decoded = ansiEscape(command, index + 1);
-    if (decoded === null) return null;
-    text += decoded.text;
-    index = decoded.end;
-  }
-  return null;
-}
-
-/** The words of a command line, or null when its quoting never closes or cannot be decoded the
- *  same way by every shell it may run under. */
-export function shellWords(command: string): ShellWord[] | null {
+function readShellWords(command: string): ShellWordsRead {
+  if (command.includes('\u0000')) return { unreadable: 'nul' };
   const words: ShellWord[] = [];
   const length = command.length;
   let at = 0;
@@ -102,7 +52,7 @@ export function shellWords(command: string): ShellWord[] | null {
     if (start < 0) start = at;
     if (char === "'") {
       const close = command.indexOf("'", at + 1);
-      if (close < 0) return null;
+      if (close < 0) return { unreadable: 'unclosed' };
       text += command.slice(at + 1, close);
       at = close + 1;
       continue;
@@ -110,7 +60,7 @@ export function shellWords(command: string): ShellWord[] | null {
     if (char === '"') {
       at += 1;
       for (;;) {
-        if (at >= length) return null;
+        if (at >= length) return { unreadable: 'unclosed' };
         const inner = command[at]!;
         if (inner === '"') {
           at += 1;
@@ -118,7 +68,7 @@ export function shellWords(command: string): ShellWord[] | null {
         }
         if (inner === '\\') {
           const next = command[at + 1];
-          if (next === undefined) return null;
+          if (next === undefined) return { unreadable: 'unclosed' };
           // Inside double quotes a backslash is special only before `$`, a backtick, `"`, a
           // backslash or a newline; a backslash-newline is removed as a continuation, and
           // anywhere else the backslash stands for itself.
@@ -142,7 +92,7 @@ export function shellWords(command: string): ShellWord[] | null {
     }
     if (char === '\\') {
       const next = command[at + 1];
-      if (next === undefined) return null;
+      if (next === undefined) return { unreadable: 'unclosed' };
       // A backslash-newline outside quotes is a line continuation: both characters vanish, and
       // the word goes on either side of them.
       if (next === '\n') {
@@ -153,16 +103,28 @@ export function shellWords(command: string): ShellWord[] | null {
       at += 2;
       continue;
     }
-    if (char === '$' && command[at + 1] === "'") {
-      const ansi = ansiWord(command, at);
-      if (ansi === null) return null;
-      text += ansi.text;
-      at = ansi.end;
-      continue;
-    }
+    // An unquoted `$'` opens ANSI-C quoting, which the two shells do not read alike. Inside
+    // double quotes it is not quoting at all (the `$` is literal there), so this check is here,
+    // outside the double-quote branch above.
+    if (char === '$' && command[at + 1] === "'") return { unreadable: 'ansi' };
     text += char;
     at += 1;
   }
   if (start >= 0) words.push({ text, start, end: length });
-  return words;
+  return { words };
+}
+
+/** The words of a command line, or null when its quoting never closes or cannot be decoded the
+ *  same way by every shell it may run under. */
+export function shellWords(command: string): ShellWord[] | null {
+  const read = readShellWords(command);
+  return 'unreadable' in read ? null : read.words;
+}
+
+/** Why a line has no knowable words, or null when it has them. A caller that must tell a line no
+ *  shell can run (`unclosed`) from one a shell may run but this reader cannot prove (`ansi`,
+ *  `nul`) reads the reason here. */
+export function shellWordsReason(command: string): ShellWordsUnreadable | null {
+  const read = readShellWords(command);
+  return 'unreadable' in read ? read.unreadable : null;
 }

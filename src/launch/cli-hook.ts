@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { SEAT_NAME } from '../file/sections/seats.ts';
 import { wrapperInboundOf, type CrossSessionInbound } from './declaration.ts';
 import type { CliHookReading } from '../labels/state.ts';
-import { cliWordsOf, profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
+import { cliWordList, profileFor, shellQuote, supportsCliHook } from '../profiles/profile.ts';
 import { STATE_FILE, emptySession, readState, updateState } from '../state.ts';
 import { isPresenceBinding, mintPresenceBinding } from '../daemon/presence/contract.ts';
 import { currentBriefClaim } from './general-brief.ts';
@@ -114,10 +114,11 @@ export function setsSettings(cli: string, launch: string): boolean;
 /** The line alone: no CLI is named, so the whole line is read as before. */
 export function setsSettings(launch: string): boolean;
 export function setsSettings(cliOrLaunch: string, launch?: string): boolean {
-  // The CLI's own words: a `--settings` inside a trailing quoted script is the CLI's setting,
-  // and the shell's options before that script are not the CLI's to read.
-  const words = launch === undefined ? cliOrLaunch : cliWordsOf(cliOrLaunch, launch);
-  return /(^|\s)--settings(=|\s|$)/.test(words);
+  if (launch === undefined) return /(^|\s)--settings(=|\s|$)/.test(cliOrLaunch);
+  // The CLI's own decoded words: a quoted `--settings` is the flag, one inside a trailing quoted
+  // script is the CLI's setting, and the shell's options before that script are not the CLI's to
+  // read. A line this version cannot decode sets nothing it can prove.
+  return cliWordList(cliOrLaunch, launch)?.some((word) => word === '--settings' || word.startsWith('--settings=')) ?? false;
 }
 
 /** How a seat's CLI learns that a drop is waiting for it: the start-of-turn hook this module

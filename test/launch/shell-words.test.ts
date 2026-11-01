@@ -1,11 +1,12 @@
 // The launch line is read the way a POSIX shell splits it into words: single quotes literal,
 // double quotes honouring `\`, `"`, `$` and a backtick, a backslash outside quotes taking the
 // next character, a backslash-newline removed as a line continuation outside single quotes, and
-// the standard `'\''` splice reading as one word. `$'…'` is decoded where bash and zsh decode it
-// alike; an escape they read differently leaves the whole line unreadable. A line whose quoting
-// never closes has no knowable words either, and reads as null, never as a guess.
+// the standard `'\''` splice reading as one word. An ANSI-C (`$'…'`) word is never decoded: the
+// two shells read the same word differently, so a line holding one is unreadable at the `ansi`
+// reason. A NUL byte is unreadable at `nul`, and a line whose quoting never closes at
+// `unclosed`. A line with no knowable words reads as null, never as a guess.
 import { expect, test } from 'bun:test';
-import { shellWords } from '../../src/launch/shell-words.ts';
+import { shellWords, shellWordsReason } from '../../src/launch/shell-words.ts';
 
 const texts = (line: string): string[] | null => shellWords(line)?.map((word) => word.text) ?? null;
 
@@ -41,26 +42,43 @@ test('a backslash-newline is a line continuation everywhere but inside single qu
   expect(texts("'pre\\\npost'")).toEqual(['pre\\\npost']);
 });
 
-test(`ANSI-C quoting ($'…') decodes to the words the shell hands its program`, () => {
-  // Measured here in bash 3.2.57 and zsh 5.9: both read `\n` as a newline, `\'` as a quote,
-  // `\\` as a backslash, `\101` and `\x41` as `A`, a four-digit `\u` code as its letter, and the
-  // control escapes alike.
-  expect(texts("/bin/bash -c $'claude --model m'")).toEqual(['/bin/bash', '-c', 'claude --model m']);
-  expect(texts("$'a\\nb'")).toEqual(['a\nb']);
-  expect(texts("$'it\\'s'")).toEqual(["it's"]);
-  expect(texts("$'a\\\\b'")).toEqual(['a\\b']);
-  expect(texts("$'\\101\\x41'")).toEqual(['AA']);
-  expect(texts("$'x\\x4y'")).toEqual(['x\x04y']);
-  expect(texts("$'\\u00e9'")).toEqual(['é']);
-  expect(texts("pre$'post'")).toEqual(['prepost']);
+test(`every ANSI-C ($'…') word is unreadable, never decoded`, () => {
+  // Measured here with the same `printf %s $'…'` probe on bash 3.2.57 and zsh 5.9: the word
+  // `x\u00e9y` is the literal text in bash (78 5c 75 30 30 65 39) and `xéy` in zsh (78 c3 a9 79);
+  // `x\x00y` is `x` in bash (78) and `x`, a NUL, `y` in zsh (78 00 79); a short `\u00` is literal
+  // in bash (78 5c 75 30 30 79) and a NUL in zsh (78 00 79); `\8` is literal in bash (78 5c 38 79)
+  // and `8` in zsh (78 38 79). Every `$'…'` word is unreadable, including the escapes the two
+  // shells read alike: one rule, no subset.
+  for (const line of [
+    "/bin/bash -c $'claude --model m'",
+    "$'a\\nb'",
+    "$'it\\'s'",
+    "$'a\\\\b'",
+    "$'\\101\\x41'",
+    "$'\\u00e9'",
+    "$'x\\u00e9y'",
+    "$'x\\x00y'",
+    "$'x\\0y'",
+    "$'x\\u00y'",
+    "$'x\\8y'",
+    "$'a\\qb'",
+    "$'a\\$b'",
+    "$'a\\`b'",
+    "$'\\cA'",
+    "$'never closes",
+  ]) {
+    expect(shellWords(line)).toBeNull();
+    expect(shellWordsReason(line)).toBe('ansi');
+  }
 });
 
-test('an ANSI-C escape the two shells read differently leaves the line unreadable, never guessed', () => {
-  // Measured with the same probe: bash keeps the backslash on `\q`, `\$` and `` \` `` where zsh
-  // drops it; `\cA` is a control byte in bash and `cA` in zsh; `\0` is dropped by bash and kept
-  // by zsh; a short `\u00` is literal in bash and `\0` in zsh. None of these is knowable from
-  // the line alone, so the line is null and keeps 0.5.10's placement.
-  for (const line of ["$'a\\qb'", "$'a\\$b'", "$'a\\`b'", "$'\\cA'", "$'x\\0y'", "$'x\\u00y'", "$'x\\8y'", "$'never closes"]) {
-    expect(shellWords(line)).toBeNull();
-  }
+test('a NUL byte and an unclosed line each have their own reason', () => {
+  expect(shellWords('claude --model m\u0000')).toBeNull();
+  expect(shellWordsReason('claude --model m\u0000')).toBe('nul');
+  expect(shellWordsReason('/bin/sh -c "claude --model m')).toBe('unclosed');
+  expect(shellWordsReason('claude \\')).toBe('unclosed');
+  expect(shellWordsReason('claude --model m')).toBeNull();
+  // Inside double quotes `$'` is not ANSI-C quoting: it is two literal characters, as both
+  // shells read it.
+  expect(texts(`sh -c "claude $'x'"`)).toEqual(['sh', '-c', "claude $'x'"]);
 });

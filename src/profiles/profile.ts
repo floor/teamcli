@@ -297,12 +297,12 @@ export function launchCommand(
   rulesLine?: string,
   warn?: (text: string) => void,
 ): string {
-  // Every "does the line already set this" below reads the CLI's own words, so a flag inside a
-  // trailing quoted script counts exactly as one written on a plain line.
-  const cliWords = cliWordsOf(profile.cli, launch);
-  const words = new Set(cliWords.trim().split(/\s+/));
+  // Every "does the line already set this" below reads the CLI's own decoded words, so a flag
+  // inside a trailing quoted script counts exactly as one written on a plain line, and a quoted
+  // flag name is the flag. A line this version cannot read sets nothing it can prove.
+  const words = cliWordList(profile.cli, launch) ?? [];
   const options = unattendedOptions(profile, launch);
-  if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !words.has('--no-daemon')) {
+  if (profile.cli === 'codex' && runtimePolicies?.codexDaemon === 'off' && !hasFlag(words, ['--no-daemon'])) {
     const altIdx = options.indexOf('--no-alt-screen');
     if (altIdx >= 0) options.splice(altIdx, 0, '--no-daemon');
     else options.push('--no-daemon');
@@ -311,7 +311,7 @@ export function launchCommand(
   // reading the session — its prompt box, its resume list, its terminal title — sees the seat's
   // readable name rather than an anonymous session.
   if (displayName !== undefined && displayName !== '' && supportsSessionName(profile.cli)
-    && !/(^|\s)(--name(=|\s|$)|-n(\s|$))/.test(cliWords)) {
+    && !hasFlag(words, ['--name', '-n'])) {
     options.push('--name', displayName);
   }
   if (profile.rulesOption !== null) options.push(profile.rulesOption, rules);
@@ -319,7 +319,7 @@ export function launchCommand(
     for (const word of profile.mcpInbox?.launchArgs ?? []) options.push(fillInboxPlace(word, place));
   }
   if (cliHook !== undefined && cliHook !== null && supportsCliHook(profile.cli)
-    && !/(^|\s)--settings(=|\s|$)/.test(cliWords)) {
+    && !hasFlag(words, ['--settings'])) {
     options.push('--settings', cliHook);
   }
   // A first-message seat's rules line rides the launch as the CLI's initial prompt, last, so it
@@ -403,10 +403,11 @@ export function supportsSessionResume(cli: string): boolean {
   return cli === 'claude-code' || cli === 'codex' || cli === 'antigravity' || cli === 'grok';
 }
 
-/** The session id a launch line already names with `--session-id`, if it names one. */
+/** The session id a launch line already names with `--session-id`, if it names one. The line is
+ *  read as a shell reads it: a quoted flag name is the flag and a quoted value is the value. */
 export function launchSessionId(command: string): string | undefined {
-  const match = /(?:^|\s)--session-id(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$)/.exec(command);
-  return match?.[1];
+  const words = shellWords(command.trimEnd());
+  return words === null ? undefined : sessionIdIn(words.map((word) => word.text));
 }
 
 /**
@@ -423,12 +424,13 @@ export function withLaunchSession(
   command: string,
 ): { command: string; sessionId?: string; notice?: string } {
   if (!supportsSessionId(cli)) return { command };
-  // Only the CLI's own words are read: a shell's `-c` before a quoted script that runs the CLI
-  // is the shell's option, not Claude Code's `--continue`.
-  const words = cliWordsOf(cli, command);
-  const named = launchSessionId(words);
+  // Only the CLI's own decoded words are read: a shell's `-c` before a quoted script that runs
+  // the CLI is the shell's option, not Claude Code's `--continue`, and a quoted `--session-id`
+  // is the flag. A declared id, however it is quoted, is the id this launch records: no mint.
+  const words = cliWordList(cli, command);
+  const named = words === null ? undefined : sessionIdIn(words);
   if (named !== undefined) return { command, sessionId: named };
-  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(words)) return { command };
+  if (words !== null && hasFlag(words, ['--session-id', '--resume', '-r', '--continue', '-c'])) return { command };
   const sessionId = randomUUID();
   // `supportsSessionId` names one CLI, and its launch binary is `claude`: a quoted script that
   // runs it takes the id inside its quotes, where the CLI reads it, never after them. An id that
@@ -465,22 +467,23 @@ export function withLaunchSession(
  */
 export function withResume(cli: string, command: string, sessionId: string): string | null {
   if (!supportsSessionResume(cli)) return null;
-  // A line's own selection is read from the CLI's words alone: a shell's `-c`, `-lc` or `-ec`
-  // before a quoted script that runs the CLI is the shell's option, never a resume of the CLI's.
-  const words = cliWordsOf(cli, command);
+  // A line's own selection is read from the CLI's decoded words alone: a shell's `-c`, `-lc` or
+  // `-ec` before a quoted script that runs the CLI is the shell's option, never a resume of the
+  // CLI's, and a quoted flag name is the flag.
+  const words = cliWordList(cli, command);
   if (cli === 'codex') {
-    if (/(^|\s)resume(\s|$)/.test(words)) return null;
+    if (words?.includes('resume')) return null;
     return placedOnLaunchLine(command, `resume ${sessionId}`, 'codex');
   }
   if (cli === 'antigravity') {
-    if (/(^|\s)--conversation(=|\s|$)/.test(words)) return null;
+    if (words !== null && hasFlag(words, ['--conversation'])) return null;
     return placedOnLaunchLine(command, `--conversation=${sessionId}`, 'agy');
   }
   if (cli === 'grok') {
-    if (/(^|\s)(--session-id|--resume|-r)(=|\s|$)/.test(words)) return null;
+    if (words !== null && hasFlag(words, ['--session-id', '--resume', '-r'])) return null;
     return placedOnLaunchLine(command, `-r ${sessionId}`, 'grok');
   }
-  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(words)) return null;
+  if (words !== null && hasFlag(words, ['--session-id', '--resume', '-r', '--continue', '-c'])) return null;
   return placedOnLaunchLine(command, `--resume ${sessionId}`, 'claude');
 }
 
@@ -563,11 +566,12 @@ function shellScriptWordOf(command: string): ShellScript | null {
 }
 
 /** The quoting a script word's text can be written into. */
-type ScriptQuote = 'double' | 'single' | 'ansi';
+type ScriptQuote = 'double' | 'single';
 
 /** The quote that opens a word's last source character, when that character closes it: the
  *  quote context open just before the word ends. Null when the word ends outside quotes
- *  (`claude`, `"claude"x`), where nothing can be placed inside its text. */
+ *  (`claude`, `"claude"x`), where nothing can be placed inside its text. A `$'…'` word never
+ *  reaches this reader: the tokenizer does not read ANSI-C quoting, so its line is unreadable. */
 function closingQuoteOf(command: string, word: ShellWord): ScriptQuote | null {
   let quote: ScriptQuote | null = null;
   let at = word.start;
@@ -589,11 +593,6 @@ function closingQuoteOf(command: string, word: ShellWord): ScriptQuote | null {
         at += 1;
         continue;
       }
-      if (char === '$' && command[at + 1] === "'") {
-        quote = 'ansi';
-        at += 2;
-        continue;
-      }
       at += 1;
       continue;
     }
@@ -606,8 +605,7 @@ function closingQuoteOf(command: string, word: ShellWord): ScriptQuote | null {
       at += 2;
       continue;
     }
-    if (quote === 'double' && char === '"') quote = null;
-    else if (quote === 'ansi' && char === "'") quote = null;
+    if (char === '"') quote = null;
     at += 1;
   }
   if (quote === null) return null;
@@ -620,7 +618,6 @@ function closingQuoteOf(command: string, word: ShellWord): ScriptQuote | null {
  *  characters are that delimiter. Null when the word starts with something else (`x"…"`),
  *  whose source this reader cannot rebuild. */
 function openingOf(command: string, word: ShellWord, quote: ScriptQuote): number | null {
-  if (quote === 'ansi') return command[word.start] === '$' && command[word.start + 1] === "'" ? 2 : null;
   return command[word.start] === (quote === 'double' ? '"' : "'") ? 1 : null;
 }
 
@@ -722,14 +719,12 @@ function isSimpleCommand(text: string): boolean {
 
 /** `text` written so one shell quoting layer hands it on exactly as written: a double-quoted
  *  script's shell reads `\`, `"`, `$` and a backtick back to themselves; a single-quoted one
- *  takes everything literally, with quotes spliced as `'\''`; an ANSI-C quoted one (`$'…'`)
- *  reads `\` and a quote back to themselves. */
+ *  takes everything literally, with quotes spliced as `'\''`. */
 function encodeForQuote(quote: ScriptQuote, text: string): string {
   if (quote === 'double') {
     return text.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`');
   }
-  if (quote === 'single') return text.replaceAll("'", "'\\''");
-  return text.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+  return text.replaceAll("'", "'\\''");
 }
 
 /** Where an addition belongs on a launch line. `script` is inside the innermost quoted script
@@ -788,9 +783,6 @@ function nestedPlacement(
   if (shell === null || !POSIX_SHELLS.has(shell)) return null;
   const innerLayer = quotedWordOf(body, inner.word);
   if (innerLayer === null) return null;
-  // `$'…'` is decoded by bash and zsh, not by every shell a body may name: only a body that
-  // names one of those is written into that way.
-  if (innerLayer.quote === 'ansi' && shell !== 'bash' && shell !== 'zsh') return null;
   if (!startsWithCli(binary, inner.word.text)) return null;
   if (!isSimpleCommand(inner.word.text)) return null;
   const source = command.slice(outer.start + layer.openLen, outer.end - 1);
@@ -822,9 +814,14 @@ function nestedPlacement(
  * deep is followed to the script it runs. The words are written so every quoting layer between
  * the line and the CLI reads them back exactly: a double-quoted script still has its text read
  * by the wrapping shell, so `\`, `"`, `$` and a backtick are escaped for it; a single-quoted
- * script takes them through the standard `'\''` splice; an ANSI-C quoted one through its own
- * escapes. `uncertain` reports a line whose shape this version does not prove, whose words are
- * then written after the line as 0.5.10 did. This never refuses a line.
+ * script takes them through the standard `'\''` splice.
+ *
+ * Every insertion is proved after the fact: the CLI's decoded words on the new line must be its
+ * words on the old line followed by exactly the added words, in order. The separator is always a
+ * literal space — a raw newline after a continuation backslash and an escaped space are not
+ * separators to the inner shell, a space always is. If the line or the addition cannot be read,
+ * or the words do not come back that way, the addition keeps 0.5.10's placement after the line
+ * and `uncertain` reports it. This never refuses a line.
  */
 function appendOnLaunchLine(
   command: string,
@@ -836,14 +833,18 @@ function appendOnLaunchLine(
   const after = (): string => (trimmed === '' ? addition : `${trimmed} ${addition}`);
   if (placement.kind === 'uncertain') return { line: after(), uncertain: true };
   if (placement.kind === 'line') return { line: after(), uncertain: false };
+  const beforeWords = cliWordListOf(binary, trimmed);
+  const addedWords = shellWords(addition);
+  if (beforeWords === null || addedWords === null) return { line: after(), uncertain: true };
   let text = addition;
   for (let at = placement.layers.length - 1; at >= 0; at -= 1) text = encodeForQuote(placement.layers[at]!, text);
-  const before = trimmed[placement.at - 1];
-  const gap = before === undefined || /\s/.test(before) ? '' : ' ';
-  return {
-    line: `${trimmed.slice(0, placement.at)}${gap}${text}${trimmed.slice(placement.at)}`,
-    uncertain: false,
-  };
+  const line = `${trimmed.slice(0, placement.at)} ${text}${trimmed.slice(placement.at)}`;
+  const afterWords = cliWordListOf(binary, line);
+  const want = [...beforeWords, ...addedWords.map((word) => word.text)];
+  if (afterWords === null || afterWords.length !== want.length || afterWords.some((word, at) => word !== want[at])) {
+    return { line: after(), uncertain: true };
+  }
+  return { line, uncertain: false };
 }
 
 /** The line an addition this version can place, or null when it cannot prove the placement: a
@@ -895,22 +896,136 @@ function cliTextOf(binary: string, command: string): string | null {
   return null;
 }
 
-/** The words of a launch line that belong to the CLI itself: the text inside the innermost
- *  shell script that runs it, or the whole line when there is no shell command string. A
- *  shell's own options — `-c`, `-lc`, `-ec`, `-l` — are the shell's, never the CLI's, and a word
- *  after the closing quote is a positional word of the script, not the CLI's either. A shell
- *  script that runs some other program, or one this reader cannot read through, names no word
- *  of this CLI at all: `''`, never the raw line, whose shell options and script text are not
- *  the CLI's words. */
-export function cliWordsOf(cli: string, command: string): string {
+/** The CLI's own words on a launch line, decoded by the shell at every layer: the words inside
+ *  the innermost shell script that runs it, or the line's own words when there is no shell
+ *  command string. A shell's own options — `-c`, `-lc`, `-ec`, `-l` — are the shell's, never the
+ *  CLI's, and a word after the closing quote is a positional word of the script, not the CLI's
+ *  either. A shell script that runs some other program, or one this reader cannot read through,
+ *  names no word of this CLI at all. Null when the line, or the script that runs the CLI, cannot
+ *  be read: no caller may treat an unread line as a word list. */
+function cliWordListOf(binary: string, command: string): string[] | null {
   const trimmed = command.trimEnd();
-  // A line whose quoting never closes has no knowable words: none of them is the CLI's, and a
-  // shell option inside the unread text is not a CLI flag either.
-  if (shellWords(trimmed) === null) return '';
-  if (shellScriptWordOf(trimmed) === null) return trimmed;
+  const lineWords = shellWords(trimmed);
+  if (lineWords === null) return null;
+  if (shellScriptWordOf(trimmed) === null) return lineWords.map((word) => word.text);
+  const text = cliTextOf(binary, trimmed);
+  if (text === null) return null;
+  const words = shellWords(text);
+  return words === null ? null : words.map((word) => word.text);
+}
+
+/** The CLI's own decoded words on a launch line, as {@link cliWordListOf} reads them. Every
+ *  "does the line already set this" question is asked of these words: a quoted flag name is the
+ *  flag, and a quoted value is the value. Null when the line cannot be read. */
+export function cliWordList(cli: string, command: string): string[] | null {
   const binary = profileFor(cli)?.binary;
-  if (binary === undefined) return '';
-  return cliTextOf(binary, trimmed) ?? '';
+  if (binary === undefined) return null;
+  return cliWordListOf(binary, command);
+}
+
+/** The CLI's own words joined by one space, for a reader whose question is a text pattern. A
+ *  reader that needs word boundaries asks {@link cliWordList} instead: a word with a space in it
+ *  is one word there and two here. A line this reader cannot read names no words. */
+export function cliWordsOf(cli: string, command: string): string {
+  return cliWordList(cli, command)?.join(' ') ?? '';
+}
+
+/** Whether a decoded word names one of these flags, or one with a value attached (`--flag=…`). */
+function isFlagWord(word: string, flags: readonly string[]): boolean {
+  return flags.some((flag) => word === flag || word.startsWith(`${flag}=`));
+}
+
+/** Whether one of these flags is among the decoded words, bare or carrying a value. A quoted
+ *  flag name is the flag, so it counts exactly as a bare one does. */
+function hasFlag(words: readonly string[], flags: readonly string[]): boolean {
+  return words.some((word) => isFlagWord(word, flags));
+}
+
+/** The value a flag names: attached (`--flag=value`) or the next word. The first flag carrying
+ *  a value of `shape` wins; null when no flag names one. */
+function flagValueIn(words: readonly string[], flags: readonly string[], shape: RegExp): string | null {
+  for (let at = 0; at < words.length; at += 1) {
+    const word = words[at]!;
+    for (const flag of flags) {
+      if (word === flag) {
+        const value = words[at + 1];
+        if (value !== undefined && shape.test(value)) return value;
+      } else if (word.startsWith(`${flag}=`)) {
+        const value = word.slice(flag.length + 1);
+        if (shape.test(value)) return value;
+      }
+    }
+  }
+  return null;
+}
+
+/** Where a flag's value sits in source: the flag's own word's span, the value's span, and
+ *  whether the value is part of the flag's word (`--flag=value`). Spans are positions in the
+ *  source the words came from; a whole word's span is used rather than an offset inside it, so a
+ *  quoted flag name needs no guess about where its value begins. */
+type FlagValueSite = {
+  flag: string;
+  value: string;
+  flagStart: number;
+  flagEnd: number;
+  valueStart: number;
+  valueEnd: number;
+  attached: boolean;
+};
+
+/** The first flag on a body of decoded words whose value `wanted` accepts, attached
+ *  (`--flag=value`) or the next word. */
+function flagValueSite(
+  words: readonly ShellWord[],
+  flags: readonly string[],
+  wanted: (value: string) => boolean,
+): FlagValueSite | null {
+  for (let at = 0; at < words.length; at += 1) {
+    const word = words[at]!;
+    for (const flag of flags) {
+      if (word.text === flag) {
+        const next = words[at + 1];
+        if (next !== undefined && wanted(next.text)) {
+          return {
+            flag,
+            value: next.text,
+            flagStart: word.start,
+            flagEnd: word.end,
+            valueStart: next.start,
+            valueEnd: next.end,
+            attached: false,
+          };
+        }
+      } else if (word.text.startsWith(`${flag}=`)) {
+        const value = word.text.slice(flag.length + 1);
+        if (wanted(value)) {
+          return {
+            flag,
+            value,
+            flagStart: word.start,
+            flagEnd: word.end,
+            valueStart: word.end,
+            valueEnd: word.end,
+            attached: true,
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** The session id `--session-id` names in these decoded words. A quoted flag name and a quoted
+ *  value are the flag and the value, so a declared id is seen however it is written. */
+function sessionIdIn(words: readonly string[]): string | undefined {
+  for (let at = 0; at < words.length; at += 1) {
+    const word = words[at]!;
+    const value = word === '--session-id'
+      ? words[at + 1]
+      : word.startsWith('--session-id=') ? word.slice('--session-id='.length) : undefined;
+    if (value !== undefined && /^[A-Za-z0-9._-]+$/.test(value)) return value;
+  }
+  return undefined;
 }
 
 /** The words a launch line gives a shell, at every layer it has: the line itself, then the
@@ -953,37 +1068,30 @@ function launchWordScopes(command: string): string[][] {
  * it when the line has one, and never the shell's own `-c`, `-lc` or `-ec` before that script.
  */
 export function namedResumeTarget(cli: string, command: string): string | null {
-  const cliWords = cliWordsOf(cli, command);
+  // The CLI's own decoded words: a quoted flag name is the flag, a quoted value is the value,
+  // and the shell's own words are never the CLI's.
+  const words = cliWordList(cli, command);
+  if (words === null) return null;
   if (cli === 'codex') {
-    // A closing quote is not part of the token: `zsh -lc "codex resume <id>"` names the id
-    // inside the script.
-    const words = cliWords.trim().split(/\s+/).map((word) => word.replace(/^["']+|["']+$/g, ''));
     const at = words.indexOf('resume');
     if (at === -1) return null;
     const next = words[at + 1];
     return next === undefined || next.startsWith('-') ? '' : next;
   }
   if (cli === 'grok') {
-    const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(cliWords);
-    if (named?.[1] && !named[1].startsWith('-')) return named[1];
-    if (/(?:^|\s)(?:--resume|-r)(?:=|\s|$)/.test(cliWords)) return '';
-    return null;
+    const named = flagValueIn(words, ['--resume', '-r'], /^[A-Za-z0-9._:-]+$/);
+    if (named !== null) return named;
+    return hasFlag(words, ['--resume', '-r']) ? '' : null;
   }
   if (cli === 'antigravity') {
-    // A closing quote is a word boundary too: `zsh -lc "agy --conversation=<id>"` names the
-    // id inside the script, and the quote is not part of the token.
-    const named = /(?:^|\s)--conversation(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(cliWords);
-    if (named?.[1] && !named[1].startsWith('-')) return named[1];
-    if (/(?:^|\s)--conversation(?:=|\s|$)/.test(cliWords)) return '';
-    return null;
+    const named = flagValueIn(words, ['--conversation'], /^[A-Za-z0-9._:-]+$/);
+    if (named !== null) return named;
+    return hasFlag(words, ['--conversation']) ? '' : null;
   }
   if (cli !== 'claude-code') return null;
-  // A closing quote is a word boundary too: a quoted script names the id inside it, and the
-  // quote is not part of the token.
-  const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$|["'])/.exec(cliWords);
-  if (named?.[1] && !named[1].startsWith('-')) return named[1];
-  if (/(?:^|\s)(?:--resume|-r|--continue|-c)(=|\s|$|["'])/.test(cliWords)) return '';
-  return null;
+  const named = flagValueIn(words, ['--resume', '-r'], /^[A-Za-z0-9._-]+$/);
+  if (named !== null) return named;
+  return hasFlag(words, ['--resume', '-r', '--continue', '-c']) ? '' : null;
 }
 
 /** How a launch line carries a proven conversation: the line itself when it already names that
@@ -1008,9 +1116,10 @@ export function resumeCarry(
   }
   const line = withResume(cli, command, sessionId);
   if (line !== null) return { kind: 'line', line };
+  const words = cliWordList(cli, command);
   return {
     kind: 'refuse',
-    why: launchSessionId(cliWordsOf(cli, command)) === undefined
+    why: sessionIdIn(words ?? []) === undefined
       ? 'its launch line has no measured resume form'
       : 'its launch line already sets a new session id',
   };
@@ -1137,27 +1246,39 @@ export function resolveEffortOverride(
   return { effort: trimmed };
 }
 
-/** Rewrites one of the CLI's own flags on a launch line: the pattern is applied inside the
- *  script that runs the CLI, never to the line's shell text, so a quoted script keeps its
- *  closing quote. A line that does not set the flag takes the addition where the CLI reads it,
- *  or after the line when this version cannot prove a place; a script this version cannot read
- *  through keeps 0.5.10's append, which changes no existing word. */
-function rewriteOnLaunchLine(
-  profile: Profile,
-  command: string,
-  pattern: RegExp,
-  replacement: string,
-  addition: string,
-): string {
+/** One flag value a launch-line rewrite sets. `flags` are the spellings the flag may have,
+ *  `wanted` decides which decoded value is this flag's (a bare model takes any), `value` is the
+ *  new value, and `addition` is what a line naming no such flag takes instead. */
+type FlagRewrite = {
+  flags: readonly string[];
+  wanted: (value: string) => boolean;
+  value: string;
+  addition: string;
+};
+
+/** Rewrites one of the CLI's own flags on a launch line, by decoded words: a quoted flag name is
+ *  the flag and a quoted value is the value, and the flag's word in source is replaced whole, so
+ *  the closing quote of a script is never touched. A line that does not set the flag takes the
+ *  addition where the CLI reads it, or after the line when this version cannot prove a place; a
+ *  script this version cannot read through keeps 0.5.10's append, which changes no existing word. */
+function rewriteOnLaunchLine(profile: Profile, command: string, rewrite: FlagRewrite): string {
   const trimmed = command.trimEnd();
   const body = shellScriptWordOf(trimmed) === null
     ? { text: trimmed, start: 0, end: trimmed.length }
     : cliBodyOn(profile.binary, trimmed);
-  if (body === null) return trimmed === '' ? addition : `${trimmed} ${addition}`;
-  if (pattern.test(body.text)) {
-    return `${trimmed.slice(0, body.start)}${body.text.replace(pattern, replacement)}${trimmed.slice(body.end)}`;
+  if (body === null) return trimmed === '' ? rewrite.addition : `${trimmed} ${rewrite.addition}`;
+  const words = shellWords(body.text);
+  const site = words === null ? null : flagValueSite(words, rewrite.flags, rewrite.wanted);
+  if (site !== null) {
+    // An attached value is part of the flag's word, which is rewritten whole; a separate value
+    // is its own word, so the flag's word stays exactly as the line wrote it.
+    const [start, end, text] = site.attached
+      ? [site.flagStart, site.flagEnd, `${site.flag}=${shellQuote(rewrite.value)}`]
+      : [site.valueStart, site.valueEnd, shellQuote(rewrite.value)];
+    return `${trimmed.slice(0, body.start + start)}${text}${trimmed.slice(body.start + end)}`;
   }
-  return placedOnLaunchLine(trimmed, addition, profile.binary) ?? (trimmed === '' ? addition : `${trimmed} ${addition}`);
+  return placedOnLaunchLine(trimmed, rewrite.addition, profile.binary)
+    ?? (trimmed === '' ? rewrite.addition : `${trimmed} ${rewrite.addition}`);
 }
 
 /**
@@ -1171,37 +1292,33 @@ export function withLaunchOverrides(
   let next = launch.trim();
   if (overrides.modelId) {
     const option = profile.modelFlag('', '').option;
-    const modelPattern = profile.cli === 'codex' || profile.cli === 'grok' || profile.cli === 'gemini'
-      ? /(^|\s)(--model|-m)(=|\s+)(\S+)/
-      : /(^|\s)(--model)(=|\s+)(\S+)/;
-    // What the line already sets is read from the CLI's own words, inside a quoted script too.
-    next = rewriteOnLaunchLine(
-      profile,
-      next,
-      modelPattern,
-      `$1$2$3${overrides.modelId}`,
-      `${option} ${overrides.modelId}`,
-    );
+    const flags = profile.cli === 'codex' || profile.cli === 'grok' || profile.cli === 'gemini'
+      ? ['--model', '-m']
+      : ['--model'];
+    // What the line already sets is read from the CLI's own decoded words, inside a quoted
+    // script too, and a quoted flag name is the flag.
+    next = rewriteOnLaunchLine(profile, next, {
+      flags,
+      wanted: () => true,
+      value: overrides.modelId,
+      addition: `${option} ${overrides.modelId}`,
+    });
   }
   if (overrides.effort) {
     if (profile.cli === 'codex') {
-      const codexEffort = /(^|\s)(-c|--config)(=|\s+)(['"]?model_reasoning_effort=[^'"\s]+['"]?)/;
-      next = rewriteOnLaunchLine(
-        profile,
-        next,
-        codexEffort,
-        `$1$2$3model_reasoning_effort=${overrides.effort}`,
-        `-c model_reasoning_effort=${overrides.effort}`,
-      );
+      next = rewriteOnLaunchLine(profile, next, {
+        flags: ['-c', '--config'],
+        wanted: (value) => value.startsWith('model_reasoning_effort='),
+        value: `model_reasoning_effort=${overrides.effort}`,
+        addition: `-c model_reasoning_effort=${overrides.effort}`,
+      });
     } else if (supportsEffortLaunch(profile.cli)) {
-      const effortPattern = /(^|\s)(--effort|--reasoning-effort)(=|\s+)(\S+)/;
-      next = rewriteOnLaunchLine(
-        profile,
-        next,
-        effortPattern,
-        `$1$2$3${overrides.effort}`,
-        `--effort ${overrides.effort}`,
-      );
+      next = rewriteOnLaunchLine(profile, next, {
+        flags: ['--effort', '--reasoning-effort'],
+        wanted: () => true,
+        value: overrides.effort,
+        addition: `--effort ${overrides.effort}`,
+      });
     }
   }
   return next;
@@ -2077,21 +2194,31 @@ export function withoutResume(cli: string, command: string): string | null {
   const trimmed = command.trimEnd();
   // A line whose quoting never closes has no knowable words: nothing may be stripped from it.
   if (shellWords(trimmed) === null) return null;
-  const strip = (words: string): string =>
-    words.replace(/(^|\s)(?:--resume|-r)(?:=|\s+)[A-Za-z0-9._-]+(?=\s|$)/, '$1');
   const body = shellScriptWordOf(trimmed) === null
     ? { text: trimmed, start: 0, end: trimmed.length }
     : cliBodyOn('claude', trimmed);
   // A script this version cannot read through keeps its words: a resume is never stripped from
   // text whose quoting is not proved.
   if (body === null) return null;
-  const stripped = strip(body.text);
-  if (stripped === body.text) return null;
-  const tidied = stripped.replace(/\s+$/, '').replace(/ {2,}/g, ' ');
-  if (body.start === 0 && body.end === trimmed.length) return tidied;
-  // The resume is a plain word in the script's body: strip it there and leave every other
-  // character of the line, escapes included, exactly as it was.
-  return `${trimmed.slice(0, body.start)}${tidied}${trimmed.slice(body.end)}`;
+  const words = shellWords(body.text);
+  if (words === null) return null;
+  // A quoted flag name is the flag and a quoted id is the id: the resume is found in the body's
+  // decoded words, and removed by its source span.
+  const site = flagValueSite(words, ['--resume', '-r'], (value) => /^[A-Za-z0-9._-]+$/.test(value));
+  if (site === null) return null;
+  // Remove the resume and one run of spaces or tabs beside it, leaving every other character of
+  // the body — quotes, escapes and spacing elsewhere — exactly as it was.
+  let start = site.flagStart;
+  let end = site.attached ? site.flagEnd : site.valueEnd;
+  while (start > 0 && (body.text[start - 1] === ' ' || body.text[start - 1] === '\t')) start -= 1;
+  if (start === site.flagStart) {
+    while (end < body.text.length && (body.text[end] === ' ' || body.text[end] === '\t')) end += 1;
+  }
+  const stripped = `${body.text.slice(0, start)}${body.text.slice(end)}`;
+  if (body.start === 0 && body.end === trimmed.length) return stripped.trimEnd();
+  // The resume is a plain word in the script's body: strip it there and leave the line's own
+  // quoting as it was.
+  return `${trimmed.slice(0, body.start)}${stripped}${trimmed.slice(body.end)}`;
 }
 
 /** The screen a resume of a missing conversation leaves (Claude Code 2.1.x: "No conversation

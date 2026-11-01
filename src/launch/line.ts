@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { profileFor } from '../profiles/index.ts';
 import { lobbyPath } from '../worktree/place.ts';
-import { shellWords } from './shell-words.ts';
+import { shellWordsReason } from './shell-words.ts';
 
 // A launch line is not shell-parsed: `team` splits it the way it always has, on whitespace, and
 // examines the program — its first word that is not a variable assignment — and the arguments
@@ -292,8 +292,10 @@ export function launchLineFinding(
 ): LineFinding | null {
   const launch = seat.launch;
   // A line whose quoting never closes is not a command any shell can read: it is refused in
-  // plain words, before any of the readings below guess at its words.
-  if (shellWords(launch) === null) {
+  // plain words, before any of the readings below guess at its words. A line a shell can run
+  // whose words this version cannot decode (an ANSI-C word, a NUL byte) is not refused here:
+  // 0.5.10 launched it, and the reads below treat its words as unchecked.
+  if (shellWordsReason(launch) === 'unclosed') {
     return miss('its launch line has an unclosed quote or a trailing backslash: close it before the line can run');
   }
   const words = launch.trim().split(/\s+/).filter((word) => word !== '');
