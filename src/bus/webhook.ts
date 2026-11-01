@@ -99,6 +99,14 @@ function say(report: ((text: string) => void) | undefined, text: string): void {
   }
 }
 
+/** The wait between attempts when the caller injects none: a plain timer from the language, not
+ *  a runtime's own sleep. The production build type-checks against the standard library alone and
+ *  the installed CLI runs where a bundler-specific global does not exist, so the default path has
+ *  to work on the plain runtime; a test runs it there. */
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Posts one accepted record, within the policy's bound. A 2xx answer is delivered; any other
  * status, a timeout or a network error is retried, and after the last attempt the drop file is
@@ -117,7 +125,7 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   const policy: WebhookPolicy = { ...WEBHOOK_POLICY, ...input.policy };
   const attempts = Math.max(1, policy.attempts);
   const fetchFn = input.fetch ?? fetch;
-  const sleep = input.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const sleep = input.sleep ?? defaultSleep;
   const request = webhookRequest(input.record, route.url, route.secret);
   // The request is built before the first attempt, so a value the platform refuses (an invalid
   // header, say) fails once in fixed words; its own error, which repeats the value, is never
