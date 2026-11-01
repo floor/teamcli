@@ -273,8 +273,9 @@ A seat record:
 | `waiting` | `{ state, classification, manual?, sentAt?, version?, folder? }` | a seat left at a dialog |
 
 The waiting state is `waiting-owner` or `trust-sent-recovery`; its classification is one of the
-closed list `trust`, `permission`, `question`, `provider error`, `rate limit`, `vendor notice`,
-`login`, `unknown`, `unsent`, `timeout`, and anything else that enters the file reads `unknown`.
+closed list `trust`, `permission`, `plan approval`, `confirmation`, `question`, `provider error`,
+`rate limit`, `vendor notice`, `login`, `unknown`, `unsent`, `timeout`, and anything else that
+enters the file reads `unknown`.
 
 Every write holds `.agents/team.lock` and goes through a temporary file. The log is
 `.agents/team.log`: one cleaned line per change — when, which command, by whom, what — rotated at

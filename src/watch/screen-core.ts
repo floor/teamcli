@@ -3,9 +3,9 @@
 // pattern, and it cannot move a stage or turn the floor off.
 import { allDimAfter, hasSgr, stripSgr } from '../ansi.ts';
 import type { Reset, Screen } from './screen.ts';
-import type { BlockStep, LinePattern, Rule, ScreenData, Wrap } from './screen-data.ts';
+import type { BlockStep, LinePattern, Rule, ScreenData, TextSpec, Wrap } from './screen-data.ts';
 
-export type { BlockStep, Composer, FallbackRule, LinePattern, Placeholder, PlaceholderStyle, Rule, ScreenData, Stage, Wrap } from './screen-data.ts';
+export type { BlockStep, Composer, FallbackRule, LinePattern, Placeholder, PlaceholderStyle, Rule, ScreenData, Stage, TextSpec, Wrap } from './screen-data.ts';
 export type { ScreenProfile, ComposerReading } from './screen-profile.ts';
 import type { ComposerReading } from './screen-profile.ts';
 
@@ -267,6 +267,9 @@ const SCREEN_KINDS: ReadonlySet<string> = new Set<Screen['kind']>([
   'permission',
   'trust',
   'question',
+  'plan approval',
+  'confirmation',
+  'login',
   'exit question',
   'vendor notice',
   'provider error',
@@ -338,7 +341,7 @@ function callComposer(composer: unknown, lines: string[]): Hit {
   }
 }
 
-type StageName = 'unknown' | 'trust' | 'permission' | 'exit_question' | 'question' | 'vendor_notice' | 'provider_error' | 'rate_limit' | 'working';
+type StageName = 'unknown' | 'trust' | 'plan_approval' | 'confirmation' | 'permission' | 'login' | 'exit_question' | 'question' | 'vendor_notice' | 'provider_error' | 'rate_limit' | 'working';
 
 /** The kind a stage reads as. A stage is named for the profile (vendor_notice); a screen kind is
  *  what the run prints (vendor notice). */
@@ -346,7 +349,9 @@ function kindOfStage(name: StageName): Screen['kind'] {
   if (name === 'vendor_notice') return 'vendor notice';
   if (name === 'provider_error') return 'provider error';
   if (name === 'rate_limit') return 'rate limit';
-  return name === 'exit_question' ? 'exit question' : name;
+  if (name === 'exit_question') return 'exit question';
+  if (name === 'plan_approval') return 'plan approval';
+  return name;
 }
 
 /** The reset time a rate-limit window names, from the phrase the seat printed, with the
@@ -404,10 +409,18 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
     // The exit question reads before the ordinary question on purpose: its footer is one an
     // ordinary question carries, so the stage a stop may answer must win over the kind it must
     // never answer. The order is the core's; a profile cannot move it.
+    // The plan approval and the confirmation read before `permission` on purpose: both draw the
+    // generic numbered yes/no row a permission prompt draws, so a profile's permission rule
+    // would otherwise take them and the watch would name a screen nobody may answer as one
+    // nobody may ever answer. Trust stays above all three: an answerable reading must never be
+    // taken for the one dialog a trust answer acts on.
     const cautionStages: [StageName, ScreenData['trust']][] = [
       ['unknown', data.unknown],
       ['trust', data.trust],
+      ['plan_approval', data.plan_approval],
+      ['confirmation', data.confirmation],
       ['permission', data.permission],
+      ['login', data.login],
       ['exit_question', data.exit_question],
       ['question', data.question],
       ['vendor_notice', data.vendor_notice],
@@ -459,6 +472,75 @@ export function classifyLines(data: ScreenData, lines: string[], clockOrOptions?
   }
 }
 
+/** The spec a screen kind's question text is read with: its own entry, else `any`. Null for a
+ *  kind no dialog text belongs to and for a profile that names none. */
+function textSpecOf(text: ScreenData['questionText'], kind: Screen['kind']): TextSpec | null {
+  if (text === undefined) return null;
+  if (kind === 'question' || kind === 'plan approval' || kind === 'confirmation') {
+    return text[kind] ?? text.any;
+  }
+  return null;
+}
+
+/** One taken row: each strip removes what it matches, once, then the row is trimmed. A row that
+ *  leaves nothing is the frame's own and ends the walk, exactly as a blank row does. */
+function textRow(line: string, strip: readonly RegExp[]): string {
+  let text = line;
+  for (const pattern of strip) text = text.replace(pattern, '');
+  return text.trim();
+}
+
+/**
+ * The question text a dialog shows, read from the rows the profile names, or null. `lines` is
+ * already the window the classifier reads, so the text comes from the same rows the kind did.
+ * The three anchors are exclusive — a profile sets one — and the walk takes at most `rows`
+ * consecutive rows that survive their strips: above the anchor (`before`), below it (`after`),
+ * or the anchor row itself (`inline`). Nothing is invented: a dialog whose text the strips empty
+ * reads null, and a reader never falls back to another row.
+ */
+export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['kind']): string | null {
+  const spec = textSpecOf(data.questionText, kind);
+  if (spec === null) return null;
+  const plain = plainLines(lines);
+  const matches = (pattern: RegExp) => plain.findIndex((line) => pattern.test(line));
+  const strip = spec.strip;
+  if (spec.inline !== null) {
+    const at = matches(spec.inline);
+    if (at < 0) return null;
+    const text = textRow(plain[at] as string, strip);
+    return text === '' ? null : text;
+  }
+  if (spec.after !== null) {
+    const at = matches(spec.after);
+    if (at < 0) return null;
+    const taken: string[] = [];
+    for (let index = at + 1; index < plain.length && taken.length < spec.rows; index++) {
+      const row = textRow(plain[index] as string, strip);
+      if (row === '') {
+        if (taken.length === 0) continue;
+        break;
+      }
+      taken.push(row);
+    }
+    return taken.length === 0 ? null : taken.join(' ');
+  }
+  if (spec.before !== null) {
+    const at = matches(spec.before);
+    if (at < 0) return null;
+    const taken: string[] = [];
+    for (let index = at - 1; index >= 0 && taken.length < spec.rows; index--) {
+      const row = textRow(plain[index] as string, strip);
+      if (row === '') {
+        if (taken.length === 0) continue;
+        break;
+      }
+      taken.unshift(row);
+    }
+    return taken.length === 0 ? null : taken.join(' ');
+  }
+  return null;
+}
+
 /**
  * The composer alone, for a turn that is still running. The dialog stages and
  * floor must not be overridden by composer readings returning idle or unsent.
@@ -483,7 +565,10 @@ export function composeLines(data: ScreenData, lines: string[], clockOrOptions?:
       const stages: [StageName, ScreenData['trust']][] = [
         ['unknown', data.unknown],
         ['trust', data.trust],
+        ['plan_approval', data.plan_approval],
+        ['confirmation', data.confirmation],
         ['permission', data.permission],
+        ['login', data.login],
         ['exit_question', data.exit_question],
         ['question', data.question],
         ['vendor_notice', data.vendor_notice],

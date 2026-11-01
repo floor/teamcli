@@ -469,7 +469,7 @@ export function pass({
     // Working is herdr's word or the screen's: a seat mid-turn is never idle, whatever its
     // status says.
     const working = agent.status === 'working' || screen.kind === 'working';
-    const prompt = screen.kind === 'permission' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit';
+    const prompt = screen.kind === 'permission' || screen.kind === 'plan approval' || screen.kind === 'confirmation' || screen.kind === 'login' || screen.kind === 'trust' || screen.kind === 'question' || screen.kind === 'exit question' || screen.kind === 'vendor notice' || screen.kind === 'provider error' || screen.kind === 'rate limit';
     if (!lead && !parked) workers.push({ idle: quiet && !working && !prompt });
 
     // The history the idle clock counts from. A seat seen working starts it again; a seat quiet

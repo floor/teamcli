@@ -57,6 +57,29 @@ export type VersionRange = { from: string; to: string };
 
 export type Stage = { rules: Rule[]; tested?: VersionRange; reason?: string };
 
+/** Where one dialog's question text sits on the pane. Exactly one anchor is set: `inline` takes
+ *  the matched row itself, `after` takes the rows below it, `before` the rows above it. `rows`
+ *  is how many consecutive rows may be taken — the walk stops at the first row that is blank
+ *  after the strips — and `strip` removes the frame's own characters from a taken row before it
+ *  is trimmed: a box border, the CLI's question counter, the option number. The text the reader
+ *  returns is the stripped rows joined by one space; nothing else is added to it. */
+export type TextSpec = {
+  inline: RegExp | null;
+  after: RegExp | null;
+  before: RegExp | null;
+  rows: number;
+  strip: RegExp[];
+};
+
+/** The question text's place, per screen kind. `any` covers a kind with no entry of its own, so
+ *  a profile whose dialogs share one layout writes the anchor once. */
+export type QuestionText = {
+  any: TextSpec | null;
+  question: TextSpec | null;
+  'plan approval': TextSpec | null;
+  confirmation: TextSpec | null;
+};
+
 export type Placeholder = { equals: string } | { prefix: string };
 
 /** How a composer continues a line onto its next row, from a capture that shows it: the
@@ -160,7 +183,16 @@ export type ScreenData = {
   turnEnd?: RegExp;
   unknown?: Stage;
   trust?: Stage;
+  /** A plan the agent wrote and is waiting to execute: read before `permission`, whose generic
+   *  numbered choice would otherwise take it. Answerable by the answer layer, never by a stop. */
+  plan_approval?: Stage;
+  /** A confirmation the CLI or the agent raises before acting — a mode switch, an unsent
+   *  comment, a held message. Read before `permission` for the same reason. */
+  confirmation?: Stage;
   permission?: Stage;
+  /** The CLI's own login screen: never answered, and read after `permission` so a shipped
+   *  permission pattern keeps the reading it always took. */
+  login?: Stage;
   /** The CLI's own question after the exit text was sent — its "stop tasks and exit" one, drawn
    *  in place of the composer. Read before `question` (its footer is an ordinary question's);
    *  the one screen a stop may answer, and only with the profile's `exit_confirm` key. */
@@ -177,6 +209,9 @@ export type ScreenData = {
    *  `provider_error`: the box under it is not a free prompt. */
   rate_limit?: Stage;
   working?: Stage;
+  /** Where the question text of a dialog sits, for the three kinds that carry one. Absent: the
+   *  reader returns null and the report names the dialog without quoting it. */
+  questionText?: QuestionText;
   composer: Composer;
   profile?: ScreenProfile;
   /** Set by the loader when the reading comes from a `screen_module`: the module reads the
