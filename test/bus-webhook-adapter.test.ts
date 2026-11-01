@@ -6,7 +6,7 @@
 // Every receiver here is a synthetic listener on a loopback port. No real URL, no real secret, no
 // live seat.
 import { afterEach, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
@@ -145,11 +145,12 @@ function messagePayload(root: string, id: string): RecordPayload {
   };
 }
 
-/** Writes that record where the seat's pull reads it, signed with the scratch home's key. */
-function signedDrop(home: string, root: string, id: string): SignedRecord {
+/** Writes that record where the seat's pull reads it, signed with the scratch home's key. A
+ *  patch changes the record's own fields while it still sits in the folder it was written to. */
+function signedDrop(home: string, root: string, id: string, patch: Partial<RecordPayload> = {}): SignedRecord {
   const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
   mkdirSync(dir, { recursive: true });
-  const signed = signRecord(messagePayload(root, id), home);
+  const signed = signRecord({ ...messagePayload(root, id), ...patch }, home);
   writeFileSync(join(dir, id), `${JSON.stringify(signed, null, 2)}\n`);
   return signed;
 }
@@ -319,6 +320,99 @@ test('the inbox body shape refuses, in plain words, when the record it names is 
   expect(said.lines[0]).toContain('not in the seat\'s drop folder');
   expect(said.lines[0]).toContain('the drop file stays in place');
   expect(said.lines.join('\n')).not.toContain('synthetic-secret-value');
+});
+
+for (const mode of ['header', 'default'] as const) {
+  test(`a redirect is never followed, so the secret never reaches the ${mode} mode's second address`, async () => {
+    // The routine's address is the only one the row names. A 3xx would hand the secret — the
+    // custom header verbatim, or the bearer — to whatever address the answer points at.
+    const base = scratch();
+    const target = receiver(() => new Response('ok'));
+    const hop = receiver(() => new Response(null, { status: 307, headers: { location: target.url } }));
+    const hook = files(base, hop.url);
+    const said = quiet();
+    const webhook = mode === 'header' ? { ...hook, header: 'x-synthetic-auth' } : hook;
+
+    const outcome = await deliverWebhook({
+      seat: 'iris',
+      webhook,
+      record: arrival(),
+      policy: { ...FAST, attempts: 1 },
+      report: said.report,
+    });
+
+    expect(outcome).toBe('failed');
+    expect(hop.hits.length).toBe(1);
+    expect(target.hits.length).toBe(0);
+    expect(said.lines.length).toBe(1);
+    expect(said.lines[0]).toContain('not delivered after 1 attempts');
+    expect(hop.hits[0]?.body).not.toContain('synthetic-secret-value');
+  });
+}
+
+test('the inbox shape never reads through a linked seat folder, so another project cannot feed it', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok'));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'project');
+  const outside = join(base, 'other-project');
+  signedDrop(base, outside, MESSAGE_ID);
+  const parent = join(root, '.agents', 'send-drops', 'acme');
+  mkdirSync(parent, { recursive: true });
+  symlinkSync(join(outside, '.agents', 'send-drops', 'acme', 'iris'), join(parent, 'iris'));
+  const outsideFile = join(outside, '.agents', 'send-drops', 'acme', 'iris', MESSAGE_ID);
+  const original = readFileSync(outsideFile, 'utf8');
+  const said = quiet();
+
+  const outcome = await deliverWebhook({
+    seat: 'iris',
+    webhook: { ...hook, body: 'inbox' },
+    record: arrival('iris', MESSAGE_ID),
+    root,
+    policy: FAST,
+    report: said.report,
+  });
+
+  expect(outcome).toBe('refused');
+  expect(get.hits.length).toBe(0);
+  expect(readFileSync(outsideFile, 'utf8')).toBe(original);
+  expect(said.lines.length).toBe(1);
+  expect(said.lines[0]).toContain('not posted');
+  expect(said.lines[0]).toContain('leads outside the project');
+});
+
+test('the inbox shape posts only a record addressed to this seat, session and project', async () => {
+  // Each variant is a signed record written into this seat's own drop folder, but addressed
+  // somewhere else: the seat, the session, or the project folder it names differ from the run's.
+  const variants: Partial<RecordPayload>[] = [
+    { to: 'lead' },
+    { session: 'another-session' },
+    { root: '/nonexistent/other-project' },
+  ];
+  for (const patch of variants) {
+    const base = scratch();
+    const hook = files(base, '');
+    const get = receiver(() => new Response('ok'));
+    writeFileSync(hook.urlFile, get.url + '\n');
+    const root = join(base, 'acme');
+    signedDrop(base, root, MESSAGE_ID, patch);
+    const said = quiet();
+
+    const outcome = await deliverWebhook({
+      seat: 'iris',
+      webhook: { ...hook, body: 'inbox' },
+      record: arrival('iris', MESSAGE_ID),
+      root,
+      policy: FAST,
+      report: said.report,
+    });
+
+    expect(outcome, JSON.stringify(patch)).toBe('refused');
+    expect(get.hits.length).toBe(0);
+    expect(said.lines.length).toBe(1);
+    expect(said.lines[0]).toContain('not addressed to this seat in this project');
+  }
 });
 
 test('a non-2xx answer keeps the drop and stops after three attempts, in plain words', async () => {
