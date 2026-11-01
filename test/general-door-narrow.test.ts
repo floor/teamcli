@@ -15,6 +15,7 @@ import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { commands, main } from '../src/cli.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runDaemon } from '../src/commands/daemon.ts';
+import { runInit } from '../src/commands/init.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
 import type { Io } from '../src/io.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
@@ -70,7 +71,7 @@ function grantOf(entities: string[], ops: GrantOp[]): string {
 
 mkdirSync(home, { recursive: true });
 installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
-seatOwner(home);
+const ownerStore = seatOwner(home);
 const pair = newClientKeyPair();
 const written = writeClientKeyFiles(join(home, '.config', 'team-client', 'client-a'), pair);
 if (!written.ok) throw new Error(written.why);
@@ -290,6 +291,40 @@ test('--general beside the owner-seat door is a usage error: a grant and a reque
   usage(ownDoor('up', ['--request'], wildcard));
   // The command never runs on any of these: the record is the one the earlier set left.
   expect(readStoredTeamConfig(home, teamIdOf(roots.alpha))?.text).toContain('project: alpha-two');
+});
+
+// operator-3's second review: with entities `*` and ops `send` only, config keys and init
+// --approval-modes both ran (exit 0): ownGeneral checked the entity shape, and those bodies
+// never reach admitGeneral. Neither command is owner-gated — config keys lists the static
+// settings registry (src/commands/config.ts:83, with no callerOf on that path) and init
+// --approval-modes lists the approval-mode records (src/commands/init.ts:298, before the
+// actionOutcome return at src/commands/init.ts:343) — so any caller runs them and a grant adds
+// nothing. `--general` on either is now a usage error rather than silently ignored.
+test('without --general a seat runs config keys and init --approval-modes: neither reads a grant', async () => {
+  const seat = { kind: 'seat' as const, name: 'probe', pane: 'pane1', session: 'acme' };
+  const keys = io(roots.alpha);
+  keys.caller = seat;
+  expect(await runConfig(['keys'], keys, { home, env: { TEAM_CONFIG_SOURCE: 'registry' } })).toBe(0);
+  const modes = io(fresh);
+  modes.caller = seat;
+  const code = await runInit(['--approval-modes'], modes, home, undefined, { loggedIn: () => true, ownerSeatStore: ownerStore, now: () => new Date() });
+  expect(code, `${modes.out}${modes.err}`).toBe(0);
+  expect(modes.out).toContain('team init: approval modes');
+});
+
+test('a grant whose ops do not cover them is not silently ignored: config keys and init --approval-modes take no --general', async () => {
+  const sendOnly = grantOf(['*'], ['send']);
+  const keys = door('config', ['keys'], sendOnly);
+  expect(keys.kind).toBe('usage');
+  if (keys.kind === 'usage') expect(keys.why).toContain('takes no --general');
+  const modes = door('init', ['--approval-modes'], sendOnly, io(fresh));
+  expect(modes.kind).toBe('usage');
+  if (modes.kind === 'usage') expect(modes.why).toContain('takes no --general');
+  // The dispatcher stops the line, so the command prints nothing and exits 2.
+  const scene = io();
+  expect(await main(['config', 'keys', '--general', sendOnly, '--key', client.path], scene)).toBe(2);
+  expect(scene.err).toContain('takes no --general');
+  expect(scene.out).toBe('');
 });
 
 // The exact line operator-3 ran: an owner seat is registered, and `team init --request` with a

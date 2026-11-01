@@ -104,11 +104,12 @@ Options:
 Every command but team client general-grant also takes --general <grant.json> --key <client.key>:
 a general grant the owner signed over every entity and covering the command runs it as the owner,
 with no terminal; a grant that lists entities is refused until 0.5.11. up, init and config read it
-themselves, and refuse it beside the owner-seat options; every other command is admitted here.
+themselves, and refuse it beside the owner-seat options and on a form that reads no record (config
+keys, init --approval-modes); every other command is admitted here.
 
 The team is the registry record. Edit it with team config. .agents/team.yaml is only an input to team migrate.
 
-Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error or a general grant does not admit the run, 2 when no command or an unknown command is given, --general is given without --key, or it is named beside --request or --approval.
+Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error or a general grant does not admit the run, 2 when no command or an unknown command is given, --general is given without --key, or it is named where no grant can admit the run (beside --request or --approval, or on config keys or init --approval-modes).
 `;
 
 // The hidden presence hook is written into a seat's settings file at install time, so no person

@@ -5297,8 +5297,8 @@
       "code": 2,
       "command": "team",
       "id": "team.general-usage",
-      "meaning": "--general is given without --key, on the grant-issuing command, or beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat)",
-      "trigger": "team status --general <grant.json>, or team init --request --general <grant.json> --key <client.key>"
+      "meaning": "--general is given where no grant can admit the run: without --key, on the grant-issuing command, beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat), or on a form that reads no team record (config keys, init --approval-modes)",
+      "trigger": "team status --general <grant.json>, team init --request --general <grant.json> --key <client.key>, or team config keys --general <grant.json> --key <client.key>"
     },
     {
       "code": 2,

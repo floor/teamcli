@@ -216,6 +216,40 @@ function opFlagProblem(command: string, scanned: Scan): string | null {
   return null;
 }
 
+/** The words a line leaves once its options are read as its command reads them. The two options
+ *  the door owns (`--general`, `--key`) take a value as well, so the word after them is never a
+ *  verb: `config keys --general g --key k` still starts with `keys`. */
+function positionals(argv: readonly string[], valued: readonly string[] | undefined): string[] {
+  const takesValue = new Set([...(valued ?? []), 'general', 'key']);
+  const words: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i] as string;
+    if (!word.startsWith('--')) { words.push(word); continue; }
+    if (word.indexOf('=') >= 0) continue;
+    if (takesValue.has(word.slice(2))) i++;
+  }
+  return words;
+}
+
+/**
+ * The two forms of an `OWN_GENERAL` command that read no team record and are open to any
+ * caller, so a grant admits nothing on them: `team config keys` lists the static settings
+ * registry (src/commands/config.ts:83, no caller gate on that path) and `team init
+ * --approval-modes` lists the approval-mode records (src/commands/init.ts:298, before the
+ * actionOutcome return at :343 and the caller read at :351). Accepting `--general` there and
+ * ignoring it would make a readable grant look like it admitted the run; it is refused as usage
+ * instead.
+ */
+function noRecordForm(name: string, rest: readonly string[], scanned: Scan): string | null {
+  if (name === 'config' && positionals(rest, VALUED.config)[0] === 'keys') {
+    return 'team config keys takes no --general: no grant admits it, and it lists the settings registry';
+  }
+  if (name === 'init' && scanned.flags.has('approval-modes')) {
+    return 'team init --approval-modes takes no --general: no grant admits it, and it lists the approval modes';
+  }
+  return null;
+}
+
 /** The owner-seat options a grant has no meaning beside: each asks the owner (or answers her)
  *  for this very run, which is what a grant already does. */
 const OWNER_SEAT_OPTIONS = ['request', 'approval', 'approvals', 'approve-as-owner-seat'];
@@ -230,7 +264,10 @@ const OWNER_SEAT_OPTIONS = ['request', 'approval', 'approvals', 'approve-as-owne
  *    sentence (exit id `team.general-target`), whatever other options the line carries;
  *  - `--general` beside an owner-seat option is refused as usage: the two doors have no defined
  *    meaning together (`init` already refuses that combination in its own words when it gets
- *    there; this makes the refusal reach the line whatever branch would have run).
+ *    there; this makes the refusal reach the line whatever branch would have run);
+ *  - `--general` on a form that reads no team record and is open to any caller (`config keys`,
+ *    `init --approval-modes`) is refused as usage too: the grant admits nothing there, so it
+ *    must not be taken and silently ignored.
  *
  * Everything else, including the key match and the op, stays with the command's own admission.
  * A grant that cannot be read is left to it too, so each command keeps its own refusal id.
@@ -249,6 +286,8 @@ function ownGeneral(name: string, rest: string[], io: Io, now: Date): Door | nul
   const scanned = scan(rest, VALUED[name]);
   const beside = OWNER_SEAT_OPTIONS.find((option) => scanned.flags.has(option) || (scanned.counts[option] ?? 0) > 0);
   if (beside !== undefined) return { kind: 'usage', why: `--general is its own door: it takes no --${beside}`, json };
+  const form = noRecordForm(name, rest, scanned);
+  if (form !== null) return { kind: 'usage', why: form, json };
   return { kind: 'pass', argv: rest, io };
 }
 
