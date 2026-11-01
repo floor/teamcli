@@ -49,8 +49,10 @@ export type WebhookShape =
  * authenticates it. Two bodies: the bus envelope, every row's default, and the seat-inbox record
  * shape the front's own webhook pushed. The secret is `Authorization: Bearer <secret>` unless the
  * row names a header, which then carries the secret file's line verbatim. No caller reads the
- * secret otherwise. A 3xx is never followed: a redirect would carry the secret to a destination
- * the routine's own address never named, so it fails the attempt like any other refusal to answer.
+ * secret otherwise. A row that names neither new field builds the request object every earlier
+ * row built, byte for byte; the delivery applies its own redirect policy, so a 3xx is never
+ * followed — a redirect would carry the secret to a destination the routine's own address never
+ * named, and it fails the attempt like any other refusal to answer.
  */
 export function webhookRequest(
   record: SignedEventRecord,
@@ -58,7 +60,12 @@ export function webhookRequest(
   secret: string,
   shape: WebhookShape = { body: 'event' },
 ): { url: string; init: RequestInit } {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  // The map has no prototype: a header name is the row's to pick, and `__proto__` on a plain
+  // object would run the inherited setter instead of adding a field, so the routine would answer
+  // 2xx without ever receiving its authentication header. A prototype-free map takes every valid
+  // name as a field of its own.
+  const headers = Object.create(null) as Record<string, string>;
+  headers['content-type'] = 'application/json';
   if (shape.header === undefined) headers.authorization = `Bearer ${secret}`;
   else headers[shape.header] = secret;
   return {
@@ -66,7 +73,6 @@ export function webhookRequest(
     init: {
       method: 'POST',
       headers,
-      redirect: 'error',
       body: shape.body === 'inbox' ? JSON.stringify(inboxBody(shape.message)) : JSON.stringify({ v: 1, event: record }),
     },
   };
@@ -282,7 +288,10 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   let reason = 'could not connect';
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetchFn(request.url, { ...prepared, signal: AbortSignal.timeout(policy.timeoutMs) });
+      // A redirect is never followed: it would carry the secret to a destination the routine's
+      // own address never named. The policy rides on the attempt, not on the request object, so a
+      // row that names neither new field builds exactly the request object it always did.
+      const response = await fetchFn(request.url, { ...prepared, redirect: 'error', signal: AbortSignal.timeout(policy.timeoutMs) });
       if (response.status >= 200 && response.status < 300) return 'delivered';
       reason = `HTTP ${response.status}`;
     } catch (error) {

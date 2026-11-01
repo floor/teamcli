@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
 import { startBus } from '../src/bus/server.ts';
-import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRoutesOf } from '../src/bus/webhook.ts';
+import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRequest, webhookRoutesOf } from '../src/bus/webhook.ts';
 import { signRecord, type RecordPayload, type SignedRecord } from '../src/send/record.ts';
 import { webhookRouteOf } from '../src/send/webhook.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -252,6 +252,51 @@ test('a seat row that names a header sends the secret verbatim there, and no Bea
   expect(hit.headers.authorization).toBeUndefined();
   expect(hit.headers['content-type']).toBe('application/json');
   expect(hit.body).not.toContain('synthetic-secret-value');
+});
+
+test('a header named __proto__, constructor or prototype reaches the routine intact', async () => {
+  // A plain object's `__proto__` setter would drop the field and still answer 2xx; `constructor`
+  // and `prototype` shadow names the same map would otherwise keep. The request's header map has
+  // no prototype, so each of these names is the routine's to read, like any other field.
+  for (const header of ['__proto__', 'constructor', 'prototype']) {
+    const base = scratch();
+    const hook = files(base, '');
+    const get = receiver(() => new Response('ok', { status: 204 }));
+    writeFileSync(hook.urlFile, get.url + '\n');
+
+    const outcome = await deliverWebhook({
+      seat: 'iris',
+      webhook: { urlFile: hook.urlFile, secretFile: hook.secretFile, header },
+      record: arrival(),
+      policy: FAST,
+      report: () => {},
+    });
+
+    expect(outcome).toBe('delivered');
+    const hit = get.hits[0];
+    expect(hit).toBeDefined();
+    if (!hit) continue;
+    expect(Object.prototype.hasOwnProperty.call(hit.headers, header)).toBe(true);
+    expect(hit.headers[header]).toBe('synthetic-secret-value');
+    expect(hit.headers.authorization).toBeUndefined();
+    expect(hit.headers['content-type']).toBe('application/json');
+    expect(hit.body).not.toContain('synthetic-secret-value');
+  }
+});
+
+test('a row that names neither field builds the request object every earlier row built', () => {
+  const record = arrival();
+  const request = webhookRequest(record, 'http://127.0.0.1:1/routine', 'synthetic-secret-value');
+  // Byte for byte what the adapter built before a row could name a header or a body shape: the
+  // redirect policy rides on the delivery's attempt, not on this object.
+  expect(JSON.stringify(request)).toBe(JSON.stringify({
+    url: 'http://127.0.0.1:1/routine',
+    init: {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer synthetic-secret-value' },
+      body: JSON.stringify({ v: 1, event: record }),
+    },
+  }));
 });
 
 test('the inbox body shape carries the signed message the arrival names, under the front\'s names', async () => {
