@@ -6,8 +6,7 @@
 // process is read, started or signalled.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { approvalOf } from '../../src/approve/approval.ts';
@@ -19,7 +18,7 @@ import { emptySession, LOCK_FILE, readState, updateState } from '../../src/state
 import { storePath, writeApproval } from '../../src/store/store.ts';
 import type { HerdrAgent } from '../../src/herdr.ts';
 import type { EndpointStopRead } from '../../src/launch/codex-endpoint.ts';
-import { gitEnv, testIo } from '../helpers.ts';
+import { gitEnv, shortSocketBase, testIo } from '../helpers.ts';
 
 const NOW = new Date('2026-10-15T11:30:00Z');
 const owner = { kind: 'owner' } as const;
@@ -82,7 +81,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function layout(workerCli = 'claude-code', workerName = 'claude', workerModel = 'Claude Opus'): Place {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 't1-a3-down-')));
+  const base = realpathSync(mkdtempSync(join(shortSocketBase(), 't1-a3-down-')));
   const root = join(base, 'acme');
   const home = join(base, 'home');
   mkdirSync(join(root, '.agents'), { recursive: true });
@@ -376,6 +375,9 @@ describe('down and a watch whose pid is only in the state', () => {
 
 describe('removing a seat whose endpoint record is present but unproven', () => {
   function endpointRecord(at: Place): Record<string, unknown> {
+    // Measured, not assumed: the runtime temp folder can be deep, and the build refuses a socket
+    // path over 100 bytes.
+    expect(Buffer.byteLength(join(at.dir, 'run', 'acme', 'worker', `${BINDING}.sock`))).toBeLessThanOrEqual(100);
     const socket = codexEndpointSocket(at.dir, 'acme', 'worker', BINDING);
     if (socket === null) throw new Error('the scene names no endpoint socket');
     return {
@@ -524,7 +526,7 @@ const SESSION = 'teamcli';
 const SEAT = 'builder-4';
 const T0 = '2026-10-01T10:00:00.000Z';
 const T0_MS = Date.parse(T0);
-const SHORT_TMP = existsSync('/private/tmp') ? '/private/tmp' : tmpdir();
+const SHORT_TMP = shortSocketBase();
 
 function scratch(): string {
   return mkdtempSync(join(SHORT_TMP, 't1r2-'));
@@ -549,6 +551,9 @@ function recordedAt(dir: string): unknown {
 }
 
 function ownedRecord(dir: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  // Measured, not assumed: the runtime temp folder can be deep, and the build refuses a socket
+  // path over 100 bytes.
+  expect(Buffer.byteLength(join(dir, 'run', SESSION, SEAT, `${BINDING}.sock`))).toBeLessThanOrEqual(100);
   const socket = codexEndpointSocket(dir, SESSION, SEAT, BINDING);
   if (socket === null) throw new Error('the scene names no endpoint socket');
   return { url: socket.url, binding: BINDING, pid: 700, started_at: T0, ...extra };

@@ -96,6 +96,17 @@ with the stage's, so `except` sees the same lines `match` sees. Both anchors rea
 that matches them, and a window that holds no anchor row fails the rule (`lastAnchor`,
 `src/watch/screen-core.ts`).
 
+A rule matches on one of these primitives: `any`, `all`, `footer`, `below_last_rule`,
+`none_after`, `only_after`, `block`, or `without_rule: true`. Every other key narrows a match
+one of them makes — `on_footer` the footer line, `live` the composer region, `at_composer` the
+block directly above the composer — and `without_rule: false`, `live: false` and
+`at_composer: false` narrow nothing at all. A rule carrying none of the primitives would pass
+every screen, so it is refused at load: the loader refuses it at the rule's line (`a rule needs
+a matching primitive`, `ruleOf`, `src/watch/screen-file.ts`) and the published schema's
+`$defs.rule` anyOf accepts exactly the same set (`src/profiles/profile.schema.json`).
+`reason` is not a primitive either: it labels a rate-limit match, and a rule of `reason` alone
+is refused in its own words.
+
 ### 3.3 The composer modes (built)
 
 Four modes, each a variant of `Composer` (`src/watch/screen-data.ts`):
@@ -253,6 +264,19 @@ This spec contributes no `team` command and no exit code row.
    refusal, under the implementation's own engine; the manifest is shared, the adapter is the
    implementation's. *Source:* `scripts/conformance.ts`, `test/fixtures/conformance.json`.
    *Proof:* `test/conformance.test.ts`.
+10. **A rule matches on a primitive, in the loader and the schema alike.** A rule MUST carry one
+    of §3.2's primitives, `without_rule: true` among them, and MUST NOT be built of narrowing
+    keys or `reason` alone; the loader refuses it at the rule's line, and the published
+    schema's `$defs.rule` anyOf MUST accept and refuse the same shapes. A refused override
+    rule is an override file problem, printed with its path and line (`overrideProblem`,
+    `src/profiles/overrides.ts`); it reaches the user through `doctor` (a miss, exit
+    `doctor.missing`), `add` (`add.doctor`) and `up` (`up.doctor`), which refuse on the same
+    finding, and `status` (`status.difference`), which prints it and counts a difference. The
+    watch says it once and keeps watching, by design. The exit sites are one per row and these
+    refusals add none: the rows that carry them name them. *Source:* `ruleOf`,
+    `src/watch/screen-file.ts`; `$defs.rule`, `src/profiles/profile.schema.json`.
+    *Proof:* `test/profile-rule-reason-agree.test.ts`, `test/profile-schema.test.ts`,
+    `test/overrides-approval.test.ts`.
 
 ## 6. Registries
 
@@ -301,3 +325,7 @@ spec's, and the conformance suite is a repository script.
   constructed (§3.8); the case-insensitive floor stated as a departure from RFC 0002's
   case-sensitive wording, not a reading of it (§7); seat-state-and-watch.md and launch.md
   linked at their prose mentions (§1, §3.4, §6).
+- **Rule-primitive fold** (the builder, 2026-11-01): §3.2 names the primitives and the keys
+  that narrow them, and rule 10 registers the loader's refusals — a rule of narrowing keys
+  alone, and a rule of `reason` alone — with the schema's matching anyOf and the exits that
+  carry a refused override rule.

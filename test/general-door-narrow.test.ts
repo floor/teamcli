@@ -5,21 +5,24 @@
 // admitted shape, the command's own parser decides what it acts on. Synthetic homes and teams
 // only: no real team, pane or registry is read.
 import { afterAll, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Door, generalDoor, VALUED } from '../src/client/general-door.ts';
 import { FLAG_OPS, GENERAL_OPS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp, VERB_OPS } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
+import { actionRequestsFolder } from '../src/client/team-create.ts';
 import { commands, main } from '../src/cli.ts';
 import { runConfig } from '../src/commands/config.ts';
 import { runDaemon } from '../src/commands/daemon.ts';
+import { runInit } from '../src/commands/init.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
 import type { Io } from '../src/io.ts';
 import { readStoredTeamConfig } from '../src/registry/team-config-store.ts';
 import { teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { installKey } from '../src/store/keys.ts';
 import { gitEnv } from './helpers.ts';
+import { seatOwner } from './helpers/owner-seat.ts';
 import { intoRegistry } from './helpers/registry-team.ts';
 
 const base = realpathSync(mkdtempSync(join(process.cwd(), '.gg-narrow-')));
@@ -68,6 +71,7 @@ function grantOf(entities: string[], ops: GrantOp[]): string {
 
 mkdirSync(home, { recursive: true });
 installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
+const ownerStore = seatOwner(home);
 const pair = newClientKeyPair();
 const written = writeClientKeyFiles(join(home, '.config', 'team-client', 'client-a'), pair);
 if (!written.ok) throw new Error(written.why);
@@ -79,6 +83,11 @@ mkdirSync(join(roots.beta, '.agents'), { recursive: true });
 writeFileSync(files.beta, teamText('beta', 'beta'));
 wildcard = grantOf(['*'], ['*']);
 alphaGrant = grantOf(['alpha'], ['*']);
+// A git repository with no team yet: `team init` writes its first record here, and a request
+// would be recorded under this scene's own home (the owner seat above makes that possible).
+const fresh = join(base, 'fresh');
+mkdirSync(fresh, { recursive: true });
+execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: fresh, env: gitEnv() });
 
 afterAll(() => {
   rmSync(base, { recursive: true, force: true });
@@ -247,4 +256,89 @@ test('the scoped refusal is the dispatch exit id, and nothing runs', async () =>
   const refusedJson = await main(['status', '--json', '--general', alphaGrant, '--key', client.path], json);
   expect(refusedJson).toBe(1);
   expect(JSON.parse(json.out).error.id).toBe('team.general-target');
+});
+
+// operator-3's review: up, init and config read --general with their own admission, and their
+// owner-seat branches ran first — a request was recorded, an approval listed, a signed edit
+// written — so a grant that lists entities was never read. The dispatcher now reads a present
+// --general before the command sees the line: the scoped refusal lands on every path, and
+// nothing is recorded, asked or written.
+function ownDoor(name: string, words: string[], grantPath: string, cwd: string = roots.alpha): Door {
+  return generalDoor(name, [...words, '--general', grantPath, '--key', client.path], io(cwd));
+}
+
+test('the owner-seat branches do not get around the refusal: init --request, init --approvals, config set --request and config keys all refuse on the grant', () => {
+  const recordBefore = readStoredTeamConfig(home, teamIdOf(roots.alpha))?.text;
+  scopedRefusal(ownDoor('init', ['--request'], alphaGrant, fresh));
+  scopedRefusal(ownDoor('init', ['--approvals'], alphaGrant, fresh));
+  scopedRefusal(ownDoor('config', ['set', 'project', 'alpha-two', '--request'], alphaGrant));
+  scopedRefusal(ownDoor('config', ['keys'], alphaGrant));
+  expect(existsSync(actionRequestsFolder(home))).toBe(false);
+  expect(existsSync(join(fresh, '.agents', 'team.yaml'))).toBe(false);
+  expect(readStoredTeamConfig(home, teamIdOf(roots.alpha))?.text).toBe(recordBefore);
+});
+
+test('--general beside the owner-seat door is a usage error: a grant and a request are two doors', () => {
+  const usage = (result: Door): void => {
+    expect(result.kind).toBe('usage');
+    if (result.kind === 'usage') expect(result.why).toContain('--general is its own door');
+  };
+  usage(ownDoor('init', ['--request'], wildcard, fresh));
+  usage(ownDoor('init', ['--approvals'], wildcard, fresh));
+  usage(ownDoor('init', ['--approve-as-owner-seat', 'tc_0123456789abcdef01234567', 'oui'], wildcard, fresh));
+  usage(ownDoor('config', ['set', 'project', 'alpha-two', '--request'], wildcard));
+  usage(ownDoor('config', ['set', 'project', 'alpha-two', '--approval', 'oa_nope'], wildcard));
+  usage(ownDoor('up', ['--request'], wildcard));
+  // The command never runs on any of these: the record is the one the earlier set left.
+  expect(readStoredTeamConfig(home, teamIdOf(roots.alpha))?.text).toContain('project: alpha-two');
+});
+
+// operator-3's second review: with entities `*` and ops `send` only, config keys and init
+// --approval-modes both ran (exit 0): ownGeneral checked the entity shape, and those bodies
+// never reach admitGeneral. Neither command is owner-gated — config keys lists the static
+// settings registry (src/commands/config.ts:83, with no callerOf on that path) and init
+// --approval-modes lists the approval-mode records (src/commands/init.ts:298, before the
+// actionOutcome return at src/commands/init.ts:343) — so any caller runs them and a grant adds
+// nothing. `--general` on either is now a usage error rather than silently ignored.
+test('without --general a seat runs config keys and init --approval-modes: neither reads a grant', async () => {
+  const seat = { kind: 'seat' as const, name: 'probe', pane: 'pane1', session: 'acme' };
+  const keys = io(roots.alpha);
+  keys.caller = seat;
+  expect(await runConfig(['keys'], keys, { home, env: { TEAM_CONFIG_SOURCE: 'registry' } })).toBe(0);
+  const modes = io(fresh);
+  modes.caller = seat;
+  const code = await runInit(['--approval-modes'], modes, home, undefined, { loggedIn: () => true, ownerSeatStore: ownerStore, now: () => new Date() });
+  expect(code, `${modes.out}${modes.err}`).toBe(0);
+  expect(modes.out).toContain('team init: approval modes');
+});
+
+test('a grant whose ops do not cover them is not silently ignored: config keys and init --approval-modes take no --general', async () => {
+  const sendOnly = grantOf(['*'], ['send']);
+  const keys = door('config', ['keys'], sendOnly);
+  expect(keys.kind).toBe('usage');
+  if (keys.kind === 'usage') expect(keys.why).toContain('takes no --general');
+  const modes = door('init', ['--approval-modes'], sendOnly, io(fresh));
+  expect(modes.kind).toBe('usage');
+  if (modes.kind === 'usage') expect(modes.why).toContain('takes no --general');
+  // The dispatcher stops the line, so the command prints nothing and exits 2.
+  const scene = io();
+  expect(await main(['config', 'keys', '--general', sendOnly, '--key', client.path], scene)).toBe(2);
+  expect(scene.err).toContain('takes no --general');
+  expect(scene.out).toBe('');
+});
+
+// The exact line operator-3 ran: an owner seat is registered, and `team init --request` with a
+// grant that lists entities recorded a request and exited 0. In a child whose HOME is the
+// scene's own, it now stops at the dispatcher: exit 1, the one sentence, no request file.
+test('team init --request under a grant that lists entities records nothing', () => {
+  const run = spawnSync(process.execPath, [join(import.meta.dir, '..', 'src', 'cli.ts'), 'init', '--request', '--general', alphaGrant, '--key', client.path], {
+    cwd: fresh,
+    env: { ...process.env, HOME: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' },
+    encoding: 'utf8',
+  });
+  expect(run.status, `${run.stdout}${run.stderr}`).toBe(1);
+  expect(run.stderr).toContain(SCOPED_GRANT_REFUSAL);
+  expect(run.stdout).toBe('');
+  expect(existsSync(actionRequestsFolder(home))).toBe(false);
+  expect(existsSync(join(fresh, '.agents', 'team.yaml'))).toBe(false);
 });

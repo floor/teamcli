@@ -622,7 +622,7 @@ function prologue(io: Io, host: SendHost, seatName: string): Prologue | Ended {
   // the store holds no record for is judged in.
   const fileTeamId = teamIdOf(root);
   // The address is resolved first: the registry answers an agent id, a `seat@team` (team spelled
-  // by id, project or session), a `@nickname`, or a plain seat it holds an agent for, and the
+  // by id, name or session), a `@nickname`, or a plain seat it holds an agent for, and the
   // live herdr read is the fallback for a record that carries no pane. A spec that names nobody
   // is refused by its own answer; a plain seat the registry cannot answer keeps the
   // declared-seat path below. The live read the resolution may fall back to is the host's, one

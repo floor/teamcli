@@ -535,8 +535,8 @@ describe('request, owner-seat answer, execute: the manager bundle', () => {
   });
 });
 
-describe('add --client: no terminal, the exact team, the owner approves the roster', () => {
-  test('a manager grant adds a copy of a seat from a caller with no terminal, and says the owner approves the roster', async () => {
+describe('add --client: no terminal, the exact team', () => {
+  test('a manager grant adds a copy of a seat from a caller with no terminal, and names the limit it leaves', async () => {
     const w = world();
     furnish(w);
     const g = await issued(w, 'manager', ['--seat', 'orchestrator']);
@@ -548,9 +548,11 @@ describe('add --client: no terminal, the exact team, the owner approves the rost
     expect(after).toContain('name: Desk');
     // The copy sits beside its source; every line the file had is still there.
     for (const line of before.split('\n')) expect(after.includes(line), line).toBe(true);
-    // The roster change is the owner's: the approval record was not written, and the run says so.
+    // The approval record was not written; the closing line names the grant and the stop it leaves.
     expect(existsSync(approvalFile(w))).toBe(false);
-    expect(run.err).toContain('the roster change is for the owner to approve with the owner seat');
+    expect(run.err).toContain('client grant ');
+    expect(run.err).toContain('added Desk to the team file');
+    expect(run.err).not.toContain('approve');
     expect(run.err).toContain('--bundle manager --request');
     expect(run.log).toContain('client-add-authorized');
     expect(run.log).toContain(`grant ${g.grantId} client grok-bot team docs`);
@@ -645,7 +647,7 @@ describe('add --client: no terminal, the exact team, the owner approves the rost
 });
 
 describe('remove --client: the same door, narrower still', () => {
-  test('a manager grant removes a declared seat and says the owner approves the roster; the approval record is not touched', async () => {
+  test('a manager grant removes a declared seat, and the approval record is not touched', async () => {
     const w = world();
     furnish(w);
     const g = await issued(w, 'manager', ['--seat', 'orchestrator']);
@@ -653,7 +655,8 @@ describe('remove --client: the same door, narrower still', () => {
     expect(run.code, run.out + run.err).toBe(0);
     expect(readFileSync(teamPathOf(w), 'utf8')).not.toContain('name: spare');
     expect(run.out).toContain('removed spare');
-    expect(run.out).toContain('the roster change is for the owner to approve with the owner seat');
+    expect(run.out).toContain('removed spare from the team file');
+    expect(run.out).not.toContain('approve');
     expect(existsSync(approvalFile(w))).toBe(false);
     expect(run.log).toContain('client-remove-authorized');
     expect(run.log).toContain('client:grok-bot');

@@ -39,7 +39,7 @@ function scripted(answers: ServiceRunResult[]): ServiceRunner {
 describe('a refused registration rolls its unit back', () => {
   test('a registration the service manager refuses leaves no unit behind', () => {
     const home = scratchHome();
-    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501 });
+    const manager = darwinServiceManager({ runner: scripted([FAILED]), uid: 501, sleep: () => {} });
 
     const result = manager.install(home, PROGRAM);
 
@@ -52,7 +52,7 @@ describe('a refused registration rolls its unit back', () => {
   test('a refusal after the unload retry leaves no unit behind either', () => {
     const home = scratchHome();
     // The first registration is refused, the unload succeeds, the retry is refused again.
-    const manager = darwinServiceManager({ runner: scripted([FAILED, OK, FAILED]), uid: 501 });
+    const manager = darwinServiceManager({ runner: scripted([FAILED, OK, FAILED]), uid: 501, sleep: () => {} });
 
     const result = manager.install(home, PROGRAM);
 
