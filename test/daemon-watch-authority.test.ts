@@ -8,7 +8,7 @@ import { routeOf } from '../src/daemon/routes.ts';
 import { createHostedWatch } from '../src/daemon/watch.ts';
 import { HOSTED_AUTHORITY_TICK_MS, hostedWatchAuthority, type WatchAuthorityCheck, type WatchSenderFactory } from '../src/daemon/watch-authority.ts';
 import { emptySession, LOCK_FILE, readState, STATE_FILE, updateState } from '../src/state.ts';
-import { WATCH_DIRECT_WORK, verifyWatchAuthority } from '../src/watch/authority.ts';
+import { WATCH_DIRECT_WORK, verifyWatchAuthority, type WatchActorVerdict } from '../src/watch/authority.ts';
 import { forgetIdleEpisodes, type WorkPushRequest } from '../src/watch/dispatch.ts';
 import { mintWatchEpoch } from '../src/watch/epoch.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
@@ -171,15 +171,82 @@ async function waitUntil(check: () => boolean, ms = 4000): Promise<void> {
 }
 
 describe('the watchdog file binding', () => {
-  test('a route with no recorded binding is blocked, runs nothing and writes no authority', async () => {
+  test('a route with no recorded binding has it claimed for its own file, and the watch runs', async () => {
     const logs: string[] = [];
-    const build = hostedWatchAuthority({ route: route(), teamFile, log: (text) => logs.push(text) });
+    const clock = { at: NOW };
+    const build = hostedWatchAuthority({
+      route: route(), teamFile, log: (text) => logs.push(text), now: () => new Date(clock.at), base: quietSources(clock),
+    });
+    // An absent binding is the daemon's own to record, not a refusal: it claims the route's team
+    // file before the first pass, and nothing stands the watch down.
     expect(effectsOf(build)).toBe('blocked');
-    expect(build.standby).toContain('records no watchdog file binding');
-    const host = createHostedWatch({ route: route(), now: () => new Date(NOW), ...build, onTick: build.tick });
-    expect(host.state()).toMatchObject({ phase: 'standby', why: build.standby, effects: 'blocked', cycles: 0 });
+    expect(build.standby).toBeUndefined();
+    const host = machine(build, clock);
+    await waitUntil(() => host.state().cycles === 1);
+    expect(host.state()).toMatchObject({ phase: 'running', cycles: 1, failures: 0 });
+    expect(readState(agents).sessions.crew?.watchdog).toEqual({ file: teamFile });
+    expect(record()).toMatchObject({ pid: process.pid });
+    expect(record()?.epoch).toMatch(/^watch_[0-9a-f]{32}$/);
+    expect(logs.some((line) => line.includes('the hosted watch is blocked'))).toBe(false);
+    await host.stop('done');
+    // The claim is the route's own record and outlives the run: the next daemon start finds it.
+    expect(readState(agents).sessions.crew?.watchdog).toEqual({ file: teamFile });
     expect(record()).toBeUndefined();
-    expect(logs.some((line) => line.includes('the hosted watch is blocked'))).toBe(true);
+  });
+
+  test('a claimed binding admits the watch\'s own effects under the pane-less watch identity', async () => {
+    const clock = { at: NOW };
+    const pushes: WorkPushRequest[] = [];
+    const verdicts: WatchActorVerdict[] = [];
+    const build = hostedWatchAuthority({
+      route: route(),
+      teamFile,
+      log: () => {},
+      now: () => new Date(clock.at),
+      base: idleSources(clock),
+      verifyAuthority: (check) => {
+        const verdict = verifyWatchAuthority({ ...check, purpose: WATCH_DIRECT_WORK, now: new Date(clock.at) });
+        verdicts.push(verdict);
+        return verdict;
+      },
+      sender: () => async (request) => {
+        pushes.push(request);
+        return { ok: true, outcome: 'typed (unconfirmed)' };
+      },
+    });
+    expect(build.standby).toBeUndefined();
+    const host = machine(build, clock);
+    await waitUntil(() => pushes.length === 1);
+    expect(host.state().effects).toBe('open');
+    // The record the daemon holds has no pane, so the admitted actor is the session's watch and
+    // the file it is admitted against is the one the run claimed.
+    const admitted = verdicts.find((verdict) => verdict.ok);
+    expect(admitted).toBeDefined();
+    if (admitted?.ok) {
+      expect(admitted.actor).toEqual({ kind: 'watch', session: 'crew' });
+      expect(admitted.authority.file).toBe(realpathSync(teamFile));
+    }
+    expect(readState(agents).sessions.crew?.watchdog).toEqual({ file: teamFile });
+    await host.stop('done');
+  });
+
+  test('a claim on a busy state lock waits for the next fixed beat and is then recorded', async () => {
+    writeFileSync(join(agents, LOCK_FILE), '1\n');
+    const clock = { at: NOW };
+    const build = hostedWatchAuthority({
+      route: route(), teamFile, log: () => {}, now: () => new Date(clock.at), base: quietSources(clock),
+    });
+    expect(build.standby).toBeUndefined();
+    const host = machine(build, clock);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(host.state().phase).toBe('starting');
+    expect(readState(agents).sessions.crew?.watchdog).toBeUndefined();
+    rmSync(join(agents, LOCK_FILE));
+    clock.at = NOW + HOSTED_AUTHORITY_TICK_MS;
+    host.tick(new Date(clock.at));
+    await waitUntil(() => record()?.epoch !== undefined);
+    expect(readState(agents).sessions.crew?.watchdog).toEqual({ file: teamFile });
+    expect(record()?.pid).toBe(process.pid);
     await host.stop('done');
   });
 
