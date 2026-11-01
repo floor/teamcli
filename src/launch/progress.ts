@@ -24,10 +24,13 @@ import { plainLine } from './plain.ts';
 import type { Screen } from '../watch/screen.ts';
 
 /** The classifications a record can name, in the one closed list every reader validates against.
- *  `login` is reserved: no profile produces it today. */
+ *  `login` is reserved: no profile produces it today. `plan approval` and `confirmation` are the
+ *  two dialogs a seat is answerable at, read as their own states beside the permission dialog. */
 export const CLASSIFICATIONS = [
   'trust',
   'permission',
+  'plan approval',
+  'confirmation',
   'question',
   'provider error',
   'rate limit',
