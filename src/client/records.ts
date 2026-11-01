@@ -702,7 +702,7 @@ export type EntityCoordinator = {
 export function resolveEntityCoordinator(
   home: string,
   entity: string,
-  target: { seat?: string; clientId?: string; team?: string } = {},
+  target: { seat?: string; clientId?: string; team?: string; teamId?: string } = {},
 ): { ok: true; coordinator: EntityCoordinator } | { ok: false; why: string } {
   const wanted = target.seat ?? CLIENT_SLICE_SEAT;
   let teams: Record<string, TeamRecord>;
@@ -713,14 +713,31 @@ export function resolveEntityCoordinator(
   }
   const teamName = target.team ?? entity;
   if (!CLIENT_WORD_PATTERN.test(teamName)) return refusal(`"${teamName}" is not a team name: one lowercase word, digits and hyphens`);
-  const coordinators = Object.values(teams).filter((team) => team.entity === entity && team.project === teamName);
+  const ofEntity = Object.values(teams).filter((team) => team.entity === entity);
+  let coordinators: TeamRecord[];
+  if (target.teamId !== undefined) {
+    // A grant signs the record's id: a second team of the same entity and name cannot move the
+    // send to another folder, and a record the id no longer names refuses here.
+    coordinators = ofEntity.filter((team) => team.id === target.teamId);
+  } else {
+    // A written word names the team whose own name it is, then one whose session it is, never
+    // one that only sits in a project of that name; an id names exactly one record.
+    const byId = ofEntity.filter((team) => team.id === teamName);
+    const byName = ofEntity.filter((team) => team.project === teamName);
+    const bySession = ofEntity.filter((team) => team.session === teamName);
+    coordinators = byId.length > 0 ? byId : byName.length > 0 ? byName : bySession;
+  }
   if (coordinators.length !== 1) {
     const what = teamName === entity ? 'coordinator team' : `team "${teamName}"`;
-    return refusal(
-      coordinators.length === 0
-        ? `no ${what} of entity "${entity}" is registered`
-        : `entity "${entity}" has ${String(coordinators.length)} records for ${what}; a client grant needs exactly one`,
-    );
+    if (coordinators.length === 0) {
+      return refusal(
+        target.teamId === undefined
+          ? `no ${what} of entity "${entity}" is registered`
+          : `no record of entity "${entity}" carries the team id the grant signs (${target.teamId})`,
+      );
+    }
+    const ids = coordinators.map((team) => team.id ?? '(no id)').join(', ');
+    return refusal(`entity "${entity}" has ${String(coordinators.length)} records for ${what} (${ids}); say which by its id`);
   }
   const team = coordinators[0] as TeamRecord;
   if (team.lifecycle === 'archived') return refusal(`team "${team.project}" is archived`);

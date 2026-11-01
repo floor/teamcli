@@ -601,6 +601,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
     const resolved = resolveEntityCoordinator(host.home, grant.entity, {
       seat: grant.recipientSeat,
       clientId: grant.clientId,
+      teamId: grant.teamId,
       ...(grant.team !== undefined ? { team: grant.team } : {}),
     });
     if (!resolved.ok) {
@@ -686,6 +687,7 @@ export async function runReply(argv: string[], io: Io, host: ReplyHost): Promise
           const freshResolved = resolveEntityCoordinator(host.home, grant.entity, {
             seat: grant.recipientSeat,
             clientId: grant.clientId,
+            teamId: grant.teamId,
             ...(grant.team !== undefined ? { team: grant.team } : {}),
           });
           if (!freshResolved.ok) {
