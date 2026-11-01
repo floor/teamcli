@@ -167,7 +167,7 @@ describe('a dialog is its own attention, read off each CLI’s captured screen',
   test('one pane read gives the kind and the question together', () => {
     let reads = 0;
     const source = herdrStatusSource({ readPane: () => { reads += 1; return PLAN; } });
-    const target = { name: 'worker-1', pane: 'w1:p1', cli: 'claude-code' };
+    const target = { name: 'worker-1', pane: 'pane1', cli: 'claude-code' };
     expect(source.promptReading!(target)).toEqual({ kind: 'plan approval', text: PLAN_TEXT });
     expect(reads).toBe(1);
     // `promptKind` is the same reading with the text dropped: still one read per call.
