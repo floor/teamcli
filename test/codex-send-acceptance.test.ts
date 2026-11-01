@@ -205,6 +205,23 @@ exit 0
   return { base, root, dir, home, sockets, codexHome, binDir, queueLog, dropDir };
 }
 
+/** Adds a readable webhook adapter row to the Codex seat, with its two fixture files: a loopback
+ *  URL nothing dials and a 0600 secret. The send only reads them; no routine is ever run. */
+function withWebhookRow(scene: Scene): void {
+  const urlFile = join(scene.base, 'webhook-url');
+  const secretFile = join(scene.base, 'webhook-secret');
+  writeFileSync(urlFile, 'http://127.0.0.1:1/routine\n');
+  writeFileSync(secretFile, 'synthetic-secret-value\n', { mode: 0o600 });
+  const file = join(scene.dir, 'team.yaml');
+  writeFileSync(
+    file,
+    readFileSync(file, 'utf8').replace(
+      '    launch: codex -m gpt-6-sol\n',
+      `    launch: codex -m gpt-6-sol\n    webhook:\n      url_file: ${JSON.stringify(urlFile)}\n      secret_file: ${JSON.stringify(secretFile)}\n`,
+    ),
+  );
+}
+
 type AppServer = {
   socketPath: string;
   requests: { method: string; threadId?: string }[];
@@ -748,6 +765,66 @@ exit 1
     const entry = lastEntry(scene);
     expect(entry.via).toBe('drop');
     expect((entry.failed as string[])[0]).toMatch(/^native: /);
+  });
+
+  test('a queue that took the pointer names the runtime queue, never a webhook waiting for its bus', async () => {
+    const scene = makeScene();
+    const socketPath = join(scene.dir, 'state', 'codex-app-server.sock');
+    const server = await startAppServer(socketPath, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    // A managed seat whose own records bind the endpoint and the conversation its queue is
+    // addressed by, plus a readable webhook adapter. No bus serves this root, so the adapter
+    // cannot have fired; the queue is the route that actually took the send.
+    recordSeatState(scene, recordedEndpointState(socketPath, RECORD_BINDING, RECORD_BINDING));
+    withWebhookRow(scene);
+
+    const { code, out, err, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    expect(err).toBe('');
+    // The words follow the leg that took the message. A queued-for-bus sentence here would be the
+    // webhook's claim on a wake this send never made.
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
+    expect(out).not.toContain('queued; its webhook fires');
+    expect(calls).toEqual([
+      ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
+    ]);
+  });
+
+  test('a refused queue with a readable webhook and no bus keeps the queued-for-bus words', async () => {
+    const scene = makeScene();
+    const socketPath = join(scene.dir, 'state', 'codex-app-server.sock');
+    const server = await startAppServer(socketPath, (threadId) => ({
+      id: threadId,
+      status: { type: 'idle' },
+      canAcceptDirectInput: true,
+    }));
+    recordSeatState(scene, recordedEndpointState(socketPath, RECORD_BINDING, RECORD_BINDING));
+    withWebhookRow(scene);
+    writeFileSync(
+      join(scene.binDir, 'codex'),
+      `#!/bin/sh
+{
+  for arg in "$@"; do printf '%s\\036' "$arg"; done
+  printf '\\n'
+} >> "$CODEX_QUEUE_LOG"
+exit 1
+`,
+      { mode: 0o755 },
+    );
+
+    const { code, out, err, calls } = await sendWith(scene, server);
+
+    expect(code).toBe(0);
+    // The queue refused and the drop leg took the send: the adapter is the only route left, and
+    // the bus whose announcement fires it does not serve this root yet.
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (drop, 0 ms); queued; its webhook fires when the bus takes it\n`);
+    expect(out).not.toContain('woken through its runtime queue');
+    expect(err).toContain('queued, no event adapter');
+    expect(calls).toHaveLength(1);
   });
 
   test('a relative CODEX_HOME resolves once: the probe and the queue name the same absolute socket', async () => {

@@ -1738,6 +1738,15 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
         markLeg('native', 'attempted', attempt.outcome === 'enqueue' ? undefined : attempt.reason);
         if (attempt.outcome === 'enqueue') {
           report.sent = msgId;
+          // The leg that took the message decides the words: the class is re-read with the
+          // walk's losses and, while no bus serves the root, without the webhook adapter — its
+          // wake belongs to a bus this send handed no record to, so it cannot outrank the route
+          // that actually has the pointer.
+          report.deliveryWords = classWords(
+            classWithout(to, host.home, walkLost, declared, busLive),
+            to.seat,
+            busLive,
+          );
           const failed = failures.length > 0 ? { failed: [...failures] } : {};
           const entry = { ts: host.now().toISOString(), from, to: to.seat, ...sentAs, body, id: msgId, thread: record.thread };
           if (wait) {
@@ -4641,6 +4650,10 @@ function classWithout(
    *  word, inbound word and webhook row the class was first read with. Without it the walk's own
    *  reading of the seat stands in, exactly as the first read did. */
   declaredRow?: Pick<Seat, 'cli' | 'launch' | 'human' | 'inbound' | 'webhook'>,
+  /** Whether the webhook adapter may count as a waking route in this reading. A leg that took
+   *  the message removes it when no bus serves the root: the adapter fires only when the bus
+   *  announces the record, and this send handed no record to one. */
+  webhookClaims = true,
 ): ClassRead {
   let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
@@ -4662,7 +4675,7 @@ function classWithout(
   });
   const channel = read.evidence.channel;
   const socket = lost.socket === true ? false : read.evidence.socket;
-  const webhookStanding = read.evidence.webhook;
+  const webhookCounted = read.evidence.webhook && webhookClaims;
   return {
     cls: effectiveDeliveryClass({
       declared: read.evidence.declared,
@@ -4671,11 +4684,11 @@ function classWithout(
       socket,
       endpoint: lost.endpoint === true ? false : read.evidence.endpoint,
       ...(read.evidence.human ? { human: true } : {}),
-      ...(webhookStanding ? { webhook: true } : {}),
+      ...(webhookCounted ? { webhook: true } : {}),
     }),
     // The adapter is the only reason left for `push` when no direct route stands: a failed
     // socket or queue leaves it, and its wake belongs to the bus that announces the record.
-    webhookOnly: webhookStanding && !channel && !socket,
+    webhookOnly: webhookCounted && !channel && !socket,
   };
 }
 
