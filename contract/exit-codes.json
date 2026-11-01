@@ -1642,6 +1642,13 @@
     {
       "code": 1,
       "command": "daemon",
+      "id": "daemon.fatal",
+      "meaning": "a hosted endpoint could not be kept alive, so the daemon exited for the system's service manager to restart it",
+      "trigger": "team daemon run"
+    },
+    {
+      "code": 1,
+      "command": "daemon",
       "id": "daemon.fault-daemon",
       "meaning": "the machine daemon is not running, so there is no hosted watch to fault",
       "trigger": "team daemon fault-watch --root <folder> --route <id>"

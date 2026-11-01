@@ -109,7 +109,9 @@ export type EventAppendInput = Omit<EventPayload, 'v' | 'seq'>;
 
 export type EventAppendResult =
   | { ok: true; record: SignedEventRecord; duplicate: boolean; path: string }
-  | { ok: false; reason: string };
+  /** `busy` marks the one failure that is worth retrying: another process held the event lock
+   *  for the whole wait, so the record was never looked at. */
+  | { ok: false; reason: string; busy?: true };
 
 export type EventReadResult =
   | {
@@ -804,17 +806,21 @@ const heldEventLocks = new Set<string>();
 /** Runs `work` under the store's event lock. A call made while this process already holds the
  *  lock — the drop declaration's append, from inside an append or from the prune pass — runs
  *  directly under the lock its caller holds. */
-function withEventLock<T>(storeDir: string, work: () => T): T {
+function withEventLock<T>(storeDir: string, work: () => T, lockWaitMs?: number): T {
   const lockDir = join(storeDir, 'locks', 'events');
   if (heldEventLocks.has(lockDir)) return work();
-  return withLock(lockDir, () => {
-    heldEventLocks.add(lockDir);
-    try {
-      return work();
-    } finally {
-      heldEventLocks.delete(lockDir);
-    }
-  });
+  return withLock(
+    lockDir,
+    () => {
+      heldEventLocks.add(lockDir);
+      try {
+        return work();
+      } finally {
+        heldEventLocks.delete(lockDir);
+      }
+    },
+    lockWaitMs === undefined ? {} : { waitMs: lockWaitMs },
+  );
 }
 
 function eventKey(payload: Pick<EventPayload, 'kind' | 'record_id' | 'session'>): string {
@@ -989,6 +995,10 @@ export function appendEvent(
     /** When false the append performs no retention of its own: the drop record written by a
      *  dropping pass uses this so declaring a drop cannot drop again. */
     retain?: boolean;
+    /** How long the append waits for the event lock. Omitted, it waits the lock's own budget;
+     *  0 tries once and answers `busy` instead of pausing, so a caller on an event loop can
+     *  defer the record without freezing the loop. */
+    lockWaitMs?: number;
   } = {},
 ): EventAppendResult {
   const maxBytes = options.maxBytes ?? MAX_EVENT_LOG_BYTES;
@@ -1009,10 +1019,10 @@ export function appendEvent(
   const lockDir = join(storeDir, 'locks', 'events');
   if (!heldEventLocks.has(lockDir)) {
     try {
-      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options));
+      return withEventLock(storeDir, () => appendEvent(project, root, home, input, options), options.lockWaitMs);
     } catch (error) {
       if (error instanceof LockBusyError) {
-        return { ok: false, reason: 'the event log is busy; the record was not written' };
+        return { ok: false, busy: true, reason: 'the event log is busy; the record was not written' };
       }
       throw error;
     }
