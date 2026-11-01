@@ -15,6 +15,7 @@ import type { Live } from '../src/status/compare.ts';
 import type { CheckContext, SeatObservation } from '../src/watch/check.ts';
 import { attention } from '../src/watch/checks/attention.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { readDialog } from '../src/watch/dialog.ts';
 import { attentionOf, newMemory, pass } from '../src/watch/pass.ts';
 import { questionText, readScreen } from '../src/watch/screen.ts';
 import { classifyPromptKind, createSeatStatusEngine, herdrStatusSource } from '../src/watch/status-events.ts';
@@ -28,6 +29,12 @@ const ASKED = fixture('claude-code/2.1.302/question.txt');
 const ASKED_OLDER = fixture('claude-code/2.1.289/question-plain.txt');
 const CURSOR_SWITCH = fixture('cursor/2026.10.01/permission-plan.txt');
 const CURSOR_ASKED = fixture('cursor/2026.10.16/question.txt');
+const CODEX_PLAN = fixture('codex/0.161.0/plan-approval.txt');
+const CODEX_PLAN_ANSI = fixture('codex/0.161.0/plan-approval-ansi.txt');
+const CODEX_ASKED = fixture('codex/0.161.0/question.txt');
+const CODEX_ASKED_ANSI = fixture('codex/0.161.0/question-ansi.txt');
+const CODEX_IDLE = fixture('codex/0.161.0/idle.txt');
+const CODEX_WORKING = fixture('codex/0.161.0/working.txt');
 const GEMINI_ASKED = fixture('gemini/0.64.0/question.txt');
 const GROK_ASKED = fixture('grok/1.0.52/question.txt');
 const AGY_UNSENT = fixture('antigravity/1.2.16/question-unsent-54.txt');
@@ -41,6 +48,8 @@ const ASKED_TEXT = 'Which name do you want to use?';
 const ASKED_OLDER_TEXT = 'Which filename should I use for the file?';
 const SWITCH_TEXT = 'Switch to Plan mode?';
 const UNSENT_TEXT = 'You have unsent comments. Ready to send?';
+const CODEX_PLAN_TEXT = 'Implement this plan?';
+const CODEX_ASKED_TEXT = 'What should the new README line say?';
 
 // The example team with an operator of its own (the watch's own fixture shape): the coordinator is
 // the orchestrator, so a worker's dialog is a worker's.
@@ -145,6 +154,7 @@ const ctx: CheckContext = {
 describe('a dialog is its own attention, read off each CLI’s captured screen', () => {
   test('a plan approval, a held frame and a mode switch are not permission and not unknown', () => {
     expect(attentionOf(readScreen('claude-code', PLAN), 'blocked', false)).toBe('plan approval');
+    expect(attentionOf(readScreen('codex', CODEX_PLAN), 'blocked', false)).toBe('plan approval');
     expect(attentionOf(readScreen('claude-code', HELD), 'idle', true)).toBe('confirmation');
     expect(attentionOf(readScreen('cursor', CURSOR_SWITCH), 'blocked', false)).toBe('confirmation');
     expect(attentionOf(readScreen('antigravity', AGY_UNSENT), 'idle', true)).toBe('confirmation');
@@ -157,6 +167,8 @@ describe('a dialog is its own attention, read off each CLI’s captured screen',
 
   test('the status adapter names the two kinds, and a login screen keeps its name', () => {
     expect(classifyPromptKind('claude-code', PLAN)).toBe('plan approval');
+    expect(classifyPromptKind('codex', CODEX_PLAN)).toBe('plan approval');
+    expect(classifyPromptKind('codex', CODEX_ASKED)).toBe('question');
     expect(classifyPromptKind('claude-code', HELD)).toBe('confirmation');
     expect(classifyPromptKind('cursor', CURSOR_SWITCH)).toBe('confirmation');
     expect(classifyPromptKind('antigravity', AGY_UNSENT)).toBe('confirmation');
@@ -186,6 +198,17 @@ describe('the watch reports the seat and the question, once per occurrence', () 
     expect(report.to).toBe('operator');
   });
 
+  test('a codex seat at its plan approval or its question is reported with the dialog’s own line', () => {
+    const plan = run(live({ 'codex-acme': { status: 'blocked', screen: CODEX_PLAN } })).reports;
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.key).toMatch(/^plan approval:codex-acme:[0-9a-f]{12}$/);
+    expect(plan[0]!.text).toBe(`codex-acme waits at a plan approval prompt — "${CODEX_PLAN_TEXT}": the operator's to act on`);
+    expect(plan[0]!.to).toBe('operator');
+    const asked = run(live({ 'codex-acme': { status: 'blocked', screen: CODEX_ASKED } })).reports;
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.text).toBe(`codex-acme asked a question — "${CODEX_ASKED_TEXT}": the operator's to act on`);
+  });
+
   test('a held frame is a confirmation with its own headline', () => {
     expect(run(live({ 'deepseek-acme': { status: 'idle', screen: HELD } })).reports.map((report) => report.text))
       .toEqual([`deepseek-acme waits at a confirmation prompt — "${HELD_TEXT}": the operator's to act on`]);
@@ -211,11 +234,34 @@ describe('the watch reports the seat and the question, once per occurrence', () 
     expect(second.reports[0]!.text).toContain(ASKED_OLDER_TEXT);
   });
 
+  test('codex’s plan approval and question read the same from the plain and the styled capture', () => {
+    for (const [screen, kind, text] of [
+      [CODEX_PLAN, 'plan approval', CODEX_PLAN_TEXT],
+      [CODEX_PLAN_ANSI, 'plan approval', CODEX_PLAN_TEXT],
+      [CODEX_ASKED, 'question', CODEX_ASKED_TEXT],
+      [CODEX_ASKED_ANSI, 'question', CODEX_ASKED_TEXT],
+    ] as [string, 'plan approval' | 'question', string][]) {
+      expect(readScreen('codex', screen).kind).toBe(kind);
+      expect(questionText('codex', screen)).toBe(text);
+      // One read gives the kind and the question together, the shape the status adapter uses.
+      expect(readDialog('codex', screen)).toEqual({ dialog: kind, text });
+    }
+    // The composer and a running turn around the same profile stay what they were: neither draws
+    // a question, and the approval dialog's footer (`esc to interrupt` is the working row's own
+    // phrase) is read from the dialog's header, not a working line.
+    for (const screen of [CODEX_IDLE, CODEX_WORKING]) {
+      expect(readDialog('codex', screen)).toEqual({ dialog: null });
+      expect(attentionOf(readScreen('codex', screen), 'idle', true)).toBeNull();
+    }
+  });
+
   test('every CLI the team runs reads its dialog kind and its question off the capture', () => {
     const scenes: [string, string, string, string][] = [
       ['claude-code', ASKED, 'question', ASKED_TEXT],
       ['cursor', CURSOR_ASKED, 'question', 'Which option do you want?'],
       ['cursor', CURSOR_SWITCH, 'confirmation', SWITCH_TEXT],
+      ['codex', CODEX_ASKED, 'question', CODEX_ASKED_TEXT],
+      ['codex', CODEX_PLAN, 'plan approval', CODEX_PLAN_TEXT],
       ['gemini', GEMINI_ASKED, 'question', 'Which profile target should we validate first?'],
       ['grok', GROK_ASKED, 'question', 'Which name do you choose?'],
       ['antigravity', AGY_ASKED, 'question', 'Do you prefer alpha or beta?'],
@@ -226,10 +272,9 @@ describe('the watch reports the seat and the question, once per occurrence', () 
       expect(attentionOf(readScreen(cli, screen), 'blocked', false)).toBe(kind as ReturnType<typeof attentionOf>);
       expect(questionText(cli, screen)).toBe(text);
       // The check says the same line for each CLI: the kind and the question it placed.
+      const said = kind === 'question' ? 'worker-1 asked a question' : `worker-1 waits at a ${kind} prompt`;
       expect(attention.run(observation({ cli, attention: attentionOf(readScreen(cli, screen), 'blocked', false), dialogText: questionText(cli, screen) }), ctx)[0]!.text)
-        .toBe(kind === 'question'
-          ? `worker-1 asked a question — "${text}": the operator's to act on`
-          : `worker-1 waits at a confirmation prompt — "${text}": the operator's to act on`);
+        .toBe(`${said} — "${text}": the operator's to act on`);
     }
   });
 });

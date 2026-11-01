@@ -729,6 +729,34 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/plan-approval-ansi.txt",
+      "cli": "codex",
+      "classify": "plan approval",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/plan-approval.txt",
+      "cli": "codex",
+      "classify": "plan approval",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question-ansi.txt",
+      "cli": "codex",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question.txt",
+      "cli": "codex",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/ready-context-used-bare.txt",
       "cli": "codex",
       "classify": "idle",

@@ -34,7 +34,7 @@ describe('the question-answer records a profile lists', () => {
 
   test('a profile with no records answers nothing', () => {
     expect(questionAnswers(undefined)).toEqual([]);
-    expect(profileFor('codex')?.questionAnswers).toEqual([]);
+    expect(profileFor('muse')?.questionAnswers).toEqual([]);
   });
 
   test('the shipped profiles carry the dismiss keys their captures recorded', () => {
