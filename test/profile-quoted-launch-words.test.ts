@@ -235,6 +235,12 @@ describe('a script whose words a shell changes at run time is unprovable, and ke
     { name: 'an opening parenthesis', line: '/bin/sh -c "(claude --model m)"' },
     { name: 'a closing parenthesis', line: '/bin/sh -c "true) claude --model m"' },
     { name: 'a newline', line: '/bin/sh -c "claude --model m\ntrue"' },
+    // The shell that parses the line expands an unescaped `$` or backtick inside its double
+    // quotes, even where inner single quotes make it look literal to the script's own shell.
+    { name: 'a variable hidden in inner single quotes', line: '/bin/sh -c "claude --model m \'$TAIL\'"' },
+    { name: 'a braced variable hidden in inner single quotes', line: '/bin/sh -c "claude --model m \'${TAIL}\'"' },
+    { name: 'a command substitution hidden in inner single quotes', line: '/bin/sh -c "claude --model m \'$(printf x)\'"' },
+    { name: 'a backtick hidden in inner single quotes', line: '/bin/sh -c "claude --model m \'`printf x`\'"' },
   ];
 
   for (const { name, line } of UNPROVABLE) {
@@ -277,12 +283,59 @@ describe('a script whose words a shell changes at run time is unprovable, and ke
     expect(launch.notice).toContain('cannot take a session id');
   });
 
-  test('a literal $ in inner single quotes is provable: the words still go inside the script and arrive', () => {
+  test("inner single quotes do not shield an outer expansion: the CLI gets only the words before it", () => {
+    // Measured on `/bin/sh` here with `SYNTHETIC_TAIL="' # ignored tail"`: the shell that parses
+    // the line expands the variable inside its double-quoted command argument before the script's
+    // own shell reads it. The value's quote closes an empty word and its `#` starts a comment, so
+    // the CLI receives `--model m` and that empty word, and every word after it is lost.
+    const line = '/bin/sh -c "claude --model m \'$SYNTHETIC_TAIL\'"';
+    const env = { SYNTHETIC_TAIL: "' # ignored tail" };
+    expect(cliArgv(line, { env })).toEqual(['--model', 'm']);
+    const warnings: string[] = [];
+    const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+    expect(command).toBe(baseline(line));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('after the line, where the CLI may not read them');
+    expect(cliArgv(command, { env })).toEqual(['--model', 'm']);
+    const launch = withLaunchSession('claude-code', command);
+    expect(launch.command).toBe(command);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+  });
+
+  test('a literal $ in inner single quotes is provable when the outer quote keeps it literal: the words still arrive', () => {
     // The inner shell reads a single-quoted `$X` literally, so the script hands the CLI the
     // four characters `$X` whatever `X` holds, and the added words reach it the same way.
     // `\$` is literal to the outer shell, so the inner shell receives `'$X'`: a single-quoted
-    // word of the script, not an expansion, and the CLI receives the four characters.
+    // word of the script, not an expansion, and the CLI receives the four characters. This holds
+    // because the outer word keeps the `$` literal; an unescaped one in the same place expands
+    // at the outer layer, and the scene above measures that.
     const line = '/bin/sh -c "claude --model \'\\$X\'"';
+    const env = { X: 'expanded' };
+    expect(cliArgv(line, { env })).toEqual(['--model', '$X']);
+    const command = launchCommand(claude, line, 'Rules.', HOOK);
+    expect(cliArgv(command, { env })).toEqual([
+      '--model',
+      '$X',
+      '--dangerously-skip-permissions',
+      '--append-system-prompt',
+      'Rules.',
+      '--settings',
+      HOOK,
+    ]);
+    const launch = withLaunchSession('claude-code', command);
+    expect(launch.notice).toBeUndefined();
+    const sessionId = launch.sessionId ?? '';
+    expect(sessionId).not.toBe('');
+    expect(cliArgv(launch.command, { env })).toContain(sessionId);
+  });
+
+  test('a single-quoted script keeps its inner single quotes literal: the words arrive', () => {
+    // The outer word is single-quoted, so the shell that parses the line hands the script's
+    // shell exactly the text written: a spliced `'\''` is a literal `'` there, the inner
+    // `'$X'` is single-quoted to the script's shell, and the CLI receives `$X` whatever `X`
+    // holds. The added words go inside the same script and arrive too.
+    const line = "/bin/sh -c 'claude --model '\\''$X'\\'''";
     const env = { X: 'expanded' };
     expect(cliArgv(line, { env })).toEqual(['--model', '$X']);
     const command = launchCommand(claude, line, 'Rules.', HOOK);

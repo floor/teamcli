@@ -647,6 +647,53 @@ function startsWithCli(binary: string, command: string): boolean {
   return program !== undefined && (program.text.split('/').pop() ?? program.text) === binary;
 }
 
+/** Whether a script word's raw source reaches the shell that runs it unchanged. The shell that
+ *  parses the command line reads a double-quoted word before any inner shell sees it: inside
+ *  those quotes an unescaped `$` or backtick is expanded at that outer layer, whatever quotes
+ *  appear inside it, and an unquoted stretch of the word is read there too. So a word whose raw
+ *  text holds either hands the inner shell something other than the text this reader decoded.
+ *  A single-quoted word is taken literally, and a backslash makes the next character literal.
+ *  A word that closes and reopens quotes is followed as the outer shell reads it. */
+function outerWordKeepsText(body: string, quote: ScriptQuote): boolean {
+  let state: ScriptQuote | null = quote;
+  let at = 0;
+  while (at < body.length) {
+    const char = body[at]!;
+    if (state === 'single') {
+      if (char === "'") state = null;
+      at += 1;
+      continue;
+    }
+    if (char === '\\') {
+      at += 2;
+      continue;
+    }
+    if (state === 'double') {
+      if (char === '"') {
+        state = null;
+        at += 1;
+        continue;
+      }
+      if (char === '$' || char === '`') return false;
+      at += 1;
+      continue;
+    }
+    if (char === "'") {
+      state = 'single';
+      at += 1;
+      continue;
+    }
+    if (char === '"') {
+      state = 'double';
+      at += 1;
+      continue;
+    }
+    if ('$`*?['.includes(char)) return false;
+    at += 1;
+  }
+  return true;
+}
+
 /** Whether a script body is one simple command whose words the shell hands on exactly as
  *  written. A lexical reader cannot see what the shell does at run time, so a body holding a
  *  construct the shell changes is not proved: not a top-level operator (`;`, `&`, `|`, `<`, `>`,
@@ -734,6 +781,9 @@ function placementOf(binary: string, command: string): Placement {
   if (shell === null || !POSIX_SHELLS.has(shell)) return { kind: 'uncertain' };
   const layer = quotedWordOf(trimmed, found.word);
   if (layer === null) return { kind: 'uncertain' };
+  if (!outerWordKeepsText(trimmed.slice(found.word.start + layer.openLen, found.word.end - 1), layer.quote)) {
+    return { kind: 'uncertain' };
+  }
   if (startsWithCli(binary, found.word.text)) {
     if (!isSimpleCommand(found.word.text)) return { kind: 'uncertain' };
     return { kind: 'script', at: found.word.end - 1, layers: [layer.quote] };
@@ -763,6 +813,9 @@ function nestedPlacement(
   if (shell === null || !POSIX_SHELLS.has(shell)) return null;
   const innerLayer = quotedWordOf(body, inner.word);
   if (innerLayer === null) return null;
+  if (!outerWordKeepsText(body.slice(inner.word.start + innerLayer.openLen, inner.word.end - 1), innerLayer.quote)) {
+    return null;
+  }
   if (!startsWithCli(binary, inner.word.text)) return null;
   if (!isSimpleCommand(inner.word.text)) return null;
   const source = command.slice(outer.start + layer.openLen, outer.end - 1);
