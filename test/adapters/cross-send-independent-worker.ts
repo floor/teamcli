@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-const [scene, expectedHome] = process.argv.slice(2);
+const [scene, expectedHome, encodedPair] = process.argv.slice(2);
 if (scene === undefined || expectedHome === undefined || homedir() !== realpathSync(expectedHome)) throw new Error('child-start synthetic HOME required');
 const home = homedir();
 const base = dirname(home);
@@ -63,7 +63,7 @@ let expires = future;
 if (['unsigned', 'bad-signature', 'wrong-key', 'dry-unsigned', 'reissue'].includes(scene)) to = 'coordinator@product';
 if (scene === 'other-entity') to = 'orchestrator@foreign';
 if (scene === 'expired') expires = new Date(now.getTime() - 86_400_000).toISOString();
-if (scene !== 'seat-issue') {
+if (scene !== 'seat-issue' && scene !== 'general-pair') {
   mkdirSync(grants, { recursive: true });
   keyOf(home);
   const keyHome = scene === 'wrong-key' ? join(base, 'different-home') : home;
@@ -104,7 +104,24 @@ function records() {
   }
   return found;
 }
-if (scene === 'seat-issue') {
+if (scene === 'general-pair') {
+  const input = JSON.parse(encodedPair!) as { words: string[]; entities: string[]; expectedPair: { from: string; to: string } };
+  const { main } = await import('../../src/cli.ts');
+  const { newClientKeyPair, clientKeyDir, writeClientKeyFiles } = await import('../../src/client/records.ts');
+  const { issueOwnerGeneralGrant } = await import('../../src/client/general-grant.ts');
+  const id = (team: string, seat: string) => `agt_${createHash('sha256').update(`${team}:${seat}`).digest('hex').slice(0, 12)}`;
+  const substitutions: Record<string, string> = { INSIDE_FROM: id('design', 'architect'), INSIDE_TO: id('product', 'coordinator'), OUTSIDE: id('foreign', 'orchestrator') };
+  const substitute = (word: string) => word.replace(/\$([A-Z_]+)/g, (_match, key: string) => substitutions[key] ?? key);
+  const pair = newClientKeyPair();
+  const keys = writeClientKeyFiles(clientKeyDir(home, 'independent-pair'), pair);
+  if (!keys.ok) throw new Error(keys.why);
+  const general = issueOwnerGeneralGrant(home, { clientId: 'independent-pair', publicKey: pair.publicKey, entities: input.entities, ops: ['grant'], mayIssue: false, expires: new Date(future) });
+  if (!general.ok) throw new Error(general.why);
+  const io = testIo(source, { kind: 'unplaced', reason: 'synthetic external principal' });
+  io.env = { HOME: home };
+  const code = await main(['grant', '--send', ...input.words.map(substitute), '--expires', future, '--name', 'independent-pair', '--json', '--general', general.path, '--key', keys.keyPath], io);
+  console.log(JSON.stringify({ code, out: io.out, err: io.err, home, verified: readSendGrants(home), grantFiles: existsSync(grants) ? readdirSync(grants) : [], expectedPair: { from: substitute(input.expectedPair.from), to: substitute(input.expectedPair.to) }, records: records(), paneWrites }));
+} else if (scene === 'seat-issue') {
   const io = testIo(source, caller);
   const code = await runGrant(['--send', '--from', from, '--to', to, '--expires', future, '--name', grantName], io, { home });
   console.log(JSON.stringify({ code, out: io.out, err: io.err, issued: existsSync(grantFile), home }));

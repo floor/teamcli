@@ -2,19 +2,21 @@
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+const fixtureRoot = fileURLToPath(new URL('../../cross-send-independent-fixtures/', import.meta.url));
+mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
-afterAll(() => { for (const base of bases) spawnSync('trash', [base]); });
-type Result = { code: number; out: string; err: string; records: { team: string; body: string }[]; paneWrites: number; home: string; issued?: boolean; before?: Result; line?: string; repair?: Result; after?: Result; verified?: { name: string }[] };
-function scene(name: string): Result {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'independent-cross-grant-')));
+afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
+type Result = { code: number; out: string; err: string; records: { team: string; body: string }[]; paneWrites: number; home: string; issued?: boolean; before?: Result; line?: string; repair?: Result; after?: Result; verified?: { name: string; from: string; to: string }[]; expectedPair?: { from: string; to: string }; grantFiles?: string[] };
+type PairInput = { words: string[]; entities: string[]; expectedPair: { from: string; to: string } };
+function scene(name: string, pair?: PairInput): Result {
+  const base = realpathSync(mkdtempSync(join(fixtureRoot, 'scene-')));
   bases.push(base);
   const home = join(base, 'home');
   mkdirSync(home);
   const worker = fileURLToPath(new URL('./adapters/cross-send-independent-worker.ts', import.meta.url));
-  const child = spawnSync(process.execPath, [worker, name, home], {
+  const child = spawnSync(process.execPath, [worker, name, home, JSON.stringify(pair ?? null)], {
     cwd: base, env: { ...process.env, HOME: home, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0' }, encoding: 'utf8', timeout: 20_000,
   });
   expect(child.error).toBeUndefined();
@@ -79,3 +81,50 @@ test('the exact printed repair arguments recreate a valid record and permit the 
   expect(result.records[0]?.body).toContain('admitted by: an owner-signed grant naming send (architect-outbound)');
   expect(result.paneWrites).toBe(0);
 });
+
+function checkedPair(input: PairInput, admitted: boolean) {
+  const result = scene('general-pair', input);
+  expect(result.code, result.out + result.err).toBe(admitted ? 0 : 1);
+  expect(result.records).toEqual([]);
+  expect(result.paneWrites).toBe(0);
+  if (admitted) {
+    expect(result.verified).toEqual([{ name: 'independent-pair', ...result.expectedPair, expires: expect.any(String) }]);
+    expect(result.grantFiles).toHaveLength(1);
+  } else {
+    expect(JSON.parse(result.out).error.id).toBe('team.general-refused');
+    expect(result.verified).toEqual([]);
+    expect(result.grantFiles).toEqual([]);
+  }
+}
+const inside = { from: 'architect@design', to: 'coordinator@product' };
+const outside = { from: 'orchestrator@foreign', to: 'orchestrator@foreign' };
+for (const side of ['from', 'to'] as const) {
+  const other = side === 'from' ? 'to' : 'from';
+  for (const style of ['space', 'equals', 'space-equals', 'equals-space']) {
+    for (const disposition of ['outside-last', 'outside-covered', 'inside-last']) {
+      const covered = disposition === 'outside-covered';
+      const lastInside = disposition === 'inside-last';
+      const ordered = lastInside ? [outside[side], inside[side]] : [inside[side], outside[side]];
+      const words = [`--${other}`, covered ? outside[other] : inside[other]];
+      for (let index = 0; index < ordered.length; index++) {
+        const equals = style === 'equals' || (style === 'space-equals' && index === 1) || (style === 'equals-space' && index === 0);
+        words.push(...(equals ? [`--${side}=${ordered[index]}`] : [`--${side}`, ordered[index]!]));
+      }
+      test(`repeated --${side} ${style} ${disposition} signs only the final pair`, () => {
+        checkedPair({ words, entities: [covered ? 'foreign' : 'studio'], expectedPair: { ...inside, [side]: ordered[1]!, [other]: covered ? outside[other] : inside[other] } }, disposition !== 'outside-last');
+      });
+    }
+  }
+  for (const padding of ['leading', 'trailing']) {
+    for (const disposition of ['outside-refused', 'outside-covered', 'inside-covered']) {
+      const local = disposition === 'inside-covered';
+      const covered = disposition === 'outside-covered';
+      const target = local ? (side === 'from' ? '$INSIDE_FROM' : '$INSIDE_TO') : '$OUTSIDE';
+      const padded = padding === 'leading' ? `  ${target}` : `${target}  `;
+      const fixed = covered ? outside[other] : inside[other];
+      test(`padded --${side} agent id ${padding} ${disposition} signs a trimmed pair`, () => {
+        checkedPair({ words: [`--${side}`, padded, `--${other}`, fixed], entities: [covered ? 'foreign' : 'studio'], expectedPair: { ...inside, [side]: target, [other]: fixed } }, disposition !== 'outside-refused');
+      });
+    }
+  }
+}
