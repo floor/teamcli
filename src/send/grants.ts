@@ -70,17 +70,52 @@ export function readSendGrantReads(home: string = homedir()): SendGrantRead[] {
   return out;
 }
 
-/** The name a printed re-issue line writes: the record's own when `team grant --send` takes it,
- *  else a safe stem made from it. An older record may carry a display name ("the review channel"),
- *  which the writer refuses as a file stem; the line must be one the writer accepts. */
-export function reissueName(name: string): string {
-  if (RECORD_NAME_PATTERN.test(name)) return name;
-  const kept = name
+/** The longest name the writer takes: `recordNameProblem` (src/permissions/manage.ts) also has to
+ *  fit the `revoke-<name>` a revocation would write into one 64-character file name. */
+const REISSUE_NAME_MAX = 64 - 'revoke-'.length;
+
+/** Whether `team grant --send --name <name>` takes this stem: the file-name rule, and the words the
+ *  grants folder reserves — `grant`, `delegate`, and the `revoke-` family a revocation writes. */
+function writableName(name: string): boolean {
+  return RECORD_NAME_PATTERN.test(name)
+    && name !== 'grant' && name !== 'delegate' && !name.startsWith('revoke-')
+    && RECORD_NAME_PATTERN.test(`revoke-${name}`);
+}
+
+/** `name` as one file stem of at most `cap` characters, in the record names' alphabet. */
+function slugOf(name: string, cap: number): string {
+  return name
     .replace(/[^A-Za-z0-9._-]+/g, '-')
     .replace(/^[^A-Za-z0-9]+/, '')
-    .slice(0, 64)
+    .slice(0, cap)
     .replace(/[^A-Za-z0-9]+$/, '');
-  return kept === '' ? 'send-grant' : kept;
+}
+
+/** The name a printed re-issue line writes: the record's own when `team grant --send` takes it,
+ *  else a safe stem made from it. An older record may carry a display name ("the review channel"),
+ *  one of the folder's reserved words (the writer refuses `grant`, `delegate` and every
+ *  `revoke-…`), or one too long for the `revoke-<name>` a revocation would write; the line must be
+ *  one the writer accepts. A display name, and a name too long for the revocation's own file,
+ *  keeps a bare slug (truncated to fit); a reserved stem gains a `send-` prefix, so a `revoke-`
+ *  stem never stays reserved under a suffix. */
+export function reissueName(name: string): string {
+  if (writableName(name)) return name;
+  const slug = slugOf(name, REISSUE_NAME_MAX);
+  if (writableName(slug)) return slug;
+  const stem = slugOf(name, REISSUE_NAME_MAX - 'send-'.length);
+  const prefixed = stem === '' ? 'send-grant' : `send-${stem}`;
+  return writableName(prefixed) ? prefixed : 'send-grant';
+}
+
+/** The expiry a printed re-issue line carries: the record's own when the writer takes it, else the
+ *  instant it names in the canonical form. A legacy record may carry a UTC offset (`+02:00`) or a
+ *  loose spelling the writer refuses; the line must carry a form it accepts, and dropping the
+ *  expiry would lose it. The instant is the one admission reads for the record (`Date.parse`). */
+export function reissueExpiry(expires: string): string {
+  const trimmed = expires.trim();
+  if (ISO_TIMESTAMP.test(trimmed) && isoInstant(trimmed) !== null) return trimmed;
+  const at = Date.parse(trimmed);
+  return Number.isFinite(at) ? new Date(at).toISOString() : trimmed;
 }
 
 /** The line that recreates an unverified record signed, with the fields the record itself holds.
@@ -90,7 +125,7 @@ export function sendGrantReissueLine(read: SendGrantRecord): string {
     'team grant --send',
     `--from ${shellWord(read.from)}`,
     `--to ${shellWord(read.to)}`,
-    `--expires ${shellWord(read.expires)}`,
+    `--expires ${shellWord(reissueExpiry(read.expires))}`,
     `--name ${shellWord(reissueName(read.name))}`,
   ].join(' ');
 }

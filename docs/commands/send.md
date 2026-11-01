@@ -473,7 +473,9 @@ those, or a symbolic link, is not a grant: the send is refused as if the folder 
 record that names the pair but is not signed by the owner — an unsigned record from an earlier
 build, or one whose signature does not verify — refuses the send with `send.grant-invalid` (exit
 1) and does not fall back to the other reasons: the refusal names the record and prints the exact
-`team grant --send` line that recreates it signed. `team send --dry-run` shows the same refusal
+`team grant --send` line that recreates it signed, with a reserved or over-long name printed as a
+safe stem and a legacy offset expiry printed at the same instant in canonical UTC, so the line
+runs as printed. `team send --dry-run` shows the same refusal
 and, when a signed record admits the pair, names it in the preview line.
 
 ## The client send

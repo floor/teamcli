@@ -109,7 +109,10 @@ line that recreates it signed. A record missing any field is not a grant and is 
 
 Records written before 0.5.11 carry no signature and admit nothing until the owner re-issues them
 signed with the line the refusal prints; the record's name, pair and expiry are the line's
-arguments. `team grant --send` writes the JSON record whole through a temporary file of mode 0600
+arguments. A name the writer reserves (`grant`, `delegate`, `revoke-…`), or one too long for the
+folder's file names, is printed as a safe stem, and a legacy expiry carrying a UTC offset is
+printed at the same instant in the canonical `Z` form, so the line runs as printed.
+`team grant --send` writes the JSON record whole through a temporary file of mode 0600
 and a rename, like every other record in the folder. When a record of that name is already there,
 it is the re-issue path and the write replaces `<name>.json`; an older file of the same name under
 another extension stays beside it, reads as unsigned, and admits nothing.

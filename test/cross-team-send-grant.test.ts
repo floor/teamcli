@@ -445,6 +445,62 @@ describe('team send: an unsigned record refuses and says how to re-issue it', ()
     ]);
     expect(await sendAsBuilder(w, 'lead@teamcli').code).toBe(0);
   });
+
+  // The writer reserves `grant`, `delegate` and every `revoke-…` stem, and also refuses a name whose
+  // `revoke-<name>` would not fit one file name; the printed line must survive all of them.
+  for (const { display, expected } of [
+    { display: 'grant', expected: 'send-grant' },
+    { display: 'delegate', expected: 'send-delegate' },
+    { display: 'revoke-old', expected: 'send-revoke-old' },
+    { display: 'grant!', expected: 'send-grant' },
+    { display: 'g'.repeat(60), expected: 'g'.repeat(57) },
+  ]) {
+    test(`a record called ${JSON.stringify(display)} prints --name '${expected}', and that line runs`, async () => {
+      const w = world();
+      const folder = grantsFolder(w.home);
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(
+        join(folder, 'legacy.yaml'),
+        `name: ${JSON.stringify(display)}\nsend:\n  from: builder@floor\n  to: lead@teamcli\nexpires: "${FUTURE}"\n`,
+      );
+      const refused = sendAsBuilder(w, 'lead@teamcli');
+      expect(await refused.code).toBe(1);
+      expect(refused.err()).toContain(`"${display}"`);
+      expect(refused.err()).toContain(`--name '${expected}'`);
+      const owner = testIo(w.root, { kind: 'owner' });
+      const wrote = runGrant(shellWords(printedLine(refused.err())).slice(2), owner, { home: w.home });
+      expect(await wrote).toBe(0);
+      expect(readSendGrants(w.home).map((grant) => grant.name)).toEqual([expected]);
+      expect(await sendAsBuilder(w, 'lead@teamcli').code).toBe(0);
+    });
+  }
+
+  // A legacy expiry may be an offset form the writer now refuses; the line carries the same instant
+  // in the canonical form, never the raw text and never nothing.
+  for (const { raw, canonical } of [
+    { raw: '2027-06-01T00:00:00+02:00', canonical: '2027-05-31T22:00:00.000Z' },
+    { raw: '2027-06-01T00:00:00.000-05:00', canonical: '2027-06-01T05:00:00.000Z' },
+  ]) {
+    test(`a legacy expiry ${JSON.stringify(raw)} prints the canonical instant, and that line runs`, async () => {
+      const w = world();
+      const folder = grantsFolder(w.home);
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(
+        join(folder, 'old-grant.yaml'),
+        `send:\n  from: builder@floor\n  to: lead@teamcli\nexpires: ${JSON.stringify(raw)}\n`,
+      );
+      const refused = sendAsBuilder(w, 'lead@teamcli');
+      expect(await refused.code).toBe(1);
+      expect(refused.err()).toContain(`--expires '${canonical}'`);
+      expect(refused.err()).not.toContain(`--expires '${raw}'`);
+      const owner = testIo(w.root, { kind: 'owner' });
+      const wrote = runGrant(shellWords(printedLine(refused.err())).slice(2), owner, { home: w.home });
+      expect(await wrote).toBe(0);
+      expect(readSendGrants(w.home)).toEqual([
+        { name: 'old-grant', from: 'builder@floor', to: 'lead@teamcli', expires: canonical },
+      ]);
+    });
+  }
 });
 
 describe('team grant --send: the writer', () => {
