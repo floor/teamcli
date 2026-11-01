@@ -954,7 +954,7 @@ describe('event log appends are serialized across processes (RFC 002 Amendment 0
       { ts: TS, kind: 'message.arrived', session: 'acme', record_id: 'busy' },
       { deduplicate: false, retain: false },
     );
-    expect(busy).toEqual({ ok: false, reason: 'the event log is busy; the record was not written' });
+    expect(busy).toEqual({ ok: false, busy: true, reason: 'the event log is busy; the record was not written' });
     expect(await exit).toBe(0);
     expect(await new Response(holder.stderr).text()).toBe('');
 
