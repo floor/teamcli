@@ -99,6 +99,10 @@ export type StatusSource = {
   promptKind?(seat: StatusWaitSeat): PromptKind;
   /** Reads the pane's screen for `herdr_status: unreliable` profiles (`jules`) or screen-verified statuses. */
   readUnreliableScreen?(seat: StatusWaitSeat): Screen;
+  /** Reads the pane's visible screen as plain text, the last `lines` lines at most, for a
+   *  read-only view of a seat's screen. Null when the pane cannot be read. It types nothing and
+   *  sends no key, like every other member of this contract. */
+  screenText?(seat: StatusWaitSeat, lines: number): string | null;
   /** Desktop notification when a prompt climbs to the owner. */
   notify?(title: string, body: string, sound?: string): void;
 };
@@ -293,6 +297,13 @@ export function herdrStatusSource(options: HerdrStatusSourceOptions = {}): Statu
       if (seat.human === true) return { kind: 'unknown' };
       const raw = readPane(seat.pane, PANE_WINDOW, seat.session ?? options.session);
       return readScreen(seat.cli, raw ?? undefined, options.screenOptions);
+    },
+
+    screenText(seat, lines): string | null {
+      // A human seat has no screen a tool reads: the same answer as promptKind and
+      // readUnreliableScreen, and no pane read at all.
+      if (seat.human === true) return null;
+      return readPane(seat.pane, lines, seat.session ?? options.session);
     },
 
     notify(title, body): void {

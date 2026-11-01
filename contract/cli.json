@@ -4173,6 +4173,57 @@
         },
         {
           "hidden": false,
+          "name": "--key",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--lines",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": true,
+          "name": "-h",
+          "repeatable": false,
+          "takesValue": false
+        }
+      ],
+      "hidden": false,
+      "name": "peek",
+      "positionals": [
+        {
+          "name": "seat",
+          "optional": false,
+          "repeatable": false
+        }
+      ],
+      "subcommands": [],
+      "usage": [
+        "team peek <seat> [--lines <n>]"
+      ],
+      "who": {
+        "gate": "team-read",
+        "why": "the last lines of one seat's screen are read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; the screen is read and never typed into, the owner's own pane and a name the file does not declare are refused, and every attempt after the file loads is logged"
+      }
+    },
+    {
+      "flags": [
+        {
+          "hidden": false,
+          "name": "--general",
+          "repeatable": false,
+          "takesValue": true
+        },
+        {
+          "hidden": false,
+          "name": "--help",
+          "repeatable": false,
+          "takesValue": false
+        },
+        {
+          "hidden": false,
           "name": "--json",
           "repeatable": false,
           "takesValue": false

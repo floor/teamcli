@@ -2001,6 +2001,34 @@ A run with no terminal is refused: only the owner or the orchestrator runs this,
 | --- | --- | --- |
 | `name` | yes | no |
 
+## `peek`
+
+Hidden: no
+
+Usage:
+
+    team peek <seat> [--lines <n>]
+
+### Who may run it
+
+`team-read` — the last lines of one seat's screen are read by the owner, a seat the read gate places on its recorded pane, or an approved delegate pane; the screen is read and never typed into, the owner's own pane and a name the file does not declare are refused, and every attempt after the file loads is logged
+
+### Flags
+
+| Flag | Takes a value | Repeatable | Hidden |
+| --- | --- | --- | --- |
+| `--general` | yes | no | no |
+| `--help` | no | no | no |
+| `--key` | yes | no | no |
+| `--lines` | yes | no | no |
+| `-h` | no | no | yes |
+
+### Positionals
+
+| Name | Optional | Repeatable |
+| --- | --- | --- |
+| `seat` | no | no |
+
 ## `plan`
 
 Hidden: no

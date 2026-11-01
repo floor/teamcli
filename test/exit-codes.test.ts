@@ -38,6 +38,7 @@ import { writeDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
 import runPresenceHook from '../src/daemon/presence/hook.ts';
 import type { ServiceManager } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
+import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
@@ -69,6 +70,7 @@ import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
+import { runPeek, type PeekSources } from '../src/commands/peek.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { runQueue } from '../src/commands/queue.ts';
 import { runPolicy } from '../src/commands/policy.ts';
@@ -4912,6 +4914,69 @@ scene('next.policy', async (place) => {
 `);
   recordLead(place);
   return show(await nexted(place), 'tasks.policy.omit must not name id or title, the record itself');
+});
+
+// `team peek`: the screen comes from a standing-in source, never from a terminal host, and the
+// state records the pane the seat stands on.
+function peekSource(screen: string | null): StatusSource {
+  return {
+    async waitStatus() {
+      return { outcome: 'timeout', at: NOW.getTime() };
+    },
+    screenText: () => screen,
+  };
+}
+
+async function peeked(place: Place, argv: string[], caller: Caller = owner, screen: string | null = 'hello\n'): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const sources: PeekSources = { home: place.home, now: () => NOW, source: peekSource(screen) };
+  const code = await runPeek(argv, io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+function recordPeek(place: Place, name: string, pane: string): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats[name] = { stage: 'ready', pane };
+  });
+}
+
+const PEEK_HUMAN = TEAM.replace('seats:\n', `seats:
+  - role: implementer
+    name: desk
+    label: desk
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    human: true
+`);
+
+scene('peek.shown', async (place) => {
+  write(place, TEAM);
+  recordPeek(place, 'lead', 'pane1');
+  const ran = await peeked(place, ['lead']);
+  expect(ran.out).toBe('hello\n');
+  expect(ran.err).toBe('');
+  return ran;
+});
+scene('peek.unknown', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['ghost']), 'no seat named "ghost"');
+});
+scene('peek.owner-pane', async (place) => {
+  write(place, PEEK_HUMAN);
+  return show(await peeked(place, ['desk']), "is the owner's pane");
+});
+scene('peek.file', async (place) => show(await peeked(place, ['lead']), 'no team file'));
+scene('peek.invocation', async (place) => show(await peeked(place, []), 'a <seat> is required'));
+scene('peek.not-yours', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['lead'], other), 'this team is not yours to read');
+});
+scene('peek.no-screen', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['lead']), 'no screen is readable');
 });
 
 async function planned(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
