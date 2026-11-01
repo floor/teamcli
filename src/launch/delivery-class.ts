@@ -92,6 +92,11 @@ export function declaredDeliveryClass(cli: string): DeliveryClass {
   return profileFor(cli)?.delivery ?? 'none';
 }
 
+/** The words for a webhook route that stands while no bus serves its root: the adapter fires
+ *  when the bus announces the record, so the send queues the message for the bus instead of
+ *  claiming a wake it did not make. */
+export const WEBHOOK_QUEUED_WORDS = 'queued; its webhook fires when the bus takes it';
+
 /** The class in plain words, for a console line after the leg's own word. Never a bare
  *  "unconfirmed": each sentence says what happens to the message next. */
 export function deliveryWords(cls: DeliveryClass, seat: string): string {
