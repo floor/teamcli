@@ -6,7 +6,7 @@
 // A socket no record names is left where it is, and said. A missing socket is no proof its
 // server is gone, and a record that is present but unreadable is unproven, never absent.
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { shortSocketBase } from '../helpers.ts';
@@ -18,6 +18,7 @@ import {
   ensureCodexEndpoint,
   isSocketFile,
   launchCodexEndpoint,
+  readEndpointOwnerRecord,
   seatOfManagedEndpoint,
   seatRecordsCodexEndpoint,
   stopRecordedCodexEndpoint,
@@ -802,6 +803,112 @@ describe('a deep state folder', () => {
       // Nothing proves the unnamed socket's process has gone, so it is left exactly where it is.
       expect(existsSync(unnamed)).toBe(true);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('a link planted at the owner record’s name is refused, and its target is untouched', async () => {
+    const dir = deepScratch();
+    const base = scratch();
+    const runtimeRoot = runtimeRootOf(base);
+    try {
+      seed(dir);
+      // The folder was wide when the entry was planted: the launch narrows it, but a wall that
+      // was open earlier leaves entries it did not make, so the record's write must not follow.
+      mkdirSync(runtimeRoot, { recursive: true, mode: 0o777 });
+      chmodSync(runtimeRoot, 0o777);
+      const expected = endpointSocketOf(dir, SESSION, SEAT, BINDING, runtimeRoot);
+      if (expected.kind !== 'ok') throw new Error('the scene expected a runtime socket');
+      const ownerPath = join(runtimeRoot, `${stemOf(expected.path)}.owner.json`);
+      const victim = join(base, 'victim');
+      const original = 'fixture contents must remain';
+      writeFileSync(victim, original, { mode: 0o600 });
+      chmodSync(victim, 0o600);
+      symlinkSync(victim, ownerPath);
+      let listening = false;
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          runtimeRoot,
+          spawn: () => {
+            writeFileSync(expected.path, '');
+            chmodSync(expected.path, 0o644);
+            listening = true;
+            return { pid: 9105 };
+          },
+          isPlainDir: () => true,
+          isSocket: (path) => listening && path === expected.path,
+          alive: () => false,
+          sleep: async () => {},
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer.kind).toBe('unmanaged');
+      // The record's write went through no link: its target is exactly as it was, the link is
+      // still the entry there, and the strict reader still refuses it.
+      expect(readFileSync(victim, 'utf8')).toBe(original);
+      expect(lstatSync(ownerPath).isSymbolicLink()).toBe(true);
+      expect(readEndpointOwnerRecord(ownerPath)).toBeNull();
+      // What this call did make — the socket its own server created — is cleaned up.
+      expect(existsSync(expected.path)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('a socket already at the endpoint path is never taken for this launch’s own', async () => {
+    const dir = deepScratch();
+    const base = scratch();
+    const runtimeRoot = runtimeRootOf(base);
+    const server = createServer();
+    const terminated: number[] = [];
+    try {
+      seed(dir);
+      mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
+      chmodSync(runtimeRoot, 0o700);
+      const expected = endpointSocketOf(dir, SESSION, SEAT, BINDING, runtimeRoot);
+      if (expected.kind !== 'ok') throw new Error('the scene expected a runtime socket');
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(expected.path, resolve);
+      });
+      // A live endpoint this seat's state no longer records: the strict owner record beside the
+      // socket is the only pointer left to it.
+      writeOwnerRecordOf(expected.path, { dir, binding: BINDING, pid: 700, at: T0 });
+      const answer = await ensureCodexEndpoint({
+        dir, session: SESSION, seat: SEAT,
+        deps: {
+          runtimeRoot,
+          spawn: () => {
+            // A successor rotates the binding while this launch believes it is starting.
+            updateState(dir, (state) => {
+              (state.sessions[SESSION] ??= emptySession()).seats[SEAT] = { stage: 'launched', presence_binding: OTHER };
+            });
+            return { pid: 9106 };
+          },
+          isPlainDir: () => true,
+          isSocket: isSocketFile,
+          alive: (pid) => pid === 700,
+          terminate: (pid) => { terminated.push(pid); },
+          sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+          waitMs: 200,
+          now: () => new Date('2026-10-01T10:00:05.000Z'),
+        },
+      });
+      expect(answer.kind).toBe('unmanaged');
+      // Only the process this launch started is stopped: the socket that was already listening
+      // and the record that names its server are left exactly where they were.
+      expect(terminated).toEqual([9106]);
+      expect(server.listening).toBe(true);
+      expect(existsSync(expected.path)).toBe(true);
+      expect(readEndpointOwnerRecord(join(runtimeRoot, `${stemOf(expected.path)}.owner.json`))?.pid).toBe(700);
+    } finally {
+      await new Promise<void>((resolve) => {
+        if (server.listening) server.close(() => resolve());
+        else resolve();
+      });
       rmSync(dir, { recursive: true, force: true });
       rmSync(base, { recursive: true, force: true });
     }

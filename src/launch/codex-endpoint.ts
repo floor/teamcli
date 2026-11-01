@@ -55,9 +55,9 @@
 // The other supported platform is unmeasured here: this build asks it for no more than the same
 // 100 bytes, and the runtime-folder fallback has not been run there.
 import { execFileSync, spawn as nodeSpawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { sessionList } from '../herdr.ts';
-import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { isPresenceBinding, isPresenceTime, mintPresenceBinding } from '../daemon/presence/contract.ts';
@@ -405,16 +405,79 @@ function lockDownSocket(path: string): string | null {
   return null;
 }
 
-/** Writes the strict owner record beside a runtime socket, owner-only, or says why not. */
-function writeOwnerRecord(socketPath: string, record: EndpointOwnerRecord): string | null {
-  const path = ownerRecordPathOf(socketPath);
+/** An entry's identity as the filesystem reports it, without following a link: two reads name the
+ *  same object exactly when they agree on both. Used to tell the object a launch made from one
+ *  that stood at the same pathname before it, and from a successor that took the name after. */
+type EntryIdentity = { dev: number; ino: number };
+
+function entryIdentity(path: string): EntryIdentity | null {
   try {
-    writeFileSync(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-    chmodSync(path, 0o600);
+    const at = lstatSync(path);
+    return { dev: at.dev, ino: at.ino };
   } catch {
-    return 'the record beside the endpoint socket could not be written';
+    return null;
   }
-  return null;
+}
+
+function sameEntry(a: EntryIdentity, b: EntryIdentity | null): boolean {
+  return b !== null && a.dev === b.dev && a.ino === b.ino;
+}
+
+type OwnerRecordWrite =
+  | { ok: true; entry: EntryIdentity }
+  | { ok: false; why: string };
+
+/** Writes the strict owner record beside a runtime socket, owner-only, or says why not. The writer
+ *  meets the reader's contract on both ends: an entry already at the record's name is refused
+ *  unless the strict reader accepts it as this user's own plain record, and the bytes go to an
+ *  exclusive temporary file in the same folder, published by rename. No write ever follows a link
+ *  planted at the final name, and the record's identity is returned so cleanup can tell the file
+ *  this call published from one that took its name afterwards. */
+function writeOwnerRecord(socketPath: string, record: EndpointOwnerRecord): OwnerRecordWrite {
+  const path = ownerRecordPathOf(socketPath);
+  let occupied = false;
+  try {
+    lstatSync(path);
+    occupied = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return { ok: false, why: 'the record beside the endpoint socket cannot be read' };
+    }
+  }
+  if (occupied && readEndpointOwnerRecord(path) === null) {
+    // An entry the strict reader would not accept is not this launch's to replace: it may be a
+    // link planted while the folder was wide, and writing through its name could reach anywhere.
+    return { ok: false, why: 'the record beside the endpoint socket is not a plain record this user wrote; it was left in place' };
+  }
+  const temp = join(dirname(path), `.${basename(path)}.${String(process.pid)}.${randomBytes(8).toString('hex')}.tmp`);
+  let fd: number | null = null;
+  let entry: EntryIdentity | null = null;
+  try {
+    fd = openSync(temp, 'wx', 0o600);
+    // The open's mode is masked by the process umask; the reader's contract is exact.
+    fchmodSync(fd, 0o600);
+    const at = fstatSync(fd);
+    entry = { dev: at.dev, ino: at.ino };
+    writeSync(fd, `${JSON.stringify(record)}\n`);
+    closeSync(fd);
+    fd = null;
+    renameSync(temp, path);
+  } catch {
+    return { ok: false, why: 'the record beside the endpoint socket could not be written' };
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Already closed.
+      }
+    }
+    dropFile(temp);
+  }
+  if (entry === null || !sameEntry(entry, entryIdentity(path))) {
+    return { ok: false, why: 'the record beside the endpoint socket changed while it was written' };
+  }
+  return { ok: true, entry };
 }
 
 /** Removes the runtime sockets and owner records whose recorded process is gone. A socket whose
@@ -746,27 +809,56 @@ export async function ensureCodexEndpoint(
   }
   const hookEnv = input.pane === undefined ? null : (deps.herdrEnv ?? herdrHookEnv)(input.session, input.pane);
   if (input.pane !== undefined && hookEnv === null) notes.push('herdr did not name the session\'s socket, so its turn hooks cannot report this seat');
+  // The entry standing at the endpoint path when this launch starts its server, if any: the wait
+  // below cannot tell a socket this launch made from one that was already there, so what stood
+  // here beforehand decides whether the socket that answers is this call's to take or to leave.
+  const before = entryIdentity(socketPath.path);
   const started = spawn({ url: socketPath.url, ...(input.cwd === undefined ? {} : { cwd: input.cwd }), config, ...(hookEnv === null ? {} : { env: hookEnv }) });
   if (started === null) {
     return { kind: 'unmanaged', why: 'the Codex app-server did not start' };
   }
 
-  // What this call started is this call's to clean: the process, its socket, and — in the runtime
-  // folder — the owner record that points at it.
+  // What this call started is this call's to clean — the process, and only the objects at the
+  // endpoint and record paths that this call observed appear. An entry that stood at either name
+  // before this launch, and any successor object there, is left exactly where it is: a pathname
+  // alone proves nothing about who made what stands at it.
+  const recordPath = socketPath.runtime ? ownerRecordPathOf(socketPath.path) : null;
+  let made: EntryIdentity | null = null;
+  let ours = false;
+  let recordWritten: EntryIdentity | null = null;
   const discard = () => {
     terminate(started.pid);
-    drop(socketPath.path);
-    if (socketPath.runtime) drop(ownerRecordPathOf(socketPath.path));
+    if (ours && (made === null || sameEntry(made, entryIdentity(socketPath.path)))) drop(socketPath.path);
+    if (recordPath !== null && recordWritten !== null && sameEntry(recordWritten, entryIdentity(recordPath))) drop(recordPath);
   };
 
   const deadline = Date.now() + waitMs;
   while (!socket(socketPath.path)) {
     if (Date.now() >= deadline) {
+      made = entryIdentity(socketPath.path);
+      // An entry that stood here before this launch, or a name left empty after one did, is not
+      // this call's to remove; an entry that appeared where nothing stood is.
+      ours = before === null || (made !== null && !sameEntry(before, made));
       discard();
       return { kind: 'unmanaged', why: 'the Codex app-server did not create its socket in time' };
     }
     await sleep(25);
   }
+  made = entryIdentity(socketPath.path);
+  if (before !== null && (made === null || sameEntry(before, made))) {
+    // The socket the wait saw was already at the path when this launch started its server (or the
+    // name was left empty): it is not this launch's to narrow, record or remove. Only the process
+    // this launch started is stopped; the socket and the record beside it stay as they were, for
+    // whichever launch made them to account for.
+    terminate(started.pid);
+    return {
+      kind: 'unmanaged',
+      why: made === null
+        ? 'the endpoint socket vanished before this launch could check it; nothing was removed'
+        : 'an endpoint socket this launch did not make is already at its path; it was left in place',
+    };
+  }
+  ours = true;
 
   const startedAt = now().toISOString();
   if (socketPath.runtime) {
@@ -784,10 +876,11 @@ export async function ensureCodexEndpoint(
       pid: started.pid,
       at: startedAt,
     });
-    if (pointed !== null) {
+    if (!pointed.ok) {
       discard();
-      return { kind: 'unmanaged', why: pointed };
+      return { kind: 'unmanaged', why: pointed.why };
     }
+    recordWritten = pointed.entry;
   }
 
   const recorded = updateState(
