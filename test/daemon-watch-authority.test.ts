@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WatchSources } from '../src/commands/watch.ts';
@@ -14,6 +14,8 @@ import { mintWatchEpoch } from '../src/watch/epoch.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
 import type { Live } from '../src/status/compare.ts';
 import type { Machine } from '../src/watch/machine.ts';
+import { readTeamConfig } from '../src/file/team-config.ts';
+import { intoRegistry, underRegistry } from './helpers/registry-team.ts';
 
 const MIN = 60_000;
 const NOW = Date.parse('2026-10-20T05:00:00Z');
@@ -192,6 +194,42 @@ describe('the watchdog file binding', () => {
     // The claim is the route's own record and outlives the run: the next daemon start finds it.
     expect(readState(agents).sessions.crew?.watchdog).toEqual({ file: teamFile });
     expect(record()).toBeUndefined();
+  });
+
+  test('a registry-only route binds the identity the registry keys, and the watch runs', async () => {
+    // The default team: its definition was imported and `.agents/team.yaml` retired. The loader
+    // still resolves the conventional path; nothing stands at it, and the binding must bind by
+    // the identity that path resolves to rather than by a file's existence. The suite preload
+    // reads the file source, so this scene is a registry machine for its whole life — the watch
+    // loop reads the team itself on every pass, through that same source resolution.
+    await underRegistry(async () => {
+      intoRegistry(root, home);
+      if (existsSync(teamFile)) rmSync(teamFile);
+      const loaded = readTeamConfig(root, { home, source: 'registry' });
+      if (!loaded.ok) throw new Error(JSON.stringify(loaded.errors));
+      expect(loaded.source).toBe('registry');
+      expect(existsSync(loaded.path)).toBe(false);
+      const logs: string[] = [];
+      const clock = { at: NOW };
+      const build = hostedWatchAuthority({
+        route: route(), teamFile: loaded.path, log: (text) => logs.push(text), now: () => new Date(clock.at), base: quietSources(clock),
+      });
+      expect(effectsOf(build)).toBe('blocked');
+      expect(build.standby).toBeUndefined();
+      const host = machine(build, clock);
+      try {
+        await waitUntil(() => host.state().cycles === 1);
+        expect(host.state()).toMatchObject({ phase: 'running', cycles: 1, failures: 0 });
+        expect(readState(agents).sessions.crew?.watchdog).toEqual({ file: loaded.path });
+        expect(record()?.epoch).toMatch(/^watch_[0-9a-f]{32}$/);
+        // The claim is this route's identity, not a refusal of its own record, and the run never
+        // reads the missing file as a changed binding.
+        expect(logs.some((line) => line.includes('the hosted watch is blocked'))).toBe(false);
+        expect(logs.some((line) => line.includes('is not this route'))).toBe(false);
+      } finally {
+        await host.stop('done');
+      }
+    });
   });
 
   test('a claimed binding admits the watch\'s own effects under the pane-less watch identity', async () => {
