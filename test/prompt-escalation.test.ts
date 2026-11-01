@@ -67,6 +67,10 @@ const RULE = '─'.repeat(40);
 const STATUS = '  main · …/acme · Opus 5.5 · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on (shift+tab to cycle)';
 const busy = `✶ Transfiguring… (9m 34s · ↓ 64.5k tokens)\n\n${RULE}\n❯ \n${RULE}\n${STATUS}\n`;
 const permission = 'Bash command\n\n  chmod +x run.sh\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently\n\nEsc to cancel · Tab to amend\n';
+// The two answerable dialogs a seat can also be held at, as the project's captures drew them.
+const plan = readFileSync(new URL('./fixtures/claude-code/2.1.289/permission-plan-wide-plain.txt', import.meta.url), 'utf8');
+const held = readFileSync(new URL('./fixtures/claude-code/2.1.302/held.txt', import.meta.url), 'utf8');
+const PLAN_TEXT = 'Claude has written up a plan and is ready to execute. Would you like to proceed?';
 
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 
@@ -250,6 +254,41 @@ describe("a non-lead's prompt climbs when the lead has not cleared it within N",
     expect(published.length).toBe(1);
     expect(published[0]!.kind).toBe('seat.prompt-escalated');
     expect(published[0]!.to).toBe('owner');
+  });
+});
+
+describe('a plan approval and a confirmation climb on the same clock as any prompt', () => {
+  test('a worker held at a plan approval climbs after the window, in that dialog’s own words', () => {
+    const memory = newMemory();
+    const stuck = live({ 'worker-1': { status: 'blocked', screen: plan } });
+    const first = at(stuck, 0, memory);
+    expect(first.reports.map((report) => report.key)).toEqual([expect.stringMatching(/^plan approval:worker-1:[0-9a-f]{12}$/)]);
+    expect(first.reports[0]!.text).toBe(`worker-1 waits at a plan approval prompt — "${PLAN_TEXT}": the operator's to act on`);
+    expect(at(stuck, 5 * MIN - 1, memory).reports).toEqual([]);
+    expect(at(stuck, 5 * MIN, memory).reports).toEqual([{
+      key: 'prompt-escalated:worker-1',
+      text: "worker-1 is still at a plan approval prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told",
+      to: 'owner',
+    }]);
+    expect(at(stuck, 60 * MIN, memory).reports).toEqual([]);
+  });
+
+  test('a confirmation climbs the same way, and a change of kind starts a new clock', () => {
+    const memory = newMemory();
+    const confirmed = live({ 'worker-1': { status: 'idle', screen: held } });
+    const first = at(confirmed, 0, memory);
+    expect(first.reports.map((report) => report.key)).toEqual([expect.stringMatching(/^confirmation:worker-1:[0-9a-f]{12}$/)]);
+    // Two minutes at the confirmation, then the operator clears it and the seat is held at a plan
+    // approval instead: the kind changed, so the confirmation's spell never climbs and the plan
+    // approval's clock starts at its own first sight.
+    const planScreen = live({ 'worker-1': { status: 'blocked', screen: plan } });
+    at(planScreen, 2 * MIN, memory);
+    expect(at(planScreen, 6 * MIN, memory).reports).toEqual([]);
+    expect(at(planScreen, 7 * MIN, memory).reports).toEqual([{
+      key: 'prompt-escalated:worker-1',
+      text: "worker-1 is still at a plan approval prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told",
+      to: 'owner',
+    }]);
   });
 });
 
