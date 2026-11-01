@@ -43,12 +43,17 @@ owner delivery (`src/bus/owner.ts`), and the Unix domain socket service at `.age
   keeps the checkpoint, while a trim does not. The process keeps its checkpoint in memory, and a
   read that verified every retained record also writes it beside the log
   (`verify-checkpoint.json`: format, key print, retained-file count, highest verified sequence,
-  digest), atomically. The file is written only when nothing in the read was unverified, because
-  it cannot record which prefix records were; and it is a candidate, never an answer — a different
-  key, another retained-file count, or a digest over different bytes is a miss, and the read
-  verifies in full. So a restart or another process verifies only the records appended since the
-  last clean read, and a record altered earlier is still caught. An unreadable, partial, or
-  foreign checkpoint file is ignored, never repaired into trust.
+  digest, and the store it describes), atomically. The checkpoint is trusted local state: every
+  field is authenticated under the message key in a domain of their own (`teamcli bus
+  verify-checkpoint v1`), but a reader of that key is outside the containment model (§6), and a
+  stale or mismatching checkpoint is a miss. So a digest recomputed over altered bytes with the
+  other fields copied does not verify; with no key there is no checkpoint trust. The file is
+  written only when nothing in the read was unverified, because it cannot record which prefix
+  records were; and it is a candidate, never an answer — a signature that does not verify, a
+  different key or store, another retained-file count, or a digest over different bytes is a
+  miss, and the read verifies in full. So a restart or another process verifies only the records
+  appended since the last clean read, and a record altered earlier is still caught. An unreadable,
+  partial, or foreign checkpoint file is ignored, never repaired into trust.
 - **No body, no instructions**: An event carries `v: 1`, `seq`, `ts`, `kind`, `session`,
   `record_id`, and optional routing/context tokens (`from`, `to`, `seat`, `subject`, `thread`,
   `via`, `reason`, `prompt`, `rule`). It never carries a message body.

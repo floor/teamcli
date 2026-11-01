@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -12,7 +13,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { appendEvent, EVENT_LOG_KEPT, eventLogPath } from '../src/bus/log.ts';
+import { appendEvent, EVENT_LOG_KEPT, eventLogPath, readEvents } from '../src/bus/log.ts';
 import { messageKeyOf, messageKeyPath } from '../src/store/keys.ts';
 
 // The persisted verification checkpoint (docs/internal/events.md §1, "Incremental verification"):
@@ -177,6 +178,41 @@ describe('persisted verification checkpoint: mismatches are misses, never trust'
     expect(next).toMatchObject({ ok: true, full: false, checked: 0, seqs: [1, 2] });
   }, 20_000);
 
+  test('a recomputed digest over an altered record with the other fields copied is a miss', async () => {
+    const { root, home } = makeScratch();
+    for (const id of ['m-1', 'm-2', 'm-3']) appendOne(root, home, id);
+    expect((await readInFreshProcess(root, home)).full).toBe(true);
+    const genuine = storedCheckpoint(root, home);
+
+    // The same-user forgery the reviewer probed: edit a record without signing it, recompute the
+    // digest exactly as the checkpoint does (each parsed line's raw bytes plus a newline, in
+    // retained order), and copy every other field the read checks — key print, retained count,
+    // sequence, and the genuine signature — from the clean file.
+    const path = eventLogPath('acme', root, home);
+    const lines = readFileSync(path, 'utf8').trimEnd().split('\n');
+    const changed = JSON.parse(lines[0]!) as { payload: Record<string, unknown> };
+    changed.payload.record_id = 'forged-without-signing';
+    lines[0] = JSON.stringify(changed);
+    writeFileSync(path, `${lines.join('\n')}\n`);
+    const hash = createHash('sha256');
+    for (const line of lines) hash.update(line, 'utf8').update('\n', 'utf8');
+    const forged = { ...genuine, digest: hash.digest('hex') };
+    expect(forged.digest).not.toBe(genuine.digest);
+    writeFileSync(checkpointPath(root, home), `${JSON.stringify(forged)}\n`);
+
+    // Every value the digest, key print, and retained count checks would accept now matches, so
+    // only the signature can tell: it covers the recomputed digest and the store, does not
+    // verify, and the read that follows verifies in full and refuses the altered record.
+    const caught = await readInFreshProcess(root, home);
+    expect(caught).toMatchObject({ ok: true, full: true, checked: 3, unverified: 1, seqs: [2, 3], ids: ['m-2', 'm-3'] });
+
+    // That read verified nothing clean, so it did not promote the forgery: the file stays exactly
+    // as the forger wrote it, and the next read is a full verify too.
+    expect(storedCheckpoint(root, home)).toEqual(forged);
+    const again = await readInFreshProcess(root, home);
+    expect(again).toMatchObject({ ok: true, full: true, unverified: 1, seqs: [2, 3] });
+  }, 20_000);
+
   test('an unreadable checkpoint file is ignored and replaced by the one the read earned', async () => {
     const { root, home } = makeScratch();
     appendOne(root, home, 'm-1');
@@ -223,5 +259,30 @@ describe('persisted verification checkpoint: mismatches are misses, never trust'
     expect(lstatSync(checkpointPath(root, home)).isSymbolicLink()).toBe(false);
     expect(storedCheckpoint(root, home)).toEqual(stored);
     expect(JSON.parse(readFileSync(target, 'utf8'))).toEqual(stored);
+  }, 20_000);
+});
+
+describe('persisted verification checkpoint: the write never follows a planted temporary', () => {
+  test('a link planted at the old pid-named temporary is left in place and never written through', async () => {
+    const { base, root, home } = makeScratch();
+    appendOne(root, home, 'm-1');
+    const target = join(base, 'unrelated-sentinel');
+    writeFileSync(target, 'keep-this-exact\n');
+    // The name the old pid-based writer would have used. A writer that opened it would follow
+    // the link into the sentinel before renaming the temporary over the checkpoint.
+    const planted = `${checkpointPath(root, home)}.${String(process.pid)}.tmp`;
+    symlinkSync(target, planted);
+
+    expect((await readInFreshProcess(root, home)).full).toBe(true);
+    appendOne(root, home, 'm-2');
+
+    // This process verifies only the record appended past the checkpoint and publishes the grown
+    // one, so the write path runs; the planted link is not this write's own file.
+    const written = readEvents('acme', root, home);
+    expect(written).toMatchObject({ ok: true, full: false, checked: 1 });
+    expect(readFileSync(target, 'utf8')).toBe('keep-this-exact\n');
+    expect(lstatSync(checkpointPath(root, home)).isSymbolicLink()).toBe(false);
+    expect(storedCheckpoint(root, home).seq).toBe(2);
+    expect(lstatSync(planted).isSymbolicLink()).toBe(true);
   }, 20_000);
 });

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -460,21 +461,33 @@ describe('team answer', () => {
     expect(await runAnswer([...FILE, 'lead', 'trust'], orderedIo, ordered)).toBe(0);
     expect(atSend).toBe('trust-sent-recovery');
 
-    // The reviewer's injected write fault: the atomic temporary path is an existing
-    // directory, so the recovery write throws. No key may be sent, and the seat stays
-    // waiting-owner; once the fault is removed the command completes normally.
+    // The reviewer's injected write fault: the atomic write of the recovery state throws. No key
+    // may be sent, and the seat stays waiting-owner; once the fault is removed the command
+    // completes normally. The fault sits at the write seam because the temporary's name is
+    // random, so a file planted at a name guessed from the pid would never be the one the
+    // writer opens.
     wait(dir, 'lead');
-    const temporary = join(dir, `team.state.json.${process.pid}.tmp`);
-    mkdirSync(temporary);
-    const faulted = fake(home, root, trust, 'cursor');
-    const faultedIo = testIo(root, { kind: 'owner' });
-    expect(await runAnswer([...FILE, 'lead', 'trust'], faultedIo, faulted)).toBe(1);
-    expect(faulted.keys).toEqual([]);
-    expect(faulted.typed).toEqual([]);
-    expect(faultedIo.err).toBe('lead: its recovery state could not be recorded\n');
-    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
-    expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain('answer [owner] lead: refused trust: state');
-    rmdirSync(temporary);
+    const originalWrite = fs.writeFileSync;
+    const statePrefix = join(dir, 'team.state.json.');
+    const failing = spyOn(fs, 'writeFileSync').mockImplementation(((...args: Parameters<typeof fs.writeFileSync>) => {
+      const target = args[0];
+      if (typeof target === 'string' && target.startsWith(statePrefix) && target.endsWith('.tmp')) {
+        throw new Error('synthetic state write failure');
+      }
+      return originalWrite(...args);
+    }) as typeof fs.writeFileSync);
+    try {
+      const faulted = fake(home, root, trust, 'cursor');
+      const faultedIo = testIo(root, { kind: 'owner' });
+      expect(await runAnswer([...FILE, 'lead', 'trust'], faultedIo, faulted)).toBe(1);
+      expect(faulted.keys).toEqual([]);
+      expect(faulted.typed).toEqual([]);
+      expect(faultedIo.err).toBe('lead: its recovery state could not be recorded\n');
+      expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+      expect(readFileSync(join(dir, 'team.log'), 'utf8')).toContain('answer [owner] lead: refused trust: state');
+    } finally {
+      failing.mockRestore();
+    }
 
     const again = fake(home, root, trust, 'cursor');
     const againIo = testIo(root, { kind: 'owner' });
