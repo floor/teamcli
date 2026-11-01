@@ -16,7 +16,7 @@ import type { Caller } from '../src/caller.ts';
 import type { CheckSources } from '../src/check/team.ts';
 import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
-import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
+import { runAnswer, type AnswerHost, type PaneReading } from '../src/commands/answer.ts';
 import { runArchive, writeArchive } from '../src/commands/archive.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
@@ -117,6 +117,9 @@ import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { profileFor } from '../src/profiles/index.ts';
+import type { Profile } from '../src/profiles/profile.ts';
+import type { QuestionAnswerRecord } from '../src/profiles/question-answer.ts';
 import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
@@ -3401,6 +3404,39 @@ seats:
 `;
 }
 
+/** The same team with a stopped worker: the send path refuses a stopped receiving seat before
+ *  any leg, which is how a dismissal's owed decision line is made to fail. */
+function cursorTeamWithStoppedWorker(lobby: string, root: string, home: string): string {
+  trustGranted(home, root);
+  return `format: 1
+project: acme
+coordinator: lead
+operator: lead
+session: acme
+workspace:
+  mode: shared
+trust:
+  - ${lobby}
+  - ${root}
+seats:
+  - role: coordinator
+    name: lead
+    cli: cursor
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent
+  - role: worker
+    name: worker
+    cli: cursor
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent
+    stopped: true
+`;
+}
+
 function cursorBox(text: string): string {
   const lines = text.split('\n');
   const body = [`  → ${lines[0] ?? ''}`, ...lines.slice(1).map((line) => `    ${line}`)].join('\n');
@@ -3451,7 +3487,33 @@ async function answered(place: Place, argv: string[], caller: Caller, host: Answ
   return { code, out: io.out, err: io.err };
 }
 
-scene('answer.usage', async (place) => show(await answered(place, [], owner, answerHost(place, '')), 'a seat and trust are required'));
+const QUESTION_VERSION = '2026.10.01-14929f9';
+const QUESTION_TEXT = 'Which name do you want to use?';
+
+/** The question-answer records a shipped profile does not carry yet: the scene's own, on the
+ *  shipped profile's other fields. The answer seam is the one place a profile's reading and
+ *  records arrive. */
+function questionProfile(records: QuestionAnswerRecord[] = [{ kind: 'question', key: 'escape', from: QUESTION_VERSION, to: QUESTION_VERSION }]) {
+  return (cli: string): Profile | null => {
+    const shipped = profileFor(cli);
+    return shipped ? { ...shipped, questionAnswers: records } : null;
+  };
+}
+
+/** A seat waiting at a question dialog, on the pane the host lists it at. */
+function waitingQuestion(place: Place, seat: string, pane: string): void {
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { [seat]: { stage: 'launched', pane, waiting: { state: 'waiting-owner', classification: 'question' } } }, worktrees: {} };
+  });
+}
+
+/** One fresh reading of a pane: the kind word the screen shows, and the question dialog it
+ *  reads or none. */
+function questionReading(kind: string, text: string | null): PaneReading {
+  return { kind, dialog: text === null ? { dialog: null } : { dialog: 'question', text } };
+}
+
+scene('answer.usage', async (place) => show(await answered(place, [], owner, answerHost(place, '')), 'a seat and trust or question are required'));
 scene('answer.configuration', async (place) => show(await answered(place, ['lead', 'trust', '--file', 'missing.yaml'], owner, answerHost(place, '')), 'no team file'));
 scene('answer.caller', async (place) => {
   const lobby = lobbyDir(place.home);
@@ -3605,6 +3667,70 @@ scene('answer.ready', async (place) => {
   });
   const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
+});
+scene('answer.question', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  host.sendHost = sendHost(place);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'answered question (question)');
+});
+scene('answer.delivery', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeamWithStoppedWorker(lobby, place.root, place.home));
+  waitingQuestion(place, 'worker', 'pane2');
+  const host = answerHost(place, '');
+  host.agents = () => [{ name: 'worker', pane: 'pane2', workspace: 'w1' }];
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  host.sendHost = sendHost(place);
+  return show(await answered(place, ['worker', 'question', '--file', place.file], owner, host), 'could not be delivered');
+});
+scene('answer.disagree', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  let reads = 0;
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', reads++ === 0 ? 'First name?' : 'Second name?');
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'do not agree');
+});
+scene('answer.permission', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('permission', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'permission prompt, which is never answered');
+});
+scene('answer.login', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('login', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'login prompt, which is never answered');
+});
+scene('answer.not-a-question', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('idle', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'not at a question, plan approval or confirmation dialog');
 });
 
 // These returns are reached when a second validation disagrees with the first, or when no data

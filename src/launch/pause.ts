@@ -116,11 +116,21 @@ function promptLine(seat: string, at: string): string {
   return `${seat} is waiting at ${at}: [o] open pane, [s] skip seat, [q] stop cleanly`;
 }
 
-/** What the record and prompt show: the classification, or the recovery `answer` left behind. */
-type View = { classification: string; recovery: boolean };
+/** What the record and prompt show: the classification, or the recovery `answer` left behind.
+ *  A recovery is never cleared here: the command that pressed the key completes it. */
+type View = { classification: string; recovery?: 'trust' | 'question' };
 
 function display(view: View): string {
-  return view.recovery ? 'trust sent; recovery required' : view.classification;
+  if (view.recovery === 'trust') return 'trust sent; recovery required';
+  if (view.recovery === 'question') return 'question sent; recovery required';
+  return view.classification;
+}
+
+/** The view a recovery record shows, by its state word; null for any other record. */
+function recoveryView(waiting: WaitingRecord): View | null {
+  if (waiting.state === 'trust-sent-recovery') return { classification: waiting.classification, recovery: 'trust' };
+  if (waiting.state === 'question-sent-recovery') return { classification: waiting.classification, recovery: 'question' };
+  return null;
 }
 
 /** The repair for a waiting record whose pane is gone or no longer holds the seat: the team
@@ -340,12 +350,13 @@ export async function runPause(input: PauseInput, host: PauseHost): Promise<Paus
   // this entry writes only when it is the first to record the seat, so nothing here can ever
   // overwrite a recovery a concurrent `team answer` just wrote.
   let view: View;
-  if (input.recorded?.state === 'trust-sent-recovery') {
-    view = { classification: input.recorded.classification, recovery: true };
+  const recovered = input.recorded ? recoveryView(input.recorded) : null;
+  if (recovered) {
+    view = recovered;
   } else if (input.recorded) {
-    view = { classification: input.classification, recovery: false };
+    view = { classification: input.classification };
   } else {
-    view = { classification: input.classification, recovery: false };
+    view = { classification: input.classification };
     host.write((prior) => ({
       state: 'waiting-owner',
       classification: input.classification,
@@ -441,7 +452,7 @@ async function open(input: PauseInput, host: PauseHost): Promise<Outcome> {
 
   const deadline = host.now() + host.idleTimeout * 1000;
   for (;;) {
-    if (host.now() >= deadline) return { kind: 'view', view: { classification: 'timeout', recovery: false } };
+    if (host.now() >= deadline) return { kind: 'view', view: { classification: 'timeout' } };
     await host.sleep(IDLE_POLL_MS);
     const held = host.lock();
     if ('held' in held) continue;
@@ -450,8 +461,9 @@ async function open(input: PauseInput, host: PauseHost): Promise<Outcome> {
       if (state?.stage === 'ready') return { kind: 'done', result: ready(input.seat) };
       const problem = waitingProblem(host, proofOf(input, state));
       if (problem) return leftOut(problem);
-      if (state?.waiting?.state === 'trust-sent-recovery') {
-        return { kind: 'view', view: { classification: state.waiting.classification, recovery: true } };
+      if (state?.waiting) {
+        const recovery = recoveryView(state.waiting);
+        if (recovery) return { kind: 'view', view: recovery };
       }
       const kind = host.screen();
       if (kind === 'idle') {
@@ -459,7 +471,7 @@ async function open(input: PauseInput, host: PauseHost): Promise<Outcome> {
         return { kind: 'done', result: { kind: 'idle' } };
       }
       if (kind === 'working') continue;
-      return { kind: 'view', view: { classification: kind, recovery: false } };
+      return { kind: 'view', view: { classification: kind } };
     } finally {
       held.release();
     }
@@ -507,8 +519,9 @@ async function refresh(input: PauseInput, host: PauseHost, view: View): Promise<
     if (state?.stage === 'ready') return { kind: 'done', result: ready(input.seat) };
     const problem = waitingProblem(host, proofOf(input, state));
     if (problem) return leftOut(problem);
-    if (state?.waiting?.state === 'trust-sent-recovery') {
-      return { kind: 'view', view: { classification: state.waiting.classification, recovery: true } };
+    if (state?.waiting) {
+      const recovery = recoveryView(state.waiting);
+      if (recovery) return { kind: 'view', view: recovery };
     }
     const kind = host.screen();
     if (kind === 'idle') {
@@ -517,7 +530,7 @@ async function refresh(input: PauseInput, host: PauseHost, view: View): Promise<
       return { kind: 'done', result: { kind: 'idle' } };
     }
     if (kind === 'working') return { kind: 'view', view };
-    return { kind: 'view', view: { classification: kind, recovery: false } };
+    return { kind: 'view', view: { classification: kind } };
   } finally {
     lock.release();
   }

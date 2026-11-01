@@ -114,6 +114,19 @@ function waitingView(
       },
     };
   }
+  // A question key was pressed: the dialog is dismissed, and the decision line may still be
+  // owed. The answer command completes it without a relaunch, so its own word is the repair.
+  if (waiting.state === 'question-sent-recovery') {
+    return {
+      state: 'question sent; recovery required',
+      stored: 'question-sent-recovery',
+      difference: {
+        what: `${name}: question sent; recovery required`,
+        repair: `team answer ${name} question`,
+        needs: 'approve',
+      },
+    };
+  }
   const phrase = `waiting for owner (${waiting.classification})`;
   const isTrust = waiting.classification === 'trust';
   const answer = trust && isTrust;

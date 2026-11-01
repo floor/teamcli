@@ -470,6 +470,10 @@ function trustFindings(team: TeamFile, root: string, dir: string, session: strin
       findings.push({ level: 'warn', text: `${name}: trust sent; recovery required; a lead runs team up` });
       continue;
     }
+    if (waiting.state === 'question-sent-recovery') {
+      findings.push({ level: 'warn', text: `${name}: question sent; recovery required; a lead runs team answer ${name} question` });
+      continue;
+    }
     if (waiting.state !== 'waiting-owner' || waiting.classification !== 'trust') continue;
     const pane = recorded.pane;
     if (!pane) {

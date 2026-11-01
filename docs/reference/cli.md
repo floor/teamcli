@@ -162,8 +162,9 @@ Hidden: no
 Usage:
 
     team answer <seat> trust [--session <name>] [--file <path>] [--json]
+    team answer <seat> question [--session <name>] [--file <path>] [--json]
 
-Literal: `trust`
+Literal: `question`, `trust`
 
 ### Who may run it
 

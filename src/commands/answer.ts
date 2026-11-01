@@ -20,33 +20,58 @@ import { logLine } from '../log.ts';
 import { contextLine, hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
 import { profileFor } from '../profiles/index.ts';
 import { type Profile } from '../profiles/profile.ts';
+import { ANSWER_KEYS, questionAnswerFor, type QuestionAnswerRecord } from '../profiles/question-answer.ts';
 import { extractFolder, isEligible, keyOf, labelMatches, versionMatches, type TrustRecord } from '../profiles/trust-answer.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
+import { isDialogKind, readDialog, type DialogKind, type DialogReading } from '../watch/dialog.ts';
 import { readScreen } from '../watch/screen.ts';
+import { realHost as realSendHost, runSend, type SendHost } from './send.ts';
 
 export const USAGE = `Usage: team answer <seat> trust [--session <name>] [--file <path>] [--json]
+       team answer <seat> question [--session <name>] [--file <path>] [--json]
 
-Presses the one recorded key of a folder-trust dialog, and only that key. Every check has
-to pass on two fresh reads of the pane, and the folder must be the lobby on three readings
-at once: the path the screen shows, the folder the pane itself reports working in, and the
-lobby's parent directory. <seat> names one seat of the team file; trust is the only
-dialog word. No option takes a key, a text, or another dialog. The pane is herdr's one agent
-of that name; a pane recorded in the state selects nothing. A name the file does not carry
-is left as it is, and two agents of the name send nothing. --session is the owner's alone,
-and so is --file: each is refused before the flagged session or file is read. The answer
-opens on the team's context line and closes on <seat>: answered trust (<folder>). A refused
-or incomplete answer names its reason on stderr, and a recovery stays recorded for the next
-answer to observe. --json prints one document instead of the lines: {format, dry_run,
-status, action_summary, project, session, seat, pane, dialog, state, folder?}. A run that
-exits 1 or 2 writes the structured error document instead — {error: {id, message, repair}} —
-and stderr stays empty.
+Presses the one recorded key of a dialog, and only that key. trust answers a folder-trust
+dialog, and the folder must be the lobby on three readings at once: the path the screen
+shows, the folder the pane itself reports working in, and the lobby's parent directory.
+question dismisses a question, plan approval or confirmation dialog with that CLI's recorded
+let-me-type-or-cancel key, then sends the seat one line through the ordinary send path and
+never a keystroke at a choice: decide within your rules or ask your orchestrator with team
+send. A permission, login or trust-to-run-a-command prompt is never answered. Every check
+has to pass on two fresh reads of the pane, and the question word's two reads must agree on
+the dialog and on its text. <seat> names one seat of the team file. No option takes a key,
+a text, or another dialog. The pane is the terminal host's one agent of that name; a pane
+recorded in the state selects nothing. A name the file does not carry is left as it is, and
+two agents of the name send nothing. --session is the owner's alone, and so is --file: each
+is refused before the flagged session or file is read. The answer opens on the team's
+context line and closes on <seat>: answered trust (<folder>) or <seat>: answered question
+(<dialog>). A refused or incomplete answer names its reason on stderr, and a recovery stays
+recorded for the next answer to observe. --json prints one document instead of the lines:
+{format, dry_run, status, action_summary, project, session, seat, pane, dialog,
+dialog_kind?, state, folder?}. A run that exits 1 or 2 writes the structured error document
+instead — {error: {id, message, repair}} — and stderr stays empty.
 
-Exits 0 when the trust dialog is answered and the seat is ready, 1 when the answer is
-refused or does not complete, 2 when the invocation or team file can't be read.
+Exits 0 when the dialog is answered and the seat is ready, 1 when the answer is refused or
+does not complete, 2 when the invocation or team file can't be read.
 `;
 
 const OUTSIDE = 'ask the owner to add this exact folder to trust and answer through team up';
+
+/** The line a question answer puts into the seat's own conversation, word for word: the seat
+ *  decides within its rules, or asks its orchestrator over the bus. Nothing is typed at a
+ *  choice, and no dialog option is ever selected. */
+const QUESTION_LINE = 'decide within your rules or ask your orchestrator with team send';
+
+/** The keys a question answer may press: the CLI's recorded let-me-type-or-cancel key, and only
+ *  the names of this closed set. None of them selects a choice. The set is the one
+ *  src/profiles/question-answer.ts parses; a record outside it refuses `answer.action`. */
+const QUESTION_KEYS: ReadonlySet<string> = new Set(ANSWER_KEYS);
+
+/** Whether a dialog kind — a stored classification, or a recovery record's keepsake — is one the
+ *  question word answers: `classificationOf` records a screen kind as itself. */
+function answerableClassification(value: string | undefined): value is DialogKind {
+  return value !== undefined && isDialogKind(value);
+}
 
 export type AnswerHost = {
   version(binary: string): string | null;
@@ -66,7 +91,22 @@ export type AnswerHost = {
   sleep(ms: number): Promise<void>;
   home: string;
   standing(root: string): Standing;
+  /** The send command's own host: the decision line reaches the seat's conversation through the
+   *  ordinary send path, never through a keystroke. Absent, the real one. */
+  sendHost?: SendHost;
+  /** A seat's CLI profile; absent, the shipped profile data. A scene stands in the records a
+   *  release's shipped data does not carry yet. */
+  profile?(cli: string): Profile | null;
+  /** One fresh reading of a pane for the question word: the screen's kind word, and the dialog
+   *  reading when the screen is one of the answerable three. Absent, the shipped screen data
+   *  reads it. */
+  reading?(cli: string, screen: string | undefined): PaneReading;
 };
+
+/** One fresh reading of a pane for the question word: the screen's kind word — the vocabulary of
+ *  `readScreen`, plus any word a host reports — and the dialog reading (its kind and its text,
+ *  or none). */
+export type PaneReading = { kind: string; dialog: DialogReading };
 
 export const realHost: AnswerHost = {
   version(binary) {
@@ -87,13 +127,14 @@ export const realHost: AnswerHost = {
   type: (session, pane, text) => typeText(pane, text, session),
   enter: (session, pane) => pressEnter(pane, session),
   processInfo: (session, pane) => paneProcesses(pane, session),
+  sendHost: realSendHost,
   now: () => new Date(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   home: homedir(),
   standing: (root) => approvalStanding(root, homedir()),
 };
 
-type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery' | 'human';
+type Reason = 'caller' | 'policy' | 'state' | 'screen' | 'version' | 'label' | 'folder' | 'action' | 'process' | 'idle' | 'rule delivery' | 'human' | 'permission' | 'login' | 'not-a-question' | 'disagree';
 
 /** A refusal class that is also a contract row: every class word is the row id's last word. */
 type RefusalClass = Exclude<Reason, 'idle' | 'rule delivery'>;
@@ -115,6 +156,10 @@ function refusedClass(reason: RefusalClass, message: string): Refusal {
 
 type Seen = { record: TrustRecord; version: string; folder: string };
 
+/** One reading of a pane for the question word: the record this version answers, the printed
+ *  version it was chosen from, and the dialog the two reads agreed on. */
+type SeenQuestion = { record: QuestionAnswerRecord; version: string; kind: DialogKind; text: string };
+
 const answer: Command = (argv, io) => runAnswer(argv, io, realHost);
 export default answer;
 
@@ -125,8 +170,8 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   const json = hasJsonFlag(argv);
   const seatName = args.rest[0];
   const dialog = args.rest[1];
-  if (args.error || args.rest.length !== 2 || !seatName || dialog !== 'trust') {
-    const message = args.error ?? (dialog && dialog !== 'trust' ? `unknown dialog "${dialog}"` : 'a seat and trust are required');
+  if (args.error || args.rest.length !== 2 || !seatName || (dialog !== 'trust' && dialog !== 'question')) {
+    const message = args.error ?? (dialog && dialog !== 'trust' && dialog !== 'question' ? `unknown dialog "${dialog}"` : 'a seat and trust or question are required');
     return usage(io, json, message);
   }
   const detached = detachedRefusal(walkCaller(io), { who: 'the owner or the orchestrator from its own seat', where: 'a terminal outside herdr or its own seat' });
@@ -170,6 +215,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
           class: 'caller',
           message: `team answer: ${sessionOwnerRefusal(walked)}`,
         },
+        dialog,
       );
     }
   }
@@ -193,7 +239,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
   const session = judged.session;
   const who = logTag(caller);
 
-  const refused = (reason: Refusal): number => refuse(io, json, dir, who, seatName, host, reason);
+  const refused = (reason: Refusal): number => refuse(io, json, dir, who, seatName, host, reason, dialog);
 
   const callerProblem = callerProblemOf(caller, team, seatName, standingOf(dir, session, caller));
   if (callerProblem) return refused(callerProblem);
@@ -233,9 +279,13 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     }
     const agents = host.agents(session);
     const named = agents?.filter((item) => item.name === seatName) ?? [];
+    // A waiting record names the pane it waits at, and a new seat pauses at its dialog before
+    // the rename step names it: the unnamed agent on that recorded pane is the seat. The check
+    // below decides whether the dialog is the one this word answers; the record is only the hint
+    // that places the agent, and the process identity is checked before any key is sent.
     const onRecorded =
       named.length === 0 &&
-      recorded?.waiting?.classification === 'trust' &&
+      recorded?.waiting !== undefined &&
       recorded.pane !== undefined
         ? agents?.find((item) => item.pane === recorded.pane && !item.name)
         : undefined;
@@ -250,8 +300,106 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
     const workspace = agent.workspace;
     const waiting = recorded?.waiting;
     if (waiting?.manual === true) return refused(refusedClass('state', `${seatName}: the owner has the pane open`));
+
+    if (dialog === 'question') {
+      // A recovery is the other word's to complete: only the command that pressed the key
+      // finishes it, and this word presses none.
+      if (waiting?.state === 'trust-sent-recovery') {
+        return refused(refusedClass('state', `${seatName}: a trust answer was sent; complete it with team answer ${seatName} trust`));
+      }
+      // The decision line is put into the seat's own conversation with the ordinary send path,
+      // and that path loads its team from the folder this run was started in. Before a key is
+      // pressed, that team must be this one and the seat must be judged in the file's own
+      // session: otherwise the line would reach another team's — or another session's — seat
+      // of this name, after this pane's dialog had already been dismissed.
+      const sendPath = sendPathProblem(io, host, root, session, team);
+      if (sendPath !== null) return configuration(io, json, sendPath);
+      if (waiting?.state === 'question-sent-recovery') {
+        // The dialog is dismissed and the decision line may still be owed: deliver it, and
+        // never a second key. The kind the recovery kept names the dialog in the summary.
+        if (!answerableClassification(waiting.dialog)) {
+          return refused(refusedClass('state', `${seatName}: its recovery does not name a dialog this version answers`));
+        }
+        if (!(await deliverQuestion(io, host, seatName))) {
+          logLine(dir, 'answer', who, `${seatName}: question sent; delivery required`, host.now());
+          return deliveryFailure(io, json, `${seatName}: the decision line could not be delivered; recovery required`);
+        }
+        return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, { word: 'question', dialog: waiting.dialog }, rulesOriginOf(loaded.source));
+      }
+      // The waiting state is the gate; the screen is what names the dialog. A record at a
+      // permission, login or trust screen reaches the reading below and is refused there with
+      // its own row — never by a generic state sentence, and never answered.
+      if (waiting?.state !== 'waiting-owner') {
+        return refused(refusedClass('state', `${seatName}: it is not waiting at a question, plan approval or confirmation dialog`));
+      }
+      const cli = configured.cli;
+      const profile = host.profile ? host.profile(cli) : profileFor(cli);
+      const checked = inspectQuestion(seatName, host, session, pane, profile, recorded?.launched);
+      if ('class' in checked) return refused(checked);
+      const again = inspectQuestion(seatName, host, session, pane, profile, recorded?.launched);
+      if ('class' in again) return refused(again);
+      // Two fresh reads, not one: a pane that changed between them is refused, never answered.
+      if (
+        again.kind !== checked.kind ||
+        again.text !== checked.text ||
+        again.record.kind !== checked.record.kind ||
+        again.record.key !== checked.record.key ||
+        again.record.from !== checked.record.from ||
+        again.record.to !== checked.record.to
+      ) {
+        return refused(refusedClass('disagree', `${seatName}: the two fresh reads of the pane do not agree on the dialog`));
+      }
+      // The key is the CLI's recorded let-me-type-or-cancel key, and the closed set holds no
+      // choice: a record outside it is refused, never sent.
+      if (!QUESTION_KEYS.has(checked.record.key)) {
+        return refused(refusedClass('action', `${seatName}: the recorded key is not one this version sends`));
+      }
+      // The recovery intent is on disk before the key, exactly as the trust word writes it: a
+      // crash between the two leaves a recovery that may never have sent (a retry only
+      // observes), never a waiting-owner whose retry presses a second time.
+      if (!recordRecovery(dir, session, seatName, {
+        state: 'question-sent-recovery',
+        classification: checked.kind,
+        dialog: checked.kind,
+        sentAt: host.now().toISOString(),
+        version: checked.version,
+      }, pane, workspace)) {
+        return refused(refusedClass('state', `${seatName}: its recovery state could not be recorded`));
+      }
+      const keyProcessProblem = checkProcess(seatName, host, session, pane, recorded?.launched);
+      if (keyProcessProblem) {
+        // Nothing was sent, so the clean refusal puts the record back exactly as it was. A
+        // rollback that does not take leaves the recovery, the direction that only observes.
+        if (!restoreWaiting(dir, session, seatName, waiting, pane, workspace)) {
+          return refused({ id: keyProcessProblem.id, class: 'state', message: `${keyProcessProblem.message} (it is still recorded as a recovery)` });
+        }
+        return refused(keyProcessProblem);
+      }
+      let sent = false;
+      try {
+        sent = host.sendKey(session, pane, checked.record.key);
+      } catch {
+        sent = false;
+      }
+      if (!sent) {
+        logLine(dir, 'answer', who, `${seatName}: refused question: action`, host.now());
+        return recovery(io, json, `${seatName}: the key could not be sent; recovery required`);
+      }
+      // The dialog is gone. The one decision line goes into the seat's own conversation
+      // through the ordinary send path — its own admission, its own delivery order — and never
+      // as a keystroke at a choice.
+      if (!(await deliverQuestion(io, host, seatName))) {
+        logLine(dir, 'answer', who, `${seatName}: question answered; delivery required`, host.now());
+        return deliveryFailure(io, json, `${seatName}: the dialog was dismissed, but the decision line could not be delivered; recovery required`);
+      }
+      return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, { word: 'question', dialog: checked.kind }, rulesOriginOf(loaded.source));
+    }
+
+    if (waiting?.state === 'question-sent-recovery') {
+      return refused(refusedClass('state', `${seatName}: a question was sent; complete it with team answer ${seatName} question`));
+    }
     if (waiting?.state === 'trust-sent-recovery') {
-      return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, waiting.folder, rulesOriginOf(loaded.source));
+      return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, { word: 'trust', ...(waiting.folder === undefined ? {} : { folder: waiting.folder }) }, rulesOriginOf(loaded.source));
     }
     if (waiting?.state !== 'waiting-owner' || waiting.classification !== 'trust') {
       return refused(refusedClass('state', `${seatName}: it is not waiting at a trust dialog`));
@@ -307,7 +455,7 @@ export async function runAnswer(argv: string[], io: Io, host: AnswerHost): Promi
       logLine(dir, 'answer', who, `${seatName}: refused trust: action`, host.now());
       return recovery(io, json, `${seatName}: the key could not be sent; recovery required`);
     }
-    return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, checked.folder, rulesOriginOf(loaded.source));
+    return await finish(io, json, host, dir, session, who, seatName, team, configured, pane, workspace, root, standing, recorded?.launched, { word: 'trust', folder: checked.folder }, rulesOriginOf(loaded.source));
   } finally {
     lock.release();
   }
@@ -326,6 +474,60 @@ function callerProblemOf(caller: Caller, team: TeamFile, seat: string, at: SeatS
   if (caller.kind === 'unplaced') return refusedClass('caller', caller.reason);
   if (caller.kind === 'pane') return refusedClass('caller', describeCaller(caller));
   return refusedClass('caller', `${seat}: only the owner, or the orchestrator from its own seat, can answer`);
+}
+
+/**
+ * Why the one decision line could not reach this seat through the ordinary send path, or null.
+ * `runSend` loads its team from the folder this run was started in and addresses a declared
+ * seat in the team file's own session; this answer may have read another file (`--file`, or the
+ * file a pane was launched from). Answering one pane and then writing into another team's — or
+ * another session's — seat of the same name is the one thing this word must never do, so the
+ * two readings are compared before any key is pressed.
+ */
+function sendPathProblem(io: Io, host: AnswerHost, root: string, session: string, team: TeamFile): string | null {
+  const here = readTeamConfig(io.cwd, { home: host.home });
+  if (!here.ok) return `the decision line is sent from ${io.cwd}, which holds no readable team file`;
+  const mine = canonicalLanding(root);
+  const theirs = canonicalLanding(here.root);
+  if (mine === null || theirs === null || mine !== theirs) {
+    return `the decision line is sent with the team file of ${io.cwd}, which is not this seat's team`;
+  }
+  if (session !== team.session) {
+    return `the decision line is sent in the team's own session (${team.session}), and this run answered in ${session}`;
+  }
+  return null;
+}
+
+/**
+ * Puts the one decision line into the seat's own conversation through the ordinary send path:
+ * the send command's own admission, its own delivery order and its own record — and never a
+ * keystroke this command types at a dialog. The send's exit code is the whole answer: 0 when
+ * it delivered the line or recorded it for the seat, anything else when it refused.
+ */
+async function deliverQuestion(io: Io, host: AnswerHost, seat: string): Promise<boolean> {
+  try {
+    return await runSend([seat, QUESTION_LINE], quietIo(io), host.sendHost ?? realSendHost) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** The same io with both writers silenced: the send's own report is not this command's output,
+ *  and its only word here is the exit code. */
+function quietIo(io: Io): Io {
+  return { ...io, stdout: () => {}, stderr: () => {} };
+}
+
+/**
+ * The delivery report: the dialog is dismissed and the recovery stands, but the decision line
+ * did not reach the seat through the send path. The seat is not a recovery of the key — the key
+ * went out — so it is not the recovery row either: the line itself is what is owed.
+ */
+function deliveryFailure(io: Io, json: boolean, human: string): number {
+  if (json) writeJsonError(io, 'answer.delivery', human, null);
+  else io.stderr(`${human}\n`);
+  // exit: answer.delivery
+  return 1;
 }
 
 function checkProcess(
@@ -401,6 +603,46 @@ function inspect(
 }
 
 /**
+ * One fresh reading of the pane for the question word: the record this version answers, or the
+ * class that refused. Permission, login and trust are never answered, whatever was asked — a
+ * trust-to-run-a-command prompt is a permission prompt — and anything the reading cannot call a
+ * question, plan approval or confirmation is refused too.
+ */
+function inspectQuestion(
+  seat: string,
+  host: AnswerHost,
+  session: string,
+  pane: string,
+  profile: Profile | null,
+  launched?: LaunchedIdentity,
+): SeenQuestion | Refusal {
+  const say = (reason: 'version' | 'permission' | 'login' | 'not-a-question', text: string): Refusal =>
+    refusedClass(reason, `${seat}: ${text}`);
+  const problem = checkProcess(seat, host, session, pane, launched);
+  if (problem) return problem;
+  if (!profile) return say('version', 'this version has no question answer');
+  const screen = host.pane(session, pane);
+  const reading = host.reading
+    ? host.reading(profile.cli, screen)
+    : { kind: readScreen(profile.cli, screen).kind, dialog: readDialog(profile.cli, screen) };
+  if (reading.kind === 'permission') {
+    return say('permission', 'the pane is at a permission prompt, which is never answered');
+  }
+  if (reading.kind === 'login') return say('login', 'the pane is at a login prompt, which is never answered');
+  if (reading.kind === 'trust') {
+    return say('not-a-question', `the pane is at a trust dialog; team answer ${seat} trust answers it`);
+  }
+  const dialogs = reading.dialog;
+  if (dialogs.dialog === null) {
+    return say('not-a-question', 'the pane is not at a question, plan approval or confirmation dialog');
+  }
+  const printed = host.version(profile.binary);
+  const record = printed === null ? null : questionAnswerFor(profile.questionAnswers, dialogs.dialog, printed);
+  if (printed === null || record === null) return say('version', 'this version has no question answer');
+  return { record, version: printed, kind: dialogs.dialog, text: dialogs.text };
+}
+
+/**
  * Writes the recovery record and reads it back: the key is only sent when the intent is
  * on disk, not merely handed to a writer. A write fault, or a state that reads back
  * without the record, refuses the send.
@@ -416,7 +658,7 @@ function recordRecovery(
   try {
     writeWaiting(dir, session, name, waiting, pane, workspace);
     const back = readState(dir).sessions[session]?.seats[name]?.waiting;
-    return back?.state === 'trust-sent-recovery' && back.classification === 'trust';
+    return back?.state === waiting.state && back.classification === waiting.classification;
   } catch {
     return false;
   }
@@ -465,8 +707,9 @@ function writeWaiting(
 
 /**
  * The recovery report: a key the host did not take, and a sent key whose seat did not come
- * ready — idle prompt or rules — all leave the same `trust-sent-recovery` state, so all
- * answer with the same row and exit.
+ * ready — idle prompt or rules — all leave the word's own recovery state, so all answer with
+ * the same row and exit: `trust-sent-recovery` for the trust word, `question-sent-recovery`
+ * for the question word.
  */
 function recovery(io: Io, json: boolean, human: string): number {
   if (json) writeJsonError(io, 'answer.recovery', human, null);
@@ -490,10 +733,11 @@ function refuse(
   seat: string,
   host: AnswerHost,
   reason: Refusal,
+  word: 'trust' | 'question',
 ): number {
   // No directory means this folder had no team file to log beside. Writing the line would create
   // `.agents` and `team.log` wherever the command was run.
-  if (dir !== undefined) logLine(dir, 'answer', who, `${seat}: refused trust: ${reason.class}`, host.now());
+  if (dir !== undefined) logLine(dir, 'answer', who, `${seat}: refused ${word}: ${reason.class}`, host.now());
   if (json) writeJsonError(io, reason.id, errorText(reason.message), reason.repair ?? null);
   else io.stderr(`${reason.message}\n`);
   // exit: answer.caller
@@ -511,8 +755,16 @@ function refuse(
   // exit: answer.action
   // exit: answer.process
   // exit: answer.human
+  // exit: answer.permission
+  // exit: answer.login
+  // exit: answer.not-a-question
+  // exit: answer.disagree
   return 1;
 }
+
+/** The dialog a finished answer names: the trust word's folder when one was shown, and the
+ *  question word's dialog kind — both are what the closing line reports. */
+type Finished = { word: 'trust'; folder?: string } | { word: 'question'; dialog: DialogKind };
 
 async function finish(
   io: Io,
@@ -528,8 +780,8 @@ async function finish(
   workspace: string | undefined,
   root: string,
   standing: Standing,
-  launched?: LaunchedIdentity,
-  folder?: string,
+  launched: LaunchedIdentity | undefined,
+  done: Finished,
   origin: RulesOrigin = 'file',
 ): Promise<number> {
   const seatState = readState(dir).sessions[session]?.seats[name];
@@ -539,11 +791,11 @@ async function finish(
   const launchIdentity = launched ?? seatState?.launched;
   const ready = profile ? await recover(host, session, pane, name, profile, seat as Seat, team, root, standing, launchIdentity, origin) : 'idle';
   if (typeof ready === 'object' && 'class' in ready) {
-    return refuse(io, json, dir, who, name, host, ready);
+    return refuse(io, json, dir, who, name, host, ready, done.word);
   }
   if (ready !== true) {
-    logLine(dir, 'answer', who, `${name}: refused trust: ${ready}`, host.now());
-    return recovery(io, json, `${name}: trust sent; recovery required`);
+    logLine(dir, 'answer', who, `${name}: refused ${done.word}: ${ready}`, host.now());
+    return recovery(io, json, `${name}: ${done.word} sent; recovery required`);
   }
   updateState(dir, (state) => {
     const current = state.sessions[session] ?? emptySession();
@@ -557,8 +809,10 @@ async function finish(
     if (mode === 'message' || mode === 'prepend') recorded.rules = mode;
     current.seats[name] = recorded;
   });
-  logLine(dir, 'answer', who, `${name}: trust answered`, host.now());
-  const summary = folder === undefined ? `${name}: answered trust` : `${name}: answered trust (${folder})`;
+  logLine(dir, 'answer', who, `${name}: ${done.word} answered`, host.now());
+  const summary = done.word === 'trust'
+    ? (done.folder === undefined ? `${name}: answered trust` : `${name}: answered trust (${done.folder})`)
+    : `${name}: answered question (${done.dialog})`;
   if (json) {
     writeJson(io, 'team.answer', {
       format: 1 as const,
@@ -569,14 +823,15 @@ async function finish(
       session,
       seat: name,
       pane,
-      dialog: 'trust',
+      dialog: done.word,
+      ...(done.word === 'trust' ? (done.folder !== undefined ? { folder: done.folder } : {}) : { dialog_kind: done.dialog }),
       state: 'ready',
-      ...(folder !== undefined ? { folder } : {}),
     });
   } else {
     io.stdout(`${contextLine(team.project, session)}\n${summary}\n`);
   }
   // exit: answer.ready
+  // exit: answer.question
   return 0;
 }
 
