@@ -327,6 +327,24 @@ test('a grant whose ops do not cover them is not silently ignored: config keys a
   expect(scene.out).toBe('');
 });
 
+// init's singular --approval-mode and --revoke-approval branches run before the
+// command's own --general admission, so a readable grant on either would be taken and silently
+// ignored. Both are refused as usage instead.
+test('a grant does not reach init --approval-mode or init --revoke-approval: both take no --general', async () => {
+  const sendOnly = grantOf(['*'], ['send']);
+  const forms = [['--approval-mode', 'per-action', '--scope', '.'], ['--revoke-approval', `tc_${'ab'.repeat(12)}`]];
+  for (const words of forms) {
+    const result = door('init', words, sendOnly, io(fresh));
+    expect(result.kind, whyOf(result)).toBe('usage');
+    if (result.kind === 'usage') expect(result.why).toContain('takes no --general');
+  }
+  // The dispatcher stops the line, so the command prints nothing and exits 2.
+  const scene = io(fresh);
+  expect(await main(['init', '--approval-mode', 'per-action', '--scope', '.', '--general', sendOnly, '--key', client.path], scene)).toBe(2);
+  expect(scene.err).toContain('takes no --general');
+  expect(scene.out).toBe('');
+});
+
 // The exact line operator-3 ran: an owner seat is registered, and `team init --request` with a
 // grant that lists entities recorded a request and exited 0. In a child whose HOME is the
 // scene's own, it now stops at the dispatcher: exit 1, the one sentence, no request file.
