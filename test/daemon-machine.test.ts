@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,6 +62,26 @@ function scratch(): { base: string; root: string; home: string } {
 afterEach(() => {
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
 });
+
+/** A program on disk for the adapter scenes: an entry and one module beside it. The adapter
+ *  keeps the entry's own folder as the whole program, so this folder is what a unit runs. */
+function programAt(home: string, name = 'v1'): string {
+  const folder = join(home, 'app', name);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'module.js'), 'export const ok = true;\n');
+  const entry = join(folder, 'cli.js');
+  writeFileSync(entry, 'synthetic entry\n');
+  return entry;
+}
+
+/** The runtime folders an install kept under this home. */
+function runtimeFolders(home: string): string[] {
+  try {
+    return readdirSync(join(machineConfigDir(home), 'daemon-runtime')).sort();
+  } catch {
+    return [];
+  }
+}
 
 /** The heartbeat runs on its own; poll the state record until it reflects the change. */
 async function waitFor(check: () => Promise<boolean> | boolean, ms = 3000): Promise<void> {
@@ -650,12 +670,19 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
       return { status: 0, stdout: '', stderr: '' };
     };
     const manager = darwinServiceManager({ runner, uid: 501 });
-    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(installed.ok).toBe(true);
     if (!installed.ok) return;
     const unit = readFileSync(installed.unitPath, 'utf8');
     expect(unit).toContain('/runtime/bin/node');
-    expect(unit).toContain('/app/dist/cli.js');
+    // The unit runs the retained copy of the whole program, never the package folder.
+    const retained = installed.program?.[1] ?? '';
+    expect(retained.startsWith(join(machineConfigDir(home), 'daemon-runtime'))).toBe(true);
+    expect(readFileSync(retained, 'utf8')).toBe('synthetic entry\n');
+    expect(readFileSync(join(retained, '..', 'module.js'), 'utf8')).toBe('export const ok = true;\n');
+    expect(unit).toContain(retained);
+    expect(unit).not.toContain(entry);
     expect(unit).toContain('daemon');
     expect(unit).toContain('run');
     expect(unit).toContain('--started-by');
@@ -675,13 +702,14 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
   test('the unit carries the presence opt-in exactly when the install program asks for it', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(plain.ok).toBe(true);
     if (!plain.ok) return;
     expect(readFileSync(plain.unitPath, 'utf8')).not.toContain('--presence');
 
     const opted = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], presence: true,
+      execPath: '/runtime/bin/node', entry, roots: ['/repo'], presence: true,
     });
     expect(opted.ok).toBe(true);
     if (!opted.ok) return;
@@ -696,21 +724,22 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
   test('the unit carries the watch opt-in exactly when the install program asks for it', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const plain = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(plain.ok).toBe(true);
     if (!plain.ok) return;
     expect(readFileSync(plain.unitPath, 'utf8')).not.toContain('--watch');
 
     // The watch opt-in is independent of presence: a presence-only unit carries no watch flag.
     const presenceOnly = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], presence: true,
+      execPath: '/runtime/bin/node', entry, roots: ['/repo'], presence: true,
     });
     expect(presenceOnly.ok).toBe(true);
     if (!presenceOnly.ok) return;
     expect(readFileSync(presenceOnly.unitPath, 'utf8')).not.toContain('--watch');
 
     const opted = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'], watch: true,
+      execPath: '/runtime/bin/node', entry, roots: ['/repo'], watch: true,
     });
     expect(opted.ok).toBe(true);
     if (!opted.ok) return;
@@ -730,7 +759,8 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
       uid: 501,
       sleep: () => {},
     });
-    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [] });
+    const entry = programAt(home);
+    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: [] });
     expect(installed.ok).toBe(false);
     if (installed.ok) return;
     expect(installed.why).toBe('the system\'s service manager refused to start the daemon');
@@ -738,24 +768,27 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     expect(installed.why).not.toContain('launchd');
   });
 
-  test('a failed first install leaves no unit the next login could load', () => {
+  test('a failed first install leaves no unit the next login could load, and no copy behind', () => {
     const { home } = scratch();
     const manager = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
       sleep: () => {},
     });
-    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const entry = programAt(home);
+    const installed = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
     expect(installed.ok).toBe(false);
     // The definition was written before the registration was refused; it is taken back out so
-    // the service manager cannot load an unregistered unit at the next login.
+    // the service manager cannot load an unregistered unit at the next login, and the copy the
+    // failed install added goes with it: nothing it could not finish stays behind.
     expect(existsSync(manager.unitPath(home))).toBe(false);
+    expect(runtimeFolders(home)).toEqual([]);
   });
 
   test('a failed reinstall puts the earlier unit back for the next login', () => {
     const { home } = scratch();
     const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const first = good.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const first = good.install(home, { execPath: '/runtime/bin/node', entry: programAt(home, 'v1'), roots: ['/repo'] });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const before = readFileSync(first.unitPath, 'utf8');
@@ -764,16 +797,18 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
       uid: 501,
       sleep: () => {},
     });
-    const again = failing.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli-v2.js', roots: ['/repo'] });
+    const again = failing.install(home, { execPath: '/runtime/bin/node', entry: programAt(home, 'v2'), roots: ['/repo'] });
     expect(again.ok).toBe(false);
     // The new definition is gone and the one the machine already carried is back, byte for byte.
     expect(readFileSync(first.unitPath, 'utf8')).toBe(before);
+    // Only the earlier unit's copy is kept; the failed install removed the one it added.
+    expect(runtimeFolders(home)).toHaveLength(1);
   });
 
   test('a stop the service manager refuses is reported as a refusal, and the unit stays', () => {
     const { home } = scratch();
     const good = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const installed = good.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
+    const installed = good.install(home, { execPath: '/runtime/bin/node', entry: programAt(home), roots: ['/repo'] });
     expect(installed.ok).toBe(true);
     if (!installed.ok) return;
     const before = readFileSync(installed.unitPath, 'utf8');
@@ -1347,7 +1382,7 @@ describe('team daemon status, install, uninstall and run', () => {
   test('the installed unit’s own argv starts the one daemon hosting send and bus', async () => {
     const { root, home } = scratch();
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
-    const unit = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root] });
+    const unit = manager.install(home, { execPath: '/runtime/bin/node', entry: programAt(home), roots: [root] });
     expect(unit.ok).toBe(true);
     if (!unit.ok) return;
     const argv = unitArguments(unit.unitPath);

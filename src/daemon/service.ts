@@ -7,12 +7,19 @@
 // An install never finishes with no daemon and no message. A refresh stops the daemon the
 // manager already holds, then loads the new one, offering it again with a bounded, growing wait
 // while the manager refuses — a refusal while the earlier stop is still finishing is not a
-// verdict on the new unit. If the new one still cannot start, the earlier unit is put back —
-// with the earlier program when this install replaced that same entry in place — and the daemon
-// it names is started again; the failure and that rollback are reported together, and the
-// command exits non-zero. A load the manager accepted is registration, not proof that a program
-// runs, so the command confirms the restored daemon answers before it calls the rollback done;
-// the same confirmation gates a successful install.
+// verdict on the new unit. If the new one still cannot start, the earlier unit is put back
+// unchanged and the daemon it names is started again: that unit's entry is the retained program
+// folder it was installed with, which this install never writes. The failure and that rollback
+// are reported together, and the command exits non-zero. A load the manager accepted is
+// registration, not proof that a program runs, so the command confirms the restored daemon
+// answers before it calls the rollback done; the same confirmation gates a successful install.
+//
+// A unit runs a complete program, so an install copies the whole module tree the entry needs
+// into a content-addressed folder under the machine config and writes the unit against that
+// copy. The package the owner later upgrades is not the program this tool's unit runs, and an
+// upgrade therefore never replaces code a running unit names. The copy's folder name is the
+// hash of its paths, modes and bytes; a folder already there is run only after it is verified
+// to be ours and byte-identical to that hash.
 //
 // The daemon's own start is admitted from the manager's record of the job it started and the
 // unit file that job runs — pid, program, label, owner, mode and the unit's own words — never
@@ -24,13 +31,32 @@ import { darwinServiceManager } from './service-darwin.ts';
 export type ServiceRunResult = { status: number | null; stdout: string; stderr: string };
 export type ServiceRunner = (command: string, args: string[]) => ServiceRunResult;
 
+/**
+ * The program a unit runs, as the complete set of files a retained copy must reproduce. The
+ * entry alone is not the program: a built CLI is a module tree that also reads its package
+ * manifest and the sibling packages it lives beside, so a copy of one file is not a program that
+ * can run. `root` is the directory whose layout the retained copy reproduces; `include` names
+ * every file and directory under it the entry's module tree reads at run time. A path that is
+ * named here but missing is a refusal: an install never writes a unit whose program it could not
+ * copy whole.
+ */
+export type ServiceRuntime = {
+  /** The directory the retained copy's layout is taken from. */
+  root: string;
+  /** Paths under `root`, relative, each a file or a directory, copied as it stands. */
+  include: string[];
+};
+
 export type ServiceProgram = {
   /** The runtime that runs the CLI entry (the installed `team` launcher's interpreter). */
   execPath: string;
-  /** The CLI entry file itself. The adapter keeps a copy of the program a loaded unit was
-   *  accepted with, so a later refresh that replaces this same path in place can put the bytes
-   *  the earlier unit runs back before restoring that unit. */
+  /** The CLI entry file itself. The adapter writes the unit against a retained copy of the
+   *  whole program, never against this path: the package a later upgrade replaces is not the
+   *  program a unit of this tool runs. */
   entry: string;
+  /** The files that make up the program. Absent means the entry's own directory is the whole
+   *  program, which is what a synthetic scene's single-file entry is. */
+  runtime?: ServiceRuntime;
   /** The checkouts this one daemon process hosts. */
   roots: string[];
   /** Whether the unit's run command carries the presence opt-in. Absent means the unit starts
@@ -112,18 +138,22 @@ export type ServiceInstallFailure = {
 export type ServiceInstallSuccess = {
   ok: true;
   unitPath: string;
+  /** The words the unit was written with, including the retained entry the unit runs. The
+   *  command reports these rather than a plan it computed before the copy was made. */
+  program?: string[];
   /** True when the definition this install replaced named a client key or a general grant in
    *  its run command: the new definition is written without either, and the command says so in
    *  plain words. An install never writes a key or a grant into a definition. */
   droppedAuthorization?: boolean;
   /**
    * Puts the machine back after a load the manager accepted but whose daemon does not answer:
-   * the earlier unit is restored (with the earlier program when this install replaced that same
-   * entry in place) and started again, or, for a fresh install, the unit this install wrote is
-   * stopped and removed. The command calls it only after the new daemon fails its health probe,
-   * and confirms the restored daemon answers before reporting the rollback. An undo only ever
-   * answers a failure: it is called after the new daemon did not answer, never instead of a
-   * successful install.
+   * the earlier unit is restored, unchanged, and started again — its entry names the retained
+   * program that unit was installed with, which this install did not touch — or, for a fresh
+   * install, the unit this install wrote is stopped and removed. The runtime copy this install
+   * added is removed with it, so the undo restores exactly what the install changed. The command
+   * calls it only after the new daemon fails its health probe, and confirms the restored daemon
+   * answers before reporting the rollback. An undo only ever answers a failure: it is called
+   * after the new daemon did not answer, never instead of a successful install.
    */
   undo?: () => ServiceInstallFailure;
 };
@@ -150,12 +180,14 @@ export type ServiceManager = {
    */
   unit(home: string): ServiceUnitRecord | null;
   /**
-   * Writes and registers the unit. A refresh replaces a daemon the manager already holds: the
-   * old job is stopped, and the new one is loaded, offered again with a bounded, growing wait
-   * while the manager refuses. When the new one still cannot start, the earlier unit is put
-   * back — with the earlier program when this install replaced that same entry in place — and
-   * its daemon started again, so a failed refresh leaves a daemon running and a failure, never
-   * a silent empty machine: `outcome` says which of the answers the failure carries.
+   * Copies the whole program into a retained, content-addressed runtime folder, writes the unit
+   * against that copy, and registers it. A refresh replaces a daemon the manager already holds:
+   * the old job is stopped, and the new one is loaded, offered again with a bounded, growing
+   * wait while the manager refuses. When the new one still cannot start, the earlier unit is put
+   * back unchanged and its daemon started again — the earlier unit names the retained copy it
+   * was installed with, which this install never touches — so a failed refresh leaves a daemon
+   * running and a failure, never a silent empty machine: `outcome` says which of the answers the
+   * failure carries.
    */
   install(home: string, program: ServiceProgram): ServiceInstallResult;
   uninstall(home: string): ServiceUninstallResult;

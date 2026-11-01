@@ -3,13 +3,14 @@
 // touched. The scenes prove what a failed refresh must never leave: the old daemon is stopped,
 // the new load is offered again while the manager refuses (the earlier stop may still be
 // finishing), and a load that still fails puts the previous unit back and starts its daemon
-// again — or says plainly that no daemon was started. Restoring the unit is not enough when the
-// refresh replaced the entry in place: the earlier program must come back with it, and a
-// rollback is called `restored` only after the daemon that started answers the health probe,
-// because a load the manager accepted is registration, not proof that a program runs. A load the
-// manager accepts whose daemon never answers is taken back out by the adapter's own undo — the
-// earlier unit restored for a refresh, the new unit removed for a fresh install — so an install
-// reports success only after the daemon it started answers. The command scenes prove the failure
+// again — or says plainly that no daemon was started. The unit a refresh restores runs the
+// retained copy it was installed with, which the refresh never writes, so restoring the unit
+// text is enough — and the copy the refresh added is removed with it, exactly what install
+// changed. A rollback is called `restored` only after the daemon that started answers the health
+// probe, because a load the manager accepted is registration, not proof that a program runs. A
+// load the manager accepts whose daemon never answers is taken back out by the adapter's own
+// undo — the earlier unit restored for a refresh, the new unit removed for a fresh install — so
+// an install reports success only after the daemon it started answers. The command scenes prove the failure
 // exits non-zero under its own contract row, and that a failure leaving no daemon running names
 // the recorded rerun command (its roots and opt-ins) and where a kept unit is — the same command
 // in the JSON `repair` — so a rollback that fails is actionable, not just reported.
@@ -74,8 +75,27 @@ afterEach(() => {
   for (const base of bases.splice(0)) rmSync(base, { recursive: true, force: true });
 });
 
-const PRIOR_PROGRAM: ServiceProgram = { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] };
-const NEW_PROGRAM: ServiceProgram = { execPath: '/runtime/bin/node', entry: '/app/dist/cli-v2.js', roots: ['/repo'] };
+const EXEC = '/runtime/bin/node';
+
+/** A program on disk: an entry and the sibling module it imports, in a folder of their own. The
+ *  adapter keeps the entry's own folder as the whole program, so this folder is the program. */
+function programFiles(home: string, name: string, entryBytes = 'import "./module.js";\n'): string {
+  const folder = join(home, 'app', name);
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'module.js'), 'export const ok = true;\n');
+  writeFileSync(join(folder, 'cli.js'), entryBytes);
+  return join(folder, 'cli.js');
+}
+
+function program(home: string, name: string): ServiceProgram {
+  return { execPath: EXEC, entry: programFiles(home, name), roots: ['/repo'] };
+}
+
+/** The run words a written unit carries, read back as a scene sees them. */
+function unitWords(text: string): string[] {
+  return [...(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1] ?? '')
+    .matchAll(/<string>([\s\S]*?)<\/string>/g)].map((one) => one[1] ?? '');
+}
 
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
 /** The manager's answer for a load it will not take — a status 5 refusal, the answer that stopped
@@ -178,7 +198,7 @@ function fakeManager(failure: ServiceInstallFailure): ServiceManager {
 /** The earlier unit this refresh replaces: one successful install, read back byte for byte. */
 function withEarlierUnit(home: string): string {
   const first = managerWith({}).manager;
-  expect(first.install(home, PRIOR_PROGRAM).ok).toBe(true);
+  expect(first.install(home, program(home, 'v1')).ok).toBe(true);
   return readFileSync(first.unitPath(home), 'utf8');
 }
 
@@ -187,9 +207,11 @@ function sourcesOf(
   service: ServiceManager,
   extra: Partial<DaemonCommandSources> = {},
 ): DaemonCommandSources {
+  // The program this install would run: a sibling version folder of the earlier one.
+  if (!existsSync(join(home, 'app', 'v2', 'cli.js'))) programFiles(home, 'v2');
   return {
     home,
-    program: { execPath: NEW_PROGRAM.execPath, entry: NEW_PROGRAM.entry },
+    program: { execPath: EXEC, entry: join(home, 'app', 'v2', 'cli.js') },
     version: 'test',
     service,
     ...extra,
@@ -202,7 +224,7 @@ describe('a refresh stops the old daemon and offers the new load until the manag
     const sleeps: number[] = [];
     const { manager, calls } = managerWith({ load: [LOAD_REFUSED, OK] }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result).toMatchObject({ ok: true });
     expect(calls).toEqual(['bootstrap', 'bootout', 'bootstrap']);
@@ -217,7 +239,7 @@ describe('a refresh stops the old daemon and offers the new load until the manag
     // The stop is still in flight for the next two offers; the third is accepted.
     const { manager, calls } = managerWith({ load: refusedThenAccepted(3) }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result).toMatchObject({ ok: true });
     expect(calls).toEqual(['bootstrap', 'bootout', 'bootstrap', 'bootstrap', 'bootstrap']);
@@ -229,7 +251,7 @@ describe('a refresh stops the old daemon and offers the new load until the manag
     const sleeps: number[] = [];
     const { manager } = managerWith({ load: refusedThenAccepted(5) }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result).toMatchObject({ ok: true });
     expect(sleeps).toEqual([100, 200, 400, 800]);
@@ -243,7 +265,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     const sleeps: number[] = [];
     const { manager } = managerWith({ load: refusedThenAccepted(BOUNDED_OFFERS) }, sleeps);
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -261,22 +283,22 @@ describe('a load that fails every time puts the previous unit back', () => {
     expect(sleeps).toEqual([100, 200, 400, 800, 1_000, 1_000, 1_000, 1_000]);
   });
 
-  test('an in-place refresh puts the earlier program back, so the unit it restores has something to run', () => {
+  test('a refresh never writes the program an earlier unit runs, so restoring the unit is restoring its program', () => {
     const { home } = scratch();
-    // The entry the earlier unit runs, as a real file: an in-place upgrade overwrites this same
-    // path, which is how restoring the unit alone would leave the earlier definition naming
-    // bytes it was never accepted with.
-    const entry = join(home, 'cli.js');
-    writeFileSync(entry, 'old known-good bytes');
-    const earlierProgram: ServiceProgram = { execPath: '/runtime/bin/node', entry, roots: ['/repo'] };
+    // The package folder the earlier unit was installed from; a later upgrade rewrites this
+    // very file. The unit does not run it: it runs the copy the install kept.
+    const entry = programFiles(home, 'v1', 'old known-good bytes');
     const first = managerWith({}).manager;
-    expect(first.install(home, earlierProgram).ok).toBe(true);
+    expect(first.install(home, { execPath: EXEC, entry, roots: ['/repo'] }).ok).toBe(true);
     const earlier = readFileSync(first.unitPath(home), 'utf8');
+    const retained = unitWords(earlier)[1];
+    expect(retained).toBeDefined();
+    expect(readFileSync(retained ?? '', 'utf8')).toBe('old known-good bytes');
 
-    // Every load of the new bytes is refused; the rollback load starts a program that reads the
-    // entry path again, so the scene can ask whether that program could come up at all.
+    // Every load of the new bytes is refused; the rollback load starts the earlier unit's copy,
+    // so the scene can ask whether that program could come up at all.
     let loads = 0;
-    let running = true;
+    let running = false;
     const runner: ServiceRunner = (_command, args) => {
       if ((args[0] ?? '') === 'bootout') {
         running = false;
@@ -284,20 +306,23 @@ describe('a load that fails every time puts the previous unit back', () => {
       }
       loads += 1;
       if (loads <= BOUNDED_OFFERS) return { ...LOAD_REFUSED };
-      running = readFileSync(entry, 'utf8') === 'old known-good bytes';
+      running = readFileSync(retained ?? '/nonexistent', 'utf8') === 'old known-good bytes';
       return { ...OK };
     };
     const manager = darwinServiceManager({ runner, uid: 501, sleep: () => {} });
 
+    // The package is upgraded in place; the copy the earlier unit names is untouched.
     writeFileSync(entry, 'new broken bytes');
-    const result = manager.install(home, { execPath: '/runtime/bin/node', entry, roots: ['/repo'] });
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.outcome).toBe('restored');
-    // The earlier unit is back, and the program it names is the one it was accepted with.
+    // The earlier unit is back, and the program it names is the one it was accepted with —
+    // still on disk at its own path, whatever happened to the package the copy came from.
     expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
-    expect(readFileSync(entry, 'utf8')).toBe('old known-good bytes');
+    expect(readFileSync(retained ?? '', 'utf8')).toBe('old known-good bytes');
+    expect(readFileSync(entry, 'utf8')).toBe('new broken bytes');
     expect(running).toBe(true);
   });
 
@@ -306,7 +331,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     const earlier = withEarlierUnit(home);
     const { manager, calls } = managerWith({ load: [LOAD_REFUSED] });
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -326,7 +351,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     const { home } = scratch();
     const { manager, calls } = managerWith({ load: [LOAD_REFUSED] });
 
-    const result = manager.install(home, NEW_PROGRAM);
+    const result = manager.install(home, program(home, 'v2'));
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
