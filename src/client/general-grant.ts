@@ -30,6 +30,25 @@ export type GrantOp = GeneralOp | typeof ALL_OPS;
 export function opsCover(ops: readonly string[], op: GeneralOp): boolean {
   return ops.includes(ALL_OPS) || ops.includes(op);
 }
+
+/**
+ * The op a flag reaches beyond the command's own name: `team down --abandon` is `abandon`, not
+ * `down`. The one mapping both the door and the grant's own words read, so a flag that reaches
+ * another op is never admitted under the bare command's name. A command with no entry reaches
+ * its own op whatever flags it carries (`restart --abandon` is still `restart`).
+ */
+export const FLAG_OPS: Readonly<Record<string, Readonly<Record<string, GeneralOp>>>> = {
+  down: { abandon: 'abandon' },
+};
+
+/**
+ * The op a grouped verb reaches: `team seat add` re-dispatches to `team add`, so the line is the
+ * `add` op, not `seat`. The same single mapping the door reads, so the grant of a re-dispatched
+ * line is checked against the command that runs.
+ */
+export const VERB_OPS: Readonly<Record<string, Readonly<Record<string, GeneralOp>>>> = {
+  seat: { add: 'add', remove: 'remove', restart: 'restart', rename: 'rename' },
+};
 export const GENERAL_GRANT_ID = /^gg_[0-9a-f]{24}$/;
 const MAX_CHAIN = 4;
 
@@ -188,17 +207,52 @@ export function readGeneralGrant(home: string, path: string, now: Date = new Dat
   return { ok: true, grant: g };
 }
 
+/** One check of a read grant, as a plain verdict: the door composes the three, in order, around
+ *  the target resolution it does between the op and the entity. */
+export type GrantVerdict = { ok: true } | { ok: false; why: string };
+
+/** The key proves the grant: reading it at the path given is the proof. */
+export function grantKeyMatches(home: string, grant: GeneralGrant, keyPath: string): GrantVerdict {
+  const held = readClientPrivateKey(home, keyPath);
+  if (!held.ok) return held;
+  if (held.publicKey !== grant.public_key) return { ok: false, why: `the key does not match general grant ${grant.grant_id}` };
+  return { ok: true };
+}
+
+/** The grant covers the op the line reaches. */
+export function grantCoversOp(grant: GeneralGrant, op: GeneralOp): GrantVerdict {
+  if (!opsCover(grant.ops, op)) return { ok: false, why: `general grant ${grant.grant_id} does not cover ${op}` };
+  return { ok: true };
+}
+
+/** The grant covers the entity of the team the line acts on. A wildcard grant (`'*'` entities)
+ *  covers every entity, including a team that belongs to none. */
+export function grantCoversEntity(grant: GeneralGrant, entity: string | null): GrantVerdict {
+  if (grant.entities.includes('*')) return { ok: true };
+  if (entity === null) return { ok: false, why: 'this team belongs to no entity; the grant covers listed entities only' };
+  if (!grant.entities.includes(entity)) return { ok: false, why: `general grant ${grant.grant_id} does not cover entity "${entity}"` };
+  return { ok: true };
+}
+
+/** Whether one grant admits `op` over every entity the line names: the op first, then each
+ *  entity in the order the line named them. */
+export function grantAdmits(grant: GeneralGrant, op: GeneralOp, entities: readonly (string | null)[]): GrantVerdict {
+  const coveredOp = grantCoversOp(grant, op);
+  if (!coveredOp.ok) return coveredOp;
+  for (const entity of entities) {
+    const covered = grantCoversEntity(grant, entity);
+    if (!covered.ok) return covered;
+  }
+  return { ok: true };
+}
+
 /** Whether this grant file and key admit `op` on a team of `entity`. Proof of the key is reading it. */
 export function admitGeneral(home: string, grantPath: string, keyPath: string, op: GeneralOp, entity: string | null, now: Date = new Date()): R<{ grant: GeneralGrant }> {
   const read = readGeneralGrant(home, grantPath, now);
   if (!read.ok) return read;
-  const held = readClientPrivateKey(home, keyPath);
+  const held = grantKeyMatches(home, read.grant, keyPath);
   if (!held.ok) return held;
-  if (held.publicKey !== read.grant.public_key) return { ok: false, why: `the key does not match general grant ${read.grant.grant_id}` };
-  if (!opsCover(read.grant.ops, op)) return { ok: false, why: `general grant ${read.grant.grant_id} does not cover ${op}` };
-  if (!read.grant.entities.includes('*')) {
-    if (entity === null) return { ok: false, why: 'this team belongs to no entity; the grant covers listed entities only' };
-    if (!read.grant.entities.includes(entity)) return { ok: false, why: `general grant ${read.grant.grant_id} does not cover entity "${entity}"` };
-  }
+  const admitted = grantAdmits(read.grant, op, [entity]);
+  if (!admitted.ok) return admitted;
   return { ok: true, grant: read.grant };
 }

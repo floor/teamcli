@@ -5268,6 +5268,13 @@
     {
       "code": 1,
       "command": "team",
+      "id": "team.general-target",
+      "meaning": "the team the command would act on cannot be resolved, so the general grant cannot be checked against it; nothing ran",
+      "trigger": "team status --project <name> --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "team",
       "id": "team.mcp-serve-restart-failed",
       "meaning": "a stale inbox server could not start its fresh replacement, said why and left",
       "trigger": "team mcp serve"
@@ -5537,6 +5544,13 @@
       "id": "up.general-refused",
       "meaning": "the general grant does not admit this launch; nothing ran",
       "trigger": "team up --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "up",
+      "id": "up.general-target",
+      "meaning": "the team file the launch names cannot be resolved, so the general grant cannot be checked against it; nothing ran",
+      "trigger": "team up --file <team.yaml> --general <grant.json> --key <client.key>"
     },
     {
       "code": 1,
