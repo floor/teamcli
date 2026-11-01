@@ -726,6 +726,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const manager = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      sleep: () => {},
     });
     const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [] });
     expect(installed.ok).toBe(false);
@@ -740,6 +741,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const manager = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      sleep: () => {},
     });
     const installed = manager.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: ['/repo'] });
     expect(installed.ok).toBe(false);
@@ -758,6 +760,7 @@ describe('the service adapter writes and registers one user unit, neutrally', ()
     const failing = darwinServiceManager({
       runner: () => ({ status: 1, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' }),
       uid: 501,
+      sleep: () => {},
     });
     const again = failing.install(home, { execPath: '/runtime/bin/node', entry: '/app/dist/cli-v2.js', roots: ['/repo'] });
     expect(again.ok).toBe(false);

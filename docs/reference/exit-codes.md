@@ -236,6 +236,8 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.fault-watch` | `daemon` | 1 | the daemon record carries no hosted watch for this checkout's route | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-watch-state` | `daemon` | 1 | the route's hosted watch was not started as required, is standing down, or has stopped | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.install-failed` | `daemon` | 1 | the system service manager refused to write or start the unit | `team daemon install` |
+| `daemon.install-rollback-failed` | `daemon` | 1 | the system service manager refused the new unit and the previous one could not be started again, so no daemon was started | `team daemon install` |
+| `daemon.install-rolled-back` | `daemon` | 1 | the system service manager refused to start the new unit; the previous unit was put back and its daemon started again | `team daemon install` |
 | `daemon.not-owner` | `daemon` | 1 | the caller may not install or remove the machine daemon | `team daemon install` |
 | `daemon.run-failed` | `daemon` | 1 | another start holds the machine lock, or the machine socket could not be bound | `team daemon run` |
 | `daemon.run-not-owner` | `daemon` | 1 | the caller may not run the machine daemon; only the owner or the system service manager starts it | `team daemon run` |
