@@ -5,7 +5,7 @@ import type { DelegateSources } from '../delegate.ts';
 import { devModeCallerGate, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { withoutFileOffer } from '../file/load.ts';
-import { maskSecretsLine } from '../file/secrets.ts';
+import { maskSecretRows } from '../file/secrets.ts';
 import type { Problem } from '../file/types.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
 import { plainLine, plainText } from '../launch/plain.ts';
@@ -123,7 +123,7 @@ export async function runPeek(argv: string[], io: Io, sources: PeekSources = rea
   if (raw === null) return refuseNoScreen(out, dir, tag, name, at);
 
   const screen = visibleLines(raw, lines);
-  for (const line of screen) out.stdout(`${maskSecretsLine(plainText(line))}\n`);
+  for (const line of maskSecretRows(screen.map((row) => plainText(row)))) out.stdout(`${line}\n`);
   logLine(dir, 'peek', tag, `team ${plainLine(team.project)}: seat ${plainLine(seat.name)}, ${count(screen.length)}`, at);
   // exit: peek.shown
   return 0;

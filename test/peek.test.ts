@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { DEFAULT_LINES, MAX_LINES, runPeek, type PeekSources } from '../src/commands/peek.ts';
 import { currentTeam } from '../src/file/current.ts';
-import { KEY_PREFIXES, maskSecretsLine } from '../src/file/secrets.ts';
+import { KEY_PREFIXES, maskSecretRows, maskSecretsLine } from '../src/file/secrets.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { herdrStatusSource, type StatusSource } from '../src/watch/status-events.ts';
 import { testIo, type TestIo } from './helpers.ts';
@@ -422,6 +422,69 @@ describe('a screen is masked before it is printed', () => {
     expect(io.out).toContain(sha);
     expect(logOf(where)).not.toContain('deploy');
     expect(logOf(where)).not.toContain(token);
+  });
+
+  test('a token the terminal wrapped over two rows is masked on both rows', () => {
+    // The measured probe: a prefix and ten body characters on one row, the remaining
+    // twenty-six on the next. Each row alone is too short to be key-shaped; the join is not.
+    const body = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const token = `ghp_${body}`;
+    const rows = [`deploy token ${token.slice(0, 14)}`, `${token.slice(14)} done`];
+    expect(maskSecretRows(rows)).toEqual(['deploy token [masked]', '[masked] done']);
+  });
+
+  test('a token split at every offset across two rows is masked for every key prefix', () => {
+    const body = 'abcdefghijklmnopqrstuvwx';
+    for (const prefix of KEY_PREFIXES) {
+      const token = `${prefix}${body}`;
+      for (let offset = 1; offset < token.length; offset += 1) {
+        const rows = [`before ${token.slice(0, offset)}`, `${token.slice(offset)} after`];
+        expect({ prefix, offset, masked: maskSecretRows(rows) })
+          .toEqual({ prefix, offset, masked: ['before [masked]', '[masked] after'] });
+      }
+    }
+  });
+
+  test('a token wrapped over three rows is masked on every row', () => {
+    const body = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const token = `ghp_${body}`;
+    const rows = [`lead ${token.slice(0, 14)}`, token.slice(14, 30), `${token.slice(30)} tail`];
+    expect(maskSecretRows(rows)).toEqual(['lead [masked]', '[masked]', '[masked] tail']);
+  });
+
+  test('a userinfo URL split across two rows is masked on both rows', () => {
+    const rows = ['clone https://alice:hu', 'nter2@example.test/repo.git'];
+    expect(maskSecretRows(rows)).toEqual(['clone https://[masked]', '[masked]@example.test/repo.git']);
+  });
+
+  test('a random-looking word split across two rows is masked on both rows', () => {
+    // The join is judged by the same rules as a line: the randomness rule sees the whole word.
+    const word = 'Zx9Kq2LmN4pR7sT1uV3wY6aB8cD0eF2gH5jK9mN';
+    expect(maskSecretRows([`value ${word.slice(0, 20)}`, `${word.slice(20)} end`]))
+      .toEqual(['value [masked]', '[masked] end']);
+  });
+
+  test('a sha split across two rows stays readable', () => {
+    const rows = [`commit ${sha.slice(0, 20)}`, `${sha.slice(20)} done`];
+    expect(maskSecretRows(rows)).toEqual(rows);
+  });
+
+  test('a peek masks a wrapped token, and prints the same number of rows it read', async () => {
+    const where = place();
+    recordSeat(where, 'worker-1', 'pane1');
+    const body = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const token = `ghp_${body}`;
+    const text = [`deploy token ${token.slice(0, 14)}`, `${token.slice(14)} done`].join('\n');
+    const io = owner(where);
+
+    expect(await peek(where, ['worker-1'], io, screen(text))).toBe(0);
+
+    expect(io.out.split('\n').filter((line) => line !== '')).toHaveLength(2);
+    expect(io.out).not.toContain(token);
+    expect(io.out).not.toContain(body.slice(0, 10));
+    expect(io.out).not.toContain(body.slice(10));
+    expect(io.out).toContain('[masked]');
+    expect(logOf(where)).not.toContain('deploy');
   });
 });
 
