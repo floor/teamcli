@@ -450,19 +450,31 @@ without one of those two places — the operator pair above is the one decision 
 makes.
 
 An owner-signed grant is a record in the owner's grants folder (`~/.config/team/grants/`, the
-same folder the standing create-grants live in), naming the pair it admits and when it stops:
+same folder the standing create-grants live in), naming the pair it admits and when it stops.
+[`team grant --send`](grant.md) writes it, signed with the owner's approval key:
 
-```text
-send:
-  from: builder-1@labs      # the sender: its agent id, seat@team or session/seat
-  to: lead@teamcli          # the receiver, in the same spellings; a bare seat is the sender's own team's
-expires: "2026-10-17T00:00:00Z"
+```json
+{
+  "send": { "from": "builder-1@labs", "to": "orchestrator@floor" },
+  "expires": "2026-10-17T00:00:00Z",
+  "signature": "9f2c…"
+}
 ```
+
+`from` is the sender's agent id, `seat@team` or `session/seat`. `to` is the receiver in the same
+spellings, a bare seat (the sender's own team's), or the reserved `orchestrator@<entity>`: the lead
+seat of a team of the sender's own entity, resolved at the target's team, and never a team of
+another entity. The file's stem is the record's name; the send's header and dry run print it.
 
 The record is read only once the rules above have refused, and it admits the send only when its
 `from` names the caller's own agent record — a grant naming another agent never admits this
 caller — its `to` names the receiver, and `expires` is still ahead. A record that fails any of
-those, or a symbolic link, is not a grant: the send is refused as if the folder were empty.
+those, or a symbolic link, is not a grant: the send is refused as if the folder were empty. A
+record that names the pair but is not signed by the owner — an unsigned record from an earlier
+build, or one whose signature does not verify — refuses the send with `send.grant-invalid` (exit
+1) and does not fall back to the other reasons: the refusal names the record and prints the exact
+`team grant --send` line that recreates it signed. `team send --dry-run` shows the same refusal
+and, when a signed record admits the pair, names it in the preview line.
 
 ## The client send
 

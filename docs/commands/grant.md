@@ -4,12 +4,14 @@ Writes an authority record for the current team, in one of three forms. `team gr
 --scope <act,...>` sets the orchestrator's grant in the team file; a later invocation replaces
 that scope exactly, and the file holds one grant. `team grant <seat|@team> --capabilities
 <cap,...>` writes a standing grant record — an owner-signed record naming the grantee's registry
-identity, an agent id for a seat or a team id for `@team`.
+identity, an agent id for a seat or a team id for `@team`. The `--send` form writes a send grant
+for the shared grants folder rather than the current team, and is described below.
 
 ## Synopsis
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+    team grant --send --from <side> --to <side> --expires <ISO> [--name <stem>] [--dry-run] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> [--inbox] [--expires <ISO|never>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] [--expires <ISO|never>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] --request [--expires <ISO|never>] [--json]
@@ -36,6 +38,19 @@ any other standing grant, at the next dialog.
 it the scope is the project root itself. `--expires` is a readable timestamp; without it the
 grant does not expire. `--name` sets the record's file name; without it the name is
 `seat-<agent id>` or `team-<team id>`. The words `grant`, `delegate` and `revoke-…` are reserved.
+
+The `--send` form writes a send grant: the owner-signed record [`team send`](send.md) reads when
+no rule admits a pair. `--from` is the sender — an agent id, `seat@team` or `session/seat` — and
+`--to` the receiver in the same spellings, a bare seat, or the reserved `orchestrator@<entity>`,
+the lead seat of a team of the sender's own entity. `--expires` is required: an ISO timestamp in
+the future and at most 365 days ahead. `--name` sets the record's file name; without it the name
+is the pair as one slug, `seat-at-team-to-seat-at-team`. The record is signed with the owner's
+approval key and written whole into the shared grants folder; a write never replaces a standing
+grant, a revocation or a record of another kind under the same name. A same-stem send record is the
+re-issue path and is written over, `<name>.json`; an older file of the same name under another
+extension stays in the folder, admits nothing, and is reported as unsigned. It is owner-only, like
+every grant form, and a general grant that carries `grant` admits it with no prompt. A dry run
+refuses exactly what a write refuses and prints the record it would write.
 
 In the third form `--public-key` reads the public side of a client key pair written by
 [`team client`](client.md) `keygen` — `client.pub`, or `client.key`, whose public half is derived.

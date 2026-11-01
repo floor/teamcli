@@ -33,9 +33,9 @@ import * as projectRegistry from '../registry/projects.ts';
 import { readTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { realSources as realProjectSources, type ProjectSources } from './projects.ts';
 import { socketAddressOf, type SocketAddress } from '../send/address.ts';
-import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
+import { admitSend, RULE_SUMMARY, sendGrantFor, senderHeader, teamOf, unverifiedGrantFor, type AdmitContext, type AdmitTeam, type AdmitTeams, type DeclaredSender, type SendSide } from '../send/admit.ts';
 import { deliverCompose } from '../send/compose.ts';
-import { readSendGrants } from '../send/grants.ts';
+import { readSendGrantReads, unverifiedSendGrantRefusal } from '../send/grants.ts';
 import { appendHistory } from '../send/history.ts';
 import { ensureRecord, readRecord, signReceiptPayload, signRecord, verifyRecord, writeReceipt, type RecordPayload, type SignedRecord } from '../send/record.ts';
 import { NATIVE_BODY_MARKER, NATIVE_CHANNEL } from '../send/routes.ts';
@@ -898,7 +898,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     admission = admissionOf(acting, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
-      return refuse(io, dir, who, admission.why, host, report);
+      return refuseAdmission(io, dir, who, admission, host, report);
     }
     if (!configured) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
@@ -909,7 +909,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
     admission = admissionOf(acting, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
-      return refuse(io, dir, who, admission.why, host, report);
+      return refuseAdmission(io, dir, who, admission, host, report);
     }
     // A resolved spec is addressed by its record: its session and its CLI, under the receiving
     // team's own folder; across teams this run's daemon is skipped, so the send is reached
@@ -1279,7 +1279,10 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       socketReason: socketIneligibleReason(to.cli, socketWord, inbound, heldStanding),
       handoffEligible: callerNative && !wait,
     });
-    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}; nothing was written`, report);
+    // A grant is the one rule the message's own header carries a record of: the dry run names
+    // it too, so a preview says which owner-signed record admits a pair no rule reaches.
+    const granted = admission.ok && admission.rule.startsWith('an owner-signed grant naming send') ? `; admitted by: ${admission.rule}` : '';
+    return dryRun(io, to.seat, `${to.cli} via ${walkPhrase(walk, to.cli, callerNative && !wait, socketNow)}; nothing was written${granted}`, report);
   }
   // The display words every transport opens the message with: the receiving team's
   // `message-display` template, the sender's nickname (its seat name when the file writes none),
@@ -2455,7 +2458,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     admission = admissionOf(caller, team, null, seat, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
-      return refuse(io, dir, who, admission.why, host, report);
+      return refuseAdmission(io, dir, who, admission, host, report);
     }
     if (!configured) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seat, host.now());
@@ -2466,7 +2469,7 @@ function recordRun(args: Args, io: Io, host: SendHost, json: boolean): number {
     admission = admissionOf(caller, team, hit, seatName, host.home, fileTeamId, () => host.now(), standing, undefined, watchContext(host, root));
     if (!admission.ok) {
       raiseSecurityRefusal(team, root, host.home, dir, caller, 'admission', seatName, host.now());
-      return refuse(io, dir, who, admission.why, host, report);
+      return refuseAdmission(io, dir, who, admission, host, report);
     }
     // A resolved spec is addressed by its record: its session and its CLI, under the receiving
     // team's own folder. Nothing is delivered here, so no pane is read.
@@ -4676,8 +4679,10 @@ function declaredPlacementProblem(caller: Caller, name: string, at: SeatStanding
   return null;
 }
 
-/** Why the send is admitted, and the rule that admitted it — or why it is not. */
-export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' | 'watch' } | { ok: false; why: string };
+/** Why the send is admitted, and the rule that admitted it — or why it is not. A refusal carries
+ *  `grantInvalid` when it is the send-grant refusal proper: a record names the pair but is not
+ *  signed by the owner, so the words name the record and the line that re-issues it signed. */
+export type Admission = { ok: true; rule: string; sender: Agent | DeclaredSender | 'owner' | 'watch' } | { ok: false; why: string; grantInvalid?: boolean };
 
 /**
  * The authority rule for this send: `admitSend`, over the registry's own records, default deny.
@@ -4770,7 +4775,8 @@ export function admissionOf(
   // The grant folder is asked for a recorded sender alone: a grant names an identity, and the
   // declared one has none yet. So the header it would write never claims a grant.
   if (record !== null) {
-    const grants = readSendGrants(home);
+    const reads = readSendGrantReads(home);
+    const grants = reads.filter((read) => read.state === 'verified');
     if (grants.length > 0) {
       const grant = sendGrantFor(record, judged, grants, records, now());
       if (grant !== undefined) {
@@ -4778,6 +4784,11 @@ export function admissionOf(
         if (granted.ok) return { ok: true, rule: granted.rule, sender: record };
       }
     }
+    // A record that names the pair and is not signed by the owner is told apart from no record at
+    // all: the refusal names it and prints the exact line that recreates it signed, so an upgrade
+    // that invalidates an older record leaves a repair the owner can paste, not a silent route.
+    const unverified = unverifiedGrantFor(record, judged, reads, records, now());
+    if (unverified !== undefined) return { ok: false, why: unverifiedSendGrantRefusal(unverified, home), grantInvalid: true };
   }
   return { ok: false, why: verdict.why };
 }
@@ -5138,6 +5149,19 @@ function refuse(io: Io, dir: string | null, who: string, reason: string, host: S
   if (report.json) writeSendError(io, 'send.refused', `refused: ${reason}`, report);
   else io.stderr(`team send: refused: ${reason}\n`);
   return 1; // exit: send.refused
+}
+
+/** A refusal the admission decided: the send-grant refusal has words of its own — the record and
+ *  the line that re-issues it signed — and reports its own exit id, so a reader can tell a route
+ *  that never had a grant from one whose grant needs signing again. */
+function refuseAdmission(io: Io, dir: string | null, who: string, admission: Extract<Admission, { ok: false }>, host: SendHost, report: Report): number {
+  if (admission.grantInvalid === true) {
+    if (dir !== null) logLine(dir, 'send', who, `refused: ${admission.why}`, host.now());
+    if (report.json) writeSendError(io, 'send.grant-invalid', `refused: ${admission.why}`, report);
+    else io.stderr(`team send: refused: ${admission.why}\n`);
+    return 1; // exit: send.grant-invalid
+  }
+  return refuse(io, dir, who, admission.why, host, report);
 }
 
 /** The seat's channel was not open, and nothing was sent. A dialog is the one unreachable the
