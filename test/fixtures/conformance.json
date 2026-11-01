@@ -73,7 +73,7 @@
     {
       "file": "antigravity/1.2.16/question-unsent-54.txt",
       "cli": "antigravity",
-      "classify": "question",
+      "classify": "confirmation",
       "composer": "unknown",
       "provenance": "capture"
     },
@@ -185,14 +185,14 @@
     {
       "file": "claude-code/2.1.289/permission-plan-wide-ansi.txt",
       "cli": "claude-code",
-      "classify": "permission",
+      "classify": "plan approval",
       "composer": "unknown",
       "provenance": "capture"
     },
     {
       "file": "claude-code/2.1.289/permission-plan-wide-plain.txt",
       "cli": "claude-code",
-      "classify": "permission",
+      "classify": "plan approval",
       "composer": "unknown",
       "provenance": "capture"
     },
@@ -729,6 +729,34 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/plan-approval-ansi.txt",
+      "cli": "codex",
+      "classify": "plan approval",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/plan-approval.txt",
+      "cli": "codex",
+      "classify": "plan approval",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question-ansi.txt",
+      "cli": "codex",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question.txt",
+      "cli": "codex",
+      "classify": "question",
+      "composer": "unknown",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/ready-context-used-bare.txt",
       "cli": "codex",
       "classify": "idle",
@@ -913,7 +941,7 @@
     {
       "file": "cursor/2026.10.01/permission-plan.txt",
       "cli": "cursor",
-      "classify": "permission",
+      "classify": "confirmation",
       "composer": "unknown",
       "provenance": "capture"
     },
@@ -2019,7 +2047,7 @@
     {
       "file": "claude-code/2.1.302/held.txt",
       "cli": "claude-code",
-      "classify": "unknown",
+      "classify": "confirmation",
       "composer": "unknown",
       "provenance": "capture"
     },

@@ -24,6 +24,15 @@ The `.codex` config files the 0.157.0 permission capture needed were not needed 
 `-a on-request -s read-only` makes a write ask on its own. No vendor configuration was
 edited, no dialog was answered, and the update check was not overridden.
 
+The dialog captures were taken on 2026-11-01, in a scratch session created for the
+purpose (`b7-codex-dialogs`, stopped and deleted afterwards), a 23 by 53 pane (`stty
+size` printed `23 53`). The launch was `codex -m gpt-6.1-sol --no-alt-screen -c
+check_for_update_on_startup=false` in this project's own checkout, which Codex already
+trusts, so no trust dialog was drawn; both `-c` values are the launch line's alone and
+nothing was written to a config file. Each dialog was read while it stood, with `pane
+read --source visible` (plain) and again with `--format ansi` (one CRLF-terminated row
+per line, the build's own styling), and was then left with Escape.
+
 Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
 `<project-worktree>` and `<repository-root>`, and the resume id by `<session-id>`.
 
@@ -48,6 +57,18 @@ Workspace paths are replaced by `<workspace>`, the trust dialog's two paths by
   `› /exit  exit Codex` sits above the input row.
 - `exit.txt`: the pane after Enter, read `unknown`. Codex asks no exit question; the
   shell is back with the task's own advice above it.
+- `plan-approval.txt`, `plan-approval-ansi.txt`: `/plan` put Plan mode on the status row,
+  a prompt asked for a one-line README change, and the plan the model wrote ended at
+  `Implement this plan?` above `1. Yes, implement this plan`, `2. Yes, clear context and
+  implement`, `3. No, stay in Plan mode` and the footer `enter select · esc back`; read
+  `plan approval`. Escape returned to the composer with the plan still in the transcript
+  and nothing implemented.
+- `question.txt`, `question-ansi.txt`: the next prompt in the same session asked for the
+  question to be put to the person first, and the dialog drew `Question 1/1 (1
+  unanswered)`, `What should the new README line say?`, four numbered options and the
+  footers `tab to add notes | enter to submit answer` and `esc to interrupt`; read
+  `question`. Escape closed it and interrupted that turn, the composer back over an empty
+  box.
 - `idle-wide-warning.txt`: supplied by Floor, not captured here — a sanitized 8-line frame
   from a wide pane running the observed build (`»` prompt). The status row is
   `GPT-6.1-Sol ultra · Context 100% left · weekly 94% left`, with the account's
@@ -85,7 +106,9 @@ The used variant is Codex's own: `strings` on the installed `codex-cli 0.161.0` 
 
 ## Not produced
 
-- `question`: not produced. Codex 0.161.0 asks none in its composer — the approval dialog
-  above is the only question it draws — and the profile declares no question stage.
+- `confirmation`: not produced. The 2026-11-01 scratch session's probes drew none: Ctrl+C
+  over an unsent draft cleared the box and left the composer, and `/exit` put the pane
+  back at its shell — no dialog in either. The profile records no confirmation dismiss
+  key for this version.
 - `exit question`: not produced. 0.161.0 ends on `/exit` with no question; the profile
   declares no exit confirm.

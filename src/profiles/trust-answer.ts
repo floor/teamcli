@@ -47,7 +47,7 @@ export function wholeVersion(text: string): number[] | null {
   return match ? match[0].split('.').map(Number) : null;
 }
 
-function versionOrder(a: readonly number[], b: readonly number[]): number {
+export function versionOrder(a: readonly number[], b: readonly number[]): number {
   for (let index = 0; index < Math.max(a.length, b.length); index++) {
     const difference = (a[index] ?? 0) - (b[index] ?? 0);
     if (difference !== 0) return Math.sign(difference);

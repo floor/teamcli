@@ -11,6 +11,7 @@ import { shippedEfforts } from './efforts.ts';
 import { WINDOWS, type QuotaPattern, type WindowName } from './quota.ts';
 import { YamlError, parseYaml, type YamlEntry, type YamlNode } from '../yaml.ts';
 import { trustAnswers, type TrustRecord } from './trust-answer.ts';
+import { questionAnswers, type QuestionAnswerRecord } from './question-answer.ts';
 
 /** How a CLI's input box is emptied and restored, as the one run that measured it saw.
  *  Declared only on the profiles a run covered; a CLI without this block has its unsent text
@@ -134,6 +135,9 @@ export interface Profile {
   modelFlag(model: string, version: string): { option: string; id: string | null };
   /** Trust-answer records. Empty when this version sends no trust key for the CLI. */
   answers: readonly TrustRecord[];
+  /** The keys this profile presses to dismiss a dialog of each kind, per version. Empty when it
+   *  answers none — the answer layer then refuses the seat rather than guessing a key. */
+  questionAnswers: readonly QuestionAnswerRecord[];
 }
 
 /** A version as numbers: `2.1.288 (Claude Code)` is [2, 1, 288]. Null when the text holds none. */
@@ -1111,7 +1115,7 @@ function launchOf(root: YamlNode): Shipped {
   const entries = mapping(root, 'a profile');
   const format = required(entries, 'format', root.line);
   if (format.value.kind !== 'scalar' || format.value.value !== 1) fail(format.line, '"format" must be 1');
-  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', ...LAUNCH_KEYS, ...OPTIONAL_LAUNCH_KEYS]);
+  only(entries, ['format', 'cli', 'screen', 'screen_module', 'quota', 'trust_answer', 'question_answer', ...LAUNCH_KEYS, ...OPTIONAL_LAUNCH_KEYS]);
   const cli = text(required(entries, 'cli', root.line), 'cli');
   required(entries, 'screen', root.line);
   const quotaEntry = optional(entries, 'quota');
@@ -1181,6 +1185,7 @@ function launchOf(root: YamlNode): Shipped {
         id: suggestId(models.ids, model, version),
       }),
       answers: trustAnswers(optional(entries, 'trust_answer')),
+      questionAnswers: questionAnswers(optional(entries, 'question_answer')),
     },
     status: statusEntry ? modelRules(statusEntry.value, 'status_model') : [],
     quota: quotaEntry ? quotaOf(quotaEntry.value) : [],
