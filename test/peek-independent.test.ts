@@ -258,7 +258,7 @@ for (const [name, value] of [['full SHA', sha], ['short SHA', 'abc1234'], ['UUID
   });
 }
 
-for (const [leftPad, rightPad] of [['', ' '], ['', '    '], [' ', ''], ['    ', ''], ['  ', '  '], ['    ', '    ']]) {
+for (const [leftPad, rightPad] of [['', ' '], ['', '    '], [' ', ''], ['    ', ''], ['  ', '  '], ['    ', '    ']] as const) {
   test('a wrapped token stays masked through row padding ' + leftPad.length + '/' + rightPad.length, () => {
     const result = scene({ text: 'ghp_0123456789' + rightPad + '\n' + leftPad + 'abcdefghijklmnopqrstuvwxyz\n' });
     expect(result.code).toBe(0);
