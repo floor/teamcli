@@ -147,6 +147,20 @@ describe("the profiles' schema", () => {
     expect(errors(trust({ any: ['^x$'], without_rule: true }))).toEqual([]);
   });
 
+  test('a rule matches on a primitive, and the schema names the loader’s set', () => {
+    // The loader refuses a rule of narrowing keys alone (`a rule needs a matching primitive`).
+    // `without_rule: true` is a primitive of its own; `live: false` and `at_composer: false`
+    // narrow nothing. The schema's `$defs.rule` anyOf must accept and refuse the same shapes.
+    const trust = (rule: unknown): unknown => ({ format: 1, cli: 'sample', exit: 'bye', screen: { trust: [rule], composer: COMPOSER } });
+    expect(errors(trust({ without_rule: true }))).toEqual([]);
+    expect(errors(trust({ footer: '^done$', live: false }))).toEqual([]);
+    expect(errors(trust({ footer: '^done$', at_composer: false }))).toEqual([]);
+    for (const inert of [{ live: false }, { at_composer: false }, { on_footer: true }, { without_rule: false }]) {
+      expect([inert, errors(trust(inert)).length > 0]).toEqual([inert, true]);
+    }
+    expect(errors(trust({ footer: '^done$', live: true })).length).toBeGreaterThan(0);
+  });
+
   test('reason belongs to a rate-limit rule, as the loader reads it', () => {
     // The loader reads `reason` on a rate_limit stage's rule alone (screen-file's ruleOf) and
     // refuses it on every other stage's rule as an unknown key. The schema is the published
