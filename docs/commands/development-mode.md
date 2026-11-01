@@ -11,7 +11,7 @@ declaration governs, can lift; `off` beats them; and of the three machine modes,
 
 | Mode | What it does |
 | --- | --- |
-| `local-fast` | lifts the caller gates of nine operations, the team file's approval precondition, named owner-only gates for a placed orchestrator, the designated installer's approval, and one untested Antigravity release in `team reload` |
+| `local-fast` | lifts the caller gates of ten operations, the team file's approval precondition, named owner-only gates for a placed orchestrator, the designated installer's approval, and one untested Antigravity release in `team reload` |
 | `pr-per-change` | keeps the process half and lifts no gate at all |
 | `off` | lifts nothing, and beats every legacy source |
 
@@ -41,8 +41,9 @@ switch is the repair.
 
 With dev mode on, five lifts follow.
 
-**The caller gates of nine operations.** The caller gate of `up`, `down`, `remove` of an ordinary
-seat, `register`, `add`, `restart`, `init`, `reload` and `rename` folds. The run prints
+**The caller gates of ten operations.** The caller gate of `up`, `down`, `remove` of an ordinary
+seat, `register`, `add`, `restart`, `init`, `reload`, `rename` and `peek` folds. `peek` is the one
+lift that only reads a screen. The run prints
 `warning: <the refusal>; dev mode continues` — with the level appended when a policy or the
 machine record set it: `(dev-mode on at <level> level)`, or `(dev-mode on at machine level)` for
 the machine record — and goes on; the act it carries out is logged with the command and the
