@@ -12,15 +12,20 @@
 // entry script — so the inbox server starts whether or not `team` is on the PATH. The seat is
 // the only binding the launch states; the session is the team file's the launch read, so the
 // drop folder the server serves is the sender's. A seat whose pane folder is a lobby has no
-// team file of its own: the launch passes the file it resolved, and the registration names it
-// to the server too, so neither reads the seat's folder for the team.
+// team file of its own. A file the launch read is passed on and named to the server too, so
+// neither reads the seat's folder for the team; a registry team's launch names no file — the
+// record is the definition, and the file beside it need not exist — and both resolve the team
+// from the registry's roster instead. A launch that can name no team is refused loudly rather
+// than registered against whatever folder it started in.
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readTeamConfig } from '../file/team-config.ts';
 import { currentBriefClaim } from '../launch/general-brief.ts';
 import { fillInboxPlace, profileFor, type InboxPlace } from '../profiles/profile.ts';
+import { registeredRootOf, type RegisteredRoot } from '../registry/teams.ts';
 import { readState } from '../state.ts';
 
 /** A registration's outcome: made, or refused with the reason the seat's line carries. */
@@ -87,8 +92,14 @@ export function registerInbox(input: {
   cwd: string;
   /** The team file the seat's launch read: the registration and the server it names resolve
    *  the team from it, so a seat whose folder is a lobby registers like any other. Absent: the
-   *  folder's own team file, read here to name the session and the epoch. */
+   *  team is the registry's record for this seat, resolved here and in the server's own way; a
+   *  seat no registered roster holds is refused, never registered against the folder's team. */
   file?: string;
+  /** The session the launch serves: narrows between registered teams that hold the seat name.
+   *  Read only when no `file` is named; a named file's own session is the team's. */
+  session?: string;
+  /** The registry's home. Absent: the machine's own. */
+  home?: string;
   /** The runtime epoch the launch delivered the seat's brief under, when the caller has it.
    *  Absent: read from the claim the launch's state holds for this seat. */
   epoch?: string;
@@ -105,11 +116,19 @@ export function registerInbox(input: {
     folder = '';
   }
   if (!folder) return { ok: false, reason: 'its folder could not be read' };
-  // The launch's own team file when it names one; otherwise the folder's own. A folder with no
-  // team file leaves nothing to register, so the seat stays on its drop and typed legs.
-  const loaded = input.file === undefined ? readTeamConfig(folder) : readTeamConfig(folder, { file: input.file });
-  if (!loaded.ok) {
-    return { ok: false, reason: input.file === undefined ? 'no team file could be read from its folder' : 'the team file its launch read could not be read' };
+  // The launch's own team file when it names one. Otherwise the team is the registry's record
+  // for this seat: a registry-sourced launch names no file (the path a registry read carries is
+  // for a file that need not exist), so reading a team file here would be reading a folder that
+  // holds none — exactly the launch that left a seat with no inbox, silently.
+  let loaded: ReturnType<typeof readTeamConfig>;
+  if (input.file !== undefined) {
+    loaded = readTeamConfig(folder, { file: input.file });
+    if (!loaded.ok) return { ok: false, reason: 'the team file its launch read could not be read' };
+  } else {
+    const found = registeredRootOf(input.home ?? homedir(), input.seat, input.session);
+    if (!found.ok) return { ok: false, reason: registryReason(found, input.seat) };
+    loaded = readTeamConfig(found.root, { ...(input.home === undefined ? {} : { home: input.home }) });
+    if (!loaded.ok) return { ok: false, reason: 'the registered team could not be read' };
   }
   const epoch = input.epoch ?? claimEpochOf(dirname(loaded.path), loaded.team.session, input.seat);
   const place: InboxPlace = {
@@ -159,6 +178,49 @@ export function registerInbox(input: {
     // The command said it wrote the file and did not: the client would start with no server.
   }
   return { ok: false, reason: `${block.target} was not written` };
+}
+
+/** Why the registry named no team for the seat, in the seat's line's words. */
+function registryReason(found: Exclude<RegisteredRoot, { ok: true }>, seat: string): string {
+  switch (found.kind) {
+    case 'unreadable':
+      return `the team registry cannot be read: ${found.message}`;
+    case 'none':
+      return `no registered team holds seat ${JSON.stringify(seat)}`;
+    case 'ambiguous':
+      return `seat ${JSON.stringify(seat)} is on ${String(found.ids.length)} registered teams (${found.ids.join(', ')})`;
+  }
+}
+
+/**
+ * What the seat's folder says about its profile's file route: the file the route writes, and
+ * whether that file holds the registration. Read from the file itself — a JSON file's
+ * `mcpServers` entry, or the server's name in a file whose format this module does not parse
+ * (a toml). Null when nothing on disk can say: a profile with no route, or a launch-line route
+ * whose registration lives on the command and not in a file.
+ */
+export function inboxRegistration(cli: string, cwd: string): { target: string; registered: boolean } | null {
+  const block = profileFor(cli)?.mcpInbox;
+  if (!block) return null;
+  const target = block.file ?? block.target;
+  if (target === null) return null;
+  let text: string;
+  try {
+    text = readFileSync(join(cwd, target), 'utf8');
+  } catch {
+    return { target, registered: false };
+  }
+  if (!target.endsWith('.json')) return { target, registered: text.includes(SERVER_NAME) };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { target, registered: false };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { target, registered: false };
+  const servers = (parsed as { mcpServers?: unknown }).mcpServers;
+  if (servers === null || typeof servers !== 'object' || Array.isArray(servers)) return { target, registered: false };
+  return { target, registered: (servers as Record<string, unknown>)[SERVER_NAME] !== undefined };
 }
 
 /**
