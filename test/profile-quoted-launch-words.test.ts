@@ -54,6 +54,8 @@ type CliRun = {
   runner?: string;
   /** A wrapper script written beside the run, when the launch line names one. */
   wrapper?: string;
+  /** Variables the outer shell sees, for a line that expands one at run time. */
+  env?: Record<string, string>;
 };
 
 /** Runs a built launch line with a stub CLI on the PATH and returns the argv that CLI saw. */
@@ -68,7 +70,7 @@ function cliArgv(command: string, run: CliRun = {}): string[] {
     writeFileSync(join(bin, binary), `#!/bin/sh\nprintf '%s\\0' "$@" > "$ARGV_OUT"\n`, { mode: 0o755 });
     execFileSync(run.runner ?? '/bin/sh', ['-c', command], {
       cwd: dir,
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, ARGV_OUT: out },
+      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, ARGV_OUT: out, ...run.env },
     });
     return readFileSync(out, 'utf8').split('\0').filter((word) => word !== '');
   } finally {
@@ -205,6 +207,99 @@ describe('a line whose shape this version cannot prove keeps 0.5.10 placement, w
       expect(command).toBe(baseline(line));
       expect(warnings).toEqual(expected);
     }
+  });
+});
+
+describe('a script whose words a shell changes at run time is unprovable, and keeps 0.5.10 placement', () => {
+  const baseline = (line: string): string =>
+    `AGENT_UNATTENDED=1 ${line} --dangerously-skip-permissions --append-system-prompt Rules.`;
+
+  // A lexical reader cannot see what the outer shell does at run time, so a script word holding
+  // any of these constructs is not proved: it keeps 0.5.10's placement, reports one plain
+  // notice, and records no session id. One scene per character class, plus a nested form and a
+  // comment, each measured against the placement, never run: several would not run as text.
+  const UNPROVABLE = [
+    { name: 'a variable', line: '/bin/sh -c "claude --model m $TAIL"' },
+    { name: 'a command substitution', line: '/bin/sh -c "claude --model m $(printf x)"' },
+    { name: 'a braced variable', line: '/bin/sh -c "claude --model m ${TAIL}"' },
+    { name: 'a backtick substitution', line: "/bin/sh -c 'claude --model m `printf x`'" },
+    { name: 'a star glob', line: '/bin/sh -c "claude --model *"' },
+    { name: 'a question-mark glob', line: '/bin/sh -c "claude --model m?"' },
+    { name: 'a bracket glob', line: '/bin/sh -c "claude --model [m]"' },
+    { name: 'a word-initial comment', line: '/bin/sh -c "claude --model m # note"' },
+    { name: 'a semicolon', line: '/bin/sh -c "claude --model m; true"' },
+    { name: 'a pipe', line: '/bin/sh -c "claude --model m | cat"' },
+    { name: 'an ampersand', line: '/bin/sh -c "claude --model m & true"' },
+    { name: 'an output redirection', line: '/bin/sh -c "claude --model m > out.txt"' },
+    { name: 'an input redirection', line: '/bin/sh -c "claude --model m < in.txt"' },
+    { name: 'an opening parenthesis', line: '/bin/sh -c "(claude --model m)"' },
+    { name: 'a closing parenthesis', line: '/bin/sh -c "true) claude --model m"' },
+    { name: 'a newline', line: '/bin/sh -c "claude --model m\ntrue"' },
+  ];
+
+  for (const { name, line } of UNPROVABLE) {
+    test(`${name} in the script word keeps the options after the line, with one notice and no id`, () => {
+      const warnings: string[] = [];
+      const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+      expect(command).toBe(baseline(line));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('after the line, where the CLI may not read them');
+      // The line on its own cannot take an id either: it would go after the closing quote, where
+      // this script never reads it, so none is recorded.
+      const launch = withLaunchSession('claude-code', line);
+      expect(launch.command).toBe(line);
+      expect(launch.sessionId).toBeUndefined();
+      expect(launch.notice).toContain('cannot take a session id');
+      // The fallback line itself says the same: its added words come after the script.
+      const onFallback = withLaunchSession('claude-code', command);
+      expect(onFallback.command).toBe(command);
+      expect(onFallback.sessionId).toBeUndefined();
+      expect(onFallback.notice).toContain('cannot take a session id');
+    });
+  }
+
+  test("the outer shell expands a variable into a comment, so no id is minted for the line", () => {
+    // Measured on `/bin/sh` here: the outer shell writes `# ignored tail` into the command
+    // string, the inner shell reads it as a comment, and the CLI receives only `--model m`. A
+    // lexical insertion after the variable would be swallowed by that comment while a minted id
+    // was recorded; the line is unprovable instead, so no id is recorded.
+    const line = '/bin/sh -c "claude --model m $SYNTHETIC_TAIL"';
+    const env = { SYNTHETIC_TAIL: '# ignored tail' };
+    expect(cliArgv(line, { env })).toEqual(['--model', 'm']);
+    const warnings: string[] = [];
+    const command = launchCommand(claude, line, 'Rules.', undefined, undefined, undefined, undefined, undefined, (text) => warnings.push(text));
+    expect(command).toBe(baseline(line));
+    expect(warnings).toHaveLength(1);
+    expect(cliArgv(command, { env })).toEqual(['--model', 'm']);
+    const launch = withLaunchSession('claude-code', command);
+    expect(launch.command).toBe(command);
+    expect(launch.sessionId).toBeUndefined();
+    expect(launch.notice).toContain('cannot take a session id');
+  });
+
+  test('a literal $ in inner single quotes is provable: the words still go inside the script and arrive', () => {
+    // The inner shell reads a single-quoted `$X` literally, so the script hands the CLI the
+    // four characters `$X` whatever `X` holds, and the added words reach it the same way.
+    // `\$` is literal to the outer shell, so the inner shell receives `'$X'`: a single-quoted
+    // word of the script, not an expansion, and the CLI receives the four characters.
+    const line = '/bin/sh -c "claude --model \'\\$X\'"';
+    const env = { X: 'expanded' };
+    expect(cliArgv(line, { env })).toEqual(['--model', '$X']);
+    const command = launchCommand(claude, line, 'Rules.', HOOK);
+    expect(cliArgv(command, { env })).toEqual([
+      '--model',
+      '$X',
+      '--dangerously-skip-permissions',
+      '--append-system-prompt',
+      'Rules.',
+      '--settings',
+      HOOK,
+    ]);
+    const launch = withLaunchSession('claude-code', command);
+    expect(launch.notice).toBeUndefined();
+    const sessionId = launch.sessionId ?? '';
+    expect(sessionId).not.toBe('');
+    expect(cliArgv(launch.command, { env })).toContain(sessionId);
   });
 });
 

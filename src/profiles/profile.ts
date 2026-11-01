@@ -647,10 +647,14 @@ function startsWithCli(binary: string, command: string): boolean {
   return program !== undefined && (program.text.split('/').pop() ?? program.text) === binary;
 }
 
-/** Whether a script body is one simple command: words, their quoting and their expansions, and
- *  nothing else. A body with a top-level operator (`;`, `&`, `|`, `<`, `>`, `(`, `)`), a
- *  newline or a comment cannot be extended at its end without changing what runs, and a command
- *  substitution this reader cannot weigh (`$(`) is not proved either. */
+/** Whether a script body is one simple command whose words the shell hands on exactly as
+ *  written. A lexical reader cannot see what the shell does at run time, so a body holding a
+ *  construct the shell changes is not proved: not a top-level operator (`;`, `&`, `|`, `<`, `>`,
+ *  `(`, `)`), a newline or a comment, and not an expansion or a substitution (`$` in any form, a
+ *  backtick) or a glob (`*`, `?`, `[`), which the shell reads unquoted and inside double quotes
+ *  alike. Only single quotes make such characters literal, and a backslash makes the next
+ *  character literal. A body with any other such construct is unprovable, and its line keeps the
+ *  0.5.10 placement with its notice. */
 function isSimpleCommand(text: string): boolean {
   let at = 0;
   while (at < text.length) {
@@ -675,41 +679,17 @@ function isSimpleCommand(text: string): boolean {
           closed = true;
           break;
         }
+        if (inner === '$' || inner === '`') return false;
         at += 1;
       }
       if (!closed) return false;
-      continue;
-    }
-    if (char === '$' && text[at + 1] === "'") {
-      let index = at + 2;
-      let closed = false;
-      while (index < text.length) {
-        const inner = text[index]!;
-        if (inner === '\\') {
-          index += 2;
-          continue;
-        }
-        if (inner === "'") {
-          index += 1;
-          closed = true;
-          break;
-        }
-        index += 1;
-      }
-      if (!closed) return false;
-      at = index;
       continue;
     }
     if (char === '\\') {
       at += 2;
       continue;
     }
-    if (char === '`') {
-      const close = text.indexOf('`', at + 1);
-      if (close < 0) return false;
-      at = close + 1;
-      continue;
-    }
+    if (char === '$' || char === '`' || char === '*' || char === '?' || char === '[') return false;
     if (char === '#' && (at === 0 || /\s/.test(text[at - 1]!))) return false;
     if (';|&<>()\n'.includes(char)) return false;
     at += 1;
