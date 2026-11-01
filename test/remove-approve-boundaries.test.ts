@@ -19,13 +19,17 @@ import { runRemove, type RemoveSources } from '../src/commands/remove.ts';
 import { runUp, type Launch, type UpSources } from '../src/commands/up.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
 import type { HerdrAgent } from '../src/herdr.ts';
+import { noteLaunchedPane } from '../src/file/launched-file.ts';
+import { copySeat } from '../src/file/lines.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { writeTeamText } from '../src/file/team-text.ts';
 import { agentsDir, getAgent, registerAgent } from '../src/registry/agents.ts';
 import { getTeam, teamIdOf, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, testIo } from './helpers.ts';
+import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 
 const NOW = new Date('2026-10-15T11:30:00Z');
 const OLD = new Date('2026-09-01T09:00:00Z');
@@ -536,5 +540,74 @@ describe('a team carrying an old approval record', () => {
     expect(code, `up said:\n${io.out}\n${io.err}`).toBe(0);
     expect(`${io.out}${io.err}`).not.toContain('team approve');
     expect(readFileSync(recordPath, 'utf8')).toBe(before);
+  });
+});
+
+// The fixture a launched pane's remove must read: the file is imported as the team's registry
+// record, the record gains one seat the file never has (the edit `team add <name> --like` makes),
+// and the session's lead pane is pointed at the file it launched from. A command that reads the
+// pointer as a plain file misses that seat; reading it through the seam finds the record the
+// edit went to.
+async function recordOnlySeat(body: (seat: string) => Promise<void>): Promise<void> {
+  writeFile(teamYaml());
+  record({ lead: 'lead-pane' });
+  intoRegistry(root, home);
+  await underRegistry(async () => {
+    const stored = storedTeam(root, home);
+    if (stored === null) throw new Error('the fixture team is not in the registry');
+    const file = join(dir, 'team.yaml');
+    expect(writeTeamText(file, copySeat(stored.text, 'tester-1', 'tester-3'), { home, command: 'add' }))
+      .toEqual({ ok: true, target: 'registry' });
+    updateState(dir, (state) => {
+      (state.sessions.acme ??= emptySession()).launched_file = file;
+    });
+    noteLaunchedPane(home, file, 'lead-pane', 'acme');
+    await body('tester-3');
+  });
+}
+
+describe('a launched pane reads the team where the edits write it', () => {
+  // A delegated copy is the one `team add` a seat may run, and the delegate entry lives in the
+  // record this file does not have. An add that reads the pointer as a plain file asks no
+  // delegate gate at all and refuses the caller; reading it through the seam finds the record's
+  // entry and plans the copy into that record.
+  test('team add --dry-run reads the delegate the record declares alone', async () => {
+    writeFile(teamYaml());
+    record({ lead: 'lead-pane' });
+    approveAt(teamYaml(), OLD);
+    intoRegistry(root, home);
+    await underRegistry(async () => {
+      const stored = storedTeam(root, home);
+      if (stored === null) throw new Error('the fixture team is not in the registry');
+      const file = join(dir, 'team.yaml');
+      const withDelegate = `${stored.text}delegates:\n  - pane: crew/lead-pane\n    commands: [add]\n`;
+      expect(writeTeamText(file, withDelegate, { home, command: 'add' })).toEqual({ ok: true, target: 'registry' });
+      updateState(dir, (state) => {
+        (state.sessions.acme ??= emptySession()).launched_file = file;
+      });
+      noteLaunchedPane(home, file, 'lead-pane', 'acme');
+
+      const io = testIo(root, SEAT);
+      const code = await runAdd(['tester-3', '--like', 'tester-1', '--dry-run'], io, {
+        ...addSources(world()),
+        delegateGate: () => ({ kind: 'passed' as const, pane: 'crew/lead-pane' }),
+      });
+      expect(code, `${io.err}${io.out}`).toBe(0);
+      expect(io.out).toContain('tester-3');
+      expect(io.out).toContain('dry run: nothing was run');
+      expect(storedTeam(root, home)?.text).toBe(withDelegate);
+      expect(readFileSync(file, 'utf8')).toBe(teamYaml());
+    });
+  });
+
+  test('team remove --keep stops a seat the record holds alone', async () => {
+    await recordOnlySeat(async (seat) => {
+      const io = testIo(root, SEAT);
+      const code = await runRemove([seat, '--keep'], io, removeSources([]));
+      expect(code, `${io.err}${io.out}`).toBe(0);
+      expect(io.out).toBe(`stopped ${seat}\n`);
+      expect(storedTeam(root, home)?.text ?? '').toContain('stopped: true');
+      expect(readFileSync(join(dir, 'team.yaml'), 'utf8')).toBe(teamYaml());
+    });
   });
 });

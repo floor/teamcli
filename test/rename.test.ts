@@ -9,7 +9,10 @@ import { runFeed } from '../src/commands/feed.ts';
 import { listUnacked, plantMessage, runMessages } from '../src/commands/messages.ts';
 import { runRename } from '../src/commands/rename.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
+import { noteLaunchedPane } from '../src/file/launched-file.ts';
+import { copySeat } from '../src/file/lines.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { writeTeamText } from '../src/file/team-text.ts';
 import { writeGrant } from '../src/permissions/grants.ts';
 import { resolveCaller } from '../src/permissions/who.ts';
 import { findAgent, getAgent } from '../src/registry/agents.ts';
@@ -627,5 +630,36 @@ describe('under the registry source', () => {
     expect(record.text).not.toContain('name: builder-1\n');
     expect(readFileSync(fx.file, 'utf8')).toBe(BASE_YAML);
     expect(realRegistryTouched()).toBe(false);
+  });
+
+  // A seat `team add` wrote belongs to the registry's record, not to the file the session was
+  // launched from. A lead renaming it from its own pane reads the record through the launched
+  // pointer and renames it there; the file the session launched from is left exactly as it was.
+  test('a rename from a launched pane reaches a seat the registry record holds alone', async () => {
+    const fx = makeFixture();
+    intoRegistry(fx.root, fx.home);
+    await underRegistry(async () => {
+      const record = storedTeam(fx.root, fx.home);
+      if (record === null) throw new Error('the fixture team is not in the registry');
+      // The record gains the seat and the file does not: the same edit `team add <name> --like`
+      // makes, written where the record's writers put it.
+      expect(writeTeamText(fx.file, copySeat(record.text, 'builder-1', 'builder-2'), { home: fx.home, command: 'add' }))
+        .toEqual({ ok: true, target: 'registry' });
+      const pane = readState(fx.dir).sessions.acme?.seats.lead?.pane;
+      if (pane === undefined) throw new Error('the fixture session has no recorded lead pane');
+      updateState(fx.dir, (state) => {
+        (state.sessions.acme ??= emptySession()).launched_file = fx.file;
+      });
+      noteLaunchedPane(fx.home, fx.file, pane, 'acme');
+
+      const io = testIo(fx.root, { kind: 'seat', name: 'lead', pane, session: 'acme' });
+      expect(await runRename(['builder-2', 'builder-3'], io, { home: fx.home, now: () => NOW }), `${io.err}${io.out}`).toBe(0);
+      expect(io.out).toContain('renamed builder-2 -> builder-3: moved team config');
+      const after = storedTeam(fx.root, fx.home);
+      expect(after?.text).toContain('name: builder-3');
+      expect(after?.text).not.toContain('name: builder-2');
+      expect(readFileSync(fx.file, 'utf8')).toBe(BASE_YAML);
+      expect(realRegistryTouched()).toBe(false);
+    });
   });
 });
