@@ -161,7 +161,7 @@ for (const kind of ['question', 'plan approval', 'confirmation'] as const) {
 // use one seat and one shipped CLI per scene; only the pane's actual capture changes.
 const codexQuestion = capture('codex/0.161.0/question.txt');
 const codexPlan = capture('codex/0.161.0/plan-approval.txt');
-for (const [before, after] of [[codexQuestion, codexPlan], [codexPlan, codexQuestion]]) {
+for (const [before, after] of [[codexQuestion, codexPlan], [codexPlan, codexQuestion]] as const) {
   test('changing the captured Codex prompt kind starts a new full escalation window: ' + readScreen('codex', before).kind, () => {
     const memory = newMemory();
     expect(escalations(cycle('codex', before, memory, AT))).toEqual([]);
@@ -174,7 +174,7 @@ for (const [before, after] of [[codexQuestion, codexPlan], [codexPlan, codexQues
 for (const [beforePath, afterPath] of [
   ['cursor/2026.10.01/question.txt', 'cursor/2026.10.01/permission-plan.txt'],
   ['cursor/2026.10.01/permission-plan.txt', 'cursor/2026.10.01/question.txt'],
-]) {
+] as const) {
   test('a Cursor kind change resets its clock: ' + beforePath, () => {
     const memory = newMemory();
     cycle('cursor', capture(beforePath), memory, AT);
