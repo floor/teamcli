@@ -12,6 +12,13 @@
 // names another file, or a state that cannot be read, stands the watch down as blocked and says
 // so, and no write happens.
 //
+// The record is the file the loader resolved, and it is compared by that file's identity, not by
+// its existence (src/watch/binding.ts). The default team's definition lives in the registry and
+// its `.agents/team.yaml` is retired, so the resolved path names no file at all; the identity is
+// then the canonical root that path resolves to, which is the key the registry addresses the
+// team by. A record naming another root, or another name in this root's `.agents`, still refuses:
+// the root/session isolation the binding exists for is unchanged.
+//
 // The authority is renewed on the daemon's existing fixed heartbeat, not on the sweep's own wait:
 // the build exposes `tick`, the host calls it on every daemon beat before any due waiter settles,
 // and the wrapper pulses the lifecycle host there. Renewal therefore runs every five seconds
@@ -27,13 +34,14 @@
 // exactly-once handoff claim and adds no queue, identity or WorkPush request change: drain holds
 // ambiguous work for explicit recovery.
 
-import { realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WatchSources } from '../commands/watch.ts';
 import type { PaneProcesses } from '../herdr.ts';
 import type { BrokerWorkSource } from '../idle_work.ts';
 import { emptySession, LockBusyError, pidAlive, readState, updateState } from '../state.ts';
 import { createWatchHost, type WatchHostReport } from '../watch/authority-lifecycle.ts';
+import { sameTeamBinding } from '../watch/binding.ts';
 import type { WorkPush } from '../watch/dispatch.ts';
 import type { WatchAuthorityHolder } from '../watch/epoch-store.ts';
 import { clearWatchHandover, readWatchHandover, writeWatchHandover } from '../watch/handover.ts';
@@ -109,14 +117,6 @@ function textOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function sameFile(left: string, right: string): boolean {
-  try {
-    return realpathSync(left) === realpathSync(right);
-  } catch {
-    return false;
-  }
-}
-
 /** The route's recorded binding, as this module reads it: absent (the daemon's own to claim),
  *  bound to the route's own team file, or refused (another file, or a state that cannot be
  *  read). A refusal is never permission to write: the record stays exactly as it stands. */
@@ -133,7 +133,7 @@ function readBinding(stateDir: string, session: string, teamFile: string): Bindi
     return { kind: 'refused', why: `the session state cannot be read: ${textOf(error)}` };
   }
   if (!recorded) return { kind: 'absent' };
-  if (!sameFile(recorded.file, teamFile)) {
+  if (!sameTeamBinding(recorded.file, teamFile)) {
     return { kind: 'refused', why: `the recorded watchdog file "${recorded.file}" is not this route's team file "${teamFile}"` };
   }
   return { kind: 'bound', recorded };
@@ -158,7 +158,7 @@ function claimBinding(stateDir: string, session: string, teamFile: string): Clai
       const current = (state.sessions[session] ??= emptySession());
       const recorded = current.watchdog;
       if (recorded !== undefined) {
-        return sameFile(recorded.file, teamFile)
+        return sameTeamBinding(recorded.file, teamFile)
           ? { kind: 'present' }
           : {
               kind: 'refused',
@@ -386,7 +386,12 @@ async function runAuthoritativeHost(
       if (claim.kind === 'claimed') {
         input.log(
           `root ${input.route.root}: the session recorded no watchdog file binding; `
-            + `recorded this route's team file "${input.teamFile}"`,
+            + (existsSync(input.teamFile)
+              ? `recorded this route's team file "${input.teamFile}"`
+              // The default team: the definition is in the registry and the conventional file is
+              // retired. The binding still names the loader's resolved handle, and its identity
+              // is the canonical root that handle resolves to.
+              : `recorded this route's team identity "${input.teamFile}" (no file stands there; the root it names is the binding's identity)`),
         );
         break;
       }
