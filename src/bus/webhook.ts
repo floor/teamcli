@@ -13,7 +13,8 @@
 // The request shape and the way the secret authenticates live in `webhookRequest`, one function,
 // until the routine's own contract is forwarded. Everything else here reads files and counts
 // answers.
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { SeatWebhook, TeamFile } from '../file/types.ts';
 import type { SignedRecord } from '../send/record.ts';
 import { webhookRouteOf, type WebhookRoute } from '../send/webhook.ts';
@@ -48,7 +49,10 @@ export type WebhookShape =
  * authenticates it. Two bodies: the bus envelope, every row's default, and the seat-inbox record
  * shape the front's own webhook pushed. The secret is `Authorization: Bearer <secret>` unless the
  * row names a header, which then carries the secret file's line verbatim. No caller reads the
- * secret otherwise.
+ * secret otherwise. A row that names neither new field builds the request object every earlier
+ * row built, byte for byte; the delivery applies its own redirect policy, so a 3xx is never
+ * followed — a redirect would carry the secret to a destination the routine's own address never
+ * named, and it fails the attempt like any other refusal to answer.
  */
 export function webhookRequest(
   record: SignedEventRecord,
@@ -56,7 +60,12 @@ export function webhookRequest(
   secret: string,
   shape: WebhookShape = { body: 'event' },
 ): { url: string; init: RequestInit } {
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  // The map has no prototype: a header name is the row's to pick, and `__proto__` on a plain
+  // object would run the inherited setter instead of adding a field, so the routine would answer
+  // 2xx without ever receiving its authentication header. A prototype-free map takes every valid
+  // name as a field of its own.
+  const headers = Object.create(null) as Record<string, string>;
+  headers['content-type'] = 'application/json';
   if (shape.header === undefined) headers.authorization = `Bearer ${secret}`;
   else headers[shape.header] = secret;
   return {
@@ -90,6 +99,48 @@ function inboxBody(message: SignedRecord): Record<string, unknown> {
 /** The name a record id may be as a drop file: the alphabet the drop folder itself uses. */
 const DROP_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/** One path segment of a drop folder: a name that cannot leave the folder it is joined to. */
+function segmentOk(name: string): boolean {
+  return name !== '' && name !== '.' && name !== '..' && !/[/\\\0]/.test(name);
+}
+
+/** The seat's own drop folder, resolved, with every link along the way refused: a linked
+ *  ancestor — the project's, the session's, the seat's — could lead into another project, and
+ *  the record it holds there is not this project's to post. The file's own real path must sit
+ *  directly in that folder, so a linked drop file is refused too. */
+function ownDropPath(
+  root: string,
+  session: string,
+  to: string,
+  id: string,
+): { ok: true; path: string } | { ok: false; reason: string } {
+  if (!segmentOk(session) || !segmentOk(to)) {
+    return { ok: false, reason: 'the arrival cannot name a drop folder' };
+  }
+  const dir = join(root, '.agents', 'send-drops', session, to);
+  let expected: string;
+  let realDir: string;
+  try {
+    expected = join(realpathSync(root), '.agents', 'send-drops', session, to);
+    realDir = realpathSync(dir);
+  } catch {
+    return { ok: false, reason: `the message record ${id} is not in the seat's drop folder` };
+  }
+  if (realDir !== expected) {
+    return { ok: false, reason: 'the seat\'s drop folder is a link that leads outside the project' };
+  }
+  let realFile: string;
+  try {
+    realFile = realpathSync(join(dir, id));
+  } catch {
+    return { ok: false, reason: `the message record ${id} is not in the seat's drop folder` };
+  }
+  if (dirname(realFile) !== realDir) {
+    return { ok: false, reason: `the message record ${id} is a link that leads outside the seat's drop folder` };
+  }
+  return { ok: true, path: join(dir, id) };
+}
+
 /** The message record's reader, loaded the first time a row asks for the record shape. The
  *  default body never loads it: the record module's import graph reaches the launch profiles,
  *  which read data files from beside the module, and the adapter is also run on its own where a
@@ -121,13 +172,21 @@ async function shapeOf(
   if (to === undefined || to === '') return { ok: false, reason: 'the arrival names no seat' };
   const id = payload.record_id;
   if (!DROP_NAME.test(id)) return { ok: false, reason: "the arrival's record id cannot name a drop file" };
+  const own = ownDropPath(root, payload.session, to, id);
+  if (!own.ok) return { ok: false, reason: own.reason };
   const reader = await messageReader();
   if (reader === null) {
     return { ok: false, reason: 'the inbox body shape could not load the message record reader' };
   }
-  const read = reader.readRecord(join(root, '.agents', 'send-drops', payload.session, to, id), id);
+  const read = reader.readRecord(own.path, id);
   if (!read.ok) return { ok: false, reason: `the message record ${id} could not be read: ${read.reason}` };
   if (read.record === null) return { ok: false, reason: `the message record ${id} is not in the seat's drop folder` };
+  // The record must be this arrival's own: the seat it was sent to, the session, and the project
+  // folder it was written for. A record that is not is never posted, whatever folder it sits in.
+  const written = read.record.payload;
+  if (written.to !== to || written.session !== payload.session || !reader.sameFolder(written.root, root)) {
+    return { ok: false, reason: `the message record ${id} is not addressed to this seat in this project` };
+  }
   return { ok: true, value: { body: 'inbox', ...header, message: read.record } };
 }
 
@@ -229,7 +288,10 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   let reason = 'could not connect';
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetchFn(request.url, { ...prepared, signal: AbortSignal.timeout(policy.timeoutMs) });
+      // A redirect is never followed: it would carry the secret to a destination the routine's
+      // own address never named. The policy rides on the attempt, not on the request object, so a
+      // row that names neither new field builds exactly the request object it always did.
+      const response = await fetchFn(request.url, { ...prepared, redirect: 'error', signal: AbortSignal.timeout(policy.timeoutMs) });
       if (response.status >= 200 && response.status < 300) return 'delivered';
       reason = `HTTP ${response.status}`;
     } catch (error) {
