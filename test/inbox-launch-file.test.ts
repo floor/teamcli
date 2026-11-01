@@ -245,8 +245,10 @@ describe('the codex launch line round-trips its values through shell quoting and
     const filled = pairs(launchCommand(codex, 'codex', 'Rules.', undefined, {
       seat: 'helper', session: 'acme', command: '/opt/bun', entry: '/src/cli.ts',
     }));
+    // No file to name, so the line carries the launch's session instead: a registry team is
+    // resolved by it, and the server refuses a team whose session is another.
     expect(JSON.parse(filled.get('mcp_servers.team_inbox.args')!)).toEqual([
-      '/src/cli.ts', 'mcp', 'serve', '--seat', 'helper',
+      '/src/cli.ts', 'mcp', 'serve', '--seat', 'helper', '--session', 'acme',
     ]);
   });
 });

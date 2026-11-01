@@ -7,7 +7,7 @@ import { callerOf, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner } 
 import { loadReadings, saveSpendReadings, updateReadings, type Seen, type SpendReading } from '../budgets/readings.ts';
 import { runChecksOf, type CheckOutcome } from '../budgets/run.ts';
 import { currentTeam, rememberCurrent } from '../file/current.ts';
-import { isParseError } from '../file/load.ts';
+import { isParseError, launchTeamFile } from '../file/load.ts';
 import { saveMachineReadings } from '../information/machine-readings.ts';
 import type { TeamFile } from '../file/types.ts';
 import { chmodSync, mkdirSync } from 'node:fs';
@@ -1211,6 +1211,7 @@ export async function runWatch(argv: string[], io: Io, sources: WatchSources): P
               root,
               home: sources.home,
               path: current.path,
+              launchFile: launchTeamFile(current),
               team,
               session,
               io,
