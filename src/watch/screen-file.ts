@@ -269,6 +269,17 @@ function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true, allowReas
     }
     if (on) rule.atComposer = true;
   }
+  // A rule matches on a primitive: `any`, `all`, `footer`, `below_last_rule`, `none_after`,
+  // `only_after`, `block` (returned above), or `without_rule: true`. `on_footer`, `live`,
+  // `at_composer` and `without_rule: false` narrow a match one of those already makes, so a
+  // rule built of them alone would pass every screen. The schema's `$defs.rule` anyOf names
+  // the same set, and these scenes hold the loader to it.
+  const matches = any !== undefined || all !== undefined || footer !== undefined
+    || below !== undefined || noneAfter !== undefined || onlyAfter !== undefined
+    || rule.withoutRule === true;
+  if (!matches) {
+    fail(node.line, 'a rule needs a matching primitive: "any", "all", "footer", "below_last_rule", "none_after", "only_after", "block", or "without_rule: true"');
+  }
   return rule;
 }
 
