@@ -59,16 +59,18 @@ export type Stage = { rules: Rule[]; tested?: VersionRange; reason?: string };
 
 /** Where one dialog's question text sits on the pane. Exactly one anchor is set: `inline` takes
  *  the matched row itself, `after` takes the rows below it, `before` the rows above it. `rows`
- *  is how many consecutive rows may be taken — the walk stops at the first row that is blank
- *  after the strips — and `strip` removes the frame's own characters from a taken row before it
- *  is trimmed: a box border, the CLI's question counter, the option number. The text the reader
- *  returns is the stripped rows joined by one space; nothing else is added to it.
+ *  is how many rows may be taken — a blank row after the strips ends the walk when the spec
+ *  names no end marker — and `strip` removes the frame's own characters from a taken row before
+ *  it is trimmed: a box border, the CLI's question counter, the option number. The text the
+ *  reader returns is the stripped rows joined by one space; nothing else is added to it.
  *
  *  `until` names the row that ends the block — the dialog's options, or its footer — and is
- *  tested against the raw row, before the strips. A spec that names it is read to that row, and
- *  a block still going when `rows` runs out is reported cut (`QuestionReading.complete`), never
- *  answered on part of its text. A spec that names no marker declares no end: its walk stops at
- *  a blank row or at `rows`, and a cut is not reported. */
+ *  tested against the raw row, before the strips. A spec that names it is read to that row:
+ *  a blank row inside the block is the block's own row and is passed over, and only reaching the
+ *  marker reports the block whole (`QuestionReading.complete`). A block still going when `rows`
+ *  runs out, or one the window ends before the marker, is reported cut, never answered on part
+ *  of its text. A spec that names no marker declares no end: its walk stops at a blank row or at
+ *  `rows`, and a cut is not reported. */
 export type TextSpec = {
   inline: RegExp | null;
   after: RegExp | null;
