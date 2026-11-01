@@ -1519,7 +1519,7 @@ describe('team answer', () => {
     expect(io.err).toBe('');
     expect(JSON.parse(io.out)).toEqual({
       schema: { name: 'team.error', version: 1 },
-      error: { id: 'answer.usage', message: 'a seat and trust are required', repair: null },
+      error: { id: 'answer.usage', message: 'a seat and trust or question are required', repair: null },
     });
 
     // --json read from raw argv: the parser's own error must not lose the structured face.
