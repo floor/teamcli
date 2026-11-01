@@ -6,12 +6,13 @@
 // Every receiver here is a synthetic listener on a loopback port. No real URL, no real secret, no
 // live seat.
 import { afterEach, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
 import { startBus } from '../src/bus/server.ts';
 import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRoutesOf } from '../src/bus/webhook.ts';
+import { webhookRouteOf } from '../src/send/webhook.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
 const made: string[] = [];
@@ -425,7 +426,170 @@ test('a running bus posts an accepted arrival to the seat\'s webhook adapter', a
     expect(existsSync(drop)).toBe(true);
     expect(readFileSync(drop, 'utf8')).toBe('from lead\n\nhello from the bus scene\n');
     expect(lines.join('\n')).not.toContain('not delivered');
+    // Nothing the bus wrote — no record, log or drop copy — carries the secret. The fixture's
+    // own two files are skipped: the secret file is where the secret belongs, and the URL file
+    // holds the address, never the secret.
+    const carryingSecret: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.isFile() && path !== hook.urlFile && path !== hook.secretFile) {
+          if (readFileSync(path, 'utf8').includes('synthetic-secret-value')) carryingSecret.push(path);
+        }
+      }
+    };
+    walk(base);
+    expect(carryingSecret).toEqual([]);
   } finally {
     await started.handle.close();
   }
+});
+
+test('a URL that names credentials is refused at read time, and its parts are never echoed', () => {
+  const base = scratch();
+  const hook = files(
+    base,
+    'http://SYNTHETIC_USER:SYNTHETIC_URL_PASSWORD@127.0.0.1:1/hook?token=SYNTHETIC_URL_QUERY',
+  );
+
+  const route = webhookRouteOf(hook);
+  expect(route?.ok).toBe(false);
+  const reason = route !== null && !route.ok ? route.reason : '';
+  expect(reason).toContain('credentials');
+  expect(reason).not.toContain('SYNTHETIC_USER');
+  expect(reason).not.toContain('SYNTHETIC_URL_PASSWORD');
+  expect(reason).not.toContain('SYNTHETIC_URL_QUERY');
+  expect(reason).not.toContain('http://');
+});
+
+test('a secret with an internal newline is refused at read time, and never echoed', async () => {
+  const base = scratch();
+  const hook = files(
+    base,
+    'http://127.0.0.1:1/routine',
+    'SYNTHETIC_SECRET_FIRST\nSYNTHETIC_SECRET_SECOND',
+  );
+
+  const route = webhookRouteOf(hook);
+  expect(route?.ok).toBe(false);
+  const reason = route !== null && !route.ok ? route.reason : '';
+  expect(reason).toContain('newline or control character');
+  expect(reason).not.toContain('SYNTHETIC_SECRET_FIRST');
+  expect(reason).not.toContain('SYNTHETIC_SECRET_SECOND');
+
+  const said = quiet();
+  const outcome = await deliverWebhook({
+    seat: 'iris',
+    webhook: hook,
+    record: arrival(),
+    policy: FAST,
+    report: said.report,
+  });
+  expect(outcome).toBe('refused');
+  expect(said.lines.join('\n')).not.toContain('SYNTHETIC_SECRET');
+});
+
+test('a runtime error is reported in fixed words, never its own message', async () => {
+  const base = scratch();
+  const hook = files(base, 'http://127.0.0.1:1/routine');
+  const said = quiet();
+
+  const outcome = await deliverWebhook({
+    seat: 'iris',
+    webhook: hook,
+    record: arrival(),
+    policy: { ...FAST, attempts: 1 },
+    report: said.report,
+    fetch: (() => {
+      throw new Error(
+        'failed url=http://127.0.0.1:1/SYNTHETIC_URL_PATH authorization=Bearer SYNTHETIC_BEARER_SECRET',
+      );
+    }) as unknown as typeof fetch,
+  });
+
+  expect(outcome).toBe('failed');
+  const line = said.lines.join('\n');
+  expect(line).toContain('could not connect');
+  expect(line).not.toContain('SYNTHETIC_URL_PATH');
+  expect(line).not.toContain('SYNTHETIC_BEARER_SECRET');
+  expect(line).not.toContain('failed url=');
+});
+
+test('every failure path keeps the credentials and the secret out of reports and the record', async () => {
+  const base = scratch();
+  const bearer = 'SYNTHETIC_BEARER_SECRET';
+  const credentialUrl =
+    'http://SYNTHETIC_USER:SYNTHETIC_URL_PASSWORD@127.0.0.1:1/hook?token=SYNTHETIC_URL_QUERY';
+  const credentialHook = files(base, credentialUrl, bearer);
+  const newlineHook = files(base, 'http://127.0.0.1:1/routine', 'SYNTHETIC_SECRET_FIRST\nSYNTHETIC_SECRET_SECOND');
+  const leakingFetch = (() => {
+    throw new Error(`failed url=${credentialUrl} authorization=Bearer ${bearer}`);
+  }) as unknown as typeof fetch;
+  const said = quiet();
+
+  await deliverWebhook({ seat: 'iris', webhook: credentialHook, record: arrival(), policy: FAST, report: said.report });
+  await deliverWebhook({ seat: 'iris', webhook: newlineHook, record: arrival(), policy: FAST, report: said.report });
+  await deliverWebhook({
+    seat: 'iris',
+    webhook: files(base, 'http://127.0.0.1:1/routine'),
+    record: arrival(),
+    policy: { ...FAST, attempts: 1 },
+    report: said.report,
+    fetch: leakingFetch,
+  });
+  const answered = await deliverWebhook({
+    seat: 'iris',
+    webhook: files(base, 'http://127.0.0.1:1/routine'),
+    record: arrival(),
+    policy: { ...FAST, attempts: 1 },
+    report: said.report,
+    fetch: (async () => new Response('no', { status: 500 })) as unknown as typeof fetch,
+  });
+
+  expect(answered).toBe('failed');
+  const everything = `${said.lines.join('\n')}\n${JSON.stringify(arrival())}`;
+  for (const part of ['SYNTHETIC_USER', 'SYNTHETIC_URL_PASSWORD', 'SYNTHETIC_URL_QUERY', 'SYNTHETIC_BEARER_SECRET', 'SYNTHETIC_SECRET_FIRST', 'SYNTHETIC_SECRET_SECOND']) {
+    expect(everything).not.toContain(part);
+  }
+});
+
+/** What the child run (test/webhook-file-race-run.ts) observed at the swap. */
+type RaceFacts = {
+  swapped: boolean;
+  accepted: boolean;
+  valueIsPrivate: boolean;
+  valueIsPublic: boolean;
+  secondRefused: boolean;
+  refusalNamesMode: boolean;
+  reasonEchoesValue: boolean;
+  parkedKept: boolean;
+  modeAtPath: string;
+};
+
+test('a secret swapped between the check and the read is never used', async () => {
+  const proc = Bun.spawn(['bun', join(import.meta.dir, 'webhook-file-race-run.ts')], {
+    cwd: new URL('..', import.meta.url).pathname,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const exit = await proc.exited;
+  const out = await new Response(proc.stdout).text();
+  const err = await new Response(proc.stderr).text();
+  expect(exit, err || out).toBe(0);
+  const facts = JSON.parse(out) as RaceFacts;
+  // The swap really happened at the read: the path now holds the public 0644 file, and the
+  // private file's bytes survived under the parked name.
+  expect(facts.swapped).toBe(true);
+  expect(facts.modeAtPath).toBe('0644');
+  expect(facts.parkedKept).toBe(true);
+  // What was accepted is the file whose descriptor passed the checks, never the file now at
+  // the path.
+  expect(facts.accepted).toBe(true);
+  expect(facts.valueIsPrivate).toBe(true);
+  expect(facts.valueIsPublic).toBe(false);
+  // A later read sees the public 0644 file and refuses it, in words that repeat no value.
+  expect(facts.secondRefused).toBe(true);
+  expect(facts.refusalNamesMode).toBe(true);
+  expect(facts.reasonEchoesValue).toBe(false);
 });

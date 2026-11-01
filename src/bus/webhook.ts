@@ -74,15 +74,21 @@ export type WebhookDeliveryInput = {
   sleep?: (ms: number) => Promise<void>;
 };
 
-/** The reason one attempt failed, in plain words. A timeout says so; anything else keeps the
- *  error's own sentence, which never carries the secret (the request's body and headers are not
- *  part of it). */
+/** The error's class name, the one detail a fixed-words report may carry. An error's own
+ *  message is never printed: a credentials URL or an invalid header value repeats the URL or
+ *  the secret in it. */
+function errorClass(error: unknown): string | null {
+  return error instanceof Error && error.name !== '' ? error.name : null;
+}
+
+/** The reason one attempt failed, in fixed words: a timeout says so, and anything else is a
+ *  connection failure, with the error's class name as the only detail. */
 function attemptReason(error: unknown, timeoutMs: number): string {
-  if (error instanceof Error) {
-    if (error.name === 'TimeoutError' || error.name === 'AbortError') return `no answer within ${timeoutMs} ms`;
-    return `the POST failed: ${error.message}`;
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+    return `no answer within ${timeoutMs} ms`;
   }
-  return 'the POST failed';
+  const cls = errorClass(error);
+  return cls === null ? 'could not connect' : `could not connect (${cls})`;
 }
 
 function say(report: ((text: string) => void) | undefined, text: string): void {
@@ -113,10 +119,22 @@ export async function deliverWebhook(input: WebhookDeliveryInput): Promise<Webho
   const fetchFn = input.fetch ?? fetch;
   const sleep = input.sleep ?? ((ms: number) => Bun.sleep(ms));
   const request = webhookRequest(input.record, route.url, route.secret);
-  let reason = 'the POST failed';
+  // The request is built before the first attempt, so a value the platform refuses (an invalid
+  // header, say) fails once in fixed words; its own error, which repeats the value, is never
+  // printed.
+  let prepared: RequestInit;
+  try {
+    prepared = { ...request.init, headers: new Headers(request.init.headers) };
+  } catch (error) {
+    const cls = errorClass(error);
+    const why = cls === null ? 'request refused before sending' : `request refused before sending (${cls})`;
+    say(input.report, `webhook: ${input.seat}: not delivered (${why}); the drop file stays in place`);
+    return 'failed';
+  }
+  let reason = 'could not connect';
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetchFn(request.url, { ...request.init, signal: AbortSignal.timeout(policy.timeoutMs) });
+      const response = await fetchFn(request.url, { ...prepared, signal: AbortSignal.timeout(policy.timeoutMs) });
       if (response.status >= 200 && response.status < 300) return 'delivered';
       reason = `HTTP ${response.status}`;
     } catch (error) {
