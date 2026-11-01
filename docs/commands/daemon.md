@@ -3,7 +3,7 @@
 The one machine-wide TeamCLI daemon. One daemon serves every team and checkout on this machine:
 it answers its own protocol on the one machine socket and, in this build, also hosts each
 checkout's existing send and bus endpoints in the same process, so no second or third daemon
-process runs for a second checkout. `run` is the foreground process the system service manager
+process runs for a second checkout. `run` is the foreground process the system's service manager
 starts; `install` writes and registers the user service unit that starts it at login and restarts
 it after a failure; `uninstall` removes that unit; `status` is the one-line health reading;
 `fault-watch` asks a running daemon to end one hosted watch's run as a counted fault, so the
@@ -45,6 +45,24 @@ hosted`, and on a signal closes the machine socket, appends `daemon stopped` to 
 the machine lock says so, starts nothing and exits 1. `--started-by` names the launcher in the
 record: `manual` (the default), `service-manager` (the unit), or `team-up`.
 
+A start that names `service-manager` is admitted only from the service manager's own record of the
+job it started, never from a process walk: a service-managed child and an orphan reparented to the
+top read the same there. The unit file is checked first — it must carry the daemon's own label, be
+owned by this user, and be neither group- nor world-writable — then the record must name this
+process's pid, then the record's program and the unit's first program argument must resolve to the
+running executable while the unit's remaining words are this process's own. A failed check refuses
+with its own id (`daemon.service-managed.unit`, `.pid` or `.program`), names the check in one line,
+and exits 1; there is no fallback to the walk. The owner's terminal start stays the other
+admission and reads no manager record. What this proves is that the service manager started this
+process from a unit this user owns; any process of that user can register a job under a label that
+is not loaded, so it is an identity check against mistakes, not a boundary against that user's
+deliberate attempt. The same limit covers the program the unit runs: the install keeps a copy of
+the whole program in the machine folder, checks that copy before it writes the unit, and keeps the
+folder holding the copies this user's own, with no group or other write; but a process of the same
+user can still replace the copy, or a folder in it, between that check and the service manager's
+exec — exactly as it can rewrite the unit file itself. The check catches drift and another user's
+write, not a race run by the same user.
+
 `run --presence` also hosts each checkout's presence pipeline: the spool ingester, the activity
 reconciler, the publisher and the per-seat health answer. Without the flag the daemon does not
 read presence at all, and a start without it behaves exactly as before. The opt-in is the `run`
@@ -68,8 +86,8 @@ whose outbound gate is closed, and say nothing while it is simply cycling. The h
 the current source; its live activation and installed acceptance are not proven, and the pane watch
 remains the path the build ships by default ([watch](watch.md)).
 
-`install` writes the user service unit and registers it with the system service manager. It
-prints `team daemon: installed for <n> checkout(s); the system service manager starts it at login
+`install` writes the user service unit and registers it with the system's service manager. It
+prints `team daemon: installed for <n> checkout(s); the system's service manager starts it at login
 and restarts it after a failure`. A refresh — an install on a machine whose previous daemon the
 service manager still holds — stops the previous daemon and then starts the new one, offering it
 again with a bounded, growing wait while the service manager refuses at first, since a refusal
@@ -78,9 +96,13 @@ previous unit is put back — with a copy of the program it was accepted with, w
 replaced that same entry path in place — and the daemon it names is started again, so a failed
 refresh leaves a running daemon and a failure line rather than an empty machine. The refusal
 says which happened: the previous daemon was put back and confirmed answering, or no daemon is
-running. A load the service manager accepts is registration, not proof that a program runs, so
-the rollback is called a restore only after the daemon answers the health reading within a
-bounded wait; otherwise the refusal names no daemon and gives the rerun command. Either way the
+running. A load the service manager accepts is registration, not proof that a program runs, so the
+rollback is called a restore only after the daemon answers the health reading within a bounded
+wait; a successful install is reported only after the daemon it started answers the same reading
+within the same wait. A new daemon that never answers is taken back out: the earlier unit is put
+back (with the earlier program when this install replaced that entry path in place) or, on a fresh
+install, the unit this install wrote is stopped and removed, and the failure is reported as if the
+load had been refused — so the success line never stands for an empty machine. Either way the
 command exits 1. A failure that leaves no daemon running also names the command that starts one
 again — this install with the roots and opt-ins it recorded — and, when the earlier definition
 is still on disk, where it is kept; the `--json` refusal carries the same command as its
@@ -89,7 +111,7 @@ is still on disk, where it is kept; the `--json` refusal carries the same comman
 
 `uninstall` removes the unit. A machine that never carried one is not an error:
 `team daemon: not installed; nothing to remove`, exit 0; a removed unit prints
-`team daemon: uninstalled; the system service manager no longer starts it`.
+`team daemon: uninstalled; the system's service manager no longer starts it`.
 
 `fault-watch` asks the one running daemon to end exactly one hosted watch's in-flight run, as a
 diagnostic of the recovery path. It names one checkout with `--root` and that checkout's route id
@@ -145,13 +167,15 @@ request's nonce. A request still pending when the daemon closes is answered `not
 | Subcommand | Who |
 | --- | --- |
 | `status` | anyone; it reads the machine's daemon record and no team file |
-| `run` | the owner, or the no-terminal start the system service manager makes with `--started-by service-manager`; a seat or a pane never starts the machine daemon |
+| `run` | the owner, or the start the system's service manager makes with `--started-by service-manager`, admitted only from the manager's own record of the job; a seat or a pane never starts the machine daemon |
 | `install`, `uninstall` | the owner alone |
 | `fault-watch` | the same admission as `install` and `uninstall`: the owner, or the dev-mode admission for a placed lead; it signals no process and grants nothing |
 
 A caller who is not the owner is refused with `only the owner installs or removes the machine
 daemon; this call is <placement>` (`daemon.not-owner`). The service-manager start is the one
-no-terminal start admitted; every other no-terminal caller is refused (`daemon.run-not-owner`).
+no-terminal start admitted; every other no-terminal caller is refused (`daemon.run-not-owner`), and
+a start that names `service-manager` without the manager's record to back it is refused under
+`daemon.service-managed.unit`, `.pid` or `.program`.
 
 ## Output and exit codes
 
@@ -161,13 +185,13 @@ no-terminal start admitted; every other no-terminal caller is refused (`daemon.r
 | `run` serves and then stops | the running line, then `team daemon: stopped` | 0 |
 | `run` finds one already serving | `team daemon: already running (pid <pid>)` | 0 |
 | `install --dry-run` | the plan, the steps a refresh takes, and `nothing was written` | 0 |
-| `install` writes and registers the unit | `team daemon: installed for <n> checkout(s); …` | 0 |
-| `install` refused after a refresh: the service manager would not start the new unit | `team daemon: <reason>`, naming whether the previous daemon was put back and confirmed answering or no daemon is running; a failure leaving none running adds the owner-runs rerun command and where a kept unit is | 1 |
+| `install` writes and registers the unit, and the daemon it started answers the health reading | `team daemon: installed for <n> checkout(s); …` | 0 |
+| `install` refused after a refresh: the service manager would not start the new unit, or its daemon never answered the health reading | `team daemon: <reason>`, naming whether the previous daemon was put back and confirmed answering or no daemon is running; a failure leaving none running adds the owner-runs rerun command and where a kept unit is | 1 |
 | `uninstall` removes the unit, or finds none | `uninstalled; …` or `not installed; nothing to remove` | 0 |
 | `fault-watch` faults the one named route's hosted run | `faulted the hosted watch for <folder> (route <id>); …` | 0 |
 | `fault-watch --dry-run` | the plan and `nothing was written` | 0 |
 | `fault-watch` refused: not the owner, no running daemon, a route id or watch that does not match, a watch that cannot be faulted, a request already waiting, or the daemon's own `refused` or `not reached` answer | `team daemon: <reason>` | 1 |
-| refused: not the owner, a run the admission refuses, no service manager adapter, a failed install or uninstall, another start holding the lock, a failed start | `team daemon: <reason>` | 1 |
+| refused: not the owner, a run the admission refuses, a service-manager start its record does not admit, no service manager adapter, a failed install or uninstall, another start holding the lock, a failed start | `team daemon: <reason>` | 1 |
 | the invocation can't be read, or a named root can't be read | `team daemon: <problem>`, with the usage for an invocation error | 2 |
 
 `status --json` prints `{"schema": {"name": "team.daemon-status", "version": 1}, "format": 1,

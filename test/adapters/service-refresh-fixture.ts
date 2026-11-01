@@ -35,46 +35,65 @@ seats:
 export type RefreshPolicy = 'accept' | 'reject-new' | 'reject-all' | 'slow-stop';
 const OK: ServiceRunResult = { status: 0, stdout: '', stderr: '' };
 const REFUSED: ServiceRunResult = { status: 23, stdout: '', stderr: 'synthetic load refused' };
+const PREVIOUS_BYTES = 'synthetic previous binary\n';
+
+/** The entry word a written unit runs: its second run word, which is the retained copy the
+ *  install made, not the synthetic package folder the copy came from. */
+export function unitEntry(text: string): string | null {
+  const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1] ?? '';
+  const words = [...block.matchAll(/<string>([\s\S]*?)<\/string>/g)].map((one) => one[1] ?? '');
+  return words[1] ?? null;
+}
 
 export function refreshFixture(realWait = false, inPlace = false) {
   // Keep the synthetic files in temporary storage so a failing scene can be inspected.
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'service-refresh-scene-')));
   const root = join(base, 'repo');
   const home = join(base, 'home');
+  const bin = join(base, 'bin');
   mkdirSync(join(root, '.agents'), { recursive: true });
   mkdirSync(home);
+  mkdirSync(bin);
   execFileSync('git', ['init', '-q'], { cwd: root });
   writeFileSync(join(root, '.agents', 'team.yaml'), TEAM);
-  const previousEntry = join(base, 'previous-entry.js');
-  const nextEntry = inPlace ? previousEntry : join(base, 'next-entry.js');
-  writeFileSync(previousEntry, 'synthetic previous binary\n');
+  // The two programs live in a folder of their own, so the entry's own folder — the whole
+  // program a synthetic install keeps — is that folder and nothing else.
+  const previousEntry = join(bin, 'previous-entry.js');
+  const nextEntry = inPlace ? previousEntry : join(bin, 'next-entry.js');
+  writeFileSync(previousEntry, PREVIOUS_BYTES);
   if (!inPlace) writeFileSync(nextEntry, 'synthetic replacement binary\n');
   const program: ServiceProgram = { execPath: '/synthetic/runtime', entry: nextEntry, roots: [root] };
   let policy: RefreshPolicy = 'accept';
   let running: 'previous' | 'next' | null = null;
+  let runningBytes: string | null = null;
   let clock = 0;
   let stoppingUntil = 0;
   const waits: number[] = [];
-  const events: { kind: 'load' | 'stop'; unit: string; accepted: boolean; at: number; bytes?: string }[] = [];
+  const events: { kind: 'load' | 'stop'; unit: string; accepted: boolean; at: number; bytes?: string; identity?: 'previous' | 'next' }[] = [];
   const healthReads: { running: 'previous' | 'next' | null; bytes: string }[] = [];
   const healthWaits: number[] = [];
   let probeDelay = 0;
   const runner: ServiceRunner = (_command, argv) => {
     if (argv[0] === 'bootout') {
       running = null;
+      runningBytes = null;
       stoppingUntil = policy === 'slow-stop' ? clock + 250 : clock;
       events.push({ kind: 'stop', unit: '', accepted: true, at: clock });
       return OK;
     }
     if (argv[0] !== 'bootstrap' || argv[2] === undefined) throw new Error('unexpected synthetic manager operation');
     const unit = readFileSync(argv[2], 'utf8');
-    const entry = unit.includes(previousEntry) ? previousEntry : nextEntry;
+    const entry = unitEntry(unit);
+    if (entry === null) throw new Error('the synthetic unit names no program');
     const bytes = readFileSync(entry, 'utf8');
-    const identity = inPlace ? (bytes === 'synthetic previous binary\n' ? 'previous' : 'next') : unit.includes(previousEntry) ? 'previous' : 'next';
+    const identity: 'previous' | 'next' = bytes === PREVIOUS_BYTES ? 'previous' : 'next';
     const accepted = running === null && clock >= stoppingUntil && policy !== 'reject-all' &&
       !(policy === 'reject-new' && identity === 'next');
-    events.push({ kind: 'load', unit, accepted, at: clock, bytes });
-    if (accepted) running = identity;
+    events.push({ kind: 'load', unit, accepted, at: clock, bytes, identity });
+    if (accepted) {
+      running = identity;
+      runningBytes = bytes;
+    }
     return accepted ? OK : REFUSED;
   };
   const manager = darwinServiceManager({
@@ -87,7 +106,9 @@ export function refreshFixture(realWait = false, inPlace = false) {
     base, root, home, previousEntry, nextEntry, program, manager, unitPath, waits, events, healthReads, healthWaits,
     setProbeDelay(value: number) { probeDelay = value; },
     async health(): Promise<DaemonHealth> {
-      const bytes = readFileSync(running === 'previous' ? previousEntry : nextEntry, 'utf8');
+      // The daemon that runs is the program the accepted load started: its own retained copy,
+      // read from there, not from the synthetic folder the copy was made from.
+      const bytes = runningBytes ?? '';
       healthReads.push({ running, bytes });
       const answered = running !== null && healthReads.length > probeDelay;
       return {

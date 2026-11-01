@@ -23,7 +23,7 @@ import { join } from 'node:path';
 
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
 import { runSend, type SendHost } from '../src/commands/send.ts';
-import { daemonHealth } from '../src/daemon/health.ts';
+import { daemonHealth, type DaemonHealth } from '../src/daemon/health.ts';
 import { startMachineDaemon } from '../src/daemon/host.ts';
 import { createPresenceActivity } from '../src/daemon/presence/activity.ts';
 import { mintPresenceBinding, readPresenceReading } from '../src/daemon/presence/contract.ts';
@@ -34,7 +34,7 @@ import { darwinServiceManager } from '../src/daemon/service-darwin.ts';
 import type { ServiceManager, ServiceProgram } from '../src/daemon/service.ts';
 import { startSendDaemon, type DaemonHost } from '../src/send/daemon.ts';
 import { STATE_FILE } from '../src/state.ts';
-import { testIo } from './helpers.ts';
+import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -98,6 +98,43 @@ function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}):
   };
 }
 
+/** The health reading an install scene injects: the installed daemon answers its probe, so the
+ *  scene never opens the machine socket and reaches the success line. */
+const ANSWERING: DaemonHealth = {
+  daemon: 'teamcli',
+  socket: '/synthetic/daemon.sock',
+  state: 'running',
+  running: true,
+  pid: 42,
+  uid: 501,
+  since: '2026-11-01T00:00:00.000Z',
+  startedBy: 'system-service-manager',
+  version: 'test',
+  gitHead: null,
+  heartbeatAt: null,
+  features: null,
+  stuck: [],
+  roots: [],
+  probe: { state: 'answered', at: '2026-11-01T00:00:01.000Z' },
+  why: null,
+};
+
+/** A manager whose record describes this test process, started from the daemon's own unit: what
+ *  the start admission reads when a scene replays the unit's start. A test process is not the
+ *  installed CLI entry, so the record cannot be the unit file's own argv; the file's
+ *  ProgramArguments are asserted from the file itself, above. */
+function managerOfThisProcess(): ServiceManager {
+  return {
+    kind: 'system-service-manager',
+    unitPath: (at) => join(at, 'unit.plist'),
+    plan: (at, program) => ({ unitPath: join(at, 'unit.plist'), program: [program.execPath, program.entry] }),
+    job: () => thisProcessJobRecord(),
+    unit: (at) => thisProcessUnitRecord(join(at, 'unit.plist')),
+    install: (at) => ({ ok: true, unitPath: join(at, 'unit.plist') }),
+    uninstall: (at) => ({ ok: true, unitPath: join(at, 'unit.plist'), removed: true }),
+  };
+}
+
 function writeSeatState(dir: string, fields: Record<string, unknown>): void {
   writeFileSync(join(dir, STATE_FILE), `${JSON.stringify({
     format: 1,
@@ -106,6 +143,14 @@ function writeSeatState(dir: string, fields: Record<string, unknown>): void {
 }
 
 /** The arguments the written unit itself would start, read back out of its ProgramArguments. */
+/** A program on disk: the adapter keeps the entry's own folder as the whole program. */
+function programAt(home: string): string {
+  const folder = join(home, 'app');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'cli.js'), 'synthetic entry\n');
+  return join(folder, 'cli.js');
+}
+
 function unitArguments(unitPath: string): string[] {
   const text = readFileSync(unitPath, 'utf8');
   const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1];
@@ -161,6 +206,8 @@ describe('the presence opt-in default and the service unit', () => {
       kind: 'system-service-manager',
       unitPath: (at) => join(at, 'unit.plist'),
       plan: (at, program) => ({ unitPath: join(at, 'unit.plist'), program: [program.execPath, program.entry] }),
+      job: () => thisProcessJobRecord(),
+      unit: (at) => thisProcessUnitRecord(join(at, 'unit.plist')),
       install: (at, program) => {
         programs.push(program);
         return { ok: true, unitPath: join(at, 'unit.plist') };
@@ -169,12 +216,12 @@ describe('the presence opt-in default and the service unit', () => {
     };
 
     const plain = testIo(root, owner);
-    expect(await runDaemon(['install'], plain, sourcesOf(home, { service }))).toBe(0);
+    expect(await runDaemon(['install'], plain, sourcesOf(home, { service, health: async () => ANSWERING }))).toBe(0);
     expect(programs.at(-1)).toEqual({ execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root] });
     expect(programs.at(-1)?.presence).toBeUndefined();
 
     const opted = testIo(root, owner);
-    expect(await runDaemon(['install', '--presence'], opted, sourcesOf(home, { service }))).toBe(0);
+    expect(await runDaemon(['install', '--presence'], opted, sourcesOf(home, { service, health: async () => ANSWERING }))).toBe(0);
     expect(programs.at(-1)).toEqual({
       execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root], presence: true,
     });
@@ -192,44 +239,50 @@ describe('the presence opt-in default and the service unit', () => {
       uid: 501,
     });
 
+    const entry = programAt(home);
     const plainUnit = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root],
+      execPath: '/runtime/bin/node', entry, roots: [root],
     });
     expect(plainUnit.ok).toBe(true);
     if (!plainUnit.ok) return;
+    // The unit runs the retained copy of the whole program, never the package folder.
+    const retained = plainUnit.program?.[1] ?? '';
+    expect(retained).not.toBe(entry);
+    expect(readFileSync(retained, 'utf8')).toBe('synthetic entry\n');
     const plainArgs = unitArguments(plainUnit.unitPath);
     expect(plainArgs).toEqual([
-      '/runtime/bin/node', '/app/dist/cli.js', 'daemon', 'run',
+      '/runtime/bin/node', retained, 'daemon', 'run',
       '--started-by', 'service-manager', '--root', root,
     ]);
     expect(plainArgs).not.toContain('--presence');
 
     const optedUnit = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root], presence: true,
+      execPath: '/runtime/bin/node', entry, roots: [root], presence: true,
     });
     expect(optedUnit.ok).toBe(true);
     if (!optedUnit.ok) return;
     const optedArgs = unitArguments(optedUnit.unitPath);
     expect(optedArgs).toEqual([
-      '/runtime/bin/node', '/app/dist/cli.js', 'daemon', 'run',
+      '/runtime/bin/node', retained, 'daemon', 'run',
       '--started-by', 'service-manager', '--root', root, '--presence',
     ]);
     expect(calls.every((call) => call[0] === 'launchctl')).toBe(true);
 
     // The unit's own argv, replayed through the command: the no-terminal owner is admitted
-    // because the source is service-manager, and the presence fields follow the unit's flag.
+    // because the manager's record names this process and the unit's words, and the presence
+    // fields follow the unit's flag.
     const seen: Array<Parameters<typeof startMachineDaemon>[0]> = [];
     const start = async (input: Parameters<typeof startMachineDaemon>[0]) => {
       seen.push(input);
       return { kind: 'already-running' as const, pid: 42 };
     };
     const unitIo = testIo(root, { kind: 'owner-no-tty' });
-    expect(await runDaemon(optedArgs.slice(3), unitIo, sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(optedArgs.slice(3), unitIo, sourcesOf(home, { start, service: managerOfThisProcess() }))).toBe(0);
     expect(seen[0]).toMatchObject({ startedBy: 'service-manager', roots: [root], presenceHosting: true });
     expect(seen[0]?.presenceCodexEndpoint).toBeDefined();
 
     const plainIo = testIo(root, { kind: 'owner-no-tty' });
-    expect(await runDaemon(plainArgs.slice(3), plainIo, sourcesOf(home, { start }))).toBe(0);
+    expect(await runDaemon(plainArgs.slice(3), plainIo, sourcesOf(home, { start, service: managerOfThisProcess() }))).toBe(0);
     expect(seen[1]).toMatchObject({ startedBy: 'service-manager', roots: [root] });
     expect(seen[1]?.presenceHosting).toBeUndefined();
     expect(seen[1]?.presenceCodexEndpoint).toBeUndefined();
@@ -237,7 +290,7 @@ describe('the presence opt-in default and the service unit', () => {
     // A no-terminal manual start is not admitted, with or without the opt-in.
     const manual = testIo(root, { kind: 'owner-no-tty' });
     expect(await runDaemon(['run', '--presence'], manual, sourcesOf(home, { start }))).toBe(1);
-    expect(manual.err).toContain('only the owner or the system service manager runs the machine daemon');
+    expect(manual.err).toContain("only the owner or the system's service manager runs the machine daemon");
     expect(seen).toHaveLength(2);
 
     // A foreground owner run still takes the flag; status refuses it.
