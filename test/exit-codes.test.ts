@@ -4505,10 +4505,42 @@ scene('daemon.install-failed', async (place) => {
   return show(
     await daemonRan(place, ['install'], owner, {
       service: fakeDaemonService({
-        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null }),
+        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null, outcome: 'refused' }),
       }),
     }),
     'the system service manager refused to start the daemon',
+  );
+});
+scene('daemon.install-rolled-back', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({
+          ok: false,
+          why: 'the system service manager refused to start the new daemon; the previous one was put back and started again',
+          detail: 'the load exited 5: Input/output error; the earlier unit was put back and its daemon started',
+          outcome: 'restored',
+        }),
+      }),
+    }),
+    'the previous one was put back and started again',
+  );
+});
+scene('daemon.install-rollback-failed', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({
+          ok: false,
+          why: 'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+          detail: 'the load exited 5: Input/output error; the earlier unit was put back, and the load exited 5: Input/output error',
+          outcome: 'lost',
+        }),
+      }),
+    }),
+    'no daemon was started',
   );
 });
 scene('daemon.run-not-owner', async (place) =>

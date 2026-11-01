@@ -487,6 +487,18 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
   return `team daemon: not running; socket ${health.socket}`;
 }
 
+/**
+ * The install's steps, in the neutral words the dry run prints before anything runs: a refresh
+ * stops the daemon the service manager holds, the new one is started with a bounded, growing
+ * retry, and a start that still fails puts the previous unit back and starts it again. The live
+ * adapter follows this contract; the names of the platform's own facility stay in it.
+ */
+const INSTALL_STEPS: readonly string[] = [
+  'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
+  'the new daemon is started, offered again with a bounded, growing wait while the system service manager refuses',
+  'if it still cannot start, the previous unit is put back and its daemon started again',
+];
+
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
   const io = cleanedIo(rawIo);
   const home = sources.home ?? homedir();
@@ -669,10 +681,11 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         unit_path: plan.unitPath,
         program: plan.program,
         roots: named.roots,
+        steps: [...INSTALL_STEPS],
       });
     } else {
       io.stdout(
-        `team daemon: would install the machine daemon for ${String(named.roots.length)} checkout(s); the system service manager starts it at login and restarts it after a failure; nothing was written\n`,
+        `team daemon: would install the machine daemon for ${String(named.roots.length)} checkout(s); the system service manager starts it at login and restarts it after a failure; nothing was written\n${INSTALL_STEPS.map((step) => `  - ${step}\n`).join('')}`,
       );
     }
     // exit: daemon.dry-run
@@ -681,6 +694,19 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   const installed = manager.install(home, fullProgram);
   if (!installed.ok) {
     appendDaemonLog(home, `install: ${installed.detail ?? installed.why}`, sources.now?.() ?? new Date());
+    // A rollback that left a daemon running is reported as the failure it is, and a rollback
+    // that could not start one says so: either way the line names what happened and exits 1,
+    // so an install never ends with no daemon and no message.
+    if (installed.outcome === 'restored') {
+      refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rolled-back', message: installed.why, repair: null });
+      // exit: daemon.install-rolled-back
+      return 1;
+    }
+    if (installed.outcome === 'lost') {
+      refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rollback-failed', message: installed.why, repair: null });
+      // exit: daemon.install-rollback-failed
+      return 1;
+    }
     refuse(io, parsed.json, 'daemon', { id: 'daemon.install-failed', message: installed.why, repair: null });
     // exit: daemon.install-failed
     return 1;

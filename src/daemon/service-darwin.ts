@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, u
 import { dirname, join } from 'node:path';
 import { DAEMON_LABEL, daemonLogPath } from './paths.ts';
 import type {
+  ServiceInstallFailure,
   ServiceInstallResult,
   ServiceManager,
   ServiceManagerOptions,
@@ -25,6 +26,19 @@ const realRunner: ServiceRunner = (command, args): ServiceRunResult => {
     stderr: result.error ? `${result.error.message}\n${result.stderr ?? ''}` : (result.stderr ?? ''),
   };
 };
+
+// The waits between load offers, all bounded so `team daemon install` cannot hang. A load
+// handed to the manager while the daemon it replaces is still leaving is refused — the race
+// that emptied the machine before this fix — so a refused offer is repeated while the waits
+// grow, giving that stop time to finish before the install calls the new unit failed. The
+// whole retry is over in about five seconds.
+const LOAD_RETRY_MS: readonly number[] = [100, 200, 400, 800, 1_000, 1_000, 1_000, 1_000];
+
+/** A synchronous wait: install is synchronous and the bounded retries pause it. */
+function realSleep(ms: number): void {
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(cell, 0, 0, ms);
+}
 
 function escapeXml(text: string): string {
   return text
@@ -86,11 +100,96 @@ ${env}  <key>RunAtLoad</key>
 
 export function darwinServiceManager(options: ServiceManagerOptions = {}): ServiceManager {
   const run = options.runner ?? realRunner;
+  const sleep = options.sleep ?? realSleep;
   const uid = options.uid ?? (typeof process.getuid === 'function' ? process.getuid() : 0);
 
   const unitPath = (home: string): string => join(home, 'Library', 'LaunchAgents', `${DAEMON_LABEL}.plist`);
   const domain = `gui/${String(uid)}`;
   const service = `${domain}/${DAEMON_LABEL}`;
+
+  /** Loads the unit at `path`, retrying a refusal with a bounded, growing wait. A refusal while
+   *  the job this unit replaces is still leaving is the same answer as a unit the manager will
+   *  not take, so both are given the same bounded patience: the manager accepts the load as soon
+   *  as the earlier job has left. */
+  const loadWithRetry = (path: string): ServiceRunResult => {
+    let result = run('launchctl', ['bootstrap', domain, path]);
+    for (const wait of LOAD_RETRY_MS) {
+      if (result.status === 0) break;
+      sleep(wait);
+      result = run('launchctl', ['bootstrap', domain, path]);
+    }
+    return result;
+  };
+
+  /** One failed load, in the words the daemon log carries. */
+  const loadDetail = (result: ServiceRunResult): string =>
+    `the load exited ${String(result.status)}: ${result.stderr.trim().split('\n').slice(-1)[0] ?? ''}`;
+
+  const refused = (what: string, detail: string, outcome: ServiceInstallFailure['outcome']): ServiceInstallResult => ({
+    ok: false,
+    why: what,
+    detail,
+    outcome,
+  });
+
+  /**
+   * The earlier definition goes back and its daemon is started again, so a refresh the service
+   * manager refuses leaves a running daemon and a reported failure, never a machine with no
+   * daemon and no message. The failed load may have left the label claimed, so it is cleared
+   * before the earlier unit is offered; that offer gets the same bounded retries, which also
+   * wait out a stop that is still finishing.
+   */
+  const restore = (
+    path: string,
+    prior: { text: string; mode: number } | null,
+    failDetail: string,
+  ): ServiceInstallResult => {
+    // Nothing was installed before this install: the definition it wrote is taken back out, so
+    // the manager cannot load an unregistered unit at the next login, and there is no earlier
+    // definition to put back.
+    if (prior === null) {
+      try {
+        if (existsSync(path)) unlinkSync(path);
+      } catch (error) {
+        return refused(
+          'the system service manager refused to start the daemon and the service definition could not be removed',
+          `${failDetail}; ${error instanceof Error ? error.message : String(error)}`,
+          'refused',
+        );
+      }
+      return refused(
+        'the system service manager refused to start the daemon',
+        `${failDetail}; no earlier unit was installed, so no daemon is running`,
+        'refused',
+      );
+    }
+    // The earlier unit goes back before the manager is asked to load it: the file is the
+    // definition a load reads, and it names the daemon this install was replacing.
+    try {
+      writeFileSync(path, prior.text, { mode: prior.mode });
+      chmodSync(path, prior.mode);
+    } catch (error) {
+      return refused(
+        'the system service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
+        `${failDetail}; ${error instanceof Error ? error.message : String(error)}`,
+        'lost',
+      );
+    }
+    run('launchctl', ['bootout', service]);
+    const back = loadWithRetry(path);
+    if (back.status === 0) {
+      return refused(
+        'the system service manager refused to start the new daemon; the previous one was put back and started again',
+        `${failDetail}; the earlier unit was put back and its daemon started`,
+        'restored',
+      );
+    }
+    return refused(
+      'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+      `${failDetail}; the earlier unit was put back, and ${loadDetail(back)}`,
+      'lost',
+    );
+  };
 
   return {
     kind: 'system-service-manager',
@@ -111,6 +210,7 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
             ok: false,
             why: 'the existing service unit could not be read',
             detail: error instanceof Error ? error.message : null,
+            outcome: 'refused',
           };
         }
       }
@@ -131,41 +231,26 @@ export function darwinServiceManager(options: ServiceManagerOptions = {}): Servi
             // Nothing of ours is there to take.
           }
         }
-        return { ok: false, why: 'the service unit could not be written', detail: error instanceof Error ? error.message : null };
-      }
-      let result = run('launchctl', ['bootstrap', domain, path]);
-      if (result.status !== 0) {
-        // The unit may already be loaded from an earlier install. Unload it and try once more.
-        run('launchctl', ['bootout', service]);
-        result = run('launchctl', ['bootstrap', domain, path]);
-      }
-      if (result.status !== 0) {
-        const detail = `bootstrap exited ${String(result.status)}: ${result.stderr.trim().split('\n').slice(-1)[0] ?? ''}`;
-        // Nothing was started, so the definition this install wrote is taken back out: the
-        // earlier one is put back when there was one, and otherwise no unit is left behind for
-        // the next login to load.
-        try {
-          if (prior === null) {
-            if (existsSync(path)) unlinkSync(path);
-          } else {
-            writeFileSync(path, prior.text, { mode: prior.mode });
-            chmodSync(path, prior.mode);
-          }
-        } catch (error) {
-          const cleanup = error instanceof Error ? error.message : String(error);
-          return {
-            ok: false,
-            why: 'the system service manager refused to start the daemon and the service definition could not be restored',
-            detail: `${detail}; ${cleanup}`,
-          };
-        }
         return {
           ok: false,
-          why: 'the system service manager refused to start the daemon',
-          detail,
+          why: 'the service unit could not be written',
+          detail: error instanceof Error ? error.message : null,
+          outcome: 'refused',
         };
       }
-      return { ok: true, unitPath: path };
+      // A job the manager already holds under our label is the daemon a refresh replaces: the
+      // load for the new unit is refused while it is loaded. It is stopped, and the load is
+      // offered again with a bounded, growing wait while the manager refuses — the earlier stop
+      // may still be finishing, and a refusal the install never retries past is the empty
+      // machine this install must never leave.
+      const first = run('launchctl', ['bootstrap', domain, path]);
+      if (first.status === 0) return { ok: true, unitPath: path };
+      run('launchctl', ['bootout', service]);
+      const loaded = loadWithRetry(path);
+      if (loaded.status === 0) return { ok: true, unitPath: path };
+      // The new unit did not start after every bounded retry: the earlier definition is put
+      // back and its daemon started, so a failure is reported and a daemon still runs.
+      return restore(path, prior, loadDetail(loaded));
     },
 
     uninstall(home): ServiceUninstallResult {
