@@ -1,8 +1,11 @@
 // A seat whose record writes two names: the `nickname:` field and the persona its written label
-// names. Display reads the label first, so a file where they differ has the seat sending under one
-// name while its record says another. A config set on either name writes the other with it
-// (src/config/edit.ts), so this is what a hand edit can leave; `team check` names both values and
-// says which wins. A note, not a difference: the team keeps running.
+// names. The label's persona is the seat's name when the field could hold it, so a file where they
+// differ has the seat sending under one name while its record says another — or, when the word
+// cannot be a nickname at all (a space, an accent, the reserved `lead`, a word another seat
+// carries), the label stays a workspace title and the field's name stands. A config set on either
+// name writes the other with it whenever the pair can be one name (src/config/edit.ts), so this is
+// what a hand edit leaves; `team check` names both values and says which is the address. A note,
+// not a difference: the team keeps running.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -42,6 +45,13 @@ const DRIFT = AGREE.replace('label: Cicero · implementer', 'label: Joan · impl
 
 const NOTE =
   'note: seat "worker": its nickname is "Cicero" and its written label names "Joan" — the label wins from the next launch, and a set on seats.worker.label writes the two together';
+
+/** The same file where the label names a word the nickname field cannot hold: a space is not in
+ *  the nickname alphabet, so the word stays display and the record's name stands. */
+const SPACED = AGREE.replace('label: Cicero · implementer', 'label: Jane Doe · implementer');
+
+const SPACED_NOTE =
+  'note: seat "worker": its written label names "Jane Doe", but the seat goes by "Cicero" — a space, an accent, the reserved "lead" or a word another seat carries is not a nickname, so the label\'s word is the workspace title alone; set seats.worker.nickname to choose the address';
 
 const made: string[] = [];
 afterEach(() => {
@@ -121,6 +131,13 @@ describe('a seat whose nickname and label name two people', () => {
   test('the check names both values and says the label wins, without counting it wrong', () => {
     const { code, out } = check(place(DRIFT), DRIFT);
     expect(out).toContain(NOTE);
+    expect(out).not.toContain('difference:');
+    expect(code).toBe(0);
+  });
+
+  test('a label word the field cannot hold is noted as display alone', () => {
+    const { code, out } = check(place(SPACED), SPACED);
+    expect(notesOtherThanSocket(out)).toEqual([SPACED_NOTE]);
     expect(out).not.toContain('difference:');
     expect(code).toBe(0);
   });
