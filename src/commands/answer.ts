@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { readArgs } from '../args.ts';
 import { anotherPaneRefusal, callerOf, callerVerdict, describeCaller, detachedRefusal, fileOwnerRefusal, isOwner, judgeCallerIn, logTag, noPaneRefusal, sessionOwnerRefusal, standingOf, walkCaller, type Caller, type SeatStanding } from '../caller.ts';
@@ -632,14 +632,17 @@ function inspect(
   // CLI's `--version`, which can take seconds, and the pane's folder readings are host calls of
   // their own: a process replaced — or a screen switched to a permission, login or other prompt —
   // while one of them runs would be keyed from a process read taken before the replacement, or
-  // from a capture taken before the switch. The order the key path relies on is: the version and
-  // the folder lookups, then the final process check, then the final pane capture, then only
-  // pure checks, then the key. The refusal order is unchanged — the process, the version, the
-  // screen and the folder are still judged in that order — only the host reads moved together.
+  // from a capture taken before the switch. `canonicalLanding` reads the filesystem too, so the
+  // expected lobby and the trust entries are resolved here, with those lookups. The order the key
+  // path relies on is: the version and the folder lookups, then the final process check, then the
+  // final pane capture, then only pure checks, then the key. The refusal order is unchanged — the
+  // process, the version, the screen and the folder are still judged in that order — only the
+  // host and filesystem reads moved together.
   const printed = host.version(profile.binary);
   const own = host.foregroundCwd(session, pane);
   const lobby = canonicalLanding(resolvedLobby);
   const names = lobby === null ? null : host.list(dirname(lobby));
+  const listed = lobby !== null && trust.some((entry) => canonicalLanding(folderOf(entry, root)) === lobby);
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
   const screen = host.pane(session, pane);
@@ -651,12 +654,18 @@ function inspect(
   if (!labelMatches(record, screen ?? '')) return say('label', 'the trust choice is not the recorded one');
   const shown = extractFolder(record.extract, screen ?? '');
   if (!shown) return say('folder', 'the dialog does not show exactly one folder');
-  // `shown` must be the lobby as team writes it, byte for byte, and canonicalise to
-  // it — a trailing slash, another case, `//` or `/./` is a different spelling, and
-  // the reading that sends less is to refuse it.
+  // `shown` must be the lobby as team writes it, byte for byte, and resolve to it — a trailing
+  // slash, `//`, `/./` or `..` is a different spelling, and the reading that sends less is to
+  // refuse it. The lobby was resolved before the process read, so this is only a comparison of
+  // the bytes the capture returned: `resolve` collapses those spellings without touching the
+  // filesystem, and a path that does not land on the lobby by its own text is refused as
+  // outside. Nothing here may read the filesystem after the capture.
   if (!lobby) return say('folder', OUTSIDE);
-  if (canonicalLanding(shown) !== lobby) return say('folder', OUTSIDE);
-  if (shown !== lobby) return say('folder', 'the dialog does not show the lobby as written: the owner answers it through team up');
+  if (shown !== lobby) {
+    return say('folder', resolve(shown) === lobby
+      ? 'the dialog does not show the lobby as written: the owner answers it through team up'
+      : OUTSIDE);
+  }
   // The screen read strips the row's trailing padding, so the last byte of the path it
   // shows is never proof — a boxed row has no visible end. Two other readings, fresh with
   // this one, must say the lobby too: the folder the pane itself reports working in, byte
@@ -669,7 +678,6 @@ function inspect(
   if (names.some((name) => name.length > base.length && name.startsWith(base) && /\s/.test(name.charAt(base.length)))) {
     return say('folder', "the lobby's parent folder holds a name that differs from the lobby's by whitespace alone");
   }
-  const listed = trust.some((entry) => canonicalLanding(folderOf(entry, root)) === lobby);
   if (!listed) return say('folder', 'this folder is not an exact trust entry');
   return { record, version: printed, folder: lobby };
 }
