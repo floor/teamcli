@@ -34,7 +34,7 @@ import { dirname, join } from 'node:path';
 import { heldAt } from '../launch/rules-file.ts';
 import { logLine } from '../log.ts';
 import { ensureStoreLadder, readNoFollow } from '../send/history.ts';
-import { LockBusyError, withLock } from '../state.ts';
+import { LockBusyError, withLock, writeAtomic } from '../state.ts';
 import {
   messageKeyOf,
   messageKeyState,
@@ -602,14 +602,70 @@ function prefixDigest(lines: RetainedLine[], upTo: number): string {
   return hash.digest('hex');
 }
 
+/** The verification checkpoint as it survives its process: the same key print and prefix digest
+ *  for a fixed retained-file count, written beside the log by a read that verified every retained
+ *  record. A later process verifies only the records past `seq`; the digest is checked against the
+ *  retained bytes first, so a rewrite, a trim, a dropped segment, or another key is a miss and that
+ *  read verifies in full. The record is never trusted for anything a full verify would decide. */
+const VERIFY_CHECKPOINT_FILE = 'verify-checkpoint.json';
+const VERIFY_CHECKPOINT_FORMAT = 1;
+
+type StoredCheckpoint = {
+  format: number;
+  keyPrint: string;
+  kept: number;
+  seq: number;
+  digest: string;
+};
+
+/** The stored checkpoint, or null when there is none or it is not exactly the shape this build
+ *  wrote. Read without following a link; a partial, unparsable, or foreign file is a miss, never a
+ *  guess. */
+function readStoredCheckpoint(storeDir: string): StoredCheckpoint | null {
+  const text = readNoFollow(join(storeDir, VERIFY_CHECKPOINT_FILE));
+  if (text === null || text === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const record = parsed as Partial<StoredCheckpoint>;
+  if (record.format !== VERIFY_CHECKPOINT_FORMAT) return null;
+  if (typeof record.keyPrint !== 'string') return null;
+  if (typeof record.digest !== 'string' || !/^[0-9a-f]{64}$/.test(record.digest)) return null;
+  if (typeof record.kept !== 'number' || !Number.isInteger(record.kept) || record.kept < 1) return null;
+  if (typeof record.seq !== 'number' || !Number.isInteger(record.seq) || record.seq < 1) return null;
+  return {
+    format: VERIFY_CHECKPOINT_FORMAT,
+    keyPrint: record.keyPrint,
+    kept: record.kept,
+    seq: record.seq,
+    digest: record.digest,
+  };
+}
+
+/** Writes the checkpoint beside the log, atomically and best effort: it only saves work on the
+ *  next read, so a store that cannot take it keeps verifying in full instead of failing. */
+function writeStoredCheckpoint(storeDir: string, record: StoredCheckpoint): void {
+  try {
+    writeAtomic(join(storeDir, VERIFY_CHECKPOINT_FILE), `${JSON.stringify(record)}\n`);
+  } catch {
+    // The log is intact without it.
+  }
+}
+
 /** Reads all retained event log files (`events.jsonl.2`, `.1`, `events.jsonl`) in sequence order,
  *  verifying each record's signature against the checkout's message key. Unverified or malformed
  *  lines are counted in `unverified` and never returned as events.
  *
- *  Verification is incremental: the retained lines at or below the checkpoint's last verified
+ *  Verification is incremental: the retained lines at or below a checkpoint's last verified
  *  sequence are pinned by its digest, and only the records after it are checked against the key.
- *  When the log has no checkpoint, the key changed, or the digest does not match the retained
- *  bytes, the whole log is verified (`full: true`) and the checkpoint is rebuilt. */
+ *  The process keeps its checkpoint in memory; a process that has none reads the one written
+ *  beside the log, and only a read that verified every retained record writes that file. When the
+ *  log has no checkpoint, the key changed, or the digest does not match the retained bytes, the
+ *  whole log is verified (`full: true`) and the checkpoint is rebuilt. */
 export function readEvents(
   project: string,
   root: string,
@@ -673,6 +729,7 @@ export function readEvents(
   let unverified: number;
   let checked: number;
   let full = true;
+  const stored = readStoredCheckpoint(storeDir);
   const matched =
     checkpoint !== undefined &&
     checkpoint.keyPrint === keyPrint &&
@@ -704,17 +761,58 @@ export function readEvents(
       events.push(line.parsed);
     }
     unverified += prefixParsed - checkpoint.events.length;
+  } else if (
+    stored !== null &&
+    stored.keyPrint === keyPrint &&
+    stored.kept === kept &&
+    keyState.kind === 'key' &&
+    prefixDigest(lines, stored.seq) === stored.digest
+  ) {
+    // Another process verified every retained record at or below this sequence on bytes that
+    // still hash to its digest, and it writes the file only when that read left nothing
+    // unverified, so the whole prefix is one verified block. Only the records past it are checked
+    // against the key now; a parsed record inside the prefix is returned, because none of them
+    // were unverified when the file was written.
+    full = false;
+    events = [];
+    unverified = 0;
+    checked = 0;
+    for (const line of lines) {
+      if (line.parsed === null) {
+        unverified += 1;
+        continue;
+      }
+      if (line.parsed.payload.seq <= stored.seq) {
+        events.push(line.parsed);
+        continue;
+      }
+      checked += 1;
+      if (!verifyDomain(EVENT_DOMAIN, line.parsed.payload as unknown as Json, line.parsed.signature, keyState.key)) {
+        unverified += 1;
+        continue;
+      }
+      events.push(line.parsed);
+    }
   } else {
     ({ events, unverified, checked } = verifyAll());
   }
 
   const highest = events.reduce((max, event) => Math.max(max, event.payload.seq), 0);
-  readCheckpoints.set(cacheKey, {
-    keyPrint,
-    seq: highest,
-    digest: prefixDigest(lines, highest),
-    events: events.slice(),
-  });
+  const digest = prefixDigest(lines, highest);
+  readCheckpoints.set(cacheKey, { keyPrint, seq: highest, digest, events: events.slice() });
+
+  // What this read verified is what the next process may lean on. A checkpoint cannot record which
+  // prefix records were unverified, so the file is written only when this read left none; a real
+  // key is required for any of it to mean anything; and an empty log has nothing to cover. An
+  // unchanged checkpoint is left as it is, so a quiet read does not rewrite the file.
+  if (
+    unverified === 0 &&
+    keyState.kind === 'key' &&
+    highest >= 1 &&
+    (stored === null || stored.seq !== highest || stored.digest !== digest)
+  ) {
+    writeStoredCheckpoint(storeDir, { format: VERIFY_CHECKPOINT_FORMAT, keyPrint, kept, seq: highest, digest });
+  }
 
   const oldestSeq = events.length > 0 ? events[0]!.payload.seq : null;
   const newestSeq = events.length > 0 ? events[events.length - 1]!.payload.seq : null;
