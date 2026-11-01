@@ -137,8 +137,9 @@ describe('a seat read from its records', () => {
    *  record that names a socket address, and the socket file itself. The settings are written
    *  first and the socket after, so the socket does not predate its declaration. A `pid` names
    *  the socket the way a session names it, so a caller's pane processes can be read against it;
-   *  `session` names the record's own session, for a record that belongs to another one. */
-  function socketSeat(seat = 'helper', shape: { pid?: number; session?: string } = {}): { home: string; socket: string } {
+   *  `session` names the record's own session, for a record that belongs to another one;
+   *  `address` overrides the address the record names, and null records none. */
+  function socketSeat(seat = 'helper', shape: { pid?: number; session?: string; address?: string | null } = {}): { home: string; socket: string } {
     const home = join(dir, 'home');
     mkdirSync(join(dir, 'hooks', 'acme'), { recursive: true });
     writeFileSync(join(dir, 'hooks', 'acme', `${seat}.json`), '{"crossSessionInbound":"accept"}\n');
@@ -151,7 +152,7 @@ describe('a seat read from its records', () => {
       cli: 'claude-code',
       launcher: null,
       launch: 'claude',
-      reach: { team: teamIdOf(dir), seat, session: shape.session ?? 'acme', pane: 'fixture-pane-9', address: socket },
+      reach: { team: teamIdOf(dir), seat, session: shape.session ?? 'acme', pane: 'fixture-pane-9', address: shape.address === undefined ? socket : shape.address },
       mcp: [],
       skills: [],
       lifecycle: 'running',
@@ -268,7 +269,7 @@ describe('a seat read from its records', () => {
     expect(accepted.class).toBe('push');
   });
 
-  test('an accepted declaration with no recorded address proves no socket, with or without a home', () => {
+  test('an accepted declaration with no recorded address and no pane read proves no socket', () => {
     socketSeat();
     const noRecord = read({
       declared: { cli: 'claude-code', launch: 'claude' },
@@ -284,6 +285,34 @@ describe('a seat read from its records', () => {
     });
     expect(noHome.evidence.socket).toBe(false);
     expect(noHome.class).toBe('pull-on-turn');
+  });
+
+  test('a pane socket the record never named is still a route, when the caller read the pane', () => {
+    // The registry may name no address — the record has none, or there is no record at all — and
+    // the pane's own foreground process carries the socket anyway. The send's choice discovers it
+    // from the processes alone, so the class must count it: dispatch and daemon next skip only
+    // what no route can wake.
+    const pid = 812346;
+    const declared = { cli: 'claude-code', launch: 'claude' } as const;
+    const state = { cli: 'claude-code', watcher: 'hook' } as const;
+    const processes = { shell: pid + 1, foreground: [pid] };
+    mkdirSync(join(dir, 'hooks', 'acme'), { recursive: true });
+    writeFileSync(join(dir, 'hooks', 'acme', 'helper.json'), '{"crossSessionInbound":"accept"}\n');
+    writeFileSync(join(dir, `${String(pid)}.sock`), '');
+    // No registry home at all: the launch's declaration is the only word, and the pane carries
+    // the socket the walk would dial.
+    const noRecord = read({ declared, state, processes, sockets: [dir] });
+    expect(noRecord.evidence.socket).toBe(true);
+    expect(noRecord.class).toBe('push');
+    // A record that names no address reads the same: it proves no route, and the pane does.
+    const { home } = socketSeat('helper', { pid, address: null });
+    const namedNone = read({ declared, state, home, processes, sockets: [dir] });
+    expect(namedNone.evidence.socket).toBe(true);
+    expect(namedNone.class).toBe('push');
+    // Without a pane read nothing is discovered: the declaration alone stays no evidence.
+    const blind = read({ declared, state, home, sockets: [dir] });
+    expect(blind.evidence.socket).toBe(false);
+    expect(blind.class).toBe('pull-on-turn');
   });
 
   test('a held socket is not evidence, and the seat stays pull-on-turn', () => {
