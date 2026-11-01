@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
 import { startBus } from '../src/bus/server.ts';
 import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRoutesOf } from '../src/bus/webhook.ts';
+import { signRecord, type RecordPayload, type SignedRecord } from '../src/send/record.ts';
 import { webhookRouteOf } from '../src/send/webhook.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
@@ -29,7 +30,7 @@ function scratch(): string {
 }
 
 /** What the synthetic receiver saw, in order. */
-type Hit = { url: string; method: string; authorization: string; body: string };
+type Hit = { url: string; method: string; headers: Record<string, string>; authorization: string; body: string };
 type Receiver = { url: string; hits: Hit[]; respond: (hit: Hit) => Response | Promise<Response> };
 
 /** A listener on a loopback port that records every request and answers with `respond`. */
@@ -43,6 +44,7 @@ function receiver(answer: (hit: Hit) => Response | Promise<Response>): Receiver 
       const hit: Hit = {
         url: new URL(request.url).pathname,
         method: request.method,
+        headers: Object.fromEntries(request.headers.entries()),
         authorization: request.headers.get('authorization') ?? '',
         body: await request.text(),
       };
@@ -67,7 +69,15 @@ function files(base: string, url: string, secret = 'synthetic-secret-value'): { 
 }
 
 /** The team file the bus is started with: one webhook seat. */
-function teamWith(base: string, webhook: { urlFile: string; secretFile: string } | null) {
+function teamWith(base: string, webhook: { urlFile: string; secretFile: string; header?: string; body?: string } | null) {
+  const row = webhook === null ? '' : [
+    '    webhook:',
+    `      url_file: ${JSON.stringify(webhook.urlFile)}`,
+    `      secret_file: ${JSON.stringify(webhook.secretFile)}`,
+    ...(webhook.header === undefined ? [] : [`      header: ${JSON.stringify(webhook.header)}`]),
+    ...(webhook.body === undefined ? [] : [`      body: ${webhook.body}`]),
+    '',
+  ].join('\n');
   const text = `format: 1
 project: acme
 coordinator: lead
@@ -89,14 +99,7 @@ seats:
     model: Test
     version: "1"
     launch: claude
-${
-  webhook === null
-    ? ''
-    : `    webhook:
-      url_file: ${JSON.stringify(webhook.urlFile)}
-      secret_file: ${JSON.stringify(webhook.secretFile)}
-`
-}`;
+${row}`;
   const parsed = validateTeamFile(text);
   if (!parsed.ok) throw new Error(parsed.errors.map((problem) => problem.message).join('; '));
   return parsed.team;
@@ -104,7 +107,7 @@ ${
 
 let seq = 0;
 /** An accepted arrival for iris, shaped like the record the bus writes. */
-function arrival(to = 'iris'): SignedEventRecord {
+function arrival(to = 'iris', recordId?: string): SignedEventRecord {
   seq += 1;
   return {
     signature: `sig-${seq}`,
@@ -114,12 +117,41 @@ function arrival(to = 'iris'): SignedEventRecord {
       ts: '2026-11-01T00:00:00.000Z',
       kind: 'message.arrived',
       session: 'acme',
-      record_id: `msg-${seq}`,
+      record_id: recordId ?? `msg-${seq}`,
       from: 'lead',
       to,
       seat: to,
     },
   };
+}
+
+const MESSAGE_ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
+
+/** One message record as a send writes it, for the arrival at `id` to name. */
+function messagePayload(root: string, id: string): RecordPayload {
+  return {
+    kind: 'message',
+    id,
+    to: 'iris',
+    to_id: null,
+    root,
+    session: 'acme',
+    at: '2026-11-01T00:00:00.000Z',
+    body: 'from lead\n\nhello from the bus scene\n',
+    from: 'lead',
+    from_id: null,
+    rule: 'a synthetic admission',
+    thread: id,
+  };
+}
+
+/** Writes that record where the seat's pull reads it, signed with the scratch home's key. */
+function signedDrop(home: string, root: string, id: string): SignedRecord {
+  const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  mkdirSync(dir, { recursive: true });
+  const signed = signRecord(messagePayload(root, id), home);
+  writeFileSync(join(dir, id), `${JSON.stringify(signed, null, 2)}\n`);
+  return signed;
 }
 
 /** A drop file the seat's pull would read: the backup that must survive every refusal. */
@@ -193,6 +225,100 @@ test('the POST carries the arrival and authenticates from the secret file, nowhe
   expect(body.v).toBe(1);
   expect(body.event.payload.record_id).toBe(record.payload.record_id);
   expect(hit.body).not.toContain('synthetic-secret-value');
+});
+
+test('a seat row that names a header sends the secret verbatim there, and no Bearer header', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+
+  const outcome = await deliverWebhook({
+    seat: 'iris',
+    webhook: { urlFile: hook.urlFile, secretFile: hook.secretFile, header: 'x-synthetic-auth' },
+    record: arrival(),
+    policy: FAST,
+    report: () => {},
+  });
+
+  expect(outcome).toBe('delivered');
+  const hit = get.hits[0];
+  expect(hit).toBeDefined();
+  if (!hit) return;
+  // The secret file's whole line is the header's value: no scheme word is added, and the
+  // default Authorization header is not written beside it.
+  expect(hit.headers['x-synthetic-auth']).toBe('synthetic-secret-value');
+  expect(hit.headers.authorization).toBeUndefined();
+  expect(hit.headers['content-type']).toBe('application/json');
+  expect(hit.body).not.toContain('synthetic-secret-value');
+});
+
+test('the inbox body shape carries the signed message the arrival names, under the front\'s names', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 200 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const signed = signedDrop(base, root, MESSAGE_ID);
+
+  const outcome = await deliverWebhook({
+    seat: 'iris',
+    webhook: { urlFile: hook.urlFile, secretFile: hook.secretFile, body: 'inbox' },
+    record: arrival('iris', MESSAGE_ID),
+    root,
+    policy: FAST,
+    report: () => {},
+  });
+
+  expect(outcome).toBe('delivered');
+  const hit = get.hits[0];
+  expect(hit).toBeDefined();
+  if (!hit) return;
+  const body = JSON.parse(hit.body) as Record<string, unknown>;
+  expect(body).toEqual({
+    id: MESSAGE_ID,
+    from: 'lead',
+    kind: 'message',
+    created_at: '2026-11-01T00:00:00.000Z',
+    body: 'from lead\n\nhello from the bus scene\n',
+    signature: signed.signature,
+  });
+  // The bus envelope is not in it, the secret is nowhere, and the bridge's own signed-inbox
+  // identity fields — a key id, a wire version, a per-record nonce — are absent rather than
+  // invented: a TeamCLI message record carries none of the three.
+  expect(body.event).toBeUndefined();
+  expect(body.v).toBeUndefined();
+  expect(body.key_id).toBeUndefined();
+  expect(body.wire_version).toBeUndefined();
+  expect(body.nonce).toBeUndefined();
+  expect(hit.body).not.toContain('synthetic-secret-value');
+});
+
+test('the inbox body shape refuses, in plain words, when the record it names is not there', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 200 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  mkdirSync(root, { recursive: true });
+  const said = quiet();
+
+  const outcome = await deliverWebhook({
+    seat: 'iris',
+    webhook: { urlFile: hook.urlFile, secretFile: hook.secretFile, body: 'inbox' },
+    record: arrival('iris', MESSAGE_ID),
+    root,
+    policy: FAST,
+    report: said.report,
+  });
+
+  expect(outcome).toBe('refused');
+  expect(get.hits.length).toBe(0);
+  expect(said.lines.length).toBe(1);
+  expect(said.lines[0]).toContain('not posted');
+  expect(said.lines[0]).toContain('not in the seat\'s drop folder');
+  expect(said.lines[0]).toContain('the drop file stays in place');
+  expect(said.lines.join('\n')).not.toContain('synthetic-secret-value');
 });
 
 test('a non-2xx answer keeps the drop and stops after three attempts, in plain words', async () => {
@@ -474,6 +600,44 @@ test('a running bus posts an accepted arrival to the seat\'s webhook adapter', a
     };
     walk(base);
     expect(carryingSecret).toEqual([]);
+  } finally {
+    await started.handle.close();
+  }
+});
+
+test('a running bus posts the inbox shape for a seat whose row names it', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  const root = join(base, 'acme');
+  const signed = signedDrop(base, root, MESSAGE_ID);
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, { ...hook, body: 'inbox' }),
+    home: base,
+    stderr: () => {},
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    for (let i = 0; i < 200 && get.hits.length === 0; i += 1) await Bun.sleep(10);
+    expect(get.hits.length).toBe(1);
+    const hit = get.hits[0];
+    expect(hit).toBeDefined();
+    if (!hit) return;
+    const body = JSON.parse(hit.body) as Record<string, unknown>;
+    expect(body.id).toBe(MESSAGE_ID);
+    expect(body.from).toBe('lead');
+    expect(body.kind).toBe('message');
+    expect(body.created_at).toBe('2026-11-01T00:00:00.000Z');
+    expect(body.body).toBe('from lead\n\nhello from the bus scene\n');
+    expect(body.signature).toBe(signed.signature);
+    expect(body.event).toBeUndefined();
+    // The record the seat's pull reads stays exactly where it was.
+    expect(existsSync(join(root, '.agents', 'send-drops', 'acme', 'iris', MESSAGE_ID))).toBe(true);
   } finally {
     await started.handle.close();
   }
