@@ -55,7 +55,7 @@ import { seatProcessVerdict } from '../launch/identity.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { forgetLaunchedPane } from '../file/launched-file.ts';
 import { readBox, readScreen, type Screen, type ScreenOptions } from '../watch/screen.ts';
-import { processCommandOf, processStartOf, watchStopRead } from '../watch/pane.ts';
+import { processCommandOf, processCwdOf, processStartOf, watchLaunchOf, watchStopRead } from '../watch/pane.ts';
 import { hasJsonFlag, planStepsOf, refuse, writeJson, type PlanStep } from '../output/index.ts';
 import { expiryPhrase } from '../client/duration-policy.ts';
 
@@ -66,9 +66,11 @@ export type DownSources = {
   alive(pid: number): boolean;
   /** The command line of the process at a pid, and the instant it started (epoch ms). The watch
    *  stop's ownership proof reads both; absent, a pane-less watch pid is unproven and left
-   *  alone. */
+   *  alone. `cwdOf` is the process's working folder, read for a watch line that names no team
+   *  file: the launch's folder is then its side of the identity, and absent leaves it unproven. */
   commandOf?(pid: number): string | null;
   startOf?(pid: number): number | null;
+  cwdOf?(pid: number): string | null;
   /** Herdr's status is not enough: a permission prompt is reported as idle. */
   screen(session: string, pane: string, cli: string, cwd?: string | null): Screen;
   /** The pane's raw text, for reading the input box back before any Enter. */
@@ -175,6 +177,7 @@ export const realSources: DownSources = {
   },
   commandOf: processCommandOf,
   startOf: processStartOf,
+  cwdOf: processCwdOf,
   screen(session, pane, cli, cwd) {
     return readScreen(cli, paneRead(pane, 200, aim(session)) ?? undefined, {
       cwd: cwd ?? undefined,
@@ -1218,19 +1221,21 @@ export async function runDown(argv: string[], io: Io, sources: DownSources): Pro
   // A watch whose pid the state records and no pane does — a watch started outside a herdr pane
   // of this team — is stopped only under the full ownership proof: the live process's command
   // line proves this install's own CLI entry running this team's `team watch` for this session,
-  // and its start instant is the one the watch recorded. A pid alone is never signalled: after
-  // the watch exited the OS can hand its pid to an unrelated process, and a record an older build
-  // wrote names no start instant to check. An unproven pid is left alone, named, and its record
-  // is kept. A record carrying a well-formed epoch is the session host's own process, never a
-  // watch to signal: killing it would stop the host. A record with a pane is left alone here —
-  // `up` verifies through that pane — and stopping the session takes it with the session. A
-  // record whose process is dead, or whose pane's first pass has not written a pid yet, has
-  // nothing to stop.
+  // names this team's file when it names one, or — naming none — is a launch from a folder this
+  // team's file is read from, and its start instant is the one the watch recorded. A pid alone is
+  // never signalled: after the watch exited the OS can hand its pid to an unrelated process, and
+  // another team's watch in the same session is that collision with a matching command line. An
+  // unproven pid is left alone, named, and its record is kept. A record carrying a well-formed
+  // epoch is the session host's own process, never a watch to signal: killing it would stop the
+  // host. A record with a pane is left alone here — `up` verifies through that pane — and
+  // stopping the session takes it with the session. A record whose process is dead, or whose
+  // pane's first pass has not written a pid yet, has nothing to stop.
   const watchStop = watchStopRead(state?.watch, session, {
     alive: (pid) => sources.alive(pid),
     commandOf: (pid) => sources.commandOf?.(pid) ?? null,
     startOf: (pid) => sources.startOf?.(pid) ?? null,
-  });
+    cwdOf: (pid) => sources.cwdOf?.(pid) ?? null,
+  }, watchLaunchOf(current.path, current.dir));
   const watchPid = watchStop.kind === 'proven' ? watchStop.pid : null;
   if (watchStop.kind === 'unproven' && refusals.length === 0) {
     notes.push(`watch: ${watchStop.why}; it was not signalled and the record is kept`);
