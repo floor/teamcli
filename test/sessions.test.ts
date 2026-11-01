@@ -456,6 +456,17 @@ describe('the launch session id', () => {
     }
   });
 
+  test("a shell wrapper's own -c is not a session selection", () => {
+    // The shell's -c before the quoted script is the shell's; only the script's words count.
+    for (const command of ['/bin/sh -c "claude --model claude-opus-5-5"', 'zsh -c "claude --model claude-opus-5-5"']) {
+      const launch = withLaunchSession('claude-code', command);
+      expect(launch.command).toMatch(/ --session-id [0-9a-f-]{36}"$/);
+      expect(launch.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    }
+    // Inside the script, -c is still a session selection.
+    expect(withLaunchSession('claude-code', 'zsh -c "claude -c"')).toEqual({ command: 'zsh -c "claude -c"' });
+  });
+
   test('a line that chooses its own session is left alone', () => {
     for (const command of [
       'claude --resume 2f6d1c1a',

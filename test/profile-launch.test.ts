@@ -549,6 +549,25 @@ describe('a launch line that already selects a conversation', () => {
       .toEqual({ kind: 'refuse', why: 'its launch line resumes a different conversation' });
   });
 
+  test("a shell's own options are never read as the CLI's", () => {
+    // `<shell> -c "<script>"` is the common quoted-script shape: the shell's -c is the shell's,
+    // and only the words inside the script are the CLI's. Inside the script, -c still counts.
+    for (const line of [
+      '/bin/sh -c "claude --model claude-opus-5-5"',
+      'zsh -c "claude --model claude-opus-5-5"',
+      '/bin/sh -ec "claude --model claude-opus-5-5"',
+      'zsh -lc "claude --model claude-opus-5-5"',
+    ]) {
+      expect(namedResumeTarget('claude-code', line)).toBeNull();
+    }
+    for (const line of ['zsh -c "claude -c"', 'zsh -c "claude --continue"', 'zsh -c "claude --resume"']) {
+      expect(namedResumeTarget('claude-code', line)).toBe('');
+    }
+    expect(namedResumeTarget('claude-code', 'zsh -c "claude --resume ses_9"')).toBe('ses_9');
+    expect(resumeCarry('claude-code', '/bin/sh -c "claude --model claude-opus-5-5"', 'ses_9'))
+      .toEqual({ kind: 'line', line: '/bin/sh -c "claude --model claude-opus-5-5 --resume ses_9"' });
+  });
+
   test('a selection that names no id reads as empty', () => {
     for (const line of ['claude --continue', 'claude -c', 'claude --resume']) {
       expect(namedResumeTarget('claude-code', line)).toBe('');

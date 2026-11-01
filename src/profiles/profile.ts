@@ -402,9 +402,12 @@ export function launchSessionId(command: string): string | undefined {
  */
 export function withLaunchSession(cli: string, command: string): { command: string; sessionId?: string } {
   if (!supportsSessionId(cli)) return { command };
-  const named = launchSessionId(command);
+  // Only the CLI's own words are read: a shell's `-c` before a quoted script that runs the CLI
+  // is the shell's option, not Claude Code's `--continue`.
+  const words = cliWordsOf(cli, command);
+  const named = launchSessionId(words);
   if (named !== undefined) return { command, sessionId: named };
-  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(command)) return { command };
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(words)) return { command };
   const sessionId = randomUUID();
   // `supportsSessionId` names one CLI, and its launch binary is `claude`: a quoted script that
   // runs it takes the id inside its quotes, where the CLI reads it, never after them.
@@ -433,20 +436,52 @@ export function withLaunchSession(cli: string, command: string): { command: stri
  */
 export function withResume(cli: string, command: string, sessionId: string): string | null {
   if (!supportsSessionResume(cli)) return null;
+  // A line's own selection is read from the CLI's words alone: a shell's `-c`, `-lc` or `-ec`
+  // before a quoted script that runs the CLI is the shell's option, never a resume of the CLI's.
+  const words = cliWordsOf(cli, command);
   if (cli === 'codex') {
-    if (/(^|\s)resume(\s|$)/.test(command)) return null;
+    if (/(^|\s)resume(\s|$)/.test(words)) return null;
     return appendOnLaunchLine(command, `resume ${sessionId}`, 'codex');
   }
   if (cli === 'antigravity') {
-    if (/(^|\s)--conversation(=|\s|$)/.test(command)) return null;
+    if (/(^|\s)--conversation(=|\s|$)/.test(words)) return null;
     return appendOnLaunchLine(command, `--conversation=${sessionId}`, 'agy');
   }
   if (cli === 'grok') {
-    if (/(^|\s)(--session-id|--resume|-r)(=|\s|$)/.test(command)) return null;
+    if (/(^|\s)(--session-id|--resume|-r)(=|\s|$)/.test(words)) return null;
     return appendOnLaunchLine(command, `-r ${sessionId}`, 'grok');
   }
-  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(command)) return null;
+  if (/(^|\s)(--session-id|--resume|-r|--continue|-c)(=|\s|$|["'])/.test(words)) return null;
   return appendOnLaunchLine(command, `--resume ${sessionId}`, 'claude');
+}
+
+/** The trailing quoted script of a launch line that runs `<binary>`, if the line has one: where
+ *  its opening quote sits and the text inside it. Null when the last word is not a quoted script,
+ *  the quote opens mid-word, the script holds a quote of its own kind, or the script runs no
+ *  `<binary>` word. A word after the closing quote is never part of it. */
+function quotedScriptOf(command: string, binary: string): { open: number; inner: string; quote: string } | null {
+  const trimmed = command.trimEnd();
+  const quote = trimmed.at(-1);
+  if (quote !== '"' && quote !== "'") return null;
+  const open = trimmed.lastIndexOf(quote, trimmed.length - 2);
+  if (open < 0) return null;
+  const before = open === 0 ? '' : trimmed[open - 1];
+  const inner = trimmed.slice(open + 1, -1);
+  const word = new RegExp(`(^|\\s)${binary}(\\s|$)`);
+  if ((open === 0 || /\s/.test(before ?? '')) && !inner.includes(quote) && word.test(inner)) {
+    return { open, inner, quote };
+  }
+  return null;
+}
+
+/** The words of a launch line that belong to the CLI itself: the text inside a trailing quoted
+ *  script that runs it, or the whole line when there is no such script. A shell's own options
+ *  before that script — `-c`, `-lc`, `-ec`, `-l` — are the shell's, never the CLI's, and a word
+ *  after the closing quote is a positional word of the script, not the CLI's either. */
+function cliWordsOf(cli: string, command: string): string {
+  const binary = profileFor(cli)?.binary;
+  if (binary === undefined) return command;
+  return quotedScriptOf(command, binary)?.inner ?? command.trimEnd();
 }
 
 /**
@@ -460,21 +495,15 @@ export function withResume(cli: string, command: string, sessionId: string): str
  */
 function appendOnLaunchLine(command: string, addition: string, binary: string): string {
   const trimmed = command.trimEnd();
-  const quote = trimmed.at(-1);
-  if (quote === '"' || quote === "'") {
-    const open = trimmed.lastIndexOf(quote, trimmed.length - 2);
-    if (open >= 0) {
-      const before = open === 0 ? '' : trimmed[open - 1];
-      const inner = trimmed.slice(open + 1, -1);
-      const word = new RegExp(`(^|\\s)${binary}(\\s|$)`);
-      const escaped = quote === '"'
-        ? addition.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
-        : (addition.includes("'") ? null : addition);
-      if (escaped !== null && (open === 0 || /\s/.test(before ?? '')) && !inner.includes(quote) && word.test(inner)) {
-        const gap = inner.length === 0 || /\s$/.test(inner) ? '' : ' ';
-        return `${trimmed.slice(0, open + 1)}${inner}${gap}${escaped}${quote}`;
-      }
-    }
+  const script = quotedScriptOf(trimmed, binary);
+  const escaped = script === null
+    ? null
+    : script.quote === '"'
+      ? addition.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
+      : (addition.includes("'") ? null : addition);
+  if (script !== null && escaped !== null) {
+    const gap = script.inner.length === 0 || /\s$/.test(script.inner) ? '' : ' ';
+    return `${trimmed.slice(0, script.open + 1)}${script.inner}${gap}${escaped}${script.quote}`;
   }
   return `${trimmed} ${addition}`;
 }
@@ -488,38 +517,40 @@ function appendOnLaunchLine(command: string, addition: string, binary: string): 
  * (Claude Code's most recent), `--last`, `--all` or a bare `resume` (Codex's picker), a bare
  * `--conversation`, or a bare `-r` — which cannot be told from the id a record binds. A line
  * this version does not read is null: an unmeasured form is not a resume this tool may reason
- * about.
+ * about. Only the CLI's own words are read — the text inside a trailing quoted script that runs
+ * it when the line has one, and never the shell's own `-c`, `-lc` or `-ec` before that script.
  */
 export function namedResumeTarget(cli: string, command: string): string | null {
+  const cliWords = cliWordsOf(cli, command);
   if (cli === 'codex') {
     // A closing quote is not part of the token: `zsh -lc "codex resume <id>"` names the id
     // inside the script.
-    const words = command.trim().split(/\s+/).map((word) => word.replace(/^["']+|["']+$/g, ''));
+    const words = cliWords.trim().split(/\s+/).map((word) => word.replace(/^["']+|["']+$/g, ''));
     const at = words.indexOf('resume');
     if (at === -1) return null;
     const next = words[at + 1];
     return next === undefined || next.startsWith('-') ? '' : next;
   }
   if (cli === 'grok') {
-    const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(command);
+    const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(cliWords);
     if (named?.[1] && !named[1].startsWith('-')) return named[1];
-    if (/(?:^|\s)(?:--resume|-r)(?:=|\s|$)/.test(command)) return '';
+    if (/(?:^|\s)(?:--resume|-r)(?:=|\s|$)/.test(cliWords)) return '';
     return null;
   }
   if (cli === 'antigravity') {
     // A closing quote is a word boundary too: `zsh -lc "agy --conversation=<id>"` names the
     // id inside the script, and the quote is not part of the token.
-    const named = /(?:^|\s)--conversation(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(command);
+    const named = /(?:^|\s)--conversation(?:=|\s+)([A-Za-z0-9._:-]+)(?=\s|$|["'])/.exec(cliWords);
     if (named?.[1] && !named[1].startsWith('-')) return named[1];
-    if (/(?:^|\s)--conversation(?:=|\s|$)/.test(command)) return '';
+    if (/(?:^|\s)--conversation(?:=|\s|$)/.test(cliWords)) return '';
     return null;
   }
   if (cli !== 'claude-code') return null;
   // A closing quote is a word boundary too: a quoted script names the id inside it, and the
   // quote is not part of the token.
-  const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$|["'])/.exec(command);
+  const named = /(?:^|\s)(?:--resume|-r)(?:=|\s+)([A-Za-z0-9._-]+)(?=\s|$|["'])/.exec(cliWords);
   if (named?.[1] && !named[1].startsWith('-')) return named[1];
-  if (/(?:^|\s)(?:--resume|-r|--continue|-c)(=|\s|$|["'])/.test(command)) return '';
+  if (/(?:^|\s)(?:--resume|-r|--continue|-c)(=|\s|$|["'])/.test(cliWords)) return '';
   return null;
 }
 
@@ -547,7 +578,7 @@ export function resumeCarry(
   if (line !== null) return { kind: 'line', line };
   return {
     kind: 'refuse',
-    why: launchSessionId(command) === undefined
+    why: launchSessionId(cliWordsOf(cli, command)) === undefined
       ? 'its launch line has no measured resume form'
       : 'its launch line already sets a new session id',
   };

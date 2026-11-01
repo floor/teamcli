@@ -1775,13 +1775,50 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(argv[10]).toMatch(/worker\.json$/);
   });
 
+  test("a shell's own -c is not read as Claude Code's continue, so the line resumes", async () => {
+    // `<shell> -c "<script>"` is the common quoted-script shape: the shell's -c is the shell's
+    // option, not the CLI's continue. Both lines carry the recorded conversation, and the
+    // profile's options go inside the script with it. The line is planned and recorded here;
+    // the next scene runs one.
+    for (const launch of ['/bin/sh -c "claude --model claude-opus-5-5"', 'zsh -c "claude --model claude-opus-5-5"']) {
+      const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+      const { fixture, run } = seeded({
+        registry: 'ses_keep',
+        state: 'ses_keep',
+        workerSession: 'ses_keep',
+        launched: true,
+        launch,
+        yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+      });
+      run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+      const io = testIo(fixture.root, { kind: 'owner' });
+
+      expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+      const ran = run.did.runs.find((line) => line.includes('--resume ses_keep'));
+      expect(ran).toBeDefined();
+      const settings = join(fixture.root, '.agents/hooks/acme/worker.json');
+      expect(ran?.startsWith(
+        `AGENT_UNATTENDED=1 ${launch.slice(0, -1)} --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt `,
+      )).toBe(true);
+      expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
+      expect(io.out).toContain('resumes the recorded conversation ses_keep');
+    }
+  });
+
   test('a quoted script hands the profile options to the CLI as arguments', async () => {
     // The field's shape: a launch line whose last word is a quoted script running the CLI. A word
     // after the closing quote never reaches the CLI, so the profile's options must go inside it.
     // Running the planned line with a stub CLI on PATH proves which words the CLI is handed — the
-    // containment check on the line cannot see the difference. `-ec`, not `-c`: a bare `-c` token
-    // reads as Claude Code's `--continue`, and the line would be refused as naming a conversation.
-    const launch = '/bin/sh -ec "claude --model claude-opus-5-5"';
+    // containment check on the line cannot see the difference. The shell's own -c is not Claude
+    // Code's --continue: only the words inside the script are the CLI's.
+    const launch = '/bin/sh -c "claude --model claude-opus-5-5"';
     const worker = `  - role: implementer
     name: worker
     label: worker
@@ -1807,7 +1844,7 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     const io = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
-    const command = run.did.runs.find((line) => line.includes('/bin/sh -ec'));
+    const command = run.did.runs.find((line) => line.includes('/bin/sh -c'));
     expect(command).toBeDefined();
     execFileSync('/bin/sh', ['-c', command ?? ''], {
       cwd: fixture.root,
