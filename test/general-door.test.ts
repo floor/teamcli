@@ -2,15 +2,16 @@
 // `--general <grant.json> --key <client.key>` through the dispatcher, admitted as the owner with no
 // terminal; every refusal is the door's own, before the command runs.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands, main } from '../src/cli.ts';
 import { GENERAL_OPS, issueOwnerGeneralGrant, type GrantOp } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import type { Io } from '../src/io.ts';
 import { installKey } from '../src/store/keys.ts';
+import { fixtureBase } from './helpers.ts';
 
-const base = realpathSync(mkdtempSync(join(process.cwd(), '.gg-test-door-')));
+const base = fixtureBase('.gg-test-door-');
 const home = join(base, 'home');
 const cwd = join(base, 'plain');
 const savedHome = process.env.HOME;

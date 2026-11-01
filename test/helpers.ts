@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import { PROFILES } from '../src/clis.ts';
@@ -295,4 +296,29 @@ export function gitEnv(): NodeJS.ProcessEnv {
     delete env[name];
   }
   return env;
+}
+
+/**
+ * A world's base folder, under a scratch root outside the OS temp directory and outside the
+ * checkout. A client key refuses to sit under the temp folder, so a fixture whose synthetic HOME
+ * holds one cannot live in temp — and a checkout may itself sit under temp, so neither can the
+ * fixture be placed beside the checkout by assumption. The root is `TEAMCLI_TEST_SCRATCH` when it
+ * names one, else `<home>/.cache/teamcli-tests`; a root the placement rule would refuse is an
+ * error, never silently used. Callers create what they need under the returned folder and remove
+ * it themselves.
+ */
+export function fixtureBase(prefix: string): string {
+  const checkout = resolve(import.meta.dir, '..');
+  const named = process.env.TEAMCLI_TEST_SCRATCH;
+  const root = resolve(named !== undefined && named !== '' ? named : join(homedir(), '.cache', 'teamcli-tests'));
+  mkdirSync(root, { recursive: true });
+  const real = realpathSync(root);
+  const temp = realpathSync(tmpdir());
+  if (real === temp || real.startsWith(temp + sep)) {
+    throw new Error(`the fixture scratch root "${real}" overlaps the OS temp directory; name a root outside it with TEAMCLI_TEST_SCRATCH`);
+  }
+  if (real === checkout || real.startsWith(checkout + sep)) {
+    throw new Error(`the fixture scratch root "${real}" is inside the checkout; name a root outside it with TEAMCLI_TEST_SCRATCH`);
+  }
+  return realpathSync(mkdtempSync(join(real, prefix)));
 }
