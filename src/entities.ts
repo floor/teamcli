@@ -76,6 +76,45 @@ export function entityLiveness(home: string | undefined, entity: string | null):
   return declaredEntityLiveness(home).get(entity);
 }
 
+/** How far apart seat nicknames must stay: the whole entity, one project of it, one team, or
+ *  nowhere. The order is the widening one the relax word lists. */
+export const NICKNAME_SCOPES = ['entity', 'project', 'team', 'off'] as const;
+export type NicknameScope = (typeof NICKNAME_SCOPES)[number];
+
+/** The scope a team reads when its entity writes no `names.unique` word. */
+export const NICKNAME_SCOPE_DEFAULT: NicknameScope = 'entity';
+
+/**
+ * Each entity's `names.unique` word, by entity name, from its entry's `names:` map —
+ * `<entity>: { names: { unique: entity | project | team | off } }`. Only entities that write one
+ * of the four words appear: the file is the owner's own, hand-written, so a word it does not
+ * spell (a typo, a case, a stray value) declares nothing and the default stands rather than
+ * widening the check by accident.
+ */
+export function declaredNamesUnique(home: string): Map<string, NicknameScope> {
+  const out = new Map<string, NicknameScope>();
+  for (const entry of entityEntries(home)) {
+    if (entry.value.kind !== 'map') continue;
+    const names = entry.value.entries.find((candidate) => candidate.key === 'names');
+    if (names === undefined || names.value.kind !== 'map') continue;
+    const unique = names.value.entries.find((candidate) => candidate.key === 'unique');
+    if (unique === undefined || unique.value.kind !== 'scalar') continue;
+    const word = typeof unique.value.value === 'string' ? unique.value.value.trim() : '';
+    if ((NICKNAME_SCOPES as readonly string[]).includes(word)) out.set(entry.key, word as NicknameScope);
+  }
+  return out;
+}
+
+/**
+ * The nickname scope in force for a team of `entity` at `home`: the entity's own word, or the
+ * default. A team that names no entity, or a reader with no home, has no entry to read, so no
+ * check runs — the entry is the only place the word lives.
+ */
+export function namesUniqueFor(home: string | undefined, entity: string | null): NicknameScope {
+  if (home === undefined || entity === null) return 'off';
+  return declaredNamesUnique(home).get(entity) ?? NICKNAME_SCOPE_DEFAULT;
+}
+
 /** One entity's `clients:` word: seats by client id, or why the map does not read. */
 export type DeclaredClients = { ok: true; clients: Record<string, string[]> } | { ok: false; why: string };
 
