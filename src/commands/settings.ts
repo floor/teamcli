@@ -3,7 +3,9 @@
 // registry (`src/config/compose.ts`); `set` and `unset` sign a record into the seat's agent file,
 // raise `config.changed`, and log the change. Only the owner writes: a lead's write within its
 // team waits for the role policy the approved minimum leaves out, and this build refuses rather
-// than admit a write no policy authorized.
+// than admit a write no policy authorized. The one exception is dev mode's owner admission
+// (`src/dev_mode.ts`): a placed orchestrator writes with the `dev mode continues` warning and
+// the audit line, and nobody else does.
 //
 // The write guard runs in three layers, each refusing in its own terms: the store plan
 // (`settings.key`, `settings.value`, `settings.source`), the per-seat check in
@@ -26,6 +28,7 @@ import type { PlannedConfigSetting } from '../config/sources.ts';
 import { sayApply, sayConfigOrigin, sayConfigValue } from '../config/text.ts';
 import { checkSeatSetting } from '../config/value.ts';
 import type { DelegateSources } from '../delegate.ts';
+import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import type { Current } from '../file/current.ts';
 import { isParseError } from '../file/load.ts';
@@ -703,24 +706,32 @@ function executeWrite(
   const parsed = verb === 'set' ? parseSetWords(words) : parseUnsetWords(words);
   if (!parsed.ok) return invocation(io, json, parsed.why);
 
+  const home = options.home ?? homedir();
+  const now = options.now ?? new Date();
   const walked = walkCaller(io);
   if (!isOwner(walked)) {
     const message = `only the owner sets a seat's settings, from a terminal outside herdr; this call is ${describeCaller(walked)}`;
-    if (json) {
-      writeJsonError(io, 'settings.not-owner', message, 'the owner runs `team settings set` from a terminal outside herdr', 1, 'owner-only');
-    } else {
-      io.stderr(`team settings: ${message}\n`);
+    // Dev mode's owner admission for exactly this gate, through the one resolver the sibling
+    // owner-only writers use: a placed orchestrator continues with the same warning and audit
+    // line; the owner's own path is untouched, and every other caller keeps the refusal. A
+    // `--file` write names another record and is never this team's to admit: it keeps the gate.
+    const lift = file === undefined ? devModeOwnerLiftAtCwd(io, { command: 'settings', refusal: message, home, now }) : null;
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(io, 'settings.not-owner', message, 'the owner runs `team settings set` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        io.stderr(`team settings: ${message}\n`);
+      }
+      // exit: settings.not-owner
+      return 1;
     }
-    // exit: settings.not-owner
-    return 1;
+    io.stderr(`${lift.warning}\n`);
   }
   if (file !== undefined) {
     const refusal = fileOwnerRefusal(io, file);
     if (refusal !== undefined) return fileOwnerExit(io, json, refusal);
   }
 
-  const home = options.home ?? homedir();
-  const now = options.now ?? new Date();
   const current = currentTeam(io.cwd, file, now, home, true);
   if (!current.ok) return refuseFile(io, json, current);
   const { team } = current;

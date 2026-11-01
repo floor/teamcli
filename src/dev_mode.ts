@@ -7,8 +7,9 @@
 // The owner's urgent widening adds a second, narrower admission: while dev mode
 // is `on`, a placed seat that is a team's orchestrator — the file's resolved lead, whether it
 // was spelled by `coordinator:` or by `leads: true` — may run the owner-only authority edits —
-// grant, delegate, revoke, policy set/unset, `check --repair`, `remove --abandon`, `down
-// --abandon`, `broker`, `tempo` and the daemon's install, uninstall and fault-watch — and may
+// grant, delegate, revoke, policy set/unset, the team record's `config set`/`unset`/`edit` and a
+// seat's `settings set`/`unset`, `check --repair`, `remove --abandon`, `down --abandon`,
+// `broker`, `tempo` and the daemon's install, uninstall and fault-watch — and may
 // record an install under an unapproved `installer:` designation the live file validates — and
 // each admitted run prints the same `dev mode continues` warning and writes the same audit line
 // (the command, the caller, and dev mode's source). The
