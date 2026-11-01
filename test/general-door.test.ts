@@ -169,12 +169,13 @@ test('every command in the contract declares --general and --key, but the grant-
   expect(missing).toEqual([]);
 });
 
-test('an admitted run carries the verified grant and key paths to the command (io.general)', async () => {
+test('an admitted run carries the verified grant and key paths, and the ids they name, to the command (io.general)', async () => {
   const { generalDoor } = await import('../src/client/general-door.ts');
   const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false };
   const door = generalDoor('daemon', ['install', '--general', all, '--key', a.path], io);
   if (door.kind !== 'admitted') throw new Error(door.kind);
-  expect(door.io.general).toEqual({ grant: all, key: a.path });
+  const grantId = (JSON.parse(readFileSync(all, 'utf8')) as { general_grant: { grant_id: string } }).general_grant.grant_id;
+  expect(door.io.general).toEqual({ grant: all, key: a.path, grantId, clientId: 'a' });
   const refused = generalDoor('daemon', ['install', '--general', all, '--key', b.path], io);
   expect(refused.kind).toBe('refused');
 });

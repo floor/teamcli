@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { ownerSeatHelperPath, readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { ownerDeviceConsent } from '../security/profile.ts';
 import { readArgs } from '../args.ts';
-import { describeCaller, fileOwnerRefusal, isOwner, walkCaller } from '../caller.ts';
-import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
+import { describeCaller, fileOwnerRefusal, isOwner, logTag, walkCaller } from '../caller.ts';
+import { devModeOwnerLiftAtCwd, type DevModeOwnerLift } from '../dev_mode.ts';
 import { currentTeam } from '../file/current.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
@@ -573,6 +573,23 @@ function resolveWriteTarget(
   };
 }
 
+/** Who a policy write's log credits: the run's real writer, never the owner whose place the gate
+ *  stands in for. The owner's own terminal (or their device) is `owner`; a run the general door
+ *  admitted is the client, with the grant it verified; a run dev mode lifted is the seat it
+ *  placed. The signed record says `setter: owner` on every path — the declaration is the
+ *  owner's — and only the log says who ran it. */
+function policyWriter(io: Io, lifted: DevModeOwnerLift | null): { tag: string; said: string } {
+  const general = io.general;
+  if (general !== undefined) {
+    return { tag: `client:${general.clientId}`, said: `client ${general.clientId}, grant ${general.grantId}` };
+  }
+  if (lifted?.lifted === true) {
+    const seat = logTag(lifted.caller);
+    return { tag: seat, said: `${seat}, dev mode` };
+  }
+  return { tag: 'owner', said: 'owner' };
+}
+
 function executePolicySet(
   rest: string[],
   values: Record<string, string | undefined>,
@@ -593,6 +610,7 @@ function executePolicySet(
   }
 
   const caller = walkCaller(rawIo);
+  let lifted: DevModeOwnerLift | null = null;
   // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
   if (!flags.has('dry-run') && !isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
@@ -618,6 +636,7 @@ function executePolicySet(
       }
       return 'refused';
     }
+    lifted = lift;
     io.stderr(consent?.ok === true ? `team policy: confirmed on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
   }
 
@@ -767,11 +786,12 @@ function executePolicySet(
   }
 
   if (ctx.logDir) {
+    const by = policyWriter(rawIo, lifted);
     logLine(
       ctx.logDir,
       'policy',
-      'owner',
-      `level ${parsedLevel.level} (${ctx.target}) ${written.policy.name}: ${prevStr} -> ${nextStr}${untilSuffix} (setter: owner)`,
+      by.tag,
+      `level ${parsedLevel.level} (${ctx.target}) ${written.policy.name}: ${prevStr} -> ${nextStr}${untilSuffix} (setter: ${by.said})`,
       now,
     );
   }
@@ -827,6 +847,7 @@ function executePolicyUnset(
   }
 
   const caller = walkCaller(rawIo);
+  let lifted: DevModeOwnerLift | null = null;
   // A dry run prints the plan and writes nothing, so it never asks for Touch ID.
   if (!flags.has('dry-run') && !isOwner(caller)) {
     const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
@@ -852,6 +873,7 @@ function executePolicyUnset(
       }
       return 'refused';
     }
+    lifted = lift;
     io.stderr(consent?.ok === true ? `team policy: confirmed on the owner's device by signer ${consent.signer}\n` : `${lift?.warning ?? ''}\n`);
   }
 
@@ -937,11 +959,12 @@ function executePolicyUnset(
   }
 
   if (ctx.logDir) {
+    const by = policyWriter(rawIo, lifted);
     logLine(
       ctx.logDir,
       'policy',
-      'owner',
-      `level ${parsedLevel.level} (${ctx.target}) ${written.name}: ${prevStr} -> unset (setter: owner)`,
+      by.tag,
+      `level ${parsedLevel.level} (${ctx.target}) ${written.name}: ${prevStr} -> unset (setter: ${by.said})`,
       now,
     );
   }
