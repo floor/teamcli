@@ -614,6 +614,13 @@ function inspect(
 ): Seen | Refusal {
   const say = (reason: 'version' | 'screen' | 'label' | 'folder', text: string): Refusal =>
     refusedClass(reason, `${seat}: ${text}`);
+  // The process check compares the pane's process with the identity its launch recorded. With no
+  // record there is nothing to compare it with, so the reading cannot be proved this run's seat:
+  // the word refuses instead of pressing a key into a pane it cannot identify. The log line keeps
+  // the class both words use; the contract row is this word's own.
+  if (!launched) {
+    return { id: 'answer.trust-identity', class: 'identity', message: `${seat}: its launched identity was not recorded, so the process in its pane cannot be checked` };
+  }
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
   if (!profile) return say('version', 'this version has no trust answer');
@@ -834,6 +841,7 @@ function refuse(
   // exit: answer.action
   // exit: answer.process
   // exit: answer.identity
+  // exit: answer.trust-identity
   // exit: answer.human
   // exit: answer.permission
   // exit: answer.login

@@ -63,13 +63,13 @@ team's — or another session's — seat of the same name after this pane's dial
 On success it writes the word's own recovery into the seat's state — `trust-sent-recovery` or
 `question-sent-recovery` — and reads it back **before** sending the key: a crash between the
 two leaves a recovery a retry only observes, never a dialog answered twice. Under the seat
-lock, on both of its fresh reads of the pane, and immediately before the one terminal input it
-sends — the recorded key — and again after the key for a profile whose launch carried the rules
-line, if the seat's state holds a `launched` record (a seat stopped at a dialog has one: its
-launch records the identity in the same write as the waiting record; a launch from before the
-field existed, or one whose process the terminal host could not read when it stopped, has none
-and keeps today's check), the pane's process identity must match the recorded process (`same`);
-if the terminal host cannot read the process or it is `gone` or `replaced`, the command refuses
+lock, the pane's process identity must match the identity the seat's launch recorded (`same`):
+on the word's fresh readings of the pane, immediately before the one terminal input it sends —
+the recorded key — and again after the key for a profile whose launch carried the rules line. A
+seat whose state holds no `launched` record cannot be checked against anything, so both words
+refuse it by identity before the pane is read at all (a launch from before the field existed,
+or one whose process the terminal host could not read when it stopped, has none). If the
+terminal host cannot read the process or it is `gone` or `replaced`, the command refuses
 before sending that input, or after the key before recording the seat ready. Refusals before
 the recovery write — caller, policy, state, version, screen, label, folder and action, and both
 inspections — write nothing. The one refusal between the write and the key, this process check,
@@ -186,6 +186,7 @@ terminal, judged before the file or the caller is read. The classes are the log 
 | folder | `the dialog does not show exactly one folder`; `the dialog does not show the lobby as written: the owner answers it through team up`; `the pane's folder cannot be read`; `the pane's folder is not the lobby as written`; `the lobby's parent folder cannot be read`; `the lobby's parent folder holds a name that differs from the lobby's by whitespace alone`; `this folder is not an exact trust entry`; `ask the owner to add this exact folder to trust and answer through team up` |
 | action | `the recorded key is not one this version sends` |
 | process | `the process in its pane is not the one team launched`; `its pane could not be read` |
+| identity | `its launched identity was not recorded, so the process in its pane cannot be checked` |
 | human | `the pane is a human's; no dialog key is pressed and no rules line is typed; left as it is` |
 | permission | `the pane is at a permission prompt, which is never answered` |
 | login | `the pane is at a login prompt, which is never answered` |
@@ -213,6 +214,7 @@ host does not send, or a question-answer record carries a key outside the closed
 | 1 | `answer.file-owner` | `--file` is the owner's |
 | 1 | `answer.folder` | the dialog's folder is not the lobby's exact trust entry |
 | 1 | `answer.human` | the seat is a human's pane; no dialog key is pressed and no rules line is typed |
+| 1 | `answer.identity` | the seat's launched identity was not recorded; no process in its pane can be checked against it |
 | 1 | `answer.incomplete` | the question runs past the rows this version reads; it is not answered |
 | 1 | `answer.label` | the trust choice is not the recorded one |
 | 1 | `answer.login` | the pane is at a login prompt; it is never answered |
@@ -225,6 +227,7 @@ host does not send, or a question-answer record carries a key outside the closed
 | 1 | `answer.screen` | the pane is not the trust dialog |
 | 1 | `answer.session-owner` | `--session` is the owner's |
 | 1 | `answer.state` | the seat is not waiting at the dialog this word answers |
+| 1 | `answer.trust-identity` | the seat's launched identity was not recorded, so `trust` refuses before the pane is read |
 | 1 | `answer.unverified` | the name is not a declared seat |
 | 1 | `answer.version` | this version has no answer for the dialog |
 | 2 | `answer.configuration` | the team file cannot be read, or the decision line would go to another team |
@@ -255,6 +258,8 @@ unplaced reason.
 | `refused question: action` | the recorded key is outside the closed set, or the send failed |
 | `refused trust: process` | the process in the pane is not the one team launched, or its pane could not be read |
 | `refused question: process` | the process in the pane is not the one team launched, or its pane could not be read |
+| `refused trust: identity` | the seat's launched identity was not recorded |
+| `refused question: identity` | the seat's launched identity was not recorded |
 | `refused trust: human` | the seat is a human's pane |
 | `refused question: human` | the seat is a human's pane |
 | `refused question: permission` | the pane is at a permission prompt, including trust to run a command |
