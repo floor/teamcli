@@ -491,6 +491,16 @@ describe('a screen is masked before it is printed', () => {
     expect(maskSecretRows(['-----BEGIN'])).toEqual(['[masked]']);
   });
 
+  test('a private-key header split with a tab over three rows masks every row', () => {
+    // Builder-3's probe: the header is contiguous in the joined reading with a tab where the
+    // wrap did not fall; every row the reading touches is masked, the third included.
+    const rows = ['-----BEGIN\tOP', 'ENSSH PRI', 'VATE KEY-----'];
+    expect(maskSecretRows(rows)).toEqual(['[masked]', '[masked]', '[masked]']);
+    const joined = maskSecretRows(rows).join('').replace(/\s+/g, '');
+    const plain = '-----BEGINOPENSSHPRIVATEKEY-----';
+    for (let at = 0; at + 12 <= plain.length; at += 1) expect(joined).not.toContain(plain.slice(at, at + 12));
+  });
+
   test('a sha split across two rows is masked: a wrapped hex run cannot be told from a secret', () => {
     const rows = [`commit ${sha.slice(0, 20)}`, `${sha.slice(20)} done`];
     expect(maskSecretsLine(`commit ${sha}`)).toBe(`commit ${sha}`);

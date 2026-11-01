@@ -95,7 +95,7 @@ export function maskSecretsLine(line: string, fs: FsReader = defaultFs): string 
 
 function maskOnce(line: string, fs: FsReader): string {
   let masked = line.replace(URL_USERINFO_URL, (match) => match.replace(URL_USERINFO, '[masked]@'));
-  masked = masked.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, '[masked]');
+  masked = masked.replace(/-----BEGIN[\sA-Z]*?PRIVATE\s*KEY-----/g, '[masked]');
   masked = masked.replace(KEY_TOKEN, (_whole, separator: string) => `${separator}[masked]`);
   masked = replaceWords(masked, (word) => looksRandom(word, fs));
   return masked;
@@ -114,7 +114,7 @@ function maskOnce(line: string, fs: FsReader): string {
  * of it between two of its boundaries — a wrap can join an ordinary word to a credential's front,
  * so the run alone may fail a judgement the credential's own piece passes. A private-key header is
  * judged by halves too: a row holding a start or an end marker is masked with the row it continues
- * on, the space a word wrap removes included. If any reading finds a token, every row it touches
+ * on, the whitespace a word wrap removes included. If any reading finds a token, every row it touches
  * is masked on that row; masking an ordinary word the reading also touched is the safe error. The
  * row count never changes: a peek prints the same number of rows it read; a UUID that spans a wrap
  * stays readable, while a wrapped long hex run is masked because it cannot be told from a secret.
@@ -182,14 +182,15 @@ export function maskSecretRows(rows: readonly string[], fs: FsReader = defaultFs
  * removes it, so neither the joined header nor one row alone holds the whole marker. A row
  * holding a start marker without its end half continues on the next row; a row holding the end
  * half without its start continues from the previous one; an end marker without its end half
- * continues on the next row too; a header whole on its row needs no neighbour. Masking a
- * neighbour an ordinary row shares is the safe error.
+ * continues on the next row too; a header whole on its row needs no neighbour. Whitespace
+ * between the marker words may be a space or a tab, in any run. Masking a neighbour an ordinary
+ * row shares is the safe error.
  */
 function headerMarkerRows(rows: readonly string[]): Set<number> {
   const masked = new Set<number>();
   rows.forEach((row, index) => {
     const startHalf = row.includes('-----BEGIN');
-    const endHalf = row.includes('PRIVATE KEY-----');
+    const endHalf = /PRIVATE\s*KEY-----/.test(row);
     const endMarker = row.includes('-----END');
     if (!startHalf && !endHalf && !endMarker) return;
     masked.add(index);
@@ -211,9 +212,10 @@ function crossingSpans(text: string, joins: readonly number[], fs: FsReader): Sp
     // puts the entire credential in the next row, where no line-level URL rule could see it.
     if (crosses(match.index ?? 0, (match.index ?? 0) + match[0].length)) spans.push({ start, end });
   }
-  // The space after a marker word can be the one a wrap removes, so the joined pattern lets it
-  // go: the marker words themselves are contiguous in the joined reading whatever the split.
-  for (const match of text.matchAll(/-----BEGIN[A-Z ]*PRIVATE[ ]?KEY-----/g)) {
+  // The whitespace between marker words can be the one a wrap removes, or a tab the screen
+  // carries where the header has a space: the joined pattern accepts no whitespace or any run,
+  // so the marker words themselves are contiguous in the joined reading whatever the split.
+  for (const match of text.matchAll(/-----BEGIN[\sA-Z]*?PRIVATE\s*KEY-----/g)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
     if (crosses(start, end)) spans.push({ start, end });
@@ -221,8 +223,8 @@ function crossingSpans(text: string, joins: readonly number[], fs: FsReader): Sp
   // The end line's marker words can wrap anywhere too, and the row halves rule only reaches the
   // marker's own row and one neighbour: a wrap inside `-----END` two rows above the end half
   // would leave the first piece. The joined reading has no spaces to lose inside the marker
-  // words, so it matches the end line over any split.
-  for (const match of text.matchAll(/-----END[A-Z ]*PRIVATE[ ]?KEY-----/g)) {
+  // words, so it matches the end line over any split and any whitespace run.
+  for (const match of text.matchAll(/-----END[\sA-Z]*?PRIVATE\s*KEY-----/g)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
     if (crosses(start, end)) spans.push({ start, end });
