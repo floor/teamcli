@@ -5255,8 +5255,15 @@
       "code": 1,
       "command": "team",
       "id": "team.general-refused",
-      "meaning": "the general grant does not admit this command here (expired, another key, an op or entity it does not cover); nothing ran",
+      "meaning": "the general grant does not admit this command here (expired, another key, or an op it does not cover); nothing ran",
       "trigger": "team status --general <grant.json> --key <client.key>"
+    },
+    {
+      "code": 1,
+      "command": "team",
+      "id": "team.general-target",
+      "meaning": "the general grant lists entities, and this release admits a wildcard grant only (scoped grants arrive in 0.5.11); nothing ran",
+      "trigger": "team status --general <grant.json> --key <client.key> (a grant that lists entities)"
     },
     {
       "code": 1,
