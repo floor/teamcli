@@ -283,7 +283,7 @@
     },
     "stage": {
       "oneOf": [
-        { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 },
+        { "type": "array", "items": { "$ref": "#/$defs/ruleWithoutReason" }, "minItems": 1 },
         {
           "type": "object",
           "additionalProperties": false,
@@ -293,7 +293,7 @@
               "type": "boolean",
               "description": "Ignore ASCII case only: each letter matches its other case; no other character folds (a long s or a Kelvin sign reads as itself). The flag reaches every rule of the stage, the exceptions written beside a match included."
             },
-            "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 }
+            "rules": { "type": "array", "items": { "$ref": "#/$defs/ruleWithoutReason" }, "minItems": 1 }
           }
         }
       ]
@@ -328,7 +328,7 @@
           "type": "boolean",
           "description": "Ignore ASCII case only: each letter matches its other case; no other character folds. The flag reaches every rule of the stage, the exceptions written beside a match included."
         },
-        "rules": { "type": "array", "items": { "$ref": "#/$defs/rule" }, "minItems": 1 },
+        "rules": { "type": "array", "items": { "$ref": "#/$defs/ruleWithoutReason" }, "minItems": 1 },
         "tested": {
           "type": "object",
           "additionalProperties": false,
@@ -426,6 +426,11 @@
         },
         "block": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/blockStep" } }
       }
+    },
+    "ruleWithoutReason": {
+      "description": "A rule outside a rate-limit stage: `reason` labels a rate-limit match alone, so the loader refuses it on any other stage's rule as an unknown key.",
+      "allOf": [{ "$ref": "#/$defs/rule" }],
+      "not": { "required": ["reason"] }
     },
     "blockStep": {
       "oneOf": [
