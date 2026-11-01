@@ -17,9 +17,9 @@
 // not hosted in this build, and the catalogue's `daemon.broker` policy is off by default, so a
 // machine with no broker handler never falls back to the old per-clone broker.
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
@@ -40,7 +40,9 @@ import {
   systemServiceManager,
   type ServiceInstallFailure,
   type ServiceManager,
+  type ServicePlan,
   type ServiceProgram,
+  type ServiceRuntime,
 } from '../daemon/service.ts';
 import type { DaemonHost } from '../send/daemon.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -226,15 +228,43 @@ function rootsOf(parsed: Parsed, io: Io, home: string): { roots: string[] } | { 
   return { roots: [loaded.root] };
 }
 
-function localProgram(sources: DaemonCommandSources): { execPath: string; entry: string } | null {
+/**
+ * The files that make up the running CLI, as the service adapter must copy them. A build is a
+ * module tree under the package's `dist`, beside the relay package it imports and the manifest
+ * it reads its version from; a source run keeps the same shape one folder over. The nearest
+ * folder above the entry that carries a manifest is the package root, and the entry's own folder
+ * under it, the relay package beside it and that manifest are the whole program. Undefined when
+ * no manifest is found: the adapter then keeps the entry's own folder, exactly as a synthetic
+ * single-file scene needs.
+ */
+function programRuntime(entry: string): ServiceRuntime | undefined {
+  let folder = dirname(entry);
+  for (let up = 0; up < 8; up += 1) {
+    if (existsSync(join(folder, 'package.json'))) {
+      const include = [relative(folder, dirname(entry)) === '' ? '.' : relative(folder, dirname(entry))];
+      if (existsSync(join(folder, 'packages', 'relay'))) include.push('packages/relay');
+      include.push('package.json');
+      return { root: folder, include };
+    }
+    const parent = dirname(folder);
+    if (parent === folder) break;
+    folder = parent;
+  }
+  return undefined;
+}
+
+function localProgram(sources: DaemonCommandSources): { execPath: string; entry: string; runtime?: ServiceRuntime } | null {
   if (sources.program !== undefined) return sources.program;
   const entry = process.argv[1];
   if (entry === undefined || entry === '') return null;
+  let resolved = resolve(entry);
   try {
-    return { execPath: process.execPath, entry: realpathSync(entry) };
+    resolved = realpathSync(entry);
   } catch {
-    return { execPath: process.execPath, entry: resolve(entry) };
+    // An entry this process was started from but cannot resolve is still the path it runs.
   }
+  const runtime = programRuntime(resolved);
+  return { execPath: process.execPath, entry: resolved, ...(runtime === undefined ? {} : { runtime }) };
 }
 
 /**
@@ -896,7 +926,21 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // The installing shell's PATH, so the service finds herdr where the owner's shell does.
     ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
   };
-  const plan = manager.plan(home, fullProgram);
+  let plan: ServicePlan;
+  try {
+    plan = manager.plan(home, fullProgram);
+  } catch (error) {
+    // The plan names the retained copy the unit would run, and a program that cannot be read
+    // whole is refused before anything is written — by a dry run too, which must not promise a
+    // unit the install would then refuse.
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.install-failed',
+      message: `the program this unit would run could not be read whole, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
+      repair: null,
+    });
+    // exit: daemon.install-failed
+    return 1;
+  }
   if (parsed.dryRun) {
     if (parsed.json) {
       writeJson(io, 'team.daemon-install', {
@@ -944,7 +988,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       dry_run: false,
       installed: true,
       unit_path: installed.unitPath,
-      program: plan.program,
+      // The words the unit was actually written with, retained entry included; a manager that
+      // reports none wrote the words the plan named.
+      program: installed.program ?? plan.program,
       roots: named.roots,
       // The removal is never silent: a structured run says it in a field, a plain run below in
       // a sentence.

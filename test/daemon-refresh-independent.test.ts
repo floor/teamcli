@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runDaemon } from '../src/commands/daemon.ts';
-import { refreshFixture } from './adapters/service-refresh-fixture.ts';
+import { refreshFixture, unitEntry } from './adapters/service-refresh-fixture.ts';
 import { testIo } from './helpers.ts';
 
 type Fixture = ReturnType<typeof refreshFixture>;
@@ -72,7 +72,7 @@ test('persistent replacement refusal starts the previous binary from the restore
   expect(readFileSync(fixture.unitPath, 'utf8')).toBe(original);
   expect(readFileSync(fixture.previousEntry)).toEqual(binary);
   expect(fixture.events.at(-1)).toMatchObject({ kind: 'load', unit: original, accepted: true });
-  expect(fixture.events.some((event) => event.kind === 'load' && event.unit.includes(fixture.nextEntry) && event.accepted)).toBe(false);
+  expect(fixture.events.some((event) => event.kind === 'load' && event.identity === 'next' && event.accepted)).toBe(false);
   expect(code).toBe(1);
   const document = JSON.parse(io.out) as ErrorDocument;
   expect(document.error.id).toBe('daemon.install-rolled-back');
@@ -157,7 +157,7 @@ test('permanent refusal bounds both forward and rollback effort', async () => {
   const { code } = await install(fixture);
 
   expect(code).toBe(1);
-  expect(fixture.events.some((event) => event.kind === 'load' && event.unit.includes(fixture.previousEntry))).toBe(true);
+  expect(fixture.events.some((event) => event.kind === 'load' && event.identity === 'previous')).toBe(true);
   expect(fixture.events.filter((event) => event.kind === 'load').length).toBeLessThanOrEqual(20);
   expect(fixture.waits.length).toBeGreaterThan(0);
   expect(fixture.waits.reduce((total, ms) => total + ms, 0)).toBeLessThanOrEqual(12_000);
@@ -214,10 +214,14 @@ for (const json of [false, true]) {
 }
 
 
-test('an in-place refresh restores old program bytes before the rollback load and health probe', async () => {
+test('an in-place refresh keeps the old copy intact, so the rollback load and probe see the old program', async () => {
   const fixture = refreshFixture(false, true);
   const oldUnit = fixture.seedPrevious();
-  const oldBytes = readFileSync(fixture.previousEntry);
+  // The earlier unit runs a retained copy of the old bytes; the package folder is not the
+  // program it runs, so rewriting that folder cannot change what the earlier unit starts.
+  const oldCopy = unitEntry(oldUnit);
+  expect(oldCopy).not.toBeNull();
+  const oldBytes = readFileSync(oldCopy ?? '/nonexistent');
   writeFileSync(fixture.nextEntry, 'synthetic replacement binary cannot start\n');
   fixture.setPolicy('reject-new');
   fixture.setProbeDelay(2);
@@ -227,7 +231,10 @@ test('an in-place refresh restores old program bytes before the rollback load an
   expect(code).toBe(1);
   expect(JSON.parse(io.out).error.id).toBe('daemon.install-rolled-back');
   expect(fixture.running()).toBe('previous');
-  expect(readFileSync(fixture.previousEntry)).toEqual(oldBytes);
+  // The package folder carries the new broken bytes (the upgrade wrote it), and the copy the
+  // earlier unit runs still carries the old ones: the install never wrote either.
+  expect(readFileSync(fixture.previousEntry, 'utf8')).toBe('synthetic replacement binary cannot start\n');
+  expect(readFileSync(oldCopy ?? '', 'utf8')).toBe(oldBytes.toString());
   expect(readFileSync(fixture.unitPath, 'utf8')).toBe(oldUnit);
   const loads = fixture.events.filter((event) => event.kind === 'load');
   expect(loads.some((event) => event.bytes?.includes('cannot start') && !event.accepted)).toBe(true);
