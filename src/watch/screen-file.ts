@@ -214,6 +214,11 @@ function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true, allowReas
   const entries = mapping(node, 'a rule');
   only(entries, ['any', 'all', 'footer', 'on_footer', 'below_last_rule', 'without_rule', 'none_after', 'only_after', 'block', 'live', 'at_composer', ...(allowReason ? ['reason'] : [])]);
   if (entries.length === 0) fail(node.line, 'a rule has no primitive');
+  // `reason` labels a rate-limit match; it is not a primitive, so a rule carrying only `reason`
+  // would fall through every check and pass every screen. The schema refuses the same rule, in
+  // its anyOf of primitives.
+  const reasonEntry = allowReason ? optional(entries, 'reason') : undefined;
+  if (reasonEntry && entries.length === 1) fail(reasonEntry.line, '"reason" is not a primitive: a rule of only "reason" would match every screen');
   const block = optional(entries, 'block');
   // A block spells the rows it draws, the footer among them, so it stands alone: a rule that
   // also carried another primitive would read that one on the screen the block rejects.
@@ -222,7 +227,6 @@ function ruleOf(node: YamlNode, ignoreCase: boolean, allowCase = true, allowReas
     return { block: blockOf(block.value) };
   }
   const rule: Rule = {};
-  const reasonEntry = allowReason ? optional(entries, 'reason') : undefined;
   const reason = reasonEntry ? stringOf(reasonEntry.value) : null;
   if (reasonEntry && (reason === null || reason.trim() === '')) fail(reasonEntry.line, '"reason" must be a non-empty string');
   if (reasonEntry) rule.reason = reason!;
