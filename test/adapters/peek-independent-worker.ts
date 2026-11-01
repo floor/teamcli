@@ -85,11 +85,11 @@ if (input.ops !== undefined) {
   const { newClientKeyPair, clientKeyDir, writeClientKeyFiles } = await import('../../src/client/records.ts');
   const pair = newClientKeyPair();
   const key = writeClientKeyFiles(clientKeyDir(home, 'peek-fixture'), pair);
-  assert.equal(key.ok, true); if (!key.ok) throw new Error(key.why);
+  if (!key.ok) throw new Error(key.why); assert.equal(key.ok, true);
   const issued = issueOwnerGeneralGrant(home, { clientId: 'peek-fixture', publicKey: pair.publicKey,
     entities: input.entities ?? ['*'], ops: input.ops as Parameters<typeof issueOwnerGeneralGrant>[1]['ops'], mayIssue: false,
     expires: new Date(Date.now() + 86_400_000) });
-  assert.equal(issued.ok, true); if (!issued.ok) throw new Error(issued.why);
+  if (!issued.ok) throw new Error(issued.why); assert.equal(issued.ok, true);
   argv = [...argv, '--general', issued.path, '--key', key.keyPath];
 }
 const beforeState = readFileSync(join(dir, STATE_FILE), 'utf8');
