@@ -143,6 +143,14 @@ function writeSeatState(dir: string, fields: Record<string, unknown>): void {
 }
 
 /** The arguments the written unit itself would start, read back out of its ProgramArguments. */
+/** A program on disk: the adapter keeps the entry's own folder as the whole program. */
+function programAt(home: string): string {
+  const folder = join(home, 'app');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'cli.js'), 'synthetic entry\n');
+  return join(folder, 'cli.js');
+}
+
 function unitArguments(unitPath: string): string[] {
   const text = readFileSync(unitPath, 'utf8');
   const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1];
@@ -231,26 +239,31 @@ describe('the presence opt-in default and the service unit', () => {
       uid: 501,
     });
 
+    const entry = programAt(home);
     const plainUnit = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root],
+      execPath: '/runtime/bin/node', entry, roots: [root],
     });
     expect(plainUnit.ok).toBe(true);
     if (!plainUnit.ok) return;
+    // The unit runs the retained copy of the whole program, never the package folder.
+    const retained = plainUnit.program?.[1] ?? '';
+    expect(retained).not.toBe(entry);
+    expect(readFileSync(retained, 'utf8')).toBe('synthetic entry\n');
     const plainArgs = unitArguments(plainUnit.unitPath);
     expect(plainArgs).toEqual([
-      '/runtime/bin/node', '/app/dist/cli.js', 'daemon', 'run',
+      '/runtime/bin/node', retained, 'daemon', 'run',
       '--started-by', 'service-manager', '--root', root,
     ]);
     expect(plainArgs).not.toContain('--presence');
 
     const optedUnit = manager.install(home, {
-      execPath: '/runtime/bin/node', entry: '/app/dist/cli.js', roots: [root], presence: true,
+      execPath: '/runtime/bin/node', entry, roots: [root], presence: true,
     });
     expect(optedUnit.ok).toBe(true);
     if (!optedUnit.ok) return;
     const optedArgs = unitArguments(optedUnit.unitPath);
     expect(optedArgs).toEqual([
-      '/runtime/bin/node', '/app/dist/cli.js', 'daemon', 'run',
+      '/runtime/bin/node', retained, 'daemon', 'run',
       '--started-by', 'service-manager', '--root', root, '--presence',
     ]);
     expect(calls.every((call) => call[0] === 'launchctl')).toBe(true);

@@ -82,6 +82,14 @@ afterEach(async () => {
   for (const world of worlds.splice(0)) rmSync(world.base, { recursive: true, force: true });
 });
 
+/** A program on disk: the adapter keeps the entry's own folder as the whole program. */
+function programAt(home: string): string {
+  const folder = join(home, 'app');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'cli.js'), 'synthetic entry\n');
+  return join(folder, 'cli.js');
+}
+
 function sourcesOf(home: string, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
   return {
     home,
@@ -488,7 +496,11 @@ describe('the install contract writes only the opt-in that was asked for', () =>
     const manager = darwinServiceManager({ runner: () => ({ status: 0, stdout: '', stderr: '' }), uid: 501 });
     const install = async (argv: string[]) => {
       const io = testIo(world.root, owner);
-      expect(await runDaemon(argv, io, sourcesOf(world.home, { service: manager, health: async () => ANSWERING }))).toBe(0);
+      expect(await runDaemon(argv, io, sourcesOf(world.home, {
+        service: manager,
+        program: { execPath: '/runtime/bin/node', entry: programAt(world.home) },
+        health: async () => ANSWERING,
+      }))).toBe(0);
       return { path: manager.unitPath(world.home), unit: readFileSync(manager.unitPath(world.home), 'utf8') };
     };
     const plain = await install(['install']);
