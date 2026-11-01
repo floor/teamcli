@@ -1594,7 +1594,7 @@ export async function runSend(argv: string[], io: Io, host: SendHost): Promise<n
       // recorded one gone, or a session started before its declaration. The class cached before
       // the walk follows that evidence, so a fallback that ends in the bus inbox never claims a
       // wake the fallback itself just disproved.
-      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(to), to.seat);
+      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(to, host.home), to.seat);
       markLeg('socket', 'attempted', attempt.reason);
       note(walkAttempt('socket', 'unreachable', liveRoutesAfter(walk, at, to.cli), host.now(), startedAt, { reason: attempt.reason }));
       socketNote = `typed, socket ${attempt.reason}`;
@@ -2294,7 +2294,7 @@ async function handOff(
   if (!found.ok) return { kind: 'fallback', reason: found.reason };
   const at = socketPathFor(host, to, found.pane);
   if (at === null) return { kind: 'fallback', reason: noSocketReason(host) };
-  if (at.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, at.path) };
+  if (at.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, at.path, host.home) };
   const id = host.newId?.() ?? randomUUID();
   if (!PENDING_ID.test(id)) {
     return { kind: 'refused', why: 'the handoff id is not a UUID; no pending record was written and nothing was sent' };
@@ -3956,7 +3956,7 @@ async function deliverClientRecord(
       failures.push(`socket: ${attempt.reason}`);
       // Same evidence as the ordinary walk: a fallback that proved no dialable socket lowers
       // the reported class, so the summary never claims a wake that did not happen.
-      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(aim), aim.seat);
+      if (attempt.socketUnusable === true) report.deliveryWords = deliveryWords(classWithoutSocket(aim, host.home), aim.seat);
       markLeg('socket', 'attempted', attempt.reason);
       logLine(dir, 'send', from, `${seatName}: the socket was not taken (${attempt.reason}); falling back to the typed trigger`, host.now());
       continue;
@@ -4368,7 +4368,7 @@ async function deliverSocketFrame(
   }
   const first = socketPathFor(host, to, found.pane);
   if (first === null) return { kind: 'fallback', reason: noSocketReason(host), socketUnusable: true };
-  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path), socketUnusable: true };
+  if (first.kind === 'stale') return { kind: 'fallback', reason: staleSocketReason(to, first.path, host.home), socketUnusable: true };
   // A session started before the file that declares `accept` changed was launched without the
   // setting in force: the frame would be held at its box, so the walk passes this leg over until
   // the seat's CLI host is restarted. The socket's own age is the evidence (`inboundIsLive`).
@@ -4529,8 +4529,8 @@ function socketPathFor(host: SendHost, to: Aim, pane: string): SocketAddress | n
  *  is no evidence of a way to wake the seat any more, so the words say what will actually reach
  *  it — its runtime queue, its next turn, or nothing. A record that cannot be read keeps the
  *  class the launch line the registry carries implies. */
-function classWithoutSocket(to: Aim): DeliveryClass {
-  let record: Pick<SeatState, 'cli' | 'launch_line' | 'watcher' | 'codex_endpoint' | 'presence_binding'> | undefined;
+function classWithoutSocket(to: Aim, home: string | undefined): DeliveryClass {
+  let record: Pick<SeatState, 'id' | 'cli' | 'launch_line' | 'watcher' | 'agent_session' | 'codex_endpoint' | 'presence_binding'> | undefined;
   try {
     record = readState(to.dir).sessions[to.session]?.seats[to.seat];
   } catch {
@@ -4543,6 +4543,7 @@ function classWithoutSocket(to: Aim): DeliveryClass {
     seat: to.seat,
     declared: { cli: to.cli, launch: record?.launch_line ?? '' },
     ...(record === undefined ? {} : { state: record }),
+    ...(home === undefined ? {} : { home }),
   });
   return effectiveDeliveryClass({
     declared: read.evidence.declared,
@@ -4561,8 +4562,8 @@ function noSocketReason(host: SendHost): string {
   return `no socket was found for its pane's processes (looked in ${socketDirs(host)})`;
 }
 
-function staleSocketReason(to: Aim, path: string): string {
-  return `the socket recorded for ${to.seat} (${path}) is gone; ${deliveryWords(classWithoutSocket(to), to.seat)}`;
+function staleSocketReason(to: Aim, path: string, home: string | undefined): string {
+  return `the socket recorded for ${to.seat} (${path}) is gone; ${deliveryWords(classWithoutSocket(to, home), to.seat)}`;
 }
 
 /** Raises the owner's `security.refused` for a denied identity or admission: the rule, the

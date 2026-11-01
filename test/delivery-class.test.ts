@@ -254,7 +254,7 @@ describe('a seat read from its records', () => {
     expect(read_.class).toBe('pull-on-turn');
   });
 
-  test('a codex seat reads between turns only while its endpoint is bound to its runtime', () => {
+  test('a codex seat reads between turns only while its endpoint and its conversation are bound', () => {
     const endpoint = {
       url: `unix://${join(dir, 'codex.sock')}`,
       binding: BINDING,
@@ -263,16 +263,80 @@ describe('a seat read from its records', () => {
     };
     const launched = read({
       declared: { cli: 'codex', launch: 'codex' },
-      state: { cli: 'codex', watcher: 'inbox', presence_binding: BINDING, codex_endpoint: endpoint },
+      state: {
+        cli: 'codex', watcher: 'inbox', agent_session: 'ses_thread',
+        presence_binding: BINDING, codex_endpoint: endpoint,
+      },
     });
+    expect(launched.evidence.endpoint).toBe(true);
     expect(launched.class).toBe('between-turns');
     expect(launched.words).toBe('woken through its runtime queue');
+    // The endpoint is recorded and bound, but the queue is addressed by a conversation and this
+    // state names none: no pointer can be handed over, and the seat is read at its next turn.
+    const noThread = read({
+      declared: { cli: 'codex', launch: 'codex' },
+      state: { cli: 'codex', watcher: 'inbox', presence_binding: BINDING, codex_endpoint: endpoint },
+    });
+    expect(noThread.evidence.endpoint).toBe(false);
+    expect(noThread.evidence.conversation).toBe(false);
+    expect(noThread.class).toBe('pull-on-turn');
+    expect(noThread.words).toBe('queued; helper reads it at its next turn (pull-only)');
     const rebound = read({
       declared: { cli: 'codex', launch: 'codex' },
-      state: { cli: 'codex', watcher: 'inbox', presence_binding: 'prs_ba9876543210', codex_endpoint: endpoint },
+      state: {
+        cli: 'codex', watcher: 'inbox', agent_session: 'ses_thread',
+        presence_binding: 'prs_ba9876543210', codex_endpoint: endpoint,
+      },
     });
     expect(rebound.evidence.endpoint).toBe(false);
     expect(rebound.class).toBe('pull-on-turn');
+  });
+
+  test('a codex seat whose records name different conversations is read at its next turn', () => {
+    const home = join(dir, 'home');
+    const endpoint = {
+      url: `unix://${join(dir, 'codex.sock')}`,
+      binding: BINDING,
+      pid: 4321,
+      started_at: '2026-10-01T00:00:00Z',
+    };
+    registerAgent(home, {
+      name: 'helper',
+      signing: { model: 'GPT Sol', version: '6.1', role: 'builder' },
+      lab: 'test-lab',
+      cli: 'codex',
+      launcher: null,
+      launch: 'codex',
+      reach: { team: teamIdOf(dir), seat: 'helper', session: 'acme', pane: 'fixture-pane-9', address: null, agent_session: 'ses_record' },
+      seat_handle: 'seat_0123456789ab',
+      mcp: [],
+      skills: [],
+      lifecycle: 'running',
+      by: 'team up',
+    });
+    const disagreeing = read({
+      declared: { cli: 'codex', launch: 'codex' },
+      state: {
+        cli: 'codex', watcher: 'inbox', id: 'seat_0123456789ab', agent_session: 'ses_state',
+        presence_binding: BINDING, codex_endpoint: endpoint,
+      },
+      home,
+    });
+    // The queue would be handed one thread; the two records name different ones, so the push
+    // adapter refuses them and the class must not claim the wake either.
+    expect(disagreeing.evidence.endpoint).toBe(false);
+    expect(disagreeing.evidence.conversation).toBe(false);
+    expect(disagreeing.class).toBe('pull-on-turn');
+    const agreeing = read({
+      declared: { cli: 'codex', launch: 'codex' },
+      state: {
+        cli: 'codex', watcher: 'inbox', id: 'seat_0123456789ab', agent_session: 'ses_record',
+        presence_binding: BINDING, codex_endpoint: endpoint,
+      },
+      home,
+    });
+    expect(agreeing.evidence.endpoint).toBe(true);
+    expect(agreeing.class).toBe('between-turns');
   });
 
   test('a codex seat with no endpoint falls to its inbox: pull-on-turn, never between-turns', () => {

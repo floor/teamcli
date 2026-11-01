@@ -12,6 +12,11 @@ import { teamIdOf } from './teams.ts';
  *  whitespace, a control byte or a shell metacharacter is never a session id. */
 const SESSION_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
+/** The part of a seat state a binding reads: the stable handle the record is compared by, and
+ *  the conversation the launch wrote beside it. A caller holding the whole seat state passes one;
+ *  a reader that has only these two facts (the delivery class) reads the same binding. */
+export type SeatBindingState = Pick<SeatState, 'id' | 'agent_session'>;
+
 /** What the two team-owned records agree on, when they agree. */
 export type RecordedSeatSession = {
   /** The agent's immutable registry id (`agt_`); the record this resume is bound to. */
@@ -70,7 +75,7 @@ export function recordedSeatSession(input: {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 }): RecordedSeatSessionRead {
   const read = readSeatBinding(input);
   if (read.kind !== 'bound') return read;
@@ -100,7 +105,7 @@ export function recordedSeatContinuity(input: {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 }): RecordedSeatSessionRead {
   const read = readSeatBinding(input);
   if (read.kind !== 'bound') return read;
@@ -114,7 +119,7 @@ export function recordedSeatContinuity(input: {
  * herdr session, another CLI, or an orphaned one is a doubt, and the state's copy is not allowed
  * to overrule it. `null` is a refusal: the caller treats the pane as not tied to the launch.
  */
-export function continuityIdOf(read: RecordedSeatSessionRead, state: SeatState | undefined): string | null {
+export function continuityIdOf(read: RecordedSeatSessionRead, state: SeatBindingState | undefined): string | null {
   if (read.kind === 'bound') return read.recorded.sessionId;
   if (read.kind === 'refused') return null;
   const own = state?.agent_session;
@@ -128,7 +133,7 @@ export function continuityIdOfSeat(input: {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 }): string | null {
   return continuityIdOf(recordedSeatContinuity(input), input.state);
 }
@@ -178,7 +183,7 @@ type SeatBindingRead =
  *  conversation id: team, seat, orphan mark, the herdr session it was written in, the CLI, and
  *  the stable handle against the seat state. */
 type SeatRecordRead =
-  | { kind: 'bound'; agent: Agent; state: SeatState | undefined }
+  | { kind: 'bound'; agent: Agent; state: SeatBindingState | undefined }
   | { kind: 'none'; why: string }
   | { kind: 'refused'; why: string };
 
@@ -187,7 +192,7 @@ type SeatLookup = {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 };
 
 function readSeatRecord(input: SeatLookup): SeatRecordRead {
@@ -250,7 +255,7 @@ export function recordedSeatRecord(input: {
   root: string;
   herdrSession: string;
   seat: { name: string; cli: string };
-  state: SeatState | undefined;
+  state: SeatBindingState | undefined;
 }): RecordedSeatRecordRead {
   const record = readSeatRecord(input);
   return record.kind === 'bound' ? { kind: 'bound', agent: record.agent } : record;
