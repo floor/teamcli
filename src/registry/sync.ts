@@ -6,8 +6,9 @@
 // A registry that cannot be written is a note for the command's log, never a refusal: the launch
 // or the stop is done, and the next launch writes the record again. Every function here catches.
 import { findAgent, readAgents, registerAgent, updateAgent, type AgentDelegation, type AgentProvenancePatch } from '../registry/agents.ts';
-import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf } from '../registry/teams.ts';
+import { getTeam, noteTeam, setRoster, setTeamLifecycle, teamIdOf, type RosterEntry } from '../registry/teams.ts';
 import * as projects from '../registry/projects.ts';
+import { seatNicknames } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { endSession, type SessionEndReason } from '../sessions/registry.ts';
 import type { ActingCommand } from '../delegate-types.ts';
@@ -69,30 +70,61 @@ function ensureTeam(input: RegistryTeam): string | null {
   return noteTeam(home, root, seed, 'running', by);
 }
 
-/** One roster entry set (an agent) or taken out (null). Every line's `nickname`, `leads` and
- *  `assistant` are re-resolved to the file's own word — the human name the file writes on that
- *  seat, the lead seat `team.orchestrator`, whatever `leads: true` or `coordinator:` it was
- *  spelled with, and the seat the file marks `assistant: true` — the capabilities and the name,
- *  never a role name. So a mark that moved between launches does not linger on a line that no
- *  longer holds it. */
-function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: { agent: string; role: string } | null): void {
-  const leadSeat = input.team.orchestrator;
-  const assistantSeat = input.team.seats.find((candidate) => candidate.assistant === true)?.name ?? null;
-  const nicknames = new Map(input.team.seats.flatMap((candidate) => candidate.nickname === undefined ? [] : [[candidate.name, candidate.nickname] as const]));
-  const mark = (line: { agent: string; seat: string; role: string }): { agent: string; seat: string; role: string; nickname?: string; leads?: boolean; assistant?: boolean } => {
+/** The rule one roster line is re-marked by: its `nickname` from the name the seat goes by — the
+ *  persona its written label names when the `nickname:` field could hold it, else the field
+ *  (src/file/sections/seats.ts:seatNicknames) — and the capabilities the file marks, the lead
+ *  seat `team.orchestrator` and the seat it marks `assistant: true`, never a role name. The
+ *  label stands first, so a new seat never takes a name a retired seat left on the record; and a
+ *  word the field could not hold — a space, an accent, the reserved `lead`, a name another seat
+ *  already carries — never reaches the roster, so a label edit cannot take away an address that
+ *  works. So a mark that moved between launches does not linger on a line that no longer holds it. */
+function rosterMarker(team: TeamFile): (line: { agent: string; seat: string; role: string }) => RosterEntry {
+  const leadSeat = team.orchestrator;
+  const assistantSeat = team.seats.find((candidate) => candidate.assistant === true)?.name ?? null;
+  const nicknames = seatNicknames(team.seats);
+  return (line) => {
     const nickname = nicknames.get(line.seat);
     return {
       ...line,
-      ...(nickname !== undefined ? { nickname } : {}),
+      ...(nickname !== undefined && nickname !== null ? { nickname } : {}),
       ...(line.seat === leadSeat ? { leads: true } : {}),
       ...(line.seat === assistantSeat ? { assistant: true } : {}),
     };
   };
+}
+
+/** One roster entry set (an agent) or taken out (null). Every line is re-marked from the file,
+ *  so the roster always carries the names the record declares. */
+function writeRoster(input: RegistryTeam, teamId: string, seat: string, entry: { agent: string; role: string } | null): void {
+  const mark = rosterMarker(input.team);
   const roster = (getTeam(input.home, teamId)?.roster ?? [])
     .filter((item) => item.seat !== seat)
     .map(({ leads: _stale, assistant: _staleAssistant, nickname: _staleNickname, ...item }) => mark(item));
   if (entry) roster.push(mark({ agent: entry.agent, seat, role: entry.role }));
   setRoster(input.home, teamId, roster);
+}
+
+/** Re-marks every roster line from a team record that just changed, so the name a seat sends
+ *  under follows a `team config set` on its label with no relaunch. Lines are never added or
+ *  dropped — a seat that has not launched has no line to update — and a team the registry does
+ *  not hold is a no-op. Returns the seats whose nickname changed, for the caller to say. */
+export function refreshRoster(home: string, root: string, team: TeamFile): string[] {
+  const teamId = teamIdOf(root);
+  const record = getTeam(home, teamId);
+  if (record === null) return [];
+  const mark = rosterMarker(team);
+  const roster = record.roster.map((line) => mark({ agent: line.agent, seat: line.seat, role: line.role }));
+  const same = (a: RosterEntry, b: RosterEntry): boolean =>
+    a.agent === b.agent && a.seat === b.seat && a.role === b.role && a.nickname === b.nickname &&
+    (a.leads === true) === (b.leads === true) && (a.assistant === true) === (b.assistant === true);
+  if (roster.length === record.roster.length && roster.every((line, index) => same(line, record.roster[index] as RosterEntry))) return [];
+  const renamed = roster.flatMap((line, index) => (line.nickname ?? null) !== (record.roster[index]?.nickname ?? null) ? [line.seat] : []);
+  try {
+    setRoster(home, teamId, roster);
+  } catch {
+    return [];
+  }
+  return renamed;
 }
 
 /** This team leads the project its file names: the project's `lead` is the agent of the seat the

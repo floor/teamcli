@@ -102,12 +102,14 @@ Options:
   --help      print this text
 
 Every command but team client general-grant also takes --general <grant.json> --key <client.key>:
-a general grant the owner signed, covering the command and this team's entity, runs it as the owner,
-with no terminal. up, init and config read it themselves; every other command is admitted here.
+a general grant the owner signed over every entity and covering the command runs it as the owner,
+with no terminal; a grant that lists entities is refused until 0.5.11. up, init and config read it
+themselves, and refuse it beside the owner-seat options and on a form that reads no record (config
+keys, init --approval-modes); every other command is admitted here.
 
 The team is the registry record. Edit it with team config. .agents/team.yaml is only an input to team migrate.
 
-Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error or a general grant does not admit the run, 2 when no command or an unknown command is given, or --general is given without --key.
+Exits 0 on --help, --version, or --about, 1 when a command throws an uncaught error or a general grant does not admit the run, 2 when no command or an unknown command is given, --general is given without --key, or it is named where no grant can admit the run (beside --request or --approval, or on config keys or init --approval-modes).
 `;
 
 // The hidden presence hook is written into a seat's settings file at install time, so no person
@@ -214,8 +216,10 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // before any option parsing, file reading, caller check or herdr call in the command itself.
   if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, command.USAGE);
   // The general door (src/client/general-door.ts): `--general <grant.json> --key <client.key>` on
-  // any command is verified here, once, for that command's op and this team's entity; an admitted
-  // run reaches the command as the owner, with the two options taken off its line.
+  // any command is verified here, once, for the op the line reaches; a grant that lists entities
+  // is refused until 0.5.11. up, init and config read it themselves, after this door has refused
+  // a scoped grant and a grant named beside their owner-seat options. An admitted run reaches the
+  // command as the owner, with the two options taken off its line.
   const door = generalDoor(name, rest, io);
   if (door.kind === 'usage') {
     if (door.json) writeJsonError(io, 'team.general-usage', door.why, null);
@@ -226,6 +230,11 @@ export async function main(argv: string[], io: Io): Promise<number> {
     if (door.json) writeJsonError(io, 'team.general-refused', door.why, null);
     else io.stderr(`team ${name}: ${door.why}\n`);
     return 1; // exit: team.general-refused
+  }
+  if (door.kind === 'target') {
+    if (door.json) writeJsonError(io, 'team.general-target', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 1; // exit: team.general-target
   }
   if (door.kind === 'admitted' && !door.json) io.stderr(`team ${name}: admitted by general grant ${door.grant.grant_id} (${door.grant.client_id})\n`);
   rest = door.argv;

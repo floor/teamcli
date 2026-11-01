@@ -27,7 +27,7 @@ import { writePolicySet } from '../src/policy/sources.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { newMemory, NUDGE_TEXT, pass } from '../src/watch/pass.ts';
 import { readScreen } from '../src/watch/screen.ts';
-import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap } from './helpers.ts';
+import { agyMismatchedFrame, claudeBox, injectWas, testIo, wordWrap, wrapperPane } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
 
 // The ring line is the receiver's own: this fixture's team session is `acme-web`, each scene's
@@ -749,7 +749,7 @@ describe('a pass of the watch', () => {
   test('a signed wrapper whose banner reorders the version is reported as another model', () => {
     // The pane's own id holds the signed version's parts in another order: `v1.4` is 1.4, not
     // the 4.1 the record signs, so the pass reports the wrapper as running another model.
-    const seen = live({ 'deepseek-acme': { screen: `deepseek-v1.4-flash · API Usage Billing\n${busy}` } });
+    const seen = live({ 'deepseek-acme': { screen: wrapperPane('deepseek-v1.4-flash') + busy } });
     const result = pass({
       team: team(), watch: team().watch, state: emptySession(), live: seen, machine: fine, now: 0, memory: newMemory(),
       signing: new Map([['deepseek-acme', { model: 'DeepSeek Flash', version: 'V4.1', cli: 'claude-code', launch: 'team-deepseek' }]]),

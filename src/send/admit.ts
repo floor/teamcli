@@ -86,6 +86,16 @@ export type SendGrant = { name: string };
  */
 export type SendGrantRecord = { name: string; from: string; to: string; expires: string };
 
+/** One send-shaped record as the reader classified it: `verified` when the signature checks out
+ *  under the owner's approval key, `unsigned` when the file carries none, `bad-signature` when it
+ *  carries one that does not verify (including when the key itself is missing or unreadable).
+ *  Only `verified` records admit; the other two let a refusal name the record and its re-issue. */
+export type SendGrantRead = SendGrantRecord & { state: 'verified' | 'unsigned' | 'bad-signature' };
+
+/** The reserved receiver word: `orchestrator@<entity>` names the lead seat of a team of the
+ *  sender's own entity, in `to`, and nothing else. */
+export const ORCHESTRATOR_RECEIVER = 'orchestrator';
+
 /**
  * A side of a send that admission can judge without the registry: the seat a command has already
  * resolved, and the team it sits in, with the role when the file names one. A sender is judged
@@ -313,6 +323,33 @@ export function sendGrantFor(
   return undefined;
 }
 
+/**
+ * The unverified record that would have admitted this pair, or undefined: the first unexpired
+ * send-shaped record whose `from` and `to` name the pair as `sendGrantFor` reads them but whose
+ * signature did not verify. `verified` records are skipped — a verified record that matches either
+ * admitted the send before this is asked, or was refused by a rule the record cannot override.
+ * The caller turns the answer into the refusal that names the record and the line that re-issues
+ * it; nothing here reads a file or decides what an unverified record means beyond naming it.
+ */
+export function unverifiedGrantFor(
+  caller: SendSide,
+  target: SendSide,
+  reads: SendGrantRead[],
+  teams: AdmitTeams,
+  now: Date,
+): SendGrantRead | undefined {
+  const nowMs = now.getTime();
+  for (const grant of reads) {
+    if (grant.state === 'verified') continue;
+    const expMs = Date.parse(grant.expires);
+    if (!Number.isFinite(expMs) || nowMs >= expMs) continue;
+    if (!grantFromNames(grant.from, caller, teams)) continue;
+    if (!grantToNames(grant.to, target, caller, teams)) continue;
+    return grant;
+  }
+  return undefined;
+}
+
 /** Whether a grant's `from` names this caller: an agent id, `seat@team`, or `session/seat`. */
 function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams): boolean {
   if (from.startsWith('agt_')) return 'reach' in caller && caller.id === from;
@@ -327,13 +364,29 @@ function grantFromNames(from: string, caller: SendSide, teams: AdmitTeams): bool
   return false;
 }
 
-/** Whether a grant's `to` names this receiver: an agent id, `seat@team`, `session/seat`, or a
- *  bare seat, which only the caller's own team makes unambiguous. */
+/** Whether a grant's `to` names this receiver: an agent id, `seat@team`, `session/seat`, a bare
+ *  seat, which only the caller's own team makes unambiguous — or the reserved
+ *  `orchestrator@<entity>`, the lead seat of a team of the sender's own entity. */
 function grantToNames(to: string, target: SendSide, caller: SendSide, teams: AdmitTeams): boolean {
   if (to.startsWith('agt_')) return 'reach' in target && target.id === to;
   const at = to.lastIndexOf('@');
   if (at > 0) {
-    return seatOf(target) === to.slice(0, at) && teamSpelled(teamOf(target), to.slice(at + 1), teams);
+    const seat = to.slice(0, at);
+    const spelled = to.slice(at + 1);
+    // The reserved receiver word binds to the sender's entity: the word is the entity's own lead
+    // seat, read through `leadSeat` on the target's team, and it resolves only inside the entity
+    // the caller's team names. Another entity, a team with no entity, and a non-lead target all
+    // refuse — and the word never falls back to the older `seat@team` reading, so a record cannot
+    // spell another entity's lead through it.
+    if (seat === ORCHESTRATOR_RECEIVER) {
+      const entity = teams[teamOf(caller)]?.entity ?? null;
+      const targetTeam = teams[teamOf(target)];
+      return entity !== null
+        && spelled === entity
+        && targetTeam?.entity === entity
+        && seatOf(target) === leadSeat(targetTeam);
+    }
+    return seatOf(target) === seat && teamSpelled(teamOf(target), spelled, teams);
   }
   const slash = to.indexOf('/');
   if (slash > 0) {

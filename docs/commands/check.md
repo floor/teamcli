@@ -133,21 +133,24 @@ with this one line, so a held seat is named once. A temporary seat — one `team
 recorded and the file never names — is read the same way, from its record, with its like-seat's
 CLI.
 
-A watch the machine daemon hosts is read on the same pass, as notes only. The check names the ones
-a reader would act on: a watch whose last pass failed reads `watch: the last cycle failed`, with
-the age the record gives that pass when it holds one (`watch: the last cycle failed <age>`); a
-watch standing down for a live pane watch reads `watch: standing by; a live pane watch owns this
-session (<reason>)`, and it touches nothing in that session; a required watch that stopped or
-failed reads `watch: stopped in the daemon (<reason>)` or `watch: failed in the daemon (<reason>)`;
-and a watch whose outbound effects are closed adds `watch: outbound effects blocked (no verified
-admitted sender is injected); it is not enforcing anything`, whatever its phase — it can cycle
-while those effects are closed, and the check never prints it as enforcing. The rest of the watch
-is quiet: a watch that is simply cycling, one still starting or stopping, one that has not
-completed its first pass, and a stopped or failed watch the record does not call required add no
-phase line, and a route the daemon records no watch for prints nothing at all — a watch exists
-only where one was started on purpose. A stopped or failed watch is terminal in the record: nothing
-here restarts it, and the daemon does not bring it back by itself, so it runs again only when it is
-started again. With more than one watched route, each line ends with its route, `… (<root>)`.
+A watch the machine daemon hosts is read on the same pass. Three states are differences with one
+repair: a required watch that stopped or failed reads `watch: stopped in the daemon (<reason>)` or
+`watch: failed in the daemon (<reason>)`, and a running watch whose outbound effects are closed
+reads `watch: outbound effects blocked; it is not enforcing anything` — it can cycle while those
+effects are closed, and the check never prints it as enforcing. Each carries the repair `team
+daemon install with the same roots and --watch`, which the owner runs. The rest is a note: a watch
+whose last pass failed reads `watch: the last cycle failed`, with the age the record gives that
+pass when it holds one (`watch: the last cycle failed <age>`); a watch standing down for a live
+pane watch reads `watch: standing by; a live pane watch owns this session (<reason>)`, and it
+touches nothing in that session. The lines a difference already carries are not said again as
+notes. A watch that is simply cycling, one still starting or stopping, one that has not completed
+its first pass, and a stopped or failed watch the record does not call required add no phase line,
+and a route the daemon records no watch for prints nothing at all — a watch exists only where one
+was started on purpose. A hosted root needs no prior `up`: when the session records no watchdog
+file binding, the daemon records the route's own team file, and it never overwrites a record that
+names another file. A stopped or failed watch is terminal in the record: nothing here restarts
+it, and the daemon does not bring it back by itself, so it runs again only when it is started
+again. With more than one watched route, each line ends with its route, `… (<root>)`.
 
 A pane watch the session's state records is read through the same liveness predicate [`team up`](up.md)
 plans from, and the same rules keep it quiet: a live process with a fresh heartbeat adds no line. A

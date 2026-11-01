@@ -30,14 +30,14 @@ import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_w
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonDifferences, daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
-import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
+import { hostedWatchCheckNotes, hostedWatchDifferences, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { declaredModel } from '../file/model.ts';
 import { isParseError, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, labelPersona, LEAD_NAME, seatNickname, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
@@ -78,6 +78,7 @@ import { mayReadTeam } from '../read-gate.ts';
 import { findAgent, updateAgent, type Agent } from '../registry/agents.ts';
 import { continuityIdsOf, continuitySessionOf } from '../registry/resume.ts';
 import { byName, ofTeam, projectIdOf, ProjectsError } from '../registry/projects.ts';
+import { nicknameTakenNotes } from '../registry/names.ts';
 import { getTeam, readTeams, teamIdOf, TeamsError } from '../registry/teams.ts';
 import { readRecord, recordHolds, receiptFile, receiptHolds, verifyRecord } from '../send/record.ts';
 import { defaultSocketsDirs } from '../send/address.ts';
@@ -370,6 +371,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     interval: inForce.interval,
   });
   const watchRoute = canonicalRoot(root) ?? root;
+  // The daemon's hosted watch for this checkout, judged once: a stopped, failed or gate-blocked
+  // watch is not enforcing anything, and it is the owner's own install that repairs it. Its
+  // lines are the difference's then, and the notes below do not say them again.
+  const hostedWatch = hostedWatchDifferences(watch);
   // The registry's own continuity per declared seat, read once: the check's process gate and
   // `compare()` must decide a restored pane the same way `up` and `status` do.
   const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
@@ -439,6 +444,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...leftoverDifferences(current.leftover),
     ...deliveryOrderDifferences(team, root, sources.home),
     ...socketSkipped.differences,
+    // The daemon's watch for this checkout: not running when the route carries one, or running
+    // with its outbound gate closed, is a difference — the watch is not enforcing anything.
+    ...hostedWatch,
     ...policyChecked.differences,
     ...modelRule.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
@@ -497,13 +505,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // simply not installed is the ordinary state and is said in `status`, not counted here.
     ...(sources.daemon !== undefined ? daemonProblemNotes(sources.daemon) : []),
     // A hosted watch the daemon carries, notes only: a standing-down or stopped watch, a failed
-    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing.
+    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing, and a
+    // route whose watch is already the difference above keeps only the lines it does not carry.
     ...(sources.daemon !== undefined
-      ? hostedWatchCheckNotes(
-          sources.daemon,
-          sources.now(),
-          watch.kind === 'pane' ? { route: watchRoute, live: watch.health.state === 'live' } : undefined,
-        )
+      ? hostedWatchCheckNotes(sources.daemon, sources.now(), {
+          ...(watch.kind === 'hosted' && hostedWatch.length > 0 ? { differing: watch.root } : {}),
+          ...(watch.kind === 'pane'
+            ? { ownPane: { route: watchRoute, live: watch.health.state === 'live' } }
+            : {}),
+        })
       : []),
     // A pane watch when no hosted one owns the route: live, dead, stale or — only with a daemon
     // reading to prove no hosted watch exists — missing. Notes only, like every line above.
@@ -524,6 +534,8 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const notes = collapseNotes([
     ...delegateNotes(team),
     ...leadNameNotes(team),
+    ...nicknameDriftNotes(team),
+    ...nicknameTakenNotes(team, root, sources.home),
     ...leadRoleNotes(team),
     // The default session moved to <entity>-<project>: the line the approval's own comparison
     // names, so the owner sees the old and the new session before the next launch.
@@ -825,6 +837,29 @@ function leadRoleNotes(team: TeamFile): string[] {
   const lead = team.seats.find((seat) => seat.name === team.orchestrator);
   if (lead === undefined || lead.role !== 'coordinator') return [];
   return [`the lead seat "${lead.name}" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set \`role: orchestrator\` on it when convenient`];
+}
+
+/**
+ * A seat whose written label names a word that is not the name the seat goes by. A persona the
+ * `nickname:` field could hold is that name (src/file/sections/seats.ts:seatNicknames), so a field
+ * a hand edit left behind means the seat sends under the label's word while the record says
+ * another; a word the field could not hold — a space or an accent, the reserved `lead`, a name
+ * another seat already carries — stays a workspace title, and the record's nickname remains the
+ * address. A config set on either name writes the other with it whenever the pair can be one name
+ * (src/config/edit.ts:syncSeatNames), so this is what a hand edit leaves. A note, not a
+ * difference: the team runs either way.
+ */
+function nicknameDriftNotes(team: TeamFile): string[] {
+  return team.seats.flatMap((seat) => {
+    const persona = labelPersona(seat);
+    if (persona === null) return [];
+    const name = seatNickname(team.seats, seat);
+    if (name !== persona) {
+      return [`seat "${seat.name}": its written label names "${persona}", but the seat goes by "${name ?? seat.name}" — a space, an accent, the reserved "lead" or a word another seat carries is not a nickname, so the label's word is the workspace title alone; set seats.${seat.name}.nickname to choose the address`];
+    }
+    if (seat.nickname === undefined || seat.nickname === persona) return [];
+    return [`seat "${seat.name}": its nickname is "${seat.nickname}" and its written label names "${persona}" — the label wins from the next launch, and a set on seats.${seat.name}.label writes the two together`];
+  });
 }
 
 /**

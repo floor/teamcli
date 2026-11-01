@@ -201,13 +201,19 @@ export function setTeamLifecycle(home: string, id: string, state: TeamLifecycle)
   return upsertTeam(home, id, { lifecycle: state });
 }
 
-/** The teams a key names: the team with that ID, else every team whose project or session is
- *  that word. More than one is ambiguous, and the caller decides what to say about it. */
+/** The teams a key names, in the order a written address may mean it: the team with that id,
+ *  else every team whose own name (the file's `project:`) is that word, else every team whose
+ *  session is. A class with any answer is taken whole, so a second team that only shares a
+ *  session never takes a name, and more than one record in the answering class stays ambiguous
+ *  for the caller to name. */
 export function findTeams(home: string, key: string): TeamRecord[] {
   const teams = readTeams(home);
   const byId = teams[key];
   if (byId) return [byId];
-  return Object.values(teams).filter((team) => team.project === key || team.session === key);
+  const all = Object.values(teams);
+  const named = all.filter((team) => team.project === key);
+  if (named.length > 0) return named;
+  return all.filter((team) => team.session === key);
 }
 
 /** The one team a key names, or null when none does or when the key is ambiguous. */

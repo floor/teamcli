@@ -8,6 +8,7 @@ import type { DaemonHealth } from './health.ts';
 import type { HostedWatchState } from '../watch/hosted.ts';
 import type { WatchSitting } from '../watch/liveness.ts';
 import { formatRelativeTime } from '../output/text.ts';
+import type { Difference } from '../status/compare.ts';
 
 type Watched = { root: string; watch: HostedWatchState };
 
@@ -33,36 +34,70 @@ export function hostedWatchNotes(health: DaemonHealth, now: Date): string[] {
 }
 
 /**
- * The same reading for `team check`: notes only, and only something worth acting on. A watch
- * cycling with no failure is the healthy case and says nothing; a stopped or failed watch says
- * so only when the route was started to carry one (the record's `required`), a standing-down
- * watch names the pane watch that owns the session, and a closed outbound gate says it is not
- * enforcing anything. None of these is a difference, and none changes the total or the exit.
+ * What `team check` reads as a difference from the same sitting it read the watch with: a watch
+ * the route was started to carry that has stopped or failed, and a running watch whose outbound
+ * gate is closed. A pane watch, a healthy cycle, the transient phases and a watch the route never
+ * required say nothing here; a standing-down watch never reaches this reader, because the sitting
+ * hands it to the pane watch's own reading. The repair is the owner's own install — the same
+ * roots, with the watch on — so the gate map, not a word in this file, says who runs it.
  */
-export function hostedWatchCheckNotes(
-  health: DaemonHealth,
-  now: Date,
+export function hostedWatchDifferences(sitting: WatchSitting): Difference[] {
+  if (sitting.kind !== 'hosted') return [];
+  const { watch } = sitting;
+  if ((watch.phase === 'stopped' || watch.phase === 'failed') && watch.required) {
+    return [{ what: watchPhaseLine(watch, null), repair: WATCH_REPAIR }];
+  }
+  if (watch.phase === 'running' && watch.effects === 'blocked') {
+    return [{ what: BLOCKED_LINE, repair: WATCH_REPAIR }];
+  }
+  return [];
+}
+
+/** What the check reads for the notes beside those differences: the pane watch the check itself
+ *  read for this team's route, and the route whose lines the difference already carries. */
+export type HostedWatchCheckReading = {
+  /**
+   * The route root whose watch `hostedWatchDifferences` already reports: the lines the difference
+   * carries — the phase line and the blocked gate, implied by a watch that is not running — are
+   * not said again as notes. Every other route in the reading keeps its line.
+   */
+  differing?: string;
   /**
    * The pane watch the check read for this team's route. A standing-by hosted watch was told a
    * live pane watch owns the session; when that pane watch is now dead or stale, the pane note
    * names the repair and this line would claim a live watch that is not there.
    */
-  ownPane?: { route: string; live: boolean },
+  ownPane?: { route: string; live: boolean };
+};
+
+/**
+ * The same reading for `team check`: notes only, and only something worth acting on. A watch
+ * cycling with no failure is the healthy case and says nothing; a stopped or failed watch says
+ * so only when the route was started to carry one (the record's `required`), a standing-down
+ * watch names the pane watch that owns the session, and a closed outbound gate says it is not
+ * enforcing anything. A difference already carries its route's lines; the failed-cycle line is
+ * no difference and is always kept.
+ */
+export function hostedWatchCheckNotes(
+  health: DaemonHealth,
+  now: Date,
+  reading: HostedWatchCheckReading = {},
 ): string[] {
   const entries = watched(health);
   return entries.flatMap((entry) => {
     const lines: string[] = [];
     const { watch } = entry;
+    const differing = reading.differing !== undefined && entry.root === reading.differing;
     if (watch.phase === 'standby') {
-      const stoodDownForThisRoute = ownPane !== undefined && entry.root === ownPane.route;
-      if (!stoodDownForThisRoute || ownPane!.live) lines.push(watchPhaseLine(watch, health.version));
+      const stoodDownForThisRoute = reading.ownPane !== undefined && entry.root === reading.ownPane.route;
+      if (!stoodDownForThisRoute || reading.ownPane!.live) lines.push(watchPhaseLine(watch, health.version));
     } else if ((watch.phase === 'stopped' || watch.phase === 'failed') && watch.required) {
-      lines.push(watchPhaseLine(watch, health.version));
+      if (!differing) lines.push(watchPhaseLine(watch, health.version));
     } else if (watch.phase === 'running' && watch.lastCycleOutcome === 'failed') {
       const at = watch.lastCycleAt === null ? '' : ` ${formatRelativeTime(watch.lastCycleAt, now)}`;
       lines.push(`watch: the last cycle failed${at}`);
     }
-    if (watch.effects === 'blocked') lines.push(BLOCKED_LINE);
+    if (watch.effects === 'blocked' && !differing) lines.push(BLOCKED_LINE);
     return lines.map((line) => qualify(line, entry, entries.length));
   });
 }
@@ -132,5 +167,8 @@ function qualify(line: string, entry: Watched, count: number): string {
   return count > 1 ? `${line} (${entry.root})` : line;
 }
 
-const BLOCKED_LINE =
-  'watch: outbound effects blocked (no verified admitted sender is injected); it is not enforcing anything';
+const BLOCKED_LINE = 'watch: outbound effects blocked; it is not enforcing anything';
+
+/** The one repair for a watch that is not enforcing: the owner's own install of the daemon, with
+ *  the roots and the watch exactly as they were. The gate map reads `daemon` from it. */
+const WATCH_REPAIR = 'team daemon install with the same roots and --watch';

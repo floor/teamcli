@@ -9,7 +9,7 @@ import { readTeamConfig } from '../file/team-config.ts';
 import { agentList } from '../herdr.ts';
 import type { Io } from '../io.ts';
 import { AGENT_ID_PATTERN, findAgent, getAgent, type Agent } from '../registry/agents.ts';
-import { findTeam, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
+import { findTeams, readTeams, teamIdOf, type RosterEntry, type TeamRecord } from '../registry/teams.ts';
 import { resolveSeatSettings } from '../config/apply.ts';
 import { agentIdOf } from '../config/read.ts';
 
@@ -82,11 +82,42 @@ export function parseSpec(spec: string): ParsedSpec | { error: string } {
   return { kind: 'seat', seat: spec };
 }
 
+/** The refusal a key two records answer earns: both candidates by the id that picks one. */
+function ambiguousKey(spec: string, key: string, teams: TeamRecord[]): ResolveProblem {
+  const ids = teams.map((team) => team.id ?? '(no id)').join(', ');
+  return { error: `${spec}: "${key}" names ${String(teams.length)} teams (${ids}); say which by its id`, kind: 'ambiguous' };
+}
+
+/** The registry record the team file at a cwd names: by the id the registry keys teams on, then
+ *  by the team's own name, then by its session. The name and the session are asked through the
+ *  order every address gets, so a second team that only shares a session never hides this one;
+ *  a name class two records answer is refused naming both. `null` means no record exists yet. */
+function recordOfFolder(
+  home: string,
+  spec: string,
+  loaded: { root: string; team: { project: string; session: string } },
+): TeamRecord | ResolveProblem | null {
+  const id = teamIdOf(loaded.root);
+  let found = findTeams(home, id);
+  let key = id;
+  if (found.length === 0) {
+    key = loaded.team.project;
+    found = findTeams(home, key);
+  }
+  if (found.length === 0) {
+    key = loaded.team.session;
+    found = findTeams(home, key);
+  }
+  if (found.length === 0) return null;
+  if (found.length > 1) return ambiguousKey(spec, key, found);
+  return found[0] as TeamRecord;
+}
+
 /**
  * The team a spec names, as a person wrote it: the agent id's own `reach.team`, the scope after
  * the `@`, the caller's own team for a `@<nickname>`, or — for a plain seat — the team file at
- * the caller's cwd, matched by the id the registry keys teams on, then by the project or
- * session name it may also be written as.
+ * the caller's cwd, matched by the id the registry keys teams on, then by the name or session
+ * it may also be written as.
  */
 export function resolveTarget(
   home: string,
@@ -98,16 +129,17 @@ export function resolveTarget(
   if ('error' in parsed) return parsed;
   if (parsed.kind === 'id') return fromId(home, parsed.id, live);
   if (parsed.kind === 'at') {
-    const team = findTeam(home, parsed.scope);
-    if (!team) return { error: `${spec}: no team registry record matches "${parsed.scope}" (by id, project or session)` };
-    return lookupInTeam(home, spec, team, parsed.target, live, true);
+    const found = findTeams(home, parsed.scope);
+    if (found.length === 0) return { error: `${spec}: no team registry record matches "${parsed.scope}" (by id, name or session)` };
+    if (found.length > 1) return ambiguousKey(spec, parsed.scope, found);
+    return lookupInTeam(home, spec, found[0] as TeamRecord, parsed.target, live, true);
   }
   if (parsed.kind === 'nickname') return fromNickname(home, spec, parsed.nickname, io, live);
   const loaded = readTeamConfig(io.cwd, { home });
   if (!loaded.ok) return { error: `${spec}: the team of the caller's folder cannot be read (${io.cwd})` };
-  const id = teamIdOf(loaded.root);
-  const team = findTeam(home, id) ?? findTeam(home, loaded.team.project) ?? findTeam(home, loaded.team.session);
-  if (!team) return { error: `${spec}: this team has no registry record yet` };
+  const team = recordOfFolder(home, spec, loaded);
+  if (team === null) return { error: `${spec}: this team has no registry record yet` };
+  if ('error' in team) return team;
   return lookupInTeam(home, spec, team, parsed.seat, live, false);
 }
 
@@ -125,8 +157,10 @@ function fromId(home: string, id: string, live: LiveRead): Target | ResolveProbl
   const agent = getAgent(home, id);
   if (!agent) return { error: `${id}: no registered agent carries that id` };
   if (agent.lifecycle === 'retired') return { error: `${id}: the agent is retired; nothing was sent` };
-  const team = findTeam(home, agent.reach.team);
-  if (!team) return { error: `${id}: its team "${agent.reach.team}" has no registry record` };
+  const found = findTeams(home, agent.reach.team);
+  if (found.length === 0) return { error: `${id}: its team "${agent.reach.team}" has no registry record` };
+  if (found.length > 1) return ambiguousKey(id, agent.reach.team, found);
+  const team = found[0] as TeamRecord;
   const pane = paneOf(agent, live);
   if ('error' in pane) return pane;
   return { team, agent, pane: pane.pane };
@@ -189,14 +223,15 @@ function fromNickname(
   live: LiveRead,
 ): Target | ResolveProblem {
   // The caller's own team: the file at its cwd names the registry record (by the id the registry
-  // keys on, then the project or session it may also be written as), and the file's `entity`
+  // keys on, then the name or session it may also be written as), and the file's `entity`
   // stands in when that record carries none.
   let self: TeamRecord | null = null;
   let entity: string | null = null;
   const loaded = readTeamConfig(io.cwd, { home });
   if (loaded.ok) {
-    const id = teamIdOf(loaded.root);
-    self = findTeam(home, id) ?? findTeam(home, loaded.team.project) ?? findTeam(home, loaded.team.session);
+    const record = recordOfFolder(home, spec, loaded);
+    if (record !== null && 'error' in record) return record;
+    self = record;
     entity = self?.entity ?? loaded.team.entity ?? null;
   }
   if (self !== null) {
@@ -243,7 +278,7 @@ function fromNickname(
  * two entries answer, as one seat's name and another seat's nickname, is refused naming both
  * before anything is sent. A seat no roster line names keeps the agent-record lookup, so a
  * registry whose roster has not caught up still addresses the seat. The records' own spellings —
- * the id the registry keys on, then its project and session — are asked, because a record's
+ * the id the registry keys on, then its name and session — are asked, because a record's
  * `reach.team` may be written as any of them.
  */
 function lookupInTeam(
