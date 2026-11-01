@@ -676,6 +676,12 @@ function inspectQuestion(
   const problem = checkProcess(seat, host, session, pane, launched);
   if (problem) return problem;
   if (!profile) return say('version', 'this version has no question answer');
+  // Version eligibility is resolved before the pane is captured. The final reading's capture is
+  // the last thing before the key, and the checks after it are pure: `host.version` runs the
+  // CLI's `--version`, which can take seconds, and a pane switched to a permission prompt while
+  // it ran would be keyed by a reading taken before the switch. The refusal order is unchanged —
+  // the screen is judged first — only the host read moved to the near side of the capture.
+  const printed = host.version(profile.binary);
   const screen = host.pane(session, pane);
   const reading = host.reading
     ? host.reading(profile.cli, screen)
@@ -696,7 +702,6 @@ function inspectQuestion(
   if (!dialogs.complete) {
     return say('incomplete', 'the question runs past the rows this version reads; left as it is');
   }
-  const printed = host.version(profile.binary);
   const record = printed === null ? null : questionAnswerFor(profile.questionAnswers, dialogs.dialog, printed);
   if (printed === null || record === null) return say('version', 'this version has no question answer');
   return { record, version: printed, kind: dialogs.dialog, text: dialogs.text };

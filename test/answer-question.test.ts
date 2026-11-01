@@ -264,6 +264,9 @@ type Seam = {
   answers?: readonly QuestionAnswerRecord[];
   /** The version the CLI prints; the default is this lane's synthetic one. */
   printed?: string;
+  /** The version the CLI prints, called with the run's 1-based version lookup, so a scene can
+   *  make the lookup itself change the pane. Takes precedence over {@link printed}. */
+  version?: (call: number) => string;
   /** The screen the pane shows once the key is pressed; the default is the cursor idle capture. */
   afterKey?: string;
   /** No reading and no profile seam: the shipped reader and the shipped profiles answer. */
@@ -276,6 +279,7 @@ type Fake = AnswerHost & {
   entered: number;
   versions: number;
   reads: number;
+  calls: string[];
   screen: string;
   named: boolean;
 };
@@ -301,18 +305,21 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     entered: 0,
     versions: 0,
     reads: 0,
+    calls: [] as string[],
     named: true,
     get screen() { return text; },
     set screen(value: string) { text = value; },
     version() {
       host.versions += 1;
-      return seam.printed ?? VERSION;
+      host.calls.push('version');
+      return seam.version ? seam.version(host.versions) : seam.printed ?? VERSION;
     },
     agents() {
       return [{ name: host.named ? seat : '', pane: seat === 'lead' ? 'pane1' : 'pane2', workspace: 'w1' }];
     },
-    pane() { return text; },
+    pane() { host.calls.push('pane'); return text; },
     sendKey(_session: string, _pane: string, key: string) {
+      host.calls.push('sendKey');
       host.keys.push(key);
       text = seam.afterKey ?? cursorIdle;
       status = 'idle';
@@ -321,7 +328,7 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     rename() { host.named = true; return true; },
     foreground() { return ['cursor-agent']; },
     foregroundCwd() { return lobbyDir(home); },
-    processInfo() { return { shell: 4100, foreground: [4100, 4200] }; },
+    processInfo() { host.calls.push('processInfo'); return { shell: 4100, foreground: [4100, 4200] }; },
     list(dir: string) { return listFolder(dir); },
     status() { return status; },
     type(_session: string, _pane: string, value: string) {
@@ -335,6 +342,7 @@ function fake(home: string, seat: string, screen: string, seam: Seam = {}): Fake
     },
     reading() {
       host.reads += 1;
+      host.calls.push('reading');
       return seam.reading ? seam.reading(host.reads) : readOf('question');
     },
     profile(cli: string): Profile | null {
@@ -601,6 +609,58 @@ describe('team answer <seat> question', () => {
     expect(host.keys).toEqual([]);
     expect(host.reads).toBe(3);
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
+  test('a pane switched to a permission prompt during the version lookup is refused before the key', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // Builder-3's probe: the process stays the recorded one and the pane's capture is the same
+    // question every time. The switch happens while the last version lookup runs — the host call
+    // the key path used to make between its final capture and the key. With the lookup resolved
+    // before the capture, the capture sees the permission prompt the pane moved to, and the key
+    // is refused; with the lookup after it, Escape would land on the permission prompt.
+    let reads = 0;
+    const host = fake(home, 'lead', 'Which name do you want to use?\n', {
+      reading: () => {
+        reads += 1;
+        return host.screen.includes('Run this command?')
+          ? { kind: 'permission' as const, dialog: { dialog: null } as const }
+          : readOf('question');
+      },
+      version: (call) => {
+        if (call === 3) host.screen = 'Run this command?\n';
+        return VERSION;
+      },
+    });
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
+    expect(run.err).toBe('lead: the pane is at a permission prompt, which is never answered\n');
+    expect(host.keys).toEqual([]);
+    expect(host.versions).toBe(3);
+    expect(host.reads).toBe(3);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
+  test('no host read runs between the final pane capture and the key', async () => {
+    const { root, home, lobby, sockets, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    const host = fake(home, 'lead', 'Which name do you want to use?\nsynthetic-note.txt\n');
+    host.sendHost = sendHost(home, sockets);
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(0);
+    expect(host.keys).toEqual(['escape']);
+    // Between the last capture and the key there is nothing but the reading's own checks: the
+    // version lookup and the process check both run before it, so no subprocess started for the
+    // answer can outlive the capture the key was judged from.
+    const key = host.calls.indexOf('sendKey');
+    expect(key).toBeGreaterThan(0);
+    const at = host.calls.lastIndexOf('pane', key - 1);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(host.calls.slice(at + 1, key).filter((call) => call === 'version' || call === 'processInfo')).toEqual([]);
   });
 
   test('a wrapped question is read to its end, so the two captures differing in the continuation row disagree', async () => {
