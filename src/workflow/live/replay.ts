@@ -105,10 +105,10 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
         }
         const previousActivation = live.activation;
         const next = record.next ?? record.transition.to;
-        if (next === record.transition.to) {
-          if (record.error !== undefined) return fail('a normal step records an error move', record.seq);
-        } else if (record.error === undefined) {
-          return fail('an error-path step records no refused effect', record.seq);
+        if (record.error === undefined) {
+          if (next !== record.transition.to) {
+            return fail('an error-path step records no refused effect', record.seq);
+          }
         } else {
           if (record.error.from !== record.transition.from || record.error.to !== next) {
             return fail('the error move names another move', record.seq);
@@ -122,7 +122,7 @@ export function foldLive(records: readonly LiveRecord[]): FoldResult {
             return fail(`effect "${effect.name}" names an activation that is neither the old nor the new one`, record.seq);
           }
           if (effect.activation === previousActivation) {
-            if (next !== record.transition.to) {
+            if (record.error !== undefined) {
               return fail('an error-path step records an exit effect', record.seq);
             }
             if (effect.state !== record.transition.from) {
@@ -398,8 +398,9 @@ export function stepFault(input: {
     return `the definition moves ${step.transition.from}/${step.signal} to "${transition.to}", not "${step.transition.to}"`;
   }
   if (transition.guard !== undefined) {
-    // The guard is recorded on a normal step; the error path abandons the transition before it.
-    if (step.next !== undefined && step.next !== step.transition.to) {
+    // The guard is recorded on a normal step; the error path abandons the transition before it,
+    // whatever state it enters.
+    if (step.error !== undefined) {
       if (step.guard !== undefined) return 'an error-path step records a guard';
     } else if (step.guard === undefined || step.guard.name !== transition.guard.name) {
       return `the transition's guard "${transition.guard.name}" is not recorded`;
@@ -420,8 +421,8 @@ export function stepFault(input: {
 
   const next = step.next ?? step.transition.to;
   let expected: DryEffectRecord[];
-  if (next === step.transition.to) {
-    if (step.error !== undefined) return 'a normal step records an error move';
+  if (step.error === undefined) {
+    if (next !== step.transition.to) return 'the error-path step records no refused effect';
     const exit = expectedEffects(
       definition,
       input.runId,
@@ -452,7 +453,6 @@ export function stepFault(input: {
       return `the step moves to "${next}", not the definition's error state "${definition.error}"`;
     }
     const move = step.error;
-    if (move === undefined) return 'the error-path step records no refused effect';
     if (move.rule !== 'entry-effect-refused') return `the error move names the rule "${move.rule}"`;
     if (move.from !== step.transition.from || move.to !== next) {
       return 'the error move names another move than the step';
