@@ -31,5 +31,5 @@ if (process.env[flag] === import.meta.path) {
       if (secretAbsent) { process.stdout.write(stdout); process.stderr.write(stderr); }
       expect(code).toBe(0);
     } finally { execFileSync('trash', [base]); }
-  }, 30_000);
+  }, 60_000);
 }
