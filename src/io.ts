@@ -18,10 +18,13 @@ export type Io = {
    *  Absent counts as false. */
   stderrIsTTY?: boolean;
   /** Set only by the dispatcher's general door (src/client/general-door.ts) on a run it admitted:
-   *  the absolute paths of the verified grant and key. `daemon install` records them in the
-   *  service unit, so the service-started run is admitted through the same door, re-verified at
-   *  every start. Never set from the environment or a command line. */
-  general?: { grant: string; key: string };
+   *  the absolute paths of the verified grant and key, and the grant and client ids that grant
+   *  names. `daemon install` records the paths in the service unit, so the service-started run is
+   *  admitted through the same door, re-verified at every start; the ids are what an owner-only
+   *  write's log credits the write to, so the line names the client and the grant that wrote it,
+   *  not the owner whose place the door stands in. Never set from the environment or a command
+   *  line. */
+  general?: { grant: string; key: string; grantId: string; clientId: string };
   // Set by tests only. A command asks `callerOf(io)`, which otherwise reads the processes.
   caller?: Caller;
   // Set by tests only. A command asks `callerOf(io, session)`, which otherwise reads the
