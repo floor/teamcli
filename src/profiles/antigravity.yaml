@@ -158,6 +158,19 @@ screen:
           - '^\s*>\s*1\.\s+Yes, accept this change\b'
           - '^\s*2\.\s+No, reject this change\b'
         below_last_rule: '↑/↓ Navigate'
+  # The Unsent Comments dialog, as question-unsent-54.txt draws it: the CLI asks a person to
+  # confirm sending before it acts, and no rule is in the window. A bare input row after the
+  # anchor makes the words a transcript above the composer. It confirms a change rather than
+  # asking the agent a question.
+  confirmation:
+    - all:
+        - 'You have unsent comments\. Ready to send\?'
+        - 'y send and exit · n exit without sending'
+      without_rule: true
+      none_after:
+        anchor: 'You have unsent comments\. Ready to send\?'
+        patterns:
+          - '^>\s*$'
   question:
     # The question tool's choice screen, as question-54.txt draws it: the Question 1/1 line
     # and its option rows (the first marked, Write-in... the last) below the dialog's own
@@ -168,16 +181,6 @@ screen:
         - '^\s*>\s*1\.\s'
         - '\bWrite-in\.\.\.'
       below_last_rule: '↑/↓ Navigate · enter Select'
-    # The Unsent Comments dialog, as question-unsent-54.txt draws it: no rule in the window.
-    # A bare input row after the anchor makes the words a transcript above the composer.
-    - all:
-        - 'You have unsent comments\. Ready to send\?'
-        - 'y send and exit · n exit without sending'
-      without_rule: true
-      none_after:
-        anchor: 'You have unsent comments\. Ready to send\?'
-        patterns:
-          - '^>\s*$'
   rate_limit:
     # A usage wall reported from the field (2026-10-21): the pane read `Individual quota
     # reached`, with a reset span under it (`Resets in 47h31m`). No capture of the frame
@@ -210,6 +213,16 @@ screen:
         - '\bRunning command\.\.\.'
         # Active tool execution
         - '^\s*●\s+Running\b'
+  # Where each dialog's question sits, so a report can quote it. The question tool words its
+  # question after the counter's colon (`antigravity/1.2.16/question-54.txt`); the unsent
+  # confirmation asks on its own sentence row (`antigravity/1.2.16/question-unsent-54.txt`).
+  question_text:
+    question:
+      inline: '^\s*Question [0-9]+/[0-9]+:'
+      strip:
+        - '^\s*Question [0-9]+/[0-9]+:\s*'
+    confirmation:
+      inline: 'You have unsent comments\. Ready to send\?'
   composer:
     mode: two-rules-footer-below
     ignore_case: true

@@ -137,6 +137,50 @@ screen:
         - '^\s*❯\s*No, exit\s*$'
         - '^\s*Yes, I trust this folder\s*$'
         - 'Enter to confirm · Esc to cancel'
+  # A plan the agent wrote and is waiting to execute, from the 2.1.289 captures
+  # (`claude-code/2.1.289/permission-plan-wide-{plain,ansi}.txt`): the plan above the dialog's
+  # own rule, then the sentence, the two "Yes" rows and the change row under it. Read before
+  # `permission`, whose generic numbered choice would otherwise take the same rows for a
+  # permission dialog. A run row is unmarked because the mark moves with the selection; the
+  # sentence is what the reader places as the question.
+  plan_approval:
+    - all:
+        - 'Claude has written up a plan and is ready to execute\. Would you like to proceed\?'
+        - '^\s*[❯›>]?\s*1\. Yes, and use auto mode\s*$'
+        - '^\s*2\. Yes, manually approve edits\s*$'
+      below_last_rule: 'Claude has written up a plan and is ready to execute\. Would you like to proceed\?'
+    # The same dialog in a pane whose rule is out of the window. A plan quoted above an empty
+    # prompt is a transcript: the prompt comes after it.
+    - all:
+        - 'Claude has written up a plan and is ready to execute\. Would you like to proceed\?'
+        - '^\s*[❯›>]?\s*1\. Yes, and use auto mode\s*$'
+        - '^\s*2\. Yes, manually approve edits\s*$'
+      without_rule: true
+      none_after:
+        anchor: '^\s*2\. Yes, manually approve edits\s*$'
+        patterns:
+          - '^\s*[❯›>]\s*$'
+  # A cross-session message held for a person to let through, from the 2.1.302 capture
+  # (`claude-code/2.1.302/held.txt`): a rule, the headline, the frame's own prose, then the two
+  # choices — and no composer under it. A seat at it is not working and not idle. The same words
+  # in a transcript are not the dialog, so every rule needs both choice rows too.
+  confirmation:
+    - all:
+        - 'Held message from another session'
+        - '^\s*[❯›>]\s*Deny — drop it and tell the sender it was declined\s*$'
+        - '^\s*Deliver this message to Claude\s*$'
+      below_last_rule: '^\s*Held message from another session\s*$'
+    # The same three rows with the rule out of the window; a message quoted above an empty
+    # prompt is a transcript.
+    - all:
+        - '^\s*Held message from another session\s*$'
+        - '^\s*[❯›>]\s*Deny — drop it and tell the sender it was declined\s*$'
+        - '^\s*Deliver this message to Claude\s*$'
+      without_rule: true
+      none_after:
+        anchor: '^\s*Deliver this message to Claude\s*$'
+        patterns:
+          - '^\s*[❯›>]\s*$'
   # A quoted question above the composer's rule is not a dialog. The footer is the
   # captured last line and needs the question. A Yes/No choice below the last rule
   # is the other shape; the mark is optional, as on an unmarked "2. No".
@@ -278,6 +322,18 @@ screen:
     - any:
         - '\besc to interrupt\b'
         - '^[^\S\n]*[✢✳✶✻✼✽][^\n]*…\s*\(\s*\d'
+  # Where each dialog's question sits, so a report can quote it. The question tool's `☐` header
+  # row names the field the question is about, never the question itself
+  # (`claude-code/2.1.302/question.txt`, `2.1.289/question-plain.txt`); the sentence is the first
+  # row under it that survives a blank, and the option rows below move with the selection.
+  question_text:
+    question:
+      after: '^\s*☐\s'
+      rows: 1
+    plan_approval:
+      inline: '^\s*Claude has written up a plan and is ready to execute\.'
+    confirmation:
+      inline: '^\s*Held message from another session\s*$'
   composer:
     mode: box-to-rule
     # The prompt sits at the pane's first column, as unsent-typed-ansi.txt draws `❯ Fix the`;

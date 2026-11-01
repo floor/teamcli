@@ -166,6 +166,16 @@ screen:
     - any:
         - '^\s*[⠀-⣿].*\[stop\]'
         - '^\s*Shift\+Tab:mode.*Ctrl\+c:cancel'
+  # Where the answer widget's question sits, so a report can quote it: the bare `┃` row it
+  # draws, then the question on the `┃` rows under it (`grok/1.0.52/question.txt`). A question
+  # the pane wraps over two rows is read whole (`grok/1.0.52/permission.txt`); the bare `┃` row
+  # under it ends the walk.
+  question_text:
+    question:
+      after: '^\s*┃\s*$'
+      rows: 2
+      strip:
+        - '^\s*┃\s*'
   composer:
     mode: box-to-rule
     # The input row under the box's opening rule: `  │ ❯ text` at the pane's second column

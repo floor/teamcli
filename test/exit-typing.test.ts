@@ -865,7 +865,7 @@ describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', (
       '  dir',
     ].join('\n');
 
-    const wrappedPermission = [
+    const wrappedModeSwitch = [
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
       ' Switch to Plan mode?',
       ' Switching before any other action.',
@@ -878,11 +878,11 @@ describe('Codex Pinned Suites: live foreground_cwd binding for wrapped paths', (
       '  dir',
     ].join('\n');
 
-    // Working and permission match before composer status parsing, so they classify safely
+    // Working and the mode switch match before composer status parsing, so they classify safely
     expect(readScreen('cursor', wrappedWorking, { cwd: liveDir, home }).kind).toBe('working');
     expect(readScreen('cursor', wrappedWorking, { cwd: null, home }).kind).toBe('working');
-    expect(readScreen('cursor', wrappedPermission, { cwd: liveDir, home }).kind).toBe('permission');
-    expect(readScreen('cursor', wrappedPermission, { cwd: null, home }).kind).toBe('permission');
+    expect(readScreen('cursor', wrappedModeSwitch, { cwd: liveDir, home }).kind).toBe('confirmation');
+    expect(readScreen('cursor', wrappedModeSwitch, { cwd: null, home }).kind).toBe('confirmation');
   });
 });
 
