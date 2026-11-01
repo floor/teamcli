@@ -25,7 +25,7 @@ import { readStoredTeamConfig } from '../registry/team-config-store.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { findAgent, updateAgent } from '../registry/agents.ts';
 import { parseYaml, toValue, YamlError, type YamlValue } from '../yaml.ts';
-import { editedRecordText, getAt, parsePath, parseValue, shownValue, withValue } from './team-record.ts';
+import { editedRecordText, getAt, parsePath, parseValue, reservedKeyIn, shownValue, withValue } from './team-record.ts';
 import type { ConfigSources } from '../commands/config.ts';
 
 function realRoot(cwd: string): string {
@@ -108,14 +108,32 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     return unreadable(io, json, error instanceof Error ? error.message : String(error));
   }
   const where = target.kind === 'registry' ? "the registry's record" : TEAM_FILE;
+  // A reserved name is refused only where the path addresses it as a key the record does not
+  // own: a list selects an item by name or index, and a dynamic map may own an account or rule
+  // named `constructor`, so both are ordinary paths. The record is parsed here, before the owner
+  // door, so a refused path spends no prompt. A record that does not parse is reported by the
+  // verb's own reader, as before.
+  let parsed: YamlValue | null = null;
+  let parseError: unknown = null;
+  try {
+    parsed = toValue(parseYaml(text));
+  } catch (error) {
+    parseError = error;
+  }
+  const reserved = parsed === null ? null : reservedKeyIn(parsed, path);
+  if (reserved !== null) {
+    refuse(io, json, 'config', {
+      id: 'config.usage',
+      message: `${rawPath}: "${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`,
+      repair: null,
+      usage,
+    });
+    // exit: config.usage
+    return 2;
+  }
   if (verb === 'get') {
-    let record: YamlValue;
-    try {
-      record = toValue(parseYaml(text));
-    } catch (error) {
-      return unreadable(io, json, `${where} cannot be read: ${unreadableReason(error)}`);
-    }
-    const got = getAt(record, path);
+    if (parsed === null) return unreadable(io, json, `${where} cannot be read: ${unreadableReason(parseError)}`);
+    const got = getAt(parsed, path);
     if (!got.found) {
       refuse(io, json, 'config', { id: 'config.no-value', message: `${rawPath} is not set in ${where}`, repair: null });
       // exit: config.no-value

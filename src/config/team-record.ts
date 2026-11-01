@@ -17,6 +17,12 @@ import { parseYaml, stripComment, toValue, type YamlEntry, type YamlNode, type Y
 
 export type RecordPath = string[];
 
+/** Names every object inherits from its prototype chain. At a map a path segment is a key, and a
+ *  record never holds these three as its own, so a walk through one would reach a shared object.
+ *  Under a list the same segment selects an item by its name, which the schema allows — a seat
+ *  may be named `constructor`, and a path that names it is an ordinary item selector. */
+const RESERVED_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
 export function parsePath(raw: string): RecordPath | string {
   if (raw === '' || raw.startsWith('.') || raw.endsWith('.') || raw.includes('..')) return `"${raw}" is not a path: write dotted keys, like watch.unread_after or seats.lead.model`;
   return raw.split('.');
@@ -39,6 +45,37 @@ function indexIn(list: YamlValue[], segment: string): number {
   return -1;
 }
 
+/** The reserved name `path` would address where its map does not own it, or null. The walk
+ *  follows `withValue`'s: under a list a segment selects an item by name or index, never a key.
+ *  At a map an existing own key is walked whatever its spelling — a dynamic map may hold an
+ *  account or rule named `constructor`, which the schema allows — and a reserved name the map
+ *  does not own is refused before it is made: the record never holds one as its own key, and
+ *  making it would address the property every object inherits instead of the record. */
+export function reservedKeyIn(root: YamlValue, path: RecordPath): string | null {
+  if (path.length === 0 || !isMap(root)) return null;
+  let at: YamlValue = root;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const segment = path[i] as string;
+    if (Array.isArray(at)) {
+      const n = indexIn(at, segment);
+      if (n < 0) return null;
+      at = at[n] as YamlValue;
+      continue;
+    }
+    if (!isMap(at)) return null;
+    if (!Object.prototype.hasOwnProperty.call(at, segment)) {
+      if (RESERVED_SEGMENTS.has(segment)) return segment;
+      // A section a set will make; the rest of the path addresses a fresh map's keys.
+      at = {};
+      continue;
+    }
+    at = at[segment] as YamlValue;
+  }
+  const last = path[path.length - 1] as string;
+  if (!isMap(at)) return null;
+  return RESERVED_SEGMENTS.has(last) && !Object.prototype.hasOwnProperty.call(at, last) ? last : null;
+}
+
 export function getAt(root: YamlValue, path: RecordPath): { found: true; value: YamlValue } | { found: false } {
   let at: YamlValue = root;
   for (const segment of path) {
@@ -58,6 +95,8 @@ export function getAt(root: YamlValue, path: RecordPath): { found: true; value: 
 /** Sets (or, with `value` undefined, removes) the value at `path` in a copy of `root`. Missing
  *  maps on the way are made; a list item must exist. Returns a reason when the path cannot be. */
 export function withValue(root: YamlValue, path: RecordPath, value: YamlValue | undefined): { ok: true; root: YamlValue; changed: boolean } | { ok: false; why: string } {
+  const reserved = reservedKeyIn(root, path);
+  if (reserved !== null) return { ok: false, why: `"${reserved}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key` };
   const copy = structuredClone(root) as YamlValue;
   if (!isMap(copy)) return { ok: false, why: 'the record is not a map' };
   let at: Container = copy;
@@ -71,7 +110,9 @@ export function withValue(root: YamlValue, path: RecordPath, value: YamlValue | 
       if (next === null || typeof next !== 'object') return { ok: false, why: `${where} is a value, not a section` };
       at = next as Container;
     } else {
-      let next = at[segment];
+      // Own keys only, as `getAt` reads them: a name the record does not hold is a section to
+      // make, never an inherited object to walk into and write through.
+      let next = Object.prototype.hasOwnProperty.call(at, segment) ? at[segment] : undefined;
       if (next === undefined) {
         if (value === undefined) return { ok: true, root: copy, changed: false };
         next = {};
