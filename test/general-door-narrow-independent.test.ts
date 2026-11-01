@@ -162,3 +162,13 @@ for (const [command, words] of [
     expect(result.storeChanges).toEqual([]);
   });
 }
+for (const [command, words] of [['config', ['keys']], ['init', ['--approval-modes']]] as [string, string[]][]) {
+  test(`a send-only wildcard entity grant cannot enter ${command} ${words.join(' ')}`, () => {
+    const result = scene({ command, words, ops: ['send'] });
+    expect(result.code, result.out + result.err).toBe(2);
+    expect(result.out + result.err).toContain('takes no --general');
+    expect(result.calls).toBe(0);
+    expect(result.marker).toBe(false);
+    expect(result.storeChanges).toEqual([]);
+  });
+}
