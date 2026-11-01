@@ -266,3 +266,34 @@ screen:
     dialog: 'question', text: 'Changed first row Second visible question row', complete: true,
   });
 });
+
+
+for (const changed of [false, true]) {
+  test('window delta: Codex current window cut, changed=' + changed, () => {
+    const header = 'Question 1/1 (1 unanswered)';
+    const current = changed ? 'Changed current partial question?' : 'Current partial question under review?';
+    const old = [header, 'Previous question already answered?', '1. previous choice', '', header, current];
+    // Both screens retain the actual question stage's footer; only the live option row is cut.
+    const whole = [...old, '› 1. current choice', 'esc to interrupt', ''].join('\n');
+    expect(readDialog('codex', whole)).toEqual({ dialog: 'question', text: current, complete: true });
+    const cut = [...old, 'esc to interrupt', ''].join('\n');
+    expect(readDialog('codex', cut)).toEqual({ dialog: 'question', text: current + ' esc to interrupt', complete: false });
+  });
+  test('window delta: captured Grok frame opens the current window cut, changed=' + changed, () => {
+    const current = changed ? 'Changed current choice question?' : 'Which name do you choose?';
+    const captured = capture('grok/1.0.52/question.txt').replace('Which name do you choose?', current);
+    const marker = '\n  ┃\n  ┃  ' + current;
+    expect(captured).toContain(marker);
+    const withOld = captured.replace(marker, ['','  ┃','  ┃  Previous question already answered?',
+      '  ┃  1 (○) previous  Previously chosen answer.', '  ┃', '  ┃  ' + current].join('\n'));
+    expect(readDialog('grok', withOld)).toEqual({ dialog: 'question', text: current, complete: true });
+    const cut = withOld.split('\n').filter(row => !row.includes('1 (○) alpha') && !row.includes('z (○) Type your answer')).join('\n');
+    expect(readDialog('grok', cut)).toEqual({ dialog: 'question', text: current, complete: false });
+  });
+  test('window delta: a chrome-only question widget has no dialog text, changed=' + changed, () => {
+    const chrome = ['Waiting on answers' + (changed ? ' for another item' : ''), '  ┃',
+      '  ┃ ↑/↓ navigate · y copy' + (changed ? '       ' : ' ') + 'Enter:submit', 'Tab:next answer', ''].join('\n');
+    expect(readScreen('grok', chrome).kind).toBe('question');
+    expect(readDialog('grok', chrome)).toEqual({ dialog: null });
+  });
+}
