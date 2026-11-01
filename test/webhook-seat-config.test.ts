@@ -103,6 +103,25 @@ test('a header that is not an HTTP field name is refused, and content-type stays
   }
 });
 
+test('a header named for an object\'s own map is a field name like any other', () => {
+  const base = scratch();
+  const urlFile = join(base, 'hook-url');
+  const secretFile = join(base, 'hook-secret');
+  const row = (header: string): string => `    webhook:
+      url_file: ${JSON.stringify(urlFile)}
+      secret_file: ${JSON.stringify(secretFile)}
+      header: ${JSON.stringify(header)}
+`;
+  // The adapter carries these intact (its header map has no prototype), so a row may name one
+  // and the routine receives the secret there like any other field.
+  for (const header of ['__proto__', 'constructor', 'prototype', '__PROTO__']) {
+    const parsed = validateTeamFile(teamText(row(header)));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.team.seats.find((seat) => seat.name === 'iris')?.webhook?.header).toBe(header);
+  }
+});
+
 test('a body word the adapter does not read is refused', () => {
   const base = scratch();
   const urlFile = join(base, 'hook-url');
