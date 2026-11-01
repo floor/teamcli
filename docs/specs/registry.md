@@ -350,12 +350,14 @@ This area writes no registry of its own; its words are the fields above. It feed
   `entity` (the default, across every team of the entity), `project` (within one project), `team`
   (within one team) or `off`. The word is the owner's, hand-written; a word the file does not
   spell leaves the default in force. It is read where a nickname is newly set — `team config set`
-  on a seat's label or a whole seat map, `team init`, and `team add` including `--like` — against
-  the name a seat goes by: the persona its written label names when the nickname field could hold
-  it, and the field otherwise, compared case-insensitively and never counted when it is the
-  seat's own name. A clash refuses, naming the other team and seat and the word that would allow
-  it; a team that already carries a duplicate keeps running, and `team check` notes the pair. It
-  has no id, no lifecycle and no record of its own in this registry.
+  on a seat's label or a whole seat map, and `team init` — against the name a seat goes by: the
+  persona its written label names when the nickname field could hold it, and the field otherwise,
+  compared case-insensitively and never counted when it is the seat's own name. `team add` is not
+  a door: a plain add writes the seat's own name as its label, and a copy repeats the source's
+  `nickname:` line, which the file's own check refuses as a duplicate. A clash refuses, naming
+  the other team and seat and the word that would allow it; a team that already carries a
+  duplicate keeps running, and `team check` notes the pair. It has no id, no lifecycle and no
+  record of its own in this registry.
 - **The legacy project's `deliveryOrder` has no writer.** A hand-written value reads and an upsert
   keeps it; no command writes the legacy field. A signed project-level `delivery-order` policy is
   written by `team policy set`.

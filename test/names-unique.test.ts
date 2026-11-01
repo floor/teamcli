@@ -2,7 +2,7 @@
 // config (src/entities.ts) says how far apart those names stay: the whole entity (the default),
 // a project of it, a team, or nowhere. A nickname is the persona a seat's written label names,
 // compared case-insensitively, and the check runs only where a nickname is newly set — team
-// config set (a seat's label or a whole seat map), team init and team add — so a team that
+// config set (a seat's label or a whole seat map) and team init — so a team that
 // already carries a duplicate keeps running; `team check` names the pair as a note instead.
 // Every scene is a synthetic registry under a scratch root: homes, checkouts and registries are
 // the scene's own, and no live registry is read.
@@ -272,11 +272,11 @@ describe('the nickname a write brings, and the one a team already carries', () =
     const added = validateTeamFile(`${SITE.trimEnd()}\n${NAMED('reviewer', 'reviewer-2', 'Cicero')}`);
     if (!added.ok) throw new Error(JSON.stringify(added.errors));
     const root = world.roots.site!;
-    // The shape `team add --like` writes when the copied entry keeps a persona: refused.
+    // A new seat whose written label names a persona another team holds: refused.
     const clash = nicknameChangeGate({ home: world.home, teamId: teamIdOf(root), root, before: site.team, after: added.team });
     expect(clash.ok).toBe(false);
     if (!clash.ok) expect(clash.message).toContain('of team "acme"');
-    // A plain `team add` writes `label: <name>`, which is the seat's own name: no nickname, no check.
+    // A new seat whose label is its own name: no nickname, no check.
     const plain = validateTeamFile(`${SITE.trimEnd()}\n${SEAT('reviewer', 'reviewer-2', ['    label: reviewer-2\n'])}`);
     if (!plain.ok) throw new Error(JSON.stringify(plain.errors));
     expect(nicknameChangeGate({ home: world.home, teamId: teamIdOf(root), root, before: site.team, after: plain.team })).toEqual({ ok: true });
