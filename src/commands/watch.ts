@@ -1699,7 +1699,10 @@ export function watchReportEvent(
   if (colon < 0) return null;
   const prefix = report.key.slice(0, colon);
   const rawSeat = report.key.slice(colon + 1);
-  const seat = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
+  const withoutOwner = rawSeat.endsWith(':owner') ? rawSeat.slice(0, -':owner'.length) : rawSeat;
+  // A report may name its occurrence after the seat — `question:<seat>:<digest>` — so the seat is
+  // the first field, never the whole tail.
+  const seat = withoutOwner.split(':')[0] ?? '';
   if (seat === '') return null;
 
   if (prefix === 'missing' || prefix === 'never-started' || prefix === 'gone') {
@@ -1725,7 +1728,19 @@ export function watchReportEvent(
       reason: report.text,
     };
   }
-  if (prefix === 'blocked' || prefix === 'question') {
+  if (prefix === 'question' || prefix === 'plan approval' || prefix === 'confirmation') {
+    return {
+      ts,
+      kind: 'seat.at-prompt',
+      session,
+      record_id: `watch:${prefix}:${seat}:${ts}`,
+      seat,
+      subject: seat,
+      prompt: prefix,
+      reason: report.text,
+    };
+  }
+  if (prefix === 'blocked') {
     return {
       ts,
       kind: 'seat.blocked',
