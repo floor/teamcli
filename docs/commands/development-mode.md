@@ -46,7 +46,10 @@ seat, `register`, `add`, `restart`, `init`, `reload` and `rename` folds. The run
 `warning: <the refusal>; dev mode continues` — with the level appended when a policy or the
 machine record set it: `(dev-mode on at <level> level)`, or `(dev-mode on at machine level)` for
 the machine record — and goes on; the act it carries out is logged with the command and the
-caller.
+caller. `down`'s caller-placement line is the one warning whose form follows the source: the
+variable's run prints it with `; dev mode continues`, while a run a policy or the machine record
+admits prints the level note alone,
+`warning: <the refusal> (dev-mode on at <level> level)`.
 
 **The team-file approval precondition.** Where a run asks for the team's approved file — the
 delegate gate of `up`, `add`, `remove`, `down` and `register`, the grant gate of `up`, `remove`,
@@ -90,9 +93,11 @@ profile's tested `1.2.16` to `1.4.2`, closes and relaunches anyway, with `team r
 tested range never widens; every other CLI and version, and every run with dev mode off, keeps
 the refusal.
 
-Every lift logs a `dev mode continues` warning with the command and the caller; the owner and
-installer admissions add the role they proved. The caller-gate, file-approval, owner-gate and
-reload warnings also print to stderr, while the installer admission's is in the audit log alone.
+Every lift logs its warning with the command and the caller, and every one carries the
+`dev mode continues` clause except `down`'s caller-placement line under a policy or the machine
+record, which carries the level note alone; the owner and installer admissions add the role they
+proved. The caller-gate, file-approval, owner-gate and reload warnings also print to stderr, while
+the installer admission's is in the audit log alone.
 
 ## What it never lifts
 
