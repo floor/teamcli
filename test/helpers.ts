@@ -4,6 +4,8 @@ import { join, resolve, sep } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import { PROFILES } from '../src/clis.ts';
+import { DAEMON_LABEL } from '../src/daemon/paths.ts';
+import type { ServiceJobRecord, ServiceUnitRecord } from '../src/daemon/service.ts';
 import type { Io } from '../src/io.ts';
 import { currentBriefClaim, deliverBriefForAttribution } from '../src/launch/general-brief.ts';
 import { rulesText } from '../src/launch/rules.ts';
@@ -11,6 +13,25 @@ import { readMessage } from '../src/mcp/inbox.ts';
 import { readAgents } from '../src/registry/agents.ts';
 import { signedRecordOf, type SignedRecord } from '../src/send/record.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
+
+/** The service manager's record of a job that is this test process: the pid and program the
+ *  daemon's start admission compares against. A fake manager answers with this when a scene
+ *  needs the record admission to pass; a scene about a refusal changes one field. */
+export function thisProcessJobRecord(): ServiceJobRecord {
+  return { pid: process.pid, program: process.execPath };
+}
+
+/** The unit record a scene's fake manager answers with for this process: the daemon's own label,
+ *  the test user as owner, a private unit, and this process's own launch words. */
+export function thisProcessUnitRecord(path: string): ServiceUnitRecord {
+  return {
+    path,
+    label: DAEMON_LABEL,
+    ownerUid: typeof process.getuid === 'function' ? process.getuid() : 0,
+    mode: 0o600,
+    programArguments: [process.execPath, ...process.argv.slice(1)],
+  };
+}
 
 /** The signed record at `path`, parsed: a test that asserts the message's body asserts the
  *  record's payload, never the envelope's bytes. Throws when the file is not a record. */
