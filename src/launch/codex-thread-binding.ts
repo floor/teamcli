@@ -6,20 +6,25 @@
 // loaded threads and binds the one thread it proves to the seat's two records, so a send right
 // after the restart is addressed to a real conversation instead of falling to a pull.
 //
-// The bind is deliberately narrow: only an endpoint recorded under the seat's current presence
-// incarnation is read, only the seat's own agent record — the strict door's team, seat, orphan,
-// session, CLI and stable-handle checks, with the handle required to be the one the state names —
-// is written, and only exactly one loaded thread is taken as the seat's own. The record is
-// selected before the endpoint is read, so a record that is another incarnation's is refused
-// before either record changes. A read that proves nothing leaves both records as they were, and
-// the caller reports the seat pull-only rather than claiming a queue that cannot be addressed.
+// The bind is deliberately narrow: only an endpoint this seat's own launch started — the one
+// recorded under the seat's current presence incarnation, at the socket path this session and seat
+// own under that binding, and not one another seat records too — is read; only the seat's own agent
+// record — the strict door's team, seat, orphan, session, CLI and stable-handle checks, with the
+// handle required to be the one the state names — is written; and only exactly one loaded thread
+// is taken as the seat's own. The record is selected before the endpoint is read, so a record that
+// is another incarnation's is refused before either record changes. Every write is then fenced on
+// the snapshot the bind acted on — the incarnation, its endpoint, the thread the state names, and
+// the record's own conversation — re-read before the state write and again under the registry
+// lock, so a successor's thread is never replaced and the two records never end up naming
+// different incarnations' conversations. A read that proves nothing leaves both records as they
+// were, and the caller reports the seat pull-only rather than claiming a queue that cannot be
+// addressed.
 import type { CodexLoadedThreadsRead } from '../daemon/presence/codex-source.ts';
 import {
   inspectRecordedCodexEndpoint,
   readCodexEndpointRecord,
-  type CodexEndpointRecord,
 } from '../daemon/presence/endpoint-record.ts';
-import { recordAgentSession, type Agent } from '../registry/agents.ts';
+import { recordAgentSessionWhen, type Agent, type AgentSessionWrite } from '../registry/agents.ts';
 import { recordedSeatRecord } from '../registry/resume.ts';
 import { readState, updateState, type SeatState, type State } from '../state.ts';
 import { codexEndpointSocket } from './codex-endpoint.ts';
@@ -27,9 +32,6 @@ import { codexEndpointSocket } from './codex-endpoint.ts';
 export type CodexThreadBinding =
   | { kind: 'bound'; id: string }
   | { kind: 'unbound'; why: string };
-
-/** The state write's own answer: only `written` means this run put the thread in the record. */
-type StateWrite = 'written' | 'named' | 'moved' | 'gone';
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -60,7 +62,7 @@ function ownedEndpoint(
   input: { dir: string; session: string; seat: { name: string } },
   state: SeatState,
   file: State,
-): { kind: 'ok'; url: string; binding: string; record: CodexEndpointRecord } | { kind: 'unbound'; why: string } {
+): { kind: 'ok'; url: string; binding: string } | { kind: 'unbound'; why: string } {
   const recorded = inspectRecordedCodexEndpoint(state.codex_endpoint, state.presence_binding);
   if (recorded.kind === 'absent') {
     return { kind: 'unbound', why: 'the seat records no managed Codex endpoint' };
@@ -80,7 +82,7 @@ function ownedEndpoint(
   if (shared !== null) {
     return { kind: 'unbound', why: `another seat records the same Codex endpoint (${shared})` };
   }
-  return { kind: 'ok', url: recorded.record.url, binding, record: recorded.record };
+  return { kind: 'ok', url: recorded.record.url, binding };
 }
 
 /** The seat's agent record by the strict door every binding uses — team, seat, orphan mark, the
@@ -112,12 +114,98 @@ function strictRecordOf(
   return { kind: 'bound', agent: read.agent };
 }
 
+/** The snapshot every write is fenced on: the incarnation the endpoint was recorded under, that
+ *  endpoint's own URL, the thread the state names, the record selected for it, the conversation
+ *  that record held then, and the thread this run is binding. A launch replaces all of it at once,
+ *  so a snapshot the records no longer show is another incarnation's. */
+type Snapshot = {
+  id: string;
+  binding: string;
+  url: string;
+  /** The thread the seat state names, or null when it names none. */
+  named: string | null;
+  /** The record's conversation when the record was selected. */
+  recorded: string | null;
+  /** The record's id, selected by the strict door and the exact handle. */
+  agent: string;
+  /** The thread this run is binding. */
+  bind: string;
+};
+
+function conversationOf(agent: Agent): string | null {
+  const held = agent.reach.agent_session;
+  return typeof held === 'string' && held !== '' ? held : null;
+}
+
+/** Why `file` no longer shows the snapshot, or null. Pure over a state file, so the state lock's
+ *  own read and a later fresh read judge the same way. The endpoint is compared by URL under the
+ *  same binding: a successor that recorded another socket — even one carrying the same binding —
+ *  started a different server, and this run's read proves nothing about it. */
+function stateMismatch(file: State, session: string, seat: string, snap: Snapshot): string | null {
+  const held = file.sessions[session]?.seats[seat];
+  if (held === undefined) return 'the seat left the state while its thread was being bound';
+  if (held.id !== snap.id) {
+    return 'the seat state names another incarnation while its thread was being bound';
+  }
+  if (held.presence_binding !== snap.binding) {
+    return 'the seat relaunched while its thread was being bound';
+  }
+  const recorded = inspectRecordedCodexEndpoint(held.codex_endpoint, held.presence_binding);
+  if (recorded.kind !== 'ok' || recorded.record.url !== snap.url) {
+    return 'the seat’s recorded Codex endpoint changed while its thread was being bound';
+  }
+  const named = typeof held.agent_session === 'string' && held.agent_session !== ''
+    ? held.agent_session
+    : null;
+  if (named !== snap.named) {
+    return snap.named === null
+      ? 'the seat state gained a thread while another was being bound'
+      : 'the seat state changed its thread while it was being bound';
+  }
+  const shared = sharingSeat(file, session, seat, snap.url);
+  if (shared !== null) return `another seat records the same Codex endpoint (${shared})`;
+  return null;
+}
+
+/** Why either record no longer shows the snapshot, or null: the state by {@link stateMismatch},
+ *  and the record still the same one by the strict door and the exact handle. The record's own
+ *  conversation must also be the one it held at selection, or the one being bound: a conversation
+ *  another writer recorded after this run selected the record is a later binding, and replacing it
+ *  would overwrite a successor's thread in the registry alone. */
+function fence(
+  input: { home: string; root: string; dir: string; session: string; seat: { name: string; cli: string } },
+  snap: Snapshot,
+): string | null {
+  let file: State;
+  try {
+    file = readState(input.dir);
+  } catch (error) {
+    return `the team state could not be read (${errorText(error)})`;
+  }
+  const mismatch = stateMismatch(file, input.session, input.seat.name, snap);
+  if (mismatch !== null) return mismatch;
+  const held = file.sessions[input.session]?.seats[input.seat.name];
+  if (held === undefined) return 'the seat left the state while its thread was being bound';
+  const record = strictRecordOf(input, held);
+  if (record.kind === 'unbound') return record.why;
+  if (record.agent.id !== snap.agent) {
+    return "the seat's agent record changed while its thread was being bound";
+  }
+  const conversation = conversationOf(record.agent);
+  if (conversation !== null && conversation !== snap.bind && conversation !== snap.recorded) {
+    return `the seat's agent record names another thread (${conversation})`;
+  }
+  return null;
+}
+
 /**
  * Binds the thread a managed Codex endpoint holds to the seat state and the seat's agent record.
  * `read` is the endpoint read, handed in so the caller owns the transport budget. When the state
  * already names a thread, that thread is kept and only its record is repaired — and only if the
  * endpoint holds it. When the state names none, exactly one loaded thread is bound; none or
- * several prove nothing, and the answer says which.
+ * several prove nothing, and the answer says which. Every write is fenced on the snapshot the
+ * bind acted on, so a seat that relaunched during the endpoint read, or a record another writer
+ * changed, is refused rather than bound to a thread that is not the one its records name.
  */
 export async function bindCodexSeatThread(input: {
   home: string;
@@ -177,31 +265,41 @@ export async function bindCodexSeatThread(input: {
       };
     }
     id = ids[0]!;
-    // The incarnation the endpoint was recorded under is the one this write must still see: a
-    // predecessor's endpoint and a successor's state never meet, so a seat that relaunched
-    // between the read and the write is left to its own binding rather than bound to this thread.
-    const binding = state.presence_binding;
-    let wrote: StateWrite;
+  }
+  const snap: Snapshot = {
+    id: state.id,
+    binding: own.binding,
+    url: own.url,
+    named,
+    recorded: conversationOf(entry.agent),
+    agent: entry.agent.id,
+    bind: id,
+  };
+  // The snapshot the bind acted on is fenced before either record is written. The endpoint read
+  // is the one suspension point of this call, and a launch that ran during it installs a new
+  // incarnation, a new endpoint, a new thread and a new record together: the thread just read is
+  // the predecessor's, and writing it to either record would bind a successor to a conversation it
+  // does not own. A snapshot that moved is refused here, with both records left exactly as they
+  // stand — on the named path too, where nothing else would revalidate the incarnation.
+  const moved = fence(input, snap);
+  if (moved !== null) return { kind: 'unbound', why: moved };
+  if (named === null) {
+    // The state write carries the same fence under the state lock: between the check above and
+    // the write, the seat may have been replaced once more.
+    let wrote: string;
     try {
-      wrote = updateState<StateWrite>(input.dir, (file) => {
+      wrote = updateState<string>(input.dir, (file) => {
+        const mismatch = stateMismatch(file, input.session, input.seat.name, snap);
+        if (mismatch !== null) return mismatch;
         const held = file.sessions[input.session]?.seats[input.seat.name];
-        if (held === undefined) return 'gone';
-        if (held.presence_binding !== binding) return 'moved';
-        if (typeof held.agent_session === 'string' && held.agent_session !== '') return 'named';
+        if (held === undefined) return 'the seat left the state while its thread was being bound';
         held.agent_session = id;
         return 'written';
       }, { writeWhen: (result) => result === 'written' });
     } catch (error) {
       return { kind: 'unbound', why: `the seat state could not be written (${errorText(error)})` };
     }
-    if (wrote !== 'written') {
-      return {
-        kind: 'unbound',
-        why: wrote === 'moved'
-          ? 'the seat relaunched while its thread was being bound'
-          : 'the seat state changed while its thread was being bound',
-      };
-    }
+    if (wrote !== 'written') return { kind: 'unbound', why: wrote };
     const after = readState(input.dir).sessions[input.session]?.seats[input.seat.name];
     if (after?.agent_session !== id) {
       return { kind: 'unbound', why: 'the seat state did not keep the thread it was bound to' };
@@ -209,11 +307,19 @@ export async function bindCodexSeatThread(input: {
   }
   // The two records must agree: the delivery class and the native route both read the state and
   // the registry, so a thread written to one alone binds nothing. The record is the one the entry
-  // selected by its exact stable handle, never one found by its seat name alone.
+  // selected by its exact stable handle, and the write is fenced again under the folder lock on
+  // the state that now names the thread: a conversation another writer recorded first is refused
+  // rather than replaced, so a later binding is never overwritten with this one.
+  const settled: Snapshot = { ...snap, named: id };
+  let write: AgentSessionWrite;
   try {
-    recordAgentSession(input.home, entry.agent.id, id);
+    write = recordAgentSessionWhen(input.home, entry.agent.id, id, () => {
+      const why = fence(input, settled);
+      return why === null ? true : why;
+    });
   } catch (error) {
     return { kind: 'unbound', why: `the seat's agent record could not be written (${errorText(error)})` };
   }
+  if (write.kind === 'refused') return { kind: 'unbound', why: write.why };
   return { kind: 'bound', id };
 }

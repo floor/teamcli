@@ -78,9 +78,15 @@ The conversation a managed Codex seat's runtime queue is addressed by belongs to
 launch started, not to the pane: a fresh pane reports no thread, and the launch starts a new
 conversation. After the new pane is ready, the restart therefore asks that recorded endpoint which
 threads it holds and, when exactly one is loaded, binds it as the seat's conversation in both the
-seat state and its agent record. It never waits for the pane to report the thread. An endpoint that
-holds no thread yet, holds more than one, or does not answer proves nothing: the records are left as
-they were, the closing line says `pull-only`, and the log names what the read proved instead
+seat state and its agent record. It never waits for the pane to report the thread. The endpoint is
+read only when it is provably the seat's own: recorded under the seat's current presence
+incarnation at the socket path that incarnation's launch owns, and not recorded by any other live
+seat — an endpoint belonging to another seat, or one two seats both name, is not read at all. Both
+records are then written only while they still show the incarnation, endpoint, thread and agent
+record the read was made against: a seat that relaunched in between keeps its own records, and a
+conversation another writer recorded first is never replaced. An endpoint that holds no thread yet,
+holds more than one, or does not answer proves nothing: the records are left as they were, the
+closing line says `pull-only`, and the log names what the read proved instead
 (`<seat>: no thread was bound from its Codex endpoint (<reason>)`).
 | `--dry-run` succeeded | the stop line and the launch plan | 0 |
 | the run was refused, or the seat was left behind | `team restart: <reason>` | 1 |

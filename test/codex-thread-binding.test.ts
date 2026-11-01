@@ -16,15 +16,21 @@
 //    how many it saw.
 // 10. A state that names a thread its endpoint does not hold is not rebound.
 // 11. A state that names a thread the endpoint holds repairs a record that lost it.
+// 12. A record whose handle is another incarnation's is refused before the state is written.
+// 13. An endpoint recorded inside another seat's run folder is not read or bound.
+// 14. An endpoint two seats both record is refused as ambiguous.
+// 15. A seat that relaunches while its named thread is read keeps the successor's records.
+// 16. A seat that relaunches while its unnamed thread is read keeps the successor's agreement.
+// 17. A record whose conversation another writer replaced during the read is not overwritten.
+// 18. An endpoint replaced under the same incarnation during the read is refused.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../src/daemon/presence/codex-source.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import { bindCodexSeatThread } from '../src/launch/codex-thread-binding.ts';
-import { findAgent, registerAgent } from '../src/registry/agents.ts';
+import { findAgent, recordAgentSession, registerAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
@@ -404,6 +410,143 @@ describe('bindCodexSeatThread', () => {
     expect(bound.kind === 'unbound' ? bound.why : '').toContain('another seat records the same Codex endpoint');
     expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
     expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OLD_THREAD);
+    expect(deliveryOf(w).class).toBe('pull-on-turn');
+  });
+
+  // The named path has no state write of its own, so nothing but a fence can stop it from writing
+  // the predecessor's thread over a successor's: the successor installs its incarnation, endpoint
+  // and thread in both records while the predecessor's endpoint read is still in flight.
+  test('a seat that relaunches while its named thread is read keeps the successor\'s records', async () => {
+    const w = world();
+    const socket = ownedSocket(w);
+    const nextBinding = 'prs_999999999999';
+    const nextSocket = ownedSocket(w, 'worker', nextBinding);
+    await endpoint(socket.path, { ids: [OLD_THREAD] });
+    const agentId = registerWorker(w.home, w.root, { agentSession: OLD_THREAD });
+    const state = { ...seatRecord(BINDING, socket.path), agent_session: OLD_THREAD };
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state, async () => {
+      updateState(w.dir, (file) => {
+        const held = file.sessions.teamcli!.seats.worker!;
+        held.presence_binding = nextBinding;
+        held.codex_endpoint = {
+          url: nextSocket.url,
+          binding: nextBinding,
+          pid: 4343,
+          started_at: '2026-11-01T00:00:01.000Z',
+          config: [],
+        };
+        held.agent_session = THREAD;
+      });
+      recordAgentSession(w.home, agentId, THREAD);
+      return { kind: 'read', ids: [OLD_THREAD] };
+    });
+
+    // The thread just read is the predecessor's: bound, it would leave the state naming the
+    // successor's conversation and the registry naming the predecessor's.
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('relaunched');
+    const after = readState(w.dir).sessions.teamcli?.seats.worker;
+    expect(after?.presence_binding).toBe(nextBinding);
+    expect(after?.agent_session).toBe(THREAD);
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(THREAD);
+    expect(recordedSeatSession({
+      home: w.home,
+      root: w.root,
+      herdrSession: 'teamcli',
+      seat: { name: 'worker', cli: 'codex' },
+      state: after,
+    }).kind).toBe('bound');
+  });
+
+  // The control the predecessor already had: an unnamed seat whose incarnation moves during the
+  // read refuses too, and the successor's two records still agree afterwards.
+  test('a seat that relaunches while its unnamed thread is read keeps the successor\'s agreement', async () => {
+    const w = world();
+    const socket = ownedSocket(w);
+    const nextBinding = 'prs_999999999999';
+    const nextSocket = ownedSocket(w, 'worker', nextBinding);
+    await endpoint(socket.path, { ids: [THREAD] });
+    const agentId = registerWorker(w.home, w.root);
+    const state = seatRecord(BINDING, socket.path);
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state, async () => {
+      updateState(w.dir, (file) => {
+        const held = file.sessions.teamcli!.seats.worker!;
+        held.presence_binding = nextBinding;
+        held.codex_endpoint = {
+          url: nextSocket.url,
+          binding: nextBinding,
+          pid: 4343,
+          started_at: '2026-11-01T00:00:01.000Z',
+          config: [],
+        };
+        held.agent_session = OTHER_THREAD;
+      });
+      recordAgentSession(w.home, agentId, OTHER_THREAD);
+      return { kind: 'read', ids: [THREAD] };
+    });
+
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('relaunched');
+    const after = readState(w.dir).sessions.teamcli?.seats.worker;
+    expect(after?.presence_binding).toBe(nextBinding);
+    expect(after?.agent_session).toBe(OTHER_THREAD);
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OTHER_THREAD);
+    expect(deliveryOf(w).class).toBe('between-turns');
+  });
+
+  // A record can be replaced without the state moving: another writer records a conversation on
+  // the same record while the endpoint is read. That conversation is a later binding, and the
+  // registry alone would end up naming it if this run wrote over it.
+  test('a record whose conversation another writer replaced during the read is not overwritten', async () => {
+    const w = world();
+    const socket = ownedSocket(w);
+    await endpoint(socket.path, { ids: [THREAD] });
+    const agentId = registerWorker(w.home, w.root);
+    const state = seatRecord(BINDING, socket.path);
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state, async () => {
+      recordAgentSession(w.home, agentId, OTHER_THREAD);
+      return { kind: 'read', ids: [THREAD] };
+    });
+
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('names another thread');
+    expect(readState(w.dir).sessions.teamcli?.seats.worker?.agent_session).toBeUndefined();
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBe(OTHER_THREAD);
+    expect(deliveryOf(w).class).toBe('pull-on-turn');
+  });
+
+  // The same incarnation can record a different endpoint — the same seat relaunched under the
+  // binding this run read from. The thread just read belongs to the socket that was replaced, so
+  // binding it would advertise a queue the recorded endpoint does not serve.
+  test('an endpoint replaced under the same incarnation during the read is refused', async () => {
+    const w = world();
+    const socket = ownedSocket(w);
+    const replaced = ownedSocket(w, 'worker', 'prs_000000000000');
+    await endpoint(socket.path, { ids: [THREAD] });
+    registerWorker(w.home, w.root);
+    const state = seatRecord(BINDING, socket.path);
+    writeState(w.dir, state);
+
+    const bound = await bind(w, state, async () => {
+      updateState(w.dir, (file) => {
+        const held = file.sessions.teamcli!.seats.worker!;
+        held.codex_endpoint = { ...held.codex_endpoint!, url: replaced.url };
+      });
+      return { kind: 'read', ids: [THREAD] };
+    });
+
+    expect(bound.kind).toBe('unbound');
+    expect(bound.kind === 'unbound' ? bound.why : '').toContain('endpoint changed');
+    const after = readState(w.dir).sessions.teamcli?.seats.worker;
+    expect(after?.agent_session).toBeUndefined();
+    expect(after?.codex_endpoint?.url).toBe(replaced.url);
+    expect(findAgent(w.home, { team: teamIdOf(w.root), seat: 'worker' })?.reach.agent_session).toBeUndefined();
     expect(deliveryOf(w).class).toBe('pull-on-turn');
   });
 });

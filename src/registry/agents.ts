@@ -193,6 +193,54 @@ export function registerAgent(home: string, init: AgentInit): Agent {
   });
 }
 
+/** The record a patch produces from the record its writer read: `id`, `registered_by` and
+ *  `registered_at` never change; `updated_at` is set to now, and `dev_mode` follows the patch when
+ *  it states one, as `delegated` does (null taking an earlier mark off). */
+function patchedAgent(current: Agent, patch: AgentPatch): Agent {
+  const { signing, reach, provenance, settingsDelta, ...rest } = patch;
+  const nextProvenance: AgentProvenance = { ...current.provenance, updated_at: new Date().toISOString() };
+  if (provenance?.dev_mode === true) {
+    nextProvenance.dev_mode = true;
+    // Who wrote it under dev mode, and when: a record the owner registered and a later folded
+    // run wrote again keeps `registered_by` the owner's, so the caller that run admitted is
+    // recorded beside the mark. A state with no caller keeps the one an earlier dev write named.
+    if (provenance.dev_mode_by !== undefined) nextProvenance.dev_mode_by = provenance.dev_mode_by;
+    nextProvenance.dev_mode_at = nextProvenance.updated_at;
+  } else if (provenance?.dev_mode === false) {
+    delete nextProvenance.dev_mode;
+    delete nextProvenance.dev_mode_by;
+    delete nextProvenance.dev_mode_at;
+  }
+  if (provenance?.delegated === null) delete nextProvenance.delegated;
+  else if (provenance?.delegated !== undefined) nextProvenance.delegated = provenance.delegated;
+  const next: Agent = {
+    ...current,
+    ...definedOnly(rest),
+    id: current.id,
+    signing: { ...current.signing, ...definedOnly(signing ?? {}) },
+    reach: { ...current.reach, ...definedOnly(reach ?? {}) },
+    provenance: nextProvenance,
+  };
+  // `null` takes the orphan mark off the live record: the field is absent again, the way a
+  // record that was never orphaned reads, with its id and signed settings kept.
+  if (rest.orphaned_at === null) delete next.orphaned_at;
+  if (settingsDelta !== undefined) {
+    const settings: Record<string, YamlValue> = { ...(next.settings ?? {}) };
+    for (const [key, entry] of Object.entries(settingsDelta)) {
+      if (entry === null) delete settings[key];
+      else settings[key] = entry;
+    }
+    next.settings = settings;
+  }
+  if (next.policies !== undefined && Object.keys(next.policies).length === 0) {
+    delete next.policies;
+  }
+  if (next.settings !== undefined && Object.keys(next.settings).length === 0) {
+    delete next.settings;
+  }
+  return next;
+}
+
 /** Applies the patch and rewrites the file atomically. `id`, `registered_by` and `registered_at`
  *  never change; `updated_at` is set to now, and `dev_mode` follows the patch when it states one,
  *  as `delegated` does (null taking an earlier mark off). Throws when there is no such agent. */
@@ -202,47 +250,7 @@ export function updateAgent(home: string, id: string, patch: AgentPatch): Agent 
     const file = agentFile(home, id);
     const current = readAgentFile(file, id);
     if (!current) throw new Error(`no agent ${id} in ${agentsDir(home)}`);
-    const { signing, reach, provenance, settingsDelta, ...rest } = patch;
-    const nextProvenance: AgentProvenance = { ...current.provenance, updated_at: new Date().toISOString() };
-    if (provenance?.dev_mode === true) {
-      nextProvenance.dev_mode = true;
-      // Who wrote it under dev mode, and when: a record the owner registered and a later folded
-      // run wrote again keeps `registered_by` the owner's, so the caller that run admitted is
-      // recorded beside the mark. A state with no caller keeps the one an earlier dev write named.
-      if (provenance.dev_mode_by !== undefined) nextProvenance.dev_mode_by = provenance.dev_mode_by;
-      nextProvenance.dev_mode_at = nextProvenance.updated_at;
-    } else if (provenance?.dev_mode === false) {
-      delete nextProvenance.dev_mode;
-      delete nextProvenance.dev_mode_by;
-      delete nextProvenance.dev_mode_at;
-    }
-    if (provenance?.delegated === null) delete nextProvenance.delegated;
-    else if (provenance?.delegated !== undefined) nextProvenance.delegated = provenance.delegated;
-    const next: Agent = {
-      ...current,
-      ...definedOnly(rest),
-      id: current.id,
-      signing: { ...current.signing, ...definedOnly(signing ?? {}) },
-      reach: { ...current.reach, ...definedOnly(reach ?? {}) },
-      provenance: nextProvenance,
-    };
-    // `null` takes the orphan mark off the live record: the field is absent again, the way a
-    // record that was never orphaned reads, with its id and signed settings kept.
-    if (rest.orphaned_at === null) delete next.orphaned_at;
-    if (settingsDelta !== undefined) {
-      const settings: Record<string, YamlValue> = { ...(next.settings ?? {}) };
-      for (const [key, entry] of Object.entries(settingsDelta)) {
-        if (entry === null) delete settings[key];
-        else settings[key] = entry;
-      }
-      next.settings = settings;
-    }
-    if (next.policies !== undefined && Object.keys(next.policies).length === 0) {
-      delete next.policies;
-    }
-    if (next.settings !== undefined && Object.keys(next.settings).length === 0) {
-      delete next.settings;
-    }
+    const next = patchedAgent(current, patch);
     const problem = invalid(next);
     if (problem) throw new Error(`cannot update ${id}: ${problem}`);
     writeAgentFile(file, next);
@@ -263,6 +271,36 @@ export function recordAgentAddress(home: string, id: string, address: string | n
  *  nothing here reads herdr, and nothing here derives an id from a pane, a pid or a name. */
 export function recordAgentSession(home: string, id: string, agentSession: string | null): Agent {
   return updateAgent(home, id, { reach: { agent_session: agentSession } });
+}
+
+/** What a conditional session write did: `refused` names the reason it left the file untouched. */
+export type AgentSessionWrite =
+  | { kind: 'written'; agent: Agent }
+  | { kind: 'refused'; why: string };
+
+/** Records the conversation only if the record still passes `accept` when the write's own read
+ *  sees it, under the folder lock. A writer that has to know the record it is about to replace —
+ *  a bind that must not overwrite a conversation another writer recorded first — judges the
+ *  record as it stands then; a refusal writes nothing and changes no `updated_at`. */
+export function recordAgentSessionWhen(
+  home: string,
+  id: string,
+  agentSession: string,
+  accept: (current: Agent) => true | string,
+): AgentSessionWrite {
+  if (!isAgentId(id)) throw new Error(`"${id}" is not an agent id`);
+  return withLock(agentsDir(home), () => {
+    const file = agentFile(home, id);
+    const current = readAgentFile(file, id);
+    if (!current) throw new Error(`no agent ${id} in ${agentsDir(home)}`);
+    const verdict = accept(current);
+    if (verdict !== true) return { kind: 'refused', why: verdict };
+    const next = patchedAgent(current, { reach: { agent_session: agentSession } });
+    const problem = invalid(next);
+    if (problem) throw new Error(`cannot update ${id}: ${problem}`);
+    writeAgentFile(file, next);
+    return { kind: 'written', agent: next };
+  });
 }
 
 /** The agent that holds a seat of a team. A retired agent no longer holds it; if more than one
