@@ -312,6 +312,19 @@ export function workspaceLabel(seat: { name: string; role: string; label: string
   return `${seat.name} · ${seat.role}`;
 }
 
+/**
+ * The persona a written label names: the text before its middle dot, trimmed — the name people
+ * call the seat by, and the name the launch gives its session. A written label with no middle dot
+ * is the name whole. A seat whose label the file did not write has none: its stored label is the
+ * model and version, and its workspace title its seat name and role. Display only; the record's
+ * `nickname:` is the address and is kept equal to this word by every config write.
+ */
+export function labelPersona(seat: { label: string; labelWritten?: boolean }): string | null {
+  if (seat.labelWritten !== true) return null;
+  const name = (seat.label.split('·')[0] ?? '').trim();
+  return name === '' ? null : name;
+}
+
 /** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets
  *  none. A CLI whose launcher takes no effort setting carries the display alone. Herdr writes the
  *  status word and ` · ` in front of this text. */

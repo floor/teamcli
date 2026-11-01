@@ -63,7 +63,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
-import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
@@ -1382,9 +1382,7 @@ function seatPlan(
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root, undefined, origin),
-    sessionName: sessionDisplayName({
-      seat: seat.name,
-      nickname: seat.nickname ?? null,
+    sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),

@@ -21,6 +21,7 @@
 // earlier build printed it.
 
 import { seatOverridesOf } from '../config/apply.ts';
+import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import { ofTeam as projectOfTeam, type ProjectRecord } from '../registry/projects.ts';
@@ -158,6 +159,10 @@ export function senderDisplayName(sender: SenderIdentity, naming: SenderNaming):
  */
 export function sessionDisplayName(input: {
   seat: string;
+  /** The name the seat's written label carries, when the caller holds the seat. It stands first:
+   *  the label is the seat's own word, and a nickname a retired seat left on the record must not
+   *  name a new one. */
+  persona?: string | null;
   nickname?: string | null;
   /** The seat's team, by team id. */
   team: string | null;
@@ -165,7 +170,7 @@ export function sessionDisplayName(input: {
   teamName?: string | null;
   mode: SenderNameMode;
 }): string {
-  const name = input.nickname ?? input.seat;
+  const name = input.persona ?? input.nickname ?? input.seat;
   switch (input.mode) {
     case 'seat':
       return input.seat;
@@ -176,6 +181,28 @@ export function sessionDisplayName(input: {
     default:
       return name;
   }
+}
+
+/**
+ * The display name a seat's own session carries, from the seat the file declares: the persona its
+ * written label names (src/file/sections/seats.ts), then the record's nickname, then the seat name
+ * — the same order the roster projection and so the message header read. The label stands first
+ * so a new seat launches under its own label, never under a name a retired seat left on the
+ * record. Every launch-command writer (`up`, `add`, `restart`, `reload`) reads this one function,
+ * so the four cannot drift apart.
+ */
+export function seatSessionName(
+  seat: { name: string; nickname?: string; label: string; labelWritten?: boolean },
+  input: { team: string | null; teamName?: string | null; mode: SenderNameMode },
+): string {
+  return sessionDisplayName({
+    seat: seat.name,
+    persona: labelPersona(seat),
+    nickname: seat.nickname ?? null,
+    team: input.team,
+    ...(input.teamName !== undefined ? { teamName: input.teamName } : {}),
+    mode: input.mode,
+  });
 }
 
 /**

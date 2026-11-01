@@ -64,7 +64,7 @@ import { hasJsonFlag, refuse, writeJson } from '../output/index.ts';
 import { gateVerdict } from '../permissions/who.ts';
 import { parseVersion, profileFor, versionVerdict } from '../profiles/profile.ts';
 import { teamIdOf } from '../registry/teams.ts';
-import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { emptySession, readState, updateState, type SeatState } from '../state.ts';
 import { approvalStanding, type Standing } from '../store/store.ts';
 import { modelDiffers, seatModel, type Running } from '../status/statusline.ts';
@@ -608,9 +608,7 @@ export async function runReload(argv: string[], io: Io, sources: ReloadSources =
       rules: rulesOf(team, seat, root, undefined, rulesOriginOf(loaded.source)),
       // The same session display name a fresh `up` gives the seat: a relaunched claude session
       // reads its sender like every other surface, and a reload is how most seats get relaunched.
-      sessionName: sessionDisplayName({
-        seat: seat.name,
-        nickname: seat.nickname ?? null,
+      sessionName: seatSessionName(seat, {
         team: teamIdOf(root),
         teamName: team.project,
         mode: senderNameModeFor({
