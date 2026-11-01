@@ -30,7 +30,7 @@ import type { IdleWorkInput, IdleWorkReport, PendingGreenSlice } from '../idle_w
 import type { DaemonHealth } from '../daemon/health.ts';
 import { daemonProblemNotes, daemonReading } from '../daemon/health_display.ts';
 import { canonicalRoot } from '../daemon/routes.ts';
-import { hostedWatchCheckNotes, paneWatchCheckNotes } from '../daemon/watch_display.ts';
+import { hostedWatchCheckNotes, hostedWatchDifferences, paneWatchCheckNotes } from '../daemon/watch_display.ts';
 import { currentTeam } from '../file/current.ts';
 import { leftoverDifferences, leftoverNote } from '../file/team-config.ts';
 import { declaredModel } from '../file/model.ts';
@@ -371,6 +371,10 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     interval: inForce.interval,
   });
   const watchRoute = canonicalRoot(root) ?? root;
+  // The daemon's hosted watch for this checkout, judged once: a stopped, failed or gate-blocked
+  // watch is not enforcing anything, and it is the owner's own install that repairs it. Its
+  // lines are the difference's then, and the notes below do not say them again.
+  const hostedWatch = hostedWatchDifferences(watch);
   // The registry's own continuity per declared seat, read once: the check's process gate and
   // `compare()` must decide a restored pane the same way `up` and `status` do.
   const continuityIds = sources.home === undefined ? undefined : continuityIdsOf({
@@ -440,6 +444,9 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     ...leftoverDifferences(current.leftover),
     ...deliveryOrderDifferences(team, root, sources.home),
     ...socketSkipped.differences,
+    // The daemon's watch for this checkout: not running when the route carries one, or running
+    // with its outbound gate closed, is a difference — the watch is not enforcing anything.
+    ...hostedWatch,
     ...policyChecked.differences,
     ...modelRule.differences,
     ...protectedCheckouts(team, root, { branch: sources.branch }),
@@ -495,13 +502,15 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
     // simply not installed is the ordinary state and is said in `status`, not counted here.
     ...(sources.daemon !== undefined ? daemonProblemNotes(sources.daemon) : []),
     // A hosted watch the daemon carries, notes only: a standing-down or stopped watch, a failed
-    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing.
+    // cycle, and a blocked outbound gate are named; a watch simply cycling says nothing, and a
+    // route whose watch is already the difference above keeps only the lines it does not carry.
     ...(sources.daemon !== undefined
-      ? hostedWatchCheckNotes(
-          sources.daemon,
-          sources.now(),
-          watch.kind === 'pane' ? { route: watchRoute, live: watch.health.state === 'live' } : undefined,
-        )
+      ? hostedWatchCheckNotes(sources.daemon, sources.now(), {
+          ...(watch.kind === 'hosted' && hostedWatch.length > 0 ? { differing: watch.root } : {}),
+          ...(watch.kind === 'pane'
+            ? { ownPane: { route: watchRoute, live: watch.health.state === 'live' } }
+            : {}),
+        })
       : []),
     // A pane watch when no hosted one owns the route: live, dead, stale or — only with a daemon
     // reading to prove no hosted watch exists — missing. Notes only, like every line above.

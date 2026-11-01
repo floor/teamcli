@@ -158,6 +158,7 @@ function sourcesOf(
     alive: () => true,
     commandOf: (pid) => (pid === 4242 ? WATCH_COMMAND : null),
     startOf: (pid) => (pid === 4242 ? WATCH_START_MS : null),
+    cwdOf: () => at.root,
     screen: () => ({ kind: 'idle' }),
     screenText: () => undefined,
     status: () => 'idle',

@@ -13,7 +13,8 @@ import { runStatus, type StatusSources } from '../src/commands/status.ts';
 import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonRootState } from '../src/daemon/state.ts';
 import { daemonHealthy, daemonNotes, daemonProblemNotes, daemonReading } from '../src/daemon/health_display.ts';
-import { hostedWatchCheckNotes, hostedWatchNotes } from '../src/daemon/watch_display.ts';
+import { hostedWatchCheckNotes, hostedWatchDifferences, hostedWatchNotes } from '../src/daemon/watch_display.ts';
+import { whoOfDifference } from '../src/output/text.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
 import { workspaceLabel } from '../src/file/sections/seats.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
@@ -74,6 +75,13 @@ function watch(over: Partial<HostedWatchState> = {}): HostedWatchState {
 
 function watched(over: Partial<HostedWatchState> = {}): DaemonHealth {
   return health({ roots: [root({ watch: watch(over) })] });
+}
+
+/** A reading whose one watched route is the checkout a check scene placed, so the check's own
+ *  sitting names it: the difference is the check's own route's, never another checkout's. */
+function atWatch(at: { root: string }, over: Partial<HostedWatchState> = {}): DaemonHealth {
+  const routeRoot = realpathSync(at.root);
+  return health({ roots: [root({ root: routeRoot, watch: watch({ root: routeRoot, ...over }) })] });
 }
 
 function notRunning(): DaemonHealth {
@@ -434,8 +442,8 @@ test('a hosted endpoint that did not start is a check note, and machine health a
   expect(io.out).toContain('no differences');
 });
 
-const BLOCKED =
-  'watch: outbound effects blocked (no verified admitted sender is injected); it is not enforcing anything';
+const BLOCKED = 'watch: outbound effects blocked; it is not enforcing anything';
+const WATCH_REPAIR = 'team daemon install with the same roots and --watch';
 
 test('a hosted watch is silent when the record carries none, and says its own phase when it does', () => {
   const RUNNING = 'watch: running in the daemon since 2026-10-19T08:00:00.000Z, version 0.5.4';
@@ -525,6 +533,8 @@ test('check hears a running watch only when its last cycle failed', () => {
 });
 
 test('check names a required stopped or failed watch, and stays quiet for one never required', () => {
+  // A watched route the check's own sitting does not name — another checkout beside this one —
+  // keeps today's note: only this team's watch is this check's difference.
   expect(hostedWatchCheckNotes(watched({ phase: 'stopped', why: 'the daemon is closing' }), NOW)).toEqual([
     'watch: stopped in the daemon (the daemon is closing)',
   ]);
@@ -534,6 +544,46 @@ test('check names a required stopped or failed watch, and stays quiet for one ne
   expect(
     hostedWatchCheckNotes(watched({ phase: 'stopped', required: false, why: 'the daemon is closing' }), NOW),
   ).toEqual([]);
+});
+
+test('a stopped, a failed and a blocked watch are the check\'s difference, with its repair', () => {
+  const row = (over: Partial<HostedWatchState>) =>
+    hostedWatchDifferences({ kind: 'hosted', root: '/work/acme', watch: watch(over) });
+  // A pane watch, a healthy cycle, a single failed cycle beside a running one, the transient
+  // phases, a standing-down watch and one never required are not differences: only a watch that
+  // is not enforcing anything is.
+  expect(hostedWatchDifferences({ kind: 'pane', health: { state: 'missing' } })).toEqual([]);
+  expect(row({})).toEqual([]);
+  expect(row({ lastCycleOutcome: 'failed', failures: 1 })).toEqual([]);
+  expect(row({ phase: 'starting', lastCycleAt: null })).toEqual([]);
+  expect(row({ phase: 'stopping' })).toEqual([]);
+  expect(row({ phase: 'standby', why: 'a pane watch holds the session "acme"' })).toEqual([]);
+  expect(row({ phase: 'failed', required: false })).toEqual([]);
+  const failed = row({ phase: 'failed', why: 'the first pass threw' });
+  expect(failed).toEqual([{ what: 'watch: failed in the daemon (the first pass threw)', repair: WATCH_REPAIR }]);
+  // The repair is the owner's own command, derived from the gate map rather than a word here.
+  expect(whoOfDifference(failed[0]!)).toBe('the owner');
+  expect(row({ phase: 'stopped', why: 'the daemon is closing' })).toEqual([
+    { what: 'watch: stopped in the daemon (the daemon is closing)', repair: WATCH_REPAIR },
+  ]);
+  expect(row({ effects: 'blocked' })).toEqual([{ what: BLOCKED, repair: WATCH_REPAIR }]);
+});
+
+test('a difference is not said twice as a note, and another route\'s watch keeps its note', () => {
+  const failed = watched({ phase: 'failed', why: 'the first pass threw' });
+  // The route this check's difference names is not repeated as a note...
+  expect(hostedWatchCheckNotes(failed, NOW, { differing: '/work/acme' })).toEqual([]);
+  expect(hostedWatchCheckNotes(watched({ effects: 'blocked' }), NOW, { differing: '/work/acme' })).toEqual([]);
+  // ...while a route the difference does not name keeps its line.
+  expect(hostedWatchCheckNotes(failed, NOW, { differing: '/work/beta' })).toEqual([
+    'watch: failed in the daemon (the first pass threw)',
+  ]);
+  // The failed cycle beside a blocked gate is still the note its own line carries.
+  expect(
+    hostedWatchCheckNotes(watched({ lastCycleOutcome: 'failed', failures: 1, effects: 'blocked' }), NOW, {
+      differing: '/work/acme',
+    }),
+  ).toEqual(['watch: the last cycle failed 3m ago']);
 });
 
 test('check says standing by and a blocked gate as quiet honest notes', () => {
@@ -572,23 +622,53 @@ test('status prints a watched route beside the daemon line, and the document car
   );
 });
 
-test('a failed required watch is a check note, and a healthy one leaves no trace', () => {
+test('a failed required watch is a check difference with its repair, and a healthy one leaves no trace', () => {
   const at = place();
   const io = testIo(at.root, { kind: 'owner' });
   const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
     ...checkSources(at, undefined),
-    daemon: watched({ phase: 'failed', why: 'the first pass threw' }),
+    daemon: atWatch(at, { phase: 'failed', why: 'the first pass threw' }),
   });
-  expect(code).toBe(0);
-  expect(io.out).toContain('watch: failed in the daemon (the first pass threw)');
-  expect(io.out).toContain('no differences');
+  expect(code).toBe(1);
+  expect(io.out).toContain('difference: watch: failed in the daemon (the first pass threw)');
+  expect(io.out).toContain(`  repair: ${WATCH_REPAIR}`);
+  expect(io.out).toContain('  who: the owner');
+  expect(io.out).not.toContain('no differences');
+  // The phase line stands once, in the difference: the note does not say it again.
+  expect(io.out.split('watch: failed in the daemon (the first pass threw)')).toHaveLength(2);
 
   const quiet = testIo(at.root, { kind: 'owner' });
   expect(
     runTeamCheck({ file: '.agents/team.yaml' }, quiet, {
       ...checkSources(at, undefined),
-      daemon: watched(),
+      daemon: atWatch(at),
     }),
   ).toBe(0);
   expect(quiet.out).not.toContain('watch:');
+});
+
+test('a blocked outbound gate is a check difference with its repair', () => {
+  const at = place();
+  const io = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    ...checkSources(at, undefined),
+    daemon: atWatch(at, { effects: 'blocked' }),
+  });
+  expect(code).toBe(1);
+  expect(io.out).toContain(`difference: ${BLOCKED}`);
+  expect(io.out).toContain(`  repair: ${WATCH_REPAIR}`);
+  expect(io.out).toContain('  who: the owner');
+  expect(io.out).not.toContain('no differences');
+});
+
+test('a running watch whose last cycle failed is a note and changes no exit', () => {
+  const at = place();
+  const io = testIo(at.root, { kind: 'owner' });
+  const code = runTeamCheck({ file: '.agents/team.yaml' }, io, {
+    ...checkSources(at, undefined),
+    daemon: atWatch(at, { lastCycleOutcome: 'failed', failures: 1 }),
+  });
+  expect(code).toBe(0);
+  expect(io.out).toContain('watch: the last cycle failed 3m ago');
+  expect(io.out).toContain('no differences');
 });

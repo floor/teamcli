@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { paneProcesses, workspaceList, workspacePanes, type PaneProcesses } from '../herdr.ts';
 import { emptySession, readState, updateState } from '../state.ts';
 import { isWatchEpoch } from './epoch.ts';
+import type { WorkingFolderReader } from './process-adapter.ts';
 
 export type WatchPlace = { pane: string; workspace: string };
 
@@ -204,16 +205,61 @@ export function watchCommandLine(
   }
   if (!entries.includes(entry)) return false;
   if (words[place.watchAt] !== 'watch') return false;
-  let named: string | undefined;
-  for (let i = place.watchAt + 1; i < words.length; i++) {
+  const named = valuedFlag(words, 'session', place.watchAt + 1);
+  return named === undefined ? session === 'default' : named === session;
+}
+
+/** The value a watch line gives a valued option, read the way the CLI's parser reads it: the last
+ *  occurrence wins, and `--name=value` spells the same option. Undefined when the line names none
+ *  (or names one with no value, which the parser refuses). */
+function valuedFlag(words: readonly string[], name: string, from: number): string | undefined {
+  let value: string | undefined;
+  for (let i = from; i < words.length; i++) {
     const word = words[i]!;
-    if (word === '--session') {
-      named = words[++i];
-    } else if (word.startsWith('--session=')) {
-      named = word.slice('--session='.length);
+    if (word === `--${name}`) {
+      const next = words[i + 1];
+      if (next !== undefined) value = next;
+      i++;
+    } else if (word.startsWith(`--${name}=`)) {
+      value = word.slice(name.length + 3);
     }
   }
-  return named === undefined ? session === 'default' : named === session;
+  return value;
+}
+
+/** The team file a watch command line names with `--file`, exactly as written — a relative path is
+ *  resolved from the folder that process started in, as its own read would resolve it — or
+ *  undefined when it names none. */
+export function watchCommandFile(command: string): string | undefined {
+  const words = shellWords(command);
+  const place = entryPosition(words);
+  if (place === null) return undefined;
+  return valuedFlag(words, 'file', place.watchAt + 1);
+}
+
+/** The team a watch serves, as the run that would stop it reads the same team: the file it read,
+ *  resolved to its real path (null when the file is not on disk, as a registry record's is), and
+ *  the folders that file is read from — the folder holding it and, for the `.agents` layout, the
+ *  project folder above. A launch that names no file reads the team from one of those folders, so
+ *  its process's working folder is its side of the identity. */
+export type WatchLaunch = { file: string | null; dirs: string[] };
+
+function realOrNull(path: string): string | null {
+  try {
+    return realpathSync(path);
+  } catch {
+    return null;
+  }
+}
+
+export function watchLaunchOf(path: string | undefined, dir: string): WatchLaunch {
+  const folder = realOrNull(dir);
+  const dirs = folder === null ? [resolve(dir)] : [folder];
+  if (folder !== null && basename(folder) === '.agents') {
+    const above = realOrNull(dirname(folder));
+    if (above !== null) dirs.push(above);
+  }
+  return { file: path === undefined ? null : realOrNull(path), dirs };
 }
 
 /** The command line of the process at `pid`, or null when it is gone or cannot be read. */
@@ -246,14 +292,25 @@ export function processStartOf(pid: number): number | null {
   }
 }
 
+/** The file a watch line names, resolved the way that process's own read resolves it: an absolute
+ *  path as itself, a relative one from the folder the process started in. Null when it resolves
+ *  to nothing readable. */
+function namedWatchFile(named: string, cwd: string | null): string | null {
+  const path = isAbsolute(named) ? named : cwd === null ? null : resolve(cwd, named);
+  return path === null ? null : realOrNull(path);
+}
+
 /** What `team down` may do with the watch the state records. A record with a pane is `up`'s to
  *  verify, a record fenced by the session's epoch is the session host's own process, and a pid
  *  that is no longer alive has nothing to stop: all three are `nothing`. A pane-less, live pid is
  *  `proven` only under the full ownership proof: the live process's command line proves this
- *  install's own CLI entry running this team's `team watch` for this session, and its start
- *  instant matches the one the watch recorded. A pid alone is never proof — the OS can hand it
- *  to an unrelated process after the watch exited — so anything less is `unproven` and is never
- *  signalled. */
+ *  install's own CLI entry running this team's `team watch` for this session, names this team's
+ *  file when it names one (a relative path read from the folder the process started in), and —
+ *  when it names no file, so it read the team from its working folder — started in a folder this
+ *  team's file is read from; and its start instant matches the one the watch recorded. A pid alone
+ *  is never proof — the OS can hand it to an unrelated process after the watch exited, and another
+ *  team's watch sharing the session name is the same collision with a matching command line — so
+ *  anything less is `unproven` and is never signalled. */
 export type WatchStopRead =
   | { kind: 'nothing' }
   | { kind: 'proven'; pid: number }
@@ -266,7 +323,12 @@ export function watchStopRead(
     alive(pid: number): boolean;
     commandOf(pid: number): string | null;
     startOf(pid: number): number | null;
+    /** The process's working folder; null when it cannot be read. Read only for a line that
+     *  names no team file, where it is the launch's side of the identity. Read through the
+     *  process adapter (`process-adapter.ts`), never by this module. */
+    cwdOf?: WorkingFolderReader;
   },
+  launch: WatchLaunch,
 ): WatchStopRead {
   if (watch === undefined || watch.pid === undefined || watch.pane !== undefined) return { kind: 'nothing' };
   if (isWatchEpoch(watch.epoch)) return { kind: 'nothing' };
@@ -278,6 +340,21 @@ export function watchStopRead(
   }
   if (!watchCommandLine(command, session)) {
     return { kind: 'unproven', pid, why: `pid ${pid} is not running this team's watch for session ${session}` };
+  }
+  const named = watchCommandFile(command);
+  if (named !== undefined) {
+    if (launch.file === null || namedWatchFile(named, proof.cwdOf?.(pid) ?? null) !== launch.file) {
+      return { kind: 'unproven', pid, why: `pid ${pid} runs a watch for another team file` };
+    }
+  } else {
+    const cwd = proof.cwdOf?.(pid) ?? null;
+    const here = cwd === null ? null : realOrNull(cwd);
+    if (here === null) {
+      return { kind: 'unproven', pid, why: `pid ${pid}'s working folder cannot be read` };
+    }
+    if (!launch.dirs.includes(here)) {
+      return { kind: 'unproven', pid, why: `pid ${pid} is not a watch launched from this team's folder` };
+    }
   }
   if (watch.started_at === undefined) {
     return { kind: 'unproven', pid, why: `pid ${pid} has no recorded start instant to match` };

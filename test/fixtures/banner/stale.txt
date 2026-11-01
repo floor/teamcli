@@ -1,0 +1,12 @@
+ ▐▛███▛█   Claude Code v2.1.289
+▝▜██████▀  glm-5.2 · API Usage Billing
+ ▝▝   ▝▝   /w/acme
+
+ ▐▛███▛█   Claude Code v2.1.291
+▝▜██████▀  glm-5.3 · API Usage Billing
+ ▝▝   ▝▝   /w/acme
+
+❯
+────────────────────────────────────────
+  main · …/acme · Opus 4.6 · S: $1.2 · W: 12%
+  ⏵⏵ bypass permissions on

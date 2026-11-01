@@ -2,7 +2,7 @@
 // state file in a real team root, read through `readState` under the state lock, because the
 // verifier's job is to judge exactly what the session records — not a snapshot a caller made up.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LOCK_FILE, STATE_FILE, withLock } from '../src/state.ts';
@@ -11,6 +11,7 @@ import {
   WATCH_AUTHORITY_FUTURE_SKEW_MS,
   WATCH_AUTHORITY_MAX_AGE_MS,
 } from '../src/watch/epoch.ts';
+import { intoRegistry, underRegistry } from './helpers/registry-team.ts';
 
 const EXAMPLE = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
 const SESSION = 'acme-web';
@@ -258,5 +259,51 @@ describe('the watch actor verifier', () => {
     if (!verdict.ok) return;
     expect(verdict.actor).toEqual({ kind: 'watch', session: SESSION });
     expect(verdict.authority.pane).toBeUndefined();
+  });
+
+  test('admits a registry-only team by the identity its root resolves to, with no team file', async () => {
+    const { root } = world(current());
+    const home = mkdtempSync(join(tmpdir(), 'watch-authority-home-'));
+    roots.push(home);
+    intoRegistry(root, home);
+    const file = join(root, '.agents', 'team.yaml');
+    if (existsSync(file)) rmSync(file);
+    // The definition moved to the registry and the conventional file retired; the binding is
+    // the loader's resolved identity, so no file has to exist for the effect to be admitted.
+    // The suite preload reads the file source, so this scene says it runs on a registry machine.
+    const verdict = await underRegistry(() => ask(root, { home }));
+    expect(verdict.ok).toBe(true);
+    if (!verdict.ok) return;
+    expect(verdict.authority.file).toBe(join(realpathSync(join(root, '.agents')), 'team.yaml'));
+  });
+
+  test('registry-only identities keep roots and file names apart', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'watch-authority-home-'));
+    roots.push(home);
+    const first = world(current());
+    intoRegistry(first.root, home);
+    if (existsSync(first.file)) rmSync(first.file);
+    const second = world(current());
+    intoRegistry(second.root, home);
+    if (existsSync(second.file)) rmSync(second.file);
+
+    const seed = (root: string, watchdogFile: string): void => {
+      writeFileSync(join(root, '.agents', STATE_FILE), `${JSON.stringify({
+        format: 1,
+        sessions: { [SESSION]: { seats: {}, worktrees: {}, watch: current(), watchdog: { file: watchdogFile } } },
+      }, null, 2)}\n`);
+    };
+    // Another registry-only root's identity is not this root's.
+    seed(second.root, first.file);
+    expect(await underRegistry(() => ask(second.root, { home }))).toEqual({
+      ok: false,
+      why: 'the recorded watch file is not this team file',
+    });
+    // The same missing folder with another name is another identity, not the same root.
+    seed(first.root, join(first.root, '.agents', 'other.yaml'));
+    expect(await underRegistry(() => ask(first.root, { home }))).toEqual({
+      ok: false,
+      why: 'the recorded watch file is not this team file',
+    });
   });
 });
