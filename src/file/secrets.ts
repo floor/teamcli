@@ -17,20 +17,49 @@ export function findSecrets(root: YamlNode, fs: FsReader = defaultFs): { refused
   const warned: Problem[] = [];
   walk(root, (value, line) => {
     for (const word of value.split(/[\s"'=,;]+/)) {
-      if (KEY_PREFIXES.some((prefix) => word.startsWith(prefix) && word.length >= prefix.length + 16)) {
+      if (isKeyShaped(word)) {
         refused.push({ line, message: 'a value shaped like a key or token: a team file never holds a credential' });
         return;
       }
     }
     if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
       refused.push({ line, message: 'a private key: a team file never holds a credential' });
-    } else if (/[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i.test(value)) {
+    } else if (URL_CREDENTIALS.test(value)) {
       refused.push({ line, message: 'a URL with credentials: a team file never holds a credential' });
     } else if (value.split(/\s+/).some((word) => looksRandom(word, fs))) {
       warned.push({ line, message: 'a long random-looking value: check it is not a credential' });
     }
   });
   return { refused, warned };
+}
+
+const URL_CREDENTIALS = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i;
+
+function isKeyShaped(word: string): boolean {
+  return KEY_PREFIXES.some((prefix) => word.startsWith(prefix) && word.length >= prefix.length + 16);
+}
+
+/**
+ * The same judgement `findSecrets` makes, applied to a line of a seat's screen: every word shaped
+ * like a key, every private-key header, every URL's userinfo and every random-looking word becomes
+ * `[masked]`. One source of truth for both callers — a value the team-file check refuses or warns
+ * about is a value a peek never prints. The randomness rule is shared as it is, including its
+ * limits: `looksRandom` measures the entropy of the characters present, so a hex commit id cannot
+ * clear its threshold and a UUID usually does not either.
+ */
+export function maskSecretsLine(line: string, fs: FsReader = defaultFs): string {
+  let masked = line.replace(URL_CREDENTIALS, (match) => match.replace(/[^\s/:@]+:[^\s/@]+@$/, '[masked]@'));
+  masked = masked.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, '[masked]');
+  masked = replaceWords(masked, (word) => isKeyShaped(word));
+  masked = replaceWords(masked, (word) => looksRandom(word, fs));
+  return masked;
+}
+
+/** Replaces the words `shaped` accepts, keeping each separator exactly as it was. */
+function replaceWords(line: string, shaped: (word: string) => boolean): string {
+  return line.replace(/(^|[\s"'=,;])([^\s"'=,;]+)/g, (whole, separator: string, word: string) =>
+    shaped(word) ? `${separator}[masked]` : whole,
+  );
 }
 
 function walk(node: YamlNode, visit: (value: string, line: number) => void): void {

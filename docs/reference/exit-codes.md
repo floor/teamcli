@@ -432,6 +432,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `pause.file` | `pause` | 2 | the team file can't be read | `team pause` |
 | `pause.invocation` | `pause` | 2 | the invocation can't be read | `team pause --all --json` |
 | `pause.team` | `pause` | 2 | the name is neither a declared seat nor a registered team, or names more than one | `team pause other` |
+| `peek.shown` | `peek` | 0 | the seat's last lines were printed, masked where a line looks like a credential | `team peek lead` |
+| `peek.owner-pane` | `peek` | 1 | the named seat is a person's pane, and the owner's pane is never read | `team peek desk` |
+| `peek.unknown` | `peek` | 1 | the team declares no seat by that name | `team peek ghost` |
+| `peek.file` | `peek` | 2 | the team file can't be read | `team peek lead` |
+| `peek.invocation` | `peek` | 2 | the invocation can't be read | `team peek lead --lines 0` |
+| `peek.no-screen` | `peek` | 2 | no screen is readable: no pane is recorded, no reader stands, or the read failed | `team peek lead` |
+| `peek.not-yours` | `peek` | 2 | the caller is not the owner or a seat the read gate places on its recorded pane | `team peek lead` |
 | `plan.none` | `plan` | 0 | nothing is takeable | `team plan` |
 | `plan.shown` | `plan` | 0 | the takeable queue was printed | `team plan` |
 | `plan.broker` | `plan` | 1 | no broker is running, or its answer was not one this build knows | `team plan` |
