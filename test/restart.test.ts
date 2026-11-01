@@ -1661,8 +1661,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
   test('a restored Claude Code wrapper resumes inside its quoted script and says so before the close', async () => {
     // The launch line runs the CLI inside a quoted script: a word after the closing quote never
-    // reaches `claude`, so the resume goes inside it, and the pre-close line quotes the line the
-    // run launches rather than the bare declaration.
+    // reaches `claude`, so the resume and the profile's options go inside it, and the pre-close
+    // line quotes the line the run launches rather than the bare declaration.
     const launch = 'zsh -lc "claude --model claude-opus-5-5"';
     const worker = `  - role: implementer
     name: worker
@@ -1685,11 +1685,17 @@ describe('team restart resumes the seat\'s own recorded session', () => {
 
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
     const resumed = 'zsh -lc "claude --model claude-opus-5-5 --resume ses_keep"';
-    expect(run.did.runs.join('\n')).toContain(`AGENT_UNATTENDED=1 ${resumed}`);
+    const settings = join(fixture.root, '.agents/hooks/acme/worker.json');
+    const ran = run.did.runs.find((line) => line.includes('zsh -lc'));
+    expect(ran).toBeDefined();
+    // The resume and every profile option sit inside the quoted script, where the CLI reads
+    // them; the settings file is the last word before the closing quote.
+    expect(ran?.startsWith('AGENT_UNATTENDED=1 zsh -lc "claude --model claude-opus-5-5 --resume ses_keep --dangerously-skip-permissions --name worker --append-system-prompt ')).toBe(true);
+    expect(ran?.endsWith(`--settings ${settings}"`)).toBe(true);
     expect(io.out).toContain(
       `worker: context: workspace close ends the pane; relaunch runs "${resumed}" in a new workspace and resumes the recorded conversation ses_keep\n`,
     );
-    // The recipe the launch records is the line it ran.
+    // The recipe the launch records is the declared line, with the resume it carried.
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.launch).toBe(resumed);
   });
 
@@ -1757,6 +1763,64 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(argv.slice(0, 7)).toEqual([
       '--model',
       'kimi-k2',
+      '--resume',
+      'ses_keep',
+      '--dangerously-skip-permissions',
+      '--name',
+      'worker',
+    ]);
+    expect(argv[7]).toBe('--append-system-prompt');
+    expect(argv[8]).toContain('Rules for this session');
+    expect(argv[9]).toBe('--settings');
+    expect(argv[10]).toMatch(/worker\.json$/);
+  });
+
+  test('a quoted script hands the profile options to the CLI as arguments', async () => {
+    // The field's shape: a launch line whose last word is a quoted script running the CLI. A word
+    // after the closing quote never reaches the CLI, so the profile's options must go inside it.
+    // Running the planned line with a stub CLI on PATH proves which words the CLI is handed — the
+    // containment check on the line cannot see the difference. `-ec`, not `-c`: a bare `-c` token
+    // reads as Claude Code's `--continue`, and the line would be refused as naming a conversation.
+    const launch = '/bin/sh -ec "claude --model claude-opus-5-5"';
+    const worker = `  - role: implementer
+    name: worker
+    label: worker
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5`;
+    const { fixture, run } = seeded({
+      registry: 'ses_keep',
+      state: 'ses_keep',
+      workerSession: 'ses_keep',
+      launched: true,
+      launch,
+      yaml: TEAM_YAML.replace(worker, worker.replace('launch: claude --model claude-opus-5-5', `launch: ${launch}`)),
+    });
+    run.sources.upLaunch.processInfo = () => ({ shell: 101, foreground: [201] });
+
+    const bin = join(fixture.base, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const argvFile = join(fixture.base, 'argv.txt');
+    writeFileSync(join(bin, 'claude'), `#!/bin/sh\nprintf '%s\\0' "$@" > '${argvFile}'\n`, { mode: 0o755 });
+
+    const io = testIo(fixture.root, { kind: 'owner' });
+    expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
+    const command = run.did.runs.find((line) => line.includes('/bin/sh -ec'));
+    expect(command).toBeDefined();
+    execFileSync('/bin/sh', ['-c', command ?? ''], {
+      cwd: fixture.root,
+      env: { PATH: `${bin}:${process.env.PATH ?? ''}`, HOME: fixture.home },
+    });
+
+    // Every word the CLI receives, in order: the line's own model, the carried resume, then the
+    // profile's unattended, naming, rules and hook options — none of them after the closing quote.
+    const argv = readFileSync(argvFile, 'utf8').split('\0').filter((word) => word !== '');
+    expect(argv).toHaveLength(11);
+    expect(argv.slice(0, 7)).toEqual([
+      '--model',
+      'claude-opus-5-5',
       '--resume',
       'ses_keep',
       '--dangerously-skip-permissions',

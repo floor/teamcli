@@ -274,6 +274,9 @@ function unattendedOptions(profile: Profile, launch: string): string[] {
  * them at launch, the rules. A CLI that loads a per-launch settings file also
  * gets that file, named at the end, unless its launch line already names one.
  * A launch with a place adds the profile's measured team-inbox arguments.
+ * A launch line whose last word is a quoted script that runs the CLI takes the
+ * options inside that script, where the CLI reads them, exactly as a carried
+ * resume and a minted session id do.
  */
 export function launchCommand(
   profile: Profile,
@@ -313,7 +316,12 @@ export function launchCommand(
     if (profile.rulesPrompt !== '') options.push(profile.rulesPrompt);
     options.push(rulesLine);
   }
-  return ['AGENT_UNATTENDED=1', launch.trim(), ...options.map(shellQuote)].join(' ');
+  const addition = options.map(shellQuote).join(' ');
+  // The options pass through appendOnLaunchLine like a resume does: a wrapper that forwards its
+  // arguments takes them at the end of the line, and a quoted script that runs the CLI takes
+  // them inside its quotes, no longer after them where the CLI never reads.
+  const line = addition === '' ? launch.trim() : appendOnLaunchLine(launch.trim(), addition, profile.binary);
+  return ['AGENT_UNATTENDED=1', line].join(' ');
 }
 
 /** True when the CLI loads a settings file named on its launch line, and that file may install
@@ -445,7 +453,10 @@ export function withResume(cli: string, command: string, sessionId: string): str
  * Words appended to a launch line so a wrapper still forwards them. A wrapper that execs
  * `"$@"` (`zsh …/as-floor.sh <binary> …`) takes the words at the end of the line. A trailing
  * quoted script that itself runs `<binary>` (`zsh -lc "grok --model …"`) would drop words
- * written after the quotes: those words go inside that script, still last.
+ * written after the quotes: those words go inside that script, still last. A double-quoted
+ * script still has its text read by the wrapping shell, so the words are escaped there — `\`,
+ * `"`, `$` and a backtick stay as written for the script. A single-quoted script cannot hold
+ * a single quote, and words that do are appended after the line, as before.
  */
 function appendOnLaunchLine(command: string, addition: string, binary: string): string {
   const trimmed = command.trimEnd();
@@ -456,9 +467,12 @@ function appendOnLaunchLine(command: string, addition: string, binary: string): 
       const before = open === 0 ? '' : trimmed[open - 1];
       const inner = trimmed.slice(open + 1, -1);
       const word = new RegExp(`(^|\\s)${binary}(\\s|$)`);
-      if ((open === 0 || /\s/.test(before ?? '')) && !inner.includes(quote) && word.test(inner)) {
+      const escaped = quote === '"'
+        ? addition.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')
+        : (addition.includes("'") ? null : addition);
+      if (escaped !== null && (open === 0 || /\s/.test(before ?? '')) && !inner.includes(quote) && word.test(inner)) {
         const gap = inner.length === 0 || /\s$/.test(inner) ? '' : ' ';
-        return `${trimmed.slice(0, open + 1)}${inner}${gap}${addition}${quote}`;
+        return `${trimmed.slice(0, open + 1)}${inner}${gap}${escaped}${quote}`;
       }
     }
   }
