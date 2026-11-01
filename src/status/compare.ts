@@ -15,7 +15,7 @@ import {
   type InboundDeclaration,
 } from '../send/inbound.ts';
 import { seatAgent } from '../send/resolve.ts';
-import { findTeam, teamIdOf, type TeamRecord } from '../registry/teams.ts';
+import { findTeams, teamIdOf, type TeamRecord } from '../registry/teams.ts';
 import { herdrUnreliable } from '../profiles/index.ts';
 import type { SeatState, SessionState } from '../state.ts';
 import { pluralCount, type DifferenceWho } from '../output/text.ts';
@@ -187,12 +187,17 @@ export function paneShowsSeat(
 
 /**
  * The team's registry record, read the way a plain-seat send reads it (`resolveTarget` in
- * src/send/resolve.ts): by the id its root keys, then by project or session. Null when the store
- * holds none — the send then takes the file's own seat, with no recorded address.
+ * src/send/resolve.ts): by the id its root keys, then by its own name, then by its session; a
+ * class two records answer stops the walk rather than falling through to another spelling.
+ * Null when the store holds none — the send then takes the file's own seat, with no recorded
+ * address.
  */
 export function registryTeamOf(home: string, root: string, team: TeamFile): TeamRecord | null {
-  const id = teamIdOf(root);
-  return findTeam(home, id) ?? findTeam(home, team.project) ?? findTeam(home, team.session);
+  for (const key of [teamIdOf(root), team.project, team.session]) {
+    const found = findTeams(home, key);
+    if (found.length > 0) return found.length === 1 ? (found[0] as TeamRecord) : null;
+  }
+  return null;
 }
 
 /**

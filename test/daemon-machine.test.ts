@@ -962,7 +962,7 @@ describe('team daemon status, install, uninstall and run', () => {
     expect(seen[0]?.presenceCodexEndpoint).toBeUndefined();
     const binding = mintPresenceBinding();
     const dir = join(root, '.agents');
-    const url = `unix:///private/tmp/launch/${binding}.sock`;
+    const url = `unix://${join(realpathSync(tmpdir()), 'launch')}/${binding}.sock`;
     const located = (current: string): string => `${JSON.stringify({
       format: 1,
       sessions: {

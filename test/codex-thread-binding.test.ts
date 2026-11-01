@@ -27,8 +27,7 @@
 //     written back.
 // 20. The same clear on the named path is kept too.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { readLoadedCodexThreads, type CodexLoadedThreadsRead } from '../src/daemon/presence/codex-source.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
@@ -38,6 +37,7 @@ import { findAgent, recordAgentSession, registerAgent } from '../src/registry/ag
 import { recordedSeatSession } from '../src/registry/resume.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { emptySession, readState, updateState, type SeatState } from '../src/state.ts';
+import { shortSocketBase } from './helpers.ts';
 import { startFakeThreadEndpoint, type FakeThreadEndpoint } from './helpers/fake-codex-thread-endpoint.ts';
 
 const THREAD = '01a1945b-5982-7751-9476-6a2ef1c45d6d';
@@ -58,11 +58,11 @@ function world(): {
   dir: string;
   socketPath: string;
 } {
-  // The host's own temp directory, never a fixed one, with short relative names (`s` for the
+  // The short socket base, not the runtime temp folder, with short relative names (`s` for the
   // state folder, `tk` and `w` for the fixture's session and seat) so the owned endpoint path this
   // build computes (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path
-  // limit under the longer temp parents as well.
-  const base = mkdtempSync(join(tmpdir(), 'tc-'));
+  // limit; the scene below measures it, because a deep temp parent can push it over.
+  const base = realpathSync(mkdtempSync(join(shortSocketBase(), 'tc-')));
   const root = join(base, 'root');
   const home = join(base, 'home');
   const dir = join(base, 's');
@@ -175,6 +175,17 @@ function deliveryOf(w: ReturnType<typeof world>) {
     state: readState(w.dir).sessions.tk?.seats.w,
   });
 }
+
+describe('the fixture temp folder', () => {
+  // Measured, not assumed: the base comes from the short socket base, and the endpoint a managed
+  // launch owns for this seat is a unix socket path the build refuses over 100 bytes.
+  test('keeps the owned endpoint inside the socket path limit', () => {
+    const w = world();
+    const path = join(w.dir, 'run', 'tk', 'w', `${BINDING}.sock`);
+    expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
+    expect(codexEndpointSocket(w.dir, 'tk', 'w', BINDING)).not.toBeNull();
+  });
+});
 
 describe('readLoadedCodexThreads', () => {
   test('asks initialize, initialized and thread/loaded/list, and answers the loaded ids', async () => {

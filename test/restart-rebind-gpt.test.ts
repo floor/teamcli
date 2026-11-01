@@ -1,10 +1,10 @@
 // Independent binding scenes: the endpoint read is injected and explicitly suspended while a
 // second writer changes the records. All folders and records are synthetic; no runtime or pane
 // is opened. Refusal preserves the second writer's complete bytes, including provenance.
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { shortSocketBase } from './helpers.ts';
 import { bindCodexSeatThread } from '../src/launch/codex-thread-binding.ts';
 import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { getAgent, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
@@ -24,7 +24,10 @@ const made: string[] = [];
 afterEach(() => { for (const path of made.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 function world(named?: string, recorded: string | null = OLD) {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'rb-')));
+  // The fixture sits under the short socket base so the endpoint path it hands the launch
+  // (`<dir>/run/<session>/<seat>/<binding>.sock`) stays inside the socket path limit; the runtime
+  // temp folder is deep enough on some hosts to push that path over it.
+  const base = realpathSync(mkdtempSync(join(shortSocketBase(), 'rb-')));
   made.push(base);
   const root = join(base, 'r');
   const dir = join(root, '.agents');
@@ -78,6 +81,17 @@ async function race(w: World, ids: string[], change: () => void) {
     return { result: await running, afterWriter, reads };
   } finally { release({ kind: 'unavailable', why: 'fixture cleanup' }); }
 }
+
+describe('the fixture temp folder', () => {
+  // Measured, not assumed: the base comes from the short socket base, and the endpoint the scene
+  // records for its seat is a unix socket path the build refuses over 100 bytes.
+  test('keeps the recorded endpoint inside the socket path limit', () => {
+    const w = world();
+    const path = join(w.dir, 'run', SESSION, SEAT.name, `${BINDING}.sock`);
+    expect(Buffer.byteLength(path)).toBeLessThanOrEqual(100);
+    expect(codexEndpointSocket(w.dir, SESSION, SEAT.name, BINDING)).not.toBeNull();
+  });
+});
 
 for (const named of [false, true]) {
   for (const later of [null, NEXT]) {

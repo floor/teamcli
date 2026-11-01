@@ -17,6 +17,7 @@ import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runRegister, type RegisterSources } from '../src/commands/register.ts';
 import type { DoctorSources } from '../src/commands/doctor.ts';
@@ -127,7 +128,7 @@ function codexTeamYaml(fixture: Fixture): string {
 }
 
 function makeFixture(yamlOf: (fixture: Fixture) => string = teamYaml): Fixture {
-  const base = realpathSync(mkdtempSync('/private/tmp/team-a9t2-'));
+  const base = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'a9t2-')));
   made.push(base);
   const home = join(base, 'home');
   // The placement gate reads the lobby's own mode: the fixture's lobby is the private one.
