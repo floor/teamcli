@@ -1,16 +1,18 @@
 // Synthetic scenes for the install's refresh safety net: an injected runner stands in for the
-// system service manager, so nothing here runs a platform command and no machine daemon is
+// system's service manager, so nothing here runs a platform command and no machine daemon is
 // touched. The scenes prove what a failed refresh must never leave: the old daemon is stopped,
 // the new load is offered again while the manager refuses (the earlier stop may still be
 // finishing), and a load that still fails puts the previous unit back and starts its daemon
 // again — or says plainly that no daemon was started. Restoring the unit is not enough when the
 // refresh replaced the entry in place: the earlier program must come back with it, and a
 // rollback is called `restored` only after the daemon that started answers the health probe,
-// because a load the manager accepted is registration, not proof that a program runs. The
-// command scenes prove the failure exits non-zero under its own contract row, and that a failure
-// leaving no daemon running names the recorded rerun command (its roots and opt-ins) and where a
-// kept unit is — the same command in the JSON `repair` — so a rollback that fails is actionable,
-// not just reported.
+// because a load the manager accepted is registration, not proof that a program runs. A load the
+// manager accepts whose daemon never answers is taken back out by the adapter's own undo — the
+// earlier unit restored for a refresh, the new unit removed for a fresh install — so an install
+// reports success only after the daemon it started answers. The command scenes prove the failure
+// exits non-zero under its own contract row, and that a failure leaving no daemon running names
+// the recorded rerun command (its roots and opt-ins) and where a kept unit is — the same command
+// in the JSON `repair` — so a rollback that fails is actionable, not just reported.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,7 +29,7 @@ import type {
   ServiceRunResult,
   ServiceRunner,
 } from '../src/daemon/service.ts';
-import { testIo } from './helpers.ts';
+import { testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const TEAM = `format: 1
 project: acme
@@ -166,6 +168,8 @@ function fakeManager(failure: ServiceInstallFailure): ServiceManager {
     kind: 'system-service-manager',
     unitPath: path,
     plan: (home) => ({ unitPath: path(home), program: ['team'] }),
+    job: () => thisProcessJobRecord(),
+    unit: (home) => thisProcessUnitRecord(path(home)),
     install: () => failure,
     uninstall: () => ({ ok: false, why: 'an uninstall is not part of this scene', detail: null }),
   };
@@ -247,7 +251,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     // The earlier definition is the one in place, and it is the one running.
     expect(result.kept).toBe(true);
     expect(result.why).toBe(
-      'the system service manager refused to start the new daemon; the previous one was put back and started again',
+      'the system\'s service manager refused to start the new daemon; the previous one was put back and started again',
     );
     // The refusal names no platform facility, and the earlier definition is the one on disk, so
     // the unit the manager starts again is the one that was running before the refresh.
@@ -310,7 +314,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     // Nothing runs, but the earlier definition is still there for the command to name.
     expect(result.kept).toBe(true);
     expect(result.why).toBe(
-      'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+      'the system\'s service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
     );
     expect(result.why).not.toMatch(/launchctl|launchd|\.plist|launch agents/i);
     expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
@@ -329,7 +333,7 @@ describe('a load that fails every time puts the previous unit back', () => {
     expect(result.outcome).toBe('refused');
     // The definition it wrote was taken back out, so there is no kept unit to name.
     expect(result.kept).toBe(false);
-    expect(result.why).toBe('the system service manager refused to start the daemon');
+    expect(result.why).toBe('the system\'s service manager refused to start the daemon');
     expect(existsSync(manager.unitPath(home))).toBe(false);
     // The offers are bounded: the first, then the nine of the retry, and no more.
     expect(calls.filter((call) => call === 'bootstrap')).toHaveLength(BOUNDED_OFFERS);
@@ -353,7 +357,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
 
     expect(code).toBe(1);
     expect(io.err).toContain(
-      'team daemon: the system service manager refused to start the new daemon; the previous one was put back and started again',
+      'team daemon: the system\'s service manager refused to start the new daemon; the previous one was put back and started again',
     );
     expect(io.err).not.toContain('launchctl');
     // The rollback left a daemon running, so there is no recovery command to give.
@@ -496,7 +500,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const { root, home } = scratch();
     const manager = fakeManager({
       ok: false,
-      why: 'the system service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
+      why: 'the system\'s service manager refused to start the new daemon, and the earlier service definition could not be put back; no daemon was started',
       detail: null,
       outcome: 'lost',
       kept: false,
@@ -515,7 +519,7 @@ describe('the command reports a failed refresh with its own row and a daemon sti
     const { root, home } = scratch('my repo');
     const manager = fakeManager({
       ok: false,
-      why: 'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+      why: 'the system\'s service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
       detail: null,
       outcome: 'lost',
       kept: false,
@@ -526,6 +530,62 @@ describe('the command reports a failed refresh with its own row and a daemon sti
 
     expect(code).toBe(1);
     expect(io.err).toContain(`--root '${root}'`);
+  });
+});
+
+describe('an install whose new daemon does not answer is taken back out', () => {
+  test('a refresh whose new daemon never answers restores the earlier unit and reports the rollback', async () => {
+    const { root, home } = scratch();
+    const earlier = withEarlierUnit(home);
+    const { manager, calls } = managerWith({});
+    const io = testIo(root, { kind: 'owner' });
+
+    // The manager accepts the new load, so only the health probe can tell the install failed.
+    // The earlier daemon is put back by the adapter's own undo, and it answers; the probe that
+    // sees an answer can only be the restored daemon's, because it runs after the undo.
+    const code = await runDaemon(['install', '--json'], io, sourcesOf(home, manager, {
+      health: async () => (calls.includes('bootout') ? ANSWERING : SILENT),
+      sleep: async () => {},
+    }));
+
+    expect(code).toBe(1);
+    const document = JSON.parse(io.out) as { error: { id: string; message: string } };
+    expect(document.error.id).toBe('daemon.install-rolled-back');
+    expect(document.error.message).toContain('did not answer');
+    // The earlier definition is the one on disk again, and its daemon was the one loaded last.
+    expect(readFileSync(manager.unitPath(home), 'utf8')).toBe(earlier);
+    expect(calls).toEqual(['bootstrap', 'bootout', 'bootstrap']);
+  });
+
+  test('a fresh install whose new daemon never answers removes its unit and names the rerun', async () => {
+    const { root, home } = scratch();
+    const { manager, calls } = managerWith({});
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager, {
+      health: async () => SILENT,
+      sleep: async () => {},
+    }));
+
+    expect(code).toBe(1);
+    expect(io.err).toContain('the daemon the new unit started did not answer the health probe');
+    expect(io.err).toContain(`the owner runs \`team daemon install --root ${root}\` to try again`);
+    // Its own definition was taken back out, so there is no kept unit to name.
+    expect(io.err).not.toContain('is kept at');
+    expect(existsSync(manager.unitPath(home))).toBe(false);
+    // The job the manager accepted was stopped again before the unit was removed.
+    expect(calls).toEqual(['bootstrap', 'bootout']);
+  });
+
+  test('an install is reported only after the new daemon answers', async () => {
+    const { root, home } = scratch();
+    const { manager } = managerWith({});
+    const io = testIo(root, { kind: 'owner' });
+
+    const code = await runDaemon(['install'], io, sourcesOf(home, manager, { health: async () => ANSWERING }));
+
+    expect(code).toBe(0);
+    expect(io.out).toContain('team daemon: installed');
   });
 });
 
@@ -541,7 +601,7 @@ describe('the dry run shows the steps a refresh takes', () => {
     expect(calls).toEqual([]);
     expect(io.out).toContain('would install');
     expect(io.out).toContain('the previous daemon, if the service manager holds one, is stopped before the new one is offered');
-    expect(io.out).toContain('the new daemon is started, offered again with a bounded, growing wait while the system service manager refuses');
+    expect(io.out).toContain('the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses');
     expect(io.out).toContain('if it still cannot start, the previous unit is put back and its daemon started again');
     expect(io.out).toContain('nothing was written');
     expect(io.out).not.toContain('launchd');
@@ -559,7 +619,7 @@ describe('the dry run shows the steps a refresh takes', () => {
     expect(document.dry_run).toBe(true);
     expect(document.steps).toEqual([
       'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
-      'the new daemon is started, offered again with a bounded, growing wait while the system service manager refuses',
+      'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
       'if it still cannot start, the previous unit is put back and its daemon started again',
     ]);
   });

@@ -132,7 +132,7 @@ import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/w
 import { runImport } from '../src/commands/import.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
-import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo, thisProcessJobRecord, thisProcessUnitRecord } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -4498,20 +4498,23 @@ type FakeDaemonService = ServiceManager & { calls: string[] };
 
 function fakeDaemonService(overrides: Partial<ServiceManager> = {}): FakeDaemonService {
   const calls: string[] = [];
-  const unit = (home: string): string => join(home, 'unit.plist');
+  const place = (home: string): string => join(home, 'unit.plist');
   return {
     kind: 'system-service-manager',
-    unitPath: unit,
-    plan: (home, program) => ({ unitPath: unit(home), program: [program.execPath, program.entry, 'daemon', 'run'] }),
-    install: (home) => {
+    unitPath: place,
+    plan: (home, program) => ({ unitPath: place(home), program: [program.execPath, program.entry, 'daemon', 'run'] }),
+    // The record a manager holds for this test process: the start admission's scenes replay it
+    // with one field changed, so a refusal is always the check that scene names.
+    job: overrides.job ?? (() => thisProcessJobRecord()),
+    unit: overrides.unit ?? ((home) => thisProcessUnitRecord(place(home))),
+    install: overrides.install ?? ((home) => {
       calls.push('install');
-      return { ok: true, unitPath: unit(home) };
-    },
-    uninstall: (home) => {
+      return { ok: true, unitPath: place(home) };
+    }),
+    uninstall: overrides.uninstall ?? ((home) => {
       calls.push('uninstall');
-      return { ok: true, unitPath: unit(home), removed: true };
-    },
-    ...overrides,
+      return { ok: true, unitPath: place(home), removed: true };
+    }),
     calls,
   };
 }
@@ -4662,7 +4665,8 @@ scene('daemon.dry-run', async (place) => {
 scene('daemon.installed', async (place) => {
   write(place, TEAM);
   const service = fakeDaemonService();
-  const ran = await daemonRan(place, ['install'], owner, { service });
+  // The success line is printed only after the installed daemon answers its health probe.
+  const ran = await daemonRan(place, ['install'], owner, { service, health: async () => answeringHealth() });
   expect(service.calls).toEqual(['install']);
   return show(ran, 'team daemon: installed');
 });
@@ -4693,10 +4697,10 @@ scene('daemon.install-failed', async (place) => {
   return show(
     await daemonRan(place, ['install'], owner, {
       service: fakeDaemonService({
-        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null, outcome: 'refused', kept: false }),
+        install: () => ({ ok: false, why: 'the system\'s service manager refused to start the daemon', detail: null, outcome: 'refused', kept: false }),
       }),
     }),
-    'the system service manager refused to start the daemon',
+    'the system\'s service manager refused to start the daemon',
   );
 });
 scene('daemon.install-rolled-back', async (place) => {
@@ -4706,7 +4710,7 @@ scene('daemon.install-rolled-back', async (place) => {
       service: fakeDaemonService({
         install: () => ({
           ok: false,
-          why: 'the system service manager refused to start the new daemon; the previous one was put back and started again',
+          why: 'the system\'s service manager refused to start the new daemon; the previous one was put back and started again',
           detail: 'the load exited 5: Input/output error; the earlier unit was put back and its daemon started',
           outcome: 'restored',
           kept: true,
@@ -4725,7 +4729,7 @@ scene('daemon.install-rollback-failed', async (place) => {
       service: fakeDaemonService({
         install: () => ({
           ok: false,
-          why: 'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+          why: 'the system\'s service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
           detail: 'the load exited 5: Input/output error; the earlier unit was put back, and the load exited 5: Input/output error',
           outcome: 'lost',
           kept: true,
@@ -4738,8 +4742,45 @@ scene('daemon.install-rollback-failed', async (place) => {
 scene('daemon.run-not-owner', async (place) =>
   show(
     await daemonRan(place, ['run'], { kind: 'seat', name: 'worker', pane: 'w2:p1', session: 'acme' }),
-    'only the owner or the system service manager runs the machine daemon',
+    "only the owner or the system's service manager runs the machine daemon",
   ));
+scene('daemon.service-managed.pid', async (place) => {
+  // A seat types the manager's start words and the unit is the daemon's own, but the manager's
+  // record names another process: the pid check refuses, and no process walk is consulted.
+  const service = fakeDaemonService({ job: () => ({ pid: process.pid + 1, program: process.execPath }) });
+  return show(
+    await daemonRan(place, ['run', '--started-by', 'service-manager'], { kind: 'seat', name: 'worker', pane: 'desk-1', session: 'acme' }, { service }),
+    'the record of the job does not name this process',
+  );
+});
+scene('daemon.service-managed.program', async (place) => {
+  // The record names this process and the unit is the daemon's own, but its words run another
+  // entry: the program check refuses before any start.
+  const service = fakeDaemonService({
+    unit: (home) => ({
+      ...thisProcessUnitRecord(join(home, 'unit.plist')),
+      programArguments: ['/synthetic/runtime', '/synthetic/entry.js', 'daemon', 'run'],
+    }),
+  });
+  return show(
+    await daemonRan(place, ['run', '--started-by', 'service-manager'], { kind: 'seat', name: 'worker', pane: 'desk-1', session: 'acme' }, { service }),
+    'the record and the unit do not run this executable with these words',
+  );
+});
+scene('daemon.service-managed.unit', async (place) => {
+  // No unit of this daemon's own can be read; the job record is never consulted, because a
+  // start must refuse closed on the first failed check rather than fall back.
+  const service = fakeDaemonService({
+    unit: () => null,
+    job: () => {
+      throw new Error("the job record must not be read when the unit is not the daemon's own");
+    },
+  });
+  return show(
+    await daemonRan(place, ['run', '--started-by', 'service-manager'], { kind: 'seat', name: 'worker', pane: 'desk-1', session: 'acme' }, { service }),
+    "the unit file is not this daemon's own",
+  );
+});
 scene('daemon.service-unavailable', async (place) =>
   show(
     await daemonRan(place, ['install'], owner, { service: null }),
@@ -4749,10 +4790,10 @@ scene('daemon.uninstall-failed', async (place) =>
   show(
     await daemonRan(place, ['uninstall'], owner, {
       service: fakeDaemonService({
-        uninstall: () => ({ ok: false, why: 'the system service manager refused to stop the daemon', detail: null }),
+        uninstall: () => ({ ok: false, why: 'the system\'s service manager refused to stop the daemon', detail: null }),
       }),
     }),
-    'the system service manager refused to stop the daemon',
+    'the system\'s service manager refused to stop the daemon',
   ));
 scene('daemon.status', async (place) => show(await daemonRan(place, ['status']), 'team daemon: not running'));
 scene('daemon.stopped', async (place) =>
