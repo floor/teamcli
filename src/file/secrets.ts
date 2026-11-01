@@ -1,4 +1,4 @@
-import { defaultFs, type FsReader } from '../lobby/gate.ts';
+import { defaultFs, type FsReader, type FsStats } from '../lobby/gate.ts';
 import type { YamlNode } from '../yaml.ts';
 import type { Problem } from './types.ts';
 
@@ -6,38 +6,11 @@ import type { Problem } from './types.ts';
 // with credentials refuses the file. A long random-looking string only warns: channel ids and
 // slugs look like one. An absolute path that is a real directory is a location, not a value —
 // a machine's temp path is long, dotless and absolute — but the shape alone silences nothing:
-// a credential in path clothing (`/x/sk-…`) is not a directory, so it still warns.
+// a credential in path clothing (`/x/sk-…`) is not a directory, and it keeps its token shape.
 export const KEY_PREFIXES = [
   'sk-', 'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'glpat-', 'xoxb-', 'xoxp-', 'xoxa-', 'xoxs-',
   'AKIA', 'ASIA', 'AIza', 'lin_api_', 'npm_', 'shpat_', 'dckr_pat_',
 ];
-
-export function findSecrets(root: YamlNode, fs: FsReader = defaultFs): { refused: Problem[]; warned: Problem[] } {
-  const refused: Problem[] = [];
-  const warned: Problem[] = [];
-  walk(root, (value, line) => {
-    for (const word of value.split(/[\s"'=,;]+/)) {
-      if (isKeyShaped(word)) {
-        refused.push({ line, message: 'a value shaped like a key or token: a team file never holds a credential' });
-        return;
-      }
-    }
-    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
-      refused.push({ line, message: 'a private key: a team file never holds a credential' });
-    } else if (URL_CREDENTIALS.test(value)) {
-      refused.push({ line, message: 'a URL with credentials: a team file never holds a credential' });
-    } else if (value.split(/\s+/).some((word) => looksRandom(word, fs))) {
-      warned.push({ line, message: 'a long random-looking value: check it is not a credential' });
-    }
-  });
-  return { refused, warned };
-}
-
-const URL_CREDENTIALS = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i;
-/** The masker's URL rule is wider than the team-file check's: userinfo with only a user is a
- *  credential too, so the password is optional here and every URL on the line is masked. */
-const URL_USERINFO_URL = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+(?::[^\s/@]+)?@/gi;
-const URL_USERINFO = /[^\s/:@]+(?::[^\s/@]+)?@$/;
 
 /** The characters a prefixed credential's body is written in. */
 const TOKEN_BODY = '[A-Za-z0-9_+=-]';
@@ -46,12 +19,161 @@ const TOKEN_BODY = '[A-Za-z0-9_+=-]';
 const PREFIX_ALTERNATION = [...KEY_PREFIXES].sort((a, b) => b.length - a.length).map(escapePattern).join('|');
 
 /**
- * One key-shaped token wherever it sits: a known prefix followed by at least sixteen body
- * characters, with a non-token character (or the line's start) before it. Framing around a token
- * — a backtick, a bracket, a colon, an equals sign, a comma — is a boundary, not part of the
- * word; a prefix shape inside a longer word (`risk-…`) is not a token.
+ * The one set of credential shapes both readers judge by: the team-file check and the screen
+ * masker build every pattern from this source, so the two cannot drift. A value the check refuses
+ * is a value a peek never prints, and a token the masker masks is one the check refuses.
  */
-const KEY_TOKEN = new RegExp(`(^|[^A-Za-z0-9_-])((?:${PREFIX_ALTERNATION})${TOKEN_BODY}{16,})`, 'g');
+const SECRET_SHAPES = {
+  /**
+   * One key-shaped token wherever it sits: a known prefix followed by at least sixteen body
+   * characters, with a non-token character (or the line's start) before it. Framing around a
+   * token — a backtick, a bracket, a colon, an equals sign, a comma — is a boundary, not part of
+   * the word; a prefix shape inside a longer word (`risk-…`) is not a token.
+   */
+  keyToken: `(^|[^A-Za-z0-9_-])((?:${PREFIX_ALTERNATION})${TOKEN_BODY}{16,})`,
+  /**
+   * A URL's userinfo — a user, and the password when one is written — captured with the scheme
+   * that precedes it. A user with no password is userinfo too, so the password is optional; the
+   * masker keeps the scheme and masks the rest, and the check refuses the value.
+   */
+  urlUserinfo: '([a-z][a-z0-9+.-]*:\\/\\/)[^\\s\\/:@]+(?::[^\\s/@]+)?@',
+  /**
+   * A private-key header. A screen can wrap the header's words and drop the space between them,
+   * so whitespace between them is any run here; the check reads the same shape in a value.
+   */
+  privateKey: '-----BEGIN[\\sA-Z]*?PRIVATE\\s*KEY-----',
+} as const;
+
+/** A fresh pattern from the one set. A pattern with `g` carries a last index between reads, and
+ *  every reader starts at its own beginning. */
+function secretPattern(shape: keyof typeof SECRET_SHAPES, flags = ''): RegExp {
+  return new RegExp(SECRET_SHAPES[shape], flags);
+}
+
+/**
+ * A team file's values, judged by the same shapes the screen masker masks. A credential keeps
+ * its token shape through whatever punctuation frames it, so a framed key is refused exactly as
+ * a bare one is.
+ */
+export function findSecrets(root: YamlNode, fs: FsReader = defaultFs): { refused: Problem[]; warned: Problem[] } {
+  const refused: Problem[] = [];
+  const warned: Problem[] = [];
+  walk(root, (value, line, field) => {
+    if (keyRefused(value, field, fs)) {
+      refused.push({ line, message: 'a value shaped like a key or token: a team file never holds a credential' });
+      return;
+    }
+    if (secretPattern('privateKey').test(value)) {
+      refused.push({ line, message: 'a private key: a team file never holds a credential' });
+    } else if (secretPattern('urlUserinfo', 'i').test(value)) {
+      refused.push({ line, message: 'a URL with credentials: a team file never holds a credential' });
+    } else if (value.split(/\s+/).some((word) => looksRandom(word, fs))) {
+      warned.push({ line, message: 'a long random-looking value: check it is not a credential' });
+    }
+  });
+  return { refused, warned };
+}
+
+/**
+ * True when a key-shaped token in the value is a credential rather than a location. The check and
+ * the masker share one token shape, but they do not owe the same verdict: a refusal blocks a real
+ * file, so a legitimate path must not be refused for a shape inside it. A token after a `/` is
+ * written as part of a path: a trust line keeps the warning it has always given, and a real
+ * absolute directory is a location; every other token is a credential, however punctuation
+ * frames it.
+ */
+function keyRefused(value: string, field: readonly string[], fs: FsReader): boolean {
+  for (const match of value.matchAll(secretPattern('keyToken', 'g'))) {
+    const separator = match[1] ?? '';
+    const tokenStart = (match.index ?? 0) + separator.length;
+    if (separator !== '/') return true;
+    const word = wordAround(value, tokenStart);
+    // A trust line keeps the earlier verdict it has always had: a warning, never a refusal, for
+    // a token written as part of a path there.
+    if (field[0] === 'trust') continue;
+    // A location the file itself names is exempt: the whole value is one absolute path under a
+    // path-valued field, and it resolves to this user's real directory with no symbolic link in
+    // any component. A launch line, a command and free text are never locations, however a path
+    // shape sits in them.
+    if (locationPath(value, word, field, fs)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The schema's path-valued fields: a value here is a location the file names, not free text. A
+ * launch line, a command or any other value is never in this list, however path-shaped it looks.
+ */
+const PATH_FIELDS: readonly (readonly string[])[] = [
+  ['lobby'],
+  ['workspace', 'path'],
+  ['workspace', 'protected'],
+  ['seats', 'reach', 'guard_dir'],
+  ['watch', 'queue_dir'],
+];
+
+/** Whether a value sits under a field the team-file schema types as a path. */
+function pathField(field: readonly string[]): boolean {
+  return PATH_FIELDS.some((path) => path.length === field.length && path.every((key, at) => key === field[at]));
+}
+
+/**
+ * Whether a key-shaped token is part of a location rather than a credential. The exemption is
+ * closed: the whole scalar is exactly that one absolute path — no other words, no punctuation —
+ * under a path-valued field, and the path is a directory this user owns whose every component is
+ * a real name, never a symbolic link. A path with a link anywhere in it could name a folder other
+ * than the one the file writes, so it keeps the token's shape.
+ */
+function locationPath(value: string, word: string, field: readonly string[], fs: FsReader): boolean {
+  if (value !== word) return false;
+  if (!pathField(field)) return false;
+  if (!word.startsWith('/')) return false;
+  return realDirectory(fs, word);
+}
+
+/**
+ * Whether the path names a directory this user owns, with no symbolic link in any component.
+ * Every prefix is lstatted and never followed: following an intermediate link is exactly how a
+ * path-shaped value would reach a folder the file does not appear to name.
+ */
+function realDirectory(fs: FsReader, path: string): boolean {
+  const mine = process.getuid?.() ?? 0;
+  let walked = '';
+  let last: FsStats | null = null;
+  for (const part of path.split('/')) {
+    if (part === '') continue;
+    walked += `/${part}`;
+    let stats: FsStats;
+    try {
+      stats = fs.lstat(walked);
+    } catch {
+      return false;
+    }
+    if (stats.isSymbolicLink()) return false;
+    last = stats;
+  }
+  if (last === null) return false;
+  return last.isDirectory() && last.uid === mine;
+}
+
+/** The whitespace-delimited word around a position: a path is judged whole, as the random rule reads it. */
+function wordAround(value: string, position: number): string {
+  let start = position;
+  while (start > 0 && !/\s/.test(value.charAt(start - 1))) start -= 1;
+  let end = position;
+  while (end < value.length && !/\s/.test(value.charAt(end))) end += 1;
+  return value.slice(start, end);
+}
+
+/** Every URL on a line, with its userinfo: the masker rewrites each match to `scheme[masked]@`. */
+const URL_USERINFO_URL = secretPattern('urlUserinfo', 'gi');
+
+/** One key-shaped token wherever it sits, for a line's replacement scan. */
+const KEY_TOKEN = secretPattern('keyToken', 'g');
+
+/** A private-key header on a line. */
+const PRIVATE_KEY = secretPattern('privateKey', 'g');
 
 /** One token-body character: the characters a prefixed credential is written in. */
 const TOKEN_CHARACTER = /[A-Za-z0-9_+=-]/;
@@ -63,10 +185,6 @@ function escapePattern(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function isKeyShaped(word: string): boolean {
-  return KEY_PREFIXES.some((prefix) => word.startsWith(prefix) && word.length >= prefix.length + 16);
-}
-
 /** No line needs more than a couple of passes; the bound only stops a pathological loop. */
 const MAX_MASK_PASSES = 4;
 
@@ -74,11 +192,10 @@ const MAX_MASK_PASSES = 4;
  * The same judgement `findSecrets` makes, applied to a line of a seat's screen: every token shaped
  * like a key, every private-key header, every URL's userinfo and every random-looking word becomes
  * `[masked]`. The judgement is shared — a value the team-file check refuses or warns about is a
- * value a peek never prints — and the token scan is deliberately stricter: a screen wraps a token
- * in whatever punctuation the program printed, so the prefix is matched wherever it sits, while
- * the team-file check still splits a value into words. The randomness rule is shared as it is,
- * including its limits: `looksRandom` measures the entropy of the characters present, so a hex
- * commit id cannot clear its threshold and a UUID usually does not either.
+ * value a peek never prints — and both readers take their tokens from one set of shapes, so a
+ * prefix framed by a backtick, a bracket or a colon is a token to each of them. The randomness rule
+ * is shared as it is, including its limits: `looksRandom` measures the entropy of the characters
+ * present, so a hex commit id cannot clear its threshold and a UUID usually does not either.
  *
  * Every pattern is global — a line can carry more than one URL or token — and the output is
  * re-scanned until a pass changes nothing, so no known prefix or userinfo URL survives it.
@@ -94,8 +211,8 @@ export function maskSecretsLine(line: string, fs: FsReader = defaultFs): string 
 }
 
 function maskOnce(line: string, fs: FsReader): string {
-  let masked = line.replace(URL_USERINFO_URL, (match) => match.replace(URL_USERINFO, '[masked]@'));
-  masked = masked.replace(/-----BEGIN[\sA-Z]*?PRIVATE\s*KEY-----/g, '[masked]');
+  let masked = line.replace(URL_USERINFO_URL, '$1[masked]@');
+  masked = masked.replace(PRIVATE_KEY, '[masked]');
   masked = masked.replace(KEY_TOKEN, (_whole, separator: string) => `${separator}[masked]`);
   masked = replaceWords(masked, (word) => looksRandom(word, fs));
   return masked;
@@ -216,7 +333,7 @@ function crossingSpans(text: string, joins: readonly number[], fs: FsReader): Sp
   // The whitespace between marker words can be the one a wrap removes, or a tab the screen
   // carries where the header has a space: the joined pattern accepts no whitespace or any run,
   // so the marker words themselves are contiguous in the joined reading whatever the split.
-  for (const match of text.matchAll(/-----BEGIN[\sA-Z]*?PRIVATE\s*KEY-----/g)) {
+  for (const match of text.matchAll(PRIVATE_KEY)) {
     const start = match.index ?? 0;
     const end = start + match[0].length;
     if (crosses(start, end)) spans.push({ start, end });
@@ -325,13 +442,14 @@ function replaceWords(line: string, shaped: (word: string) => boolean): string {
   );
 }
 
-function walk(node: YamlNode, visit: (value: string, line: number) => void): void {
+/** A value under its field path, so a rule can tell a trust line from any other value. */
+function walk(node: YamlNode, visit: (value: string, line: number, field: readonly string[]) => void, field: readonly string[] = []): void {
   if (node.kind === 'scalar') {
-    if (typeof node.value === 'string') visit(node.value, node.line);
+    if (typeof node.value === 'string') visit(node.value, node.line, field);
   } else if (node.kind === 'seq') {
-    for (const item of node.items) walk(item, visit);
+    for (const item of node.items) walk(item, visit, field);
   } else {
-    for (const entry of node.entries) walk(entry.value, visit);
+    for (const entry of node.entries) walk(entry.value, visit, [...field, entry.key]);
   }
 }
 
