@@ -312,7 +312,11 @@ through (`src/send/admit.ts`; proof: the admit tests at the tag):
 7. an assistant seat to its entity's coordinator;
 8. a seat to its own team's orchestrator;
 9. an owner-signed grant naming `send`, which spells a team by its registry team id or a seat by
-   its agent id, never a runner or process name;
+   its agent id, never a runner or process name; the record is signed with the owner's approval
+   key and verified on every read, and its `to` may be the reserved `orchestrator@<entity>`, the
+   lead seat of a team of the sender's own entity. A record that names the pair but does not
+   verify admits nothing and refuses with `send.grant-invalid`, naming the record and the line
+   that re-issues it signed;
 10. a seat to a declared seat of its own team — any two roster-declared seats of one team, asked
     after every rule above, the grant, and the open-thread reply rule.
 

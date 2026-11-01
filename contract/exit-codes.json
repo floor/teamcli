@@ -4848,6 +4848,13 @@
     {
       "code": 1,
       "command": "send",
+      "id": "send.grant-invalid",
+      "meaning": "a send grant names this pair but is not signed by the owner (it is unsigned, or its signature does not verify); nothing was sent, and the refusal prints the record's name and the exact team grant --send line that recreates it signed",
+      "trigger": "team send native@other hello"
+    },
+    {
+      "code": 1,
+      "command": "send",
       "id": "send.held",
       "meaning": "the message is on disk and the pane was left untouched",
       "trigger": "team send worker hello"

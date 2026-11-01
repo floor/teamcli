@@ -1313,6 +1313,7 @@ Usage:
 
     team grant <seat> --scope <act,...> [--dry-run] [--json]
     team grant <seat|@team> --capabilities <cap,...> [--scope <path,...>] [--expires <date>] [--name <stem>] [--dry-run] [--json]
+    team grant --send --from <side> --to <side> --expires <ISO> [--name <stem>] [--dry-run] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> [--team <team>] [--seat <seat>] [--expires <ISO|never>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --request [--team <team>] [--seat <seat>] [--expires <ISO|never>] [--inbox] [--allow-grant] [--grant-entity <entity,...>] [--grant-project <project-id,...>] [--grant-team <team,...>] [--json]
     team grant --client <client-id> --entity <entity> --public-key <file> --team <team> --up [--down] [--expires <ISO|never>] [--json]
@@ -1362,6 +1363,7 @@ Usage:
 | `--entity` | yes | no | no |
 | `--execute` | yes | no | no |
 | `--expires` | yes | no | no |
+| `--from` | yes | no | no |
 | `--general` | yes | no | no |
 | `--grant-entity` | yes | no | no |
 | `--grant-project` | yes | no | no |
@@ -1378,9 +1380,11 @@ Usage:
 | `--rp-id` | yes | no | no |
 | `--scope` | yes | no | no |
 | `--seat` | yes | no | no |
+| `--send` | no | no | no |
 | `--signer` | yes | no | no |
 | `--signer-public-key` | yes | no | no |
 | `--team` | yes | no | no |
+| `--to` | yes | no | no |
 | `--type` | yes | no | no |
 | `--up` | no | no | no |
 | `--via` | yes | no | no |

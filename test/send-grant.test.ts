@@ -12,9 +12,11 @@ import { upsertTeam } from '../src/registry/teams.ts';
 import type { NativePane } from '../src/send/native.ts';
 import { readSendGrants } from '../src/send/grants.ts';
 import { updateState } from '../src/state.ts';
+import { keyOf, signDomain } from '../src/store/keys.ts';
 import { recordBody, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-16T12:00:00.000Z');
+const DOMAIN = 'team-send-grant-v1\n';
 
 let base = '';
 
@@ -189,8 +191,28 @@ function record(dir: string, seat: string, pane: string): void {
   });
 }
 
-/** One send-grant record where the owner writes it. */
-function grantFile(home: string, stem: string, body: string): string {
+/** One owner-signed send-grant record where the owner's side writes it: the signature covers the
+ *  record's name (the stem, or the `name:` field it carries), the pair and the expiry. */
+function grantFile(
+  home: string,
+  stem: string,
+  from: string,
+  to: string,
+  expires = '2026-11-16T00:00:00Z',
+  options: { name?: string } = {},
+): string {
+  const folder = join(home, '.config', 'team', 'grants');
+  mkdirSync(folder, { recursive: true });
+  const file = join(folder, `${stem}.yaml`);
+  const name = options.name ?? stem;
+  const signature = signDomain(DOMAIN, { name, send: { from, to }, expires }, keyOf(home));
+  const named = options.name === undefined ? '' : `name: ${options.name}\n`;
+  writeFileSync(file, `${named}send:\n  from: ${from}\n  to: ${to}\nexpires: "${expires}"\nsignature: "${signature}"\n`);
+  return file;
+}
+
+/** The unsigned shape the owner wrote before signatures were read: a record, but never a grant. */
+function unsignedGrantFile(home: string, stem: string, body: string): string {
   const folder = join(home, '.config', 'team', 'grants');
   mkdirSync(folder, { recursive: true });
   const file = join(folder, `${stem}.yaml`);
@@ -224,7 +246,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     expect(existsSync(join(dir, 'send-drops'))).toBe(false);
     expect(existsSync(join(otherDir, 'send-drops'))).toBe(false);
 
-    grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native@other'));
+    grantFile(home, 'helpers-to-reviewer', 'helper@acme', 'native@other');
     const { code, err, out } = helperSend(root, sockets);
     expect(await code).toBe(0);
     expect(err()).toContain('native: queued, no event adapter');
@@ -247,9 +269,9 @@ describe('team send: the owner-signed grant on the command path', () => {
     registerSeat('helper', 'implementer', 'w2:p1');
     record(dir, 'helper', 'w2:p1');
     // The record names the lead — a valid seat, but not the caller.
-    grantFile(home, 'lead-to-reviewer', GRANT('lead@acme', 'native@other'));
+    grantFile(home, 'lead-to-reviewer', 'lead@acme', 'native@other');
     // And one naming another agent id outright, the forgery a record could attempt.
-    grantFile(home, 'forged', GRANT(`agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')}`, 'native@other'));
+    grantFile(home, 'forged', `agt_${Buffer.from('lead').toString('hex').padEnd(12, '0')}`, 'native@other');
 
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
@@ -261,10 +283,10 @@ describe('team send: the owner-signed grant on the command path', () => {
     const { root, dir, sockets, home } = world();
     registerSeat('helper', 'implementer', 'w2:p1');
     record(dir, 'helper', 'w2:p1');
-    grantFile(home, 'lapsed', GRANT('helper@acme', 'native@other', '2026-10-16T11:59:59Z'));
+    grantFile(home, 'lapsed', 'helper@acme', 'native@other', '2026-10-16T11:59:59Z');
     expect(await helperSend(root, sockets).code).toBe(1);
 
-    grantFile(home, 'lapsed', GRANT('helper@acme', 'native@other', NOW.toISOString()));
+    grantFile(home, 'lapsed', 'helper@acme', 'native@other', NOW.toISOString());
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
     expect(err()).toContain('no rule admits it');
@@ -275,7 +297,7 @@ describe('team send: the owner-signed grant on the command path', () => {
     const { root, dir, sockets, home } = world();
     registerSeat('helper', 'implementer', 'w2:p1');
     record(dir, 'helper', 'w2:p1');
-    grantFile(home, 'wrong-receiver', GRANT('helper@acme', 'lead@acme'));
+    grantFile(home, 'wrong-receiver', 'helper@acme', 'lead@acme');
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
     expect(err()).toContain('no rule admits it');
@@ -301,7 +323,7 @@ describe('team send: the owner-signed grant on the command path', () => {
   test('a caller the store holds no record for is judged as the file\'s seat: cross-team stays refused, grant or no grant', async () => {
     const { root, dir, sockets, home } = world();
     record(dir, 'helper', 'w2:p1');
-    grantFile(home, 'helpers-to-reviewer', GRANT('helper@acme', 'native@other'));
+    grantFile(home, 'helpers-to-reviewer', 'helper@acme', 'native@other');
     const { code, err } = helperSend(root, sockets);
     expect(await code).toBe(1);
     expect(err()).toContain('sender helper has no agent record on this machine, so no rule admits the send');
@@ -313,23 +335,24 @@ describe('team send: the owner-signed grant on the command path', () => {
 describe('readSendGrants: the shapes the folder hands over', () => {
   test('only a record naming a from, a to and a parseable expiry is a grant', () => {
     const { home } = world();
-    grantFile(home, 'good', GRANT('helper@acme', 'native'));
-    grantFile(home, 'no-send', 'expires: "2026-11-16T00:00:00Z"\n');
-    grantFile(home, 'send-not-a-pair', 'send: "helper@acme -> native"\nexpires: "2026-11-16T00:00:00Z"\n');
-    grantFile(home, 'no-to', 'send:\n  from: helper@acme\nexpires: "2026-11-16T00:00:00Z"\n');
-    grantFile(home, 'no-expiry', 'send:\n  from: helper@acme\n  to: native\n');
-    grantFile(home, 'unparseable-expiry', 'send:\n  from: helper@acme\n  to: native\nexpires: "soon"\n');
-    grantFile(home, 'blank-from', 'send:\n  from: "  "\n  to: native\nexpires: "2026-11-16T00:00:00Z"\n');
+    grantFile(home, 'good', 'helper@acme', 'native');
+    unsignedGrantFile(home, 'no-send', 'expires: "2026-11-16T00:00:00Z"\n');
+    unsignedGrantFile(home, 'send-not-a-pair', 'send: "helper@acme -> native"\nexpires: "2026-11-16T00:00:00Z"\n');
+    unsignedGrantFile(home, 'no-to', 'send:\n  from: helper@acme\nexpires: "2026-11-16T00:00:00Z"\n');
+    unsignedGrantFile(home, 'no-expiry', 'send:\n  from: helper@acme\n  to: native\n');
+    unsignedGrantFile(home, 'unparseable-expiry', 'send:\n  from: helper@acme\n  to: native\nexpires: "soon"\n');
+    unsignedGrantFile(home, 'blank-from', 'send:\n  from: "  "\n  to: native\nexpires: "2026-11-16T00:00:00Z"\n');
 
     expect(readSendGrants(home)).toEqual([{ name: 'good', from: 'helper@acme', to: 'native', expires: '2026-11-16T00:00:00Z' }]);
   });
 
   test('a record may name itself, and a JSON record is read like a YAML one', () => {
     const { home } = world();
-    grantFile(home, 'named', `name: the review channel\n${GRANT('helper@acme', 'native')}`);
+    grantFile(home, 'named', 'helper@acme', 'native', '2026-11-16T00:00:00Z', { name: 'the review channel' });
+    const json = { send: { from: 'radio/builder-1', to: 'teamcli/builder-1' }, expires: '2026-11-16T00:00:00Z' };
     writeFileSync(
       join(home, '.config', 'team', 'grants', 'as-json.json'),
-      JSON.stringify({ send: { from: 'radio/builder-1', to: 'teamcli/builder-1' }, expires: '2026-11-16T00:00:00Z' }),
+      JSON.stringify({ ...json, signature: signDomain(DOMAIN, { name: 'as-json', ...json }, keyOf(home)) }),
     );
     expect(readSendGrants(home)).toEqual([
       { name: 'as-json', from: 'radio/builder-1', to: 'teamcli/builder-1', expires: '2026-11-16T00:00:00Z' },

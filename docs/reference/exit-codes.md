@@ -698,6 +698,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.client-pane` | `send` | 1 | a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team send --client client-grant.json --key client.key orchestrator@floor hello` |
 | `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
+| `send.grant-invalid` | `send` | 1 | a send grant names this pair but is not signed by the owner (it is unsigned, or its signature does not verify); nothing was sent, and the refusal prints the record's name and the exact team grant --send line that recreates it signed | `team send native@other hello` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |

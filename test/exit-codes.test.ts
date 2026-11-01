@@ -5427,6 +5427,69 @@ scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
 });
+scene('send.grant-invalid', async (place) => {
+  write(place, TEAM);
+  registeredLead(place);
+  // The caller is the file's own lead, placed on the pane the registry records for it: a seat
+  // sends only from the seat its session says it stands in.
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'launched', workspace: 'w1', pane: leadSeat.pane };
+  });
+  // The team the record's `to` names, registered and laid out the way `up` writes both: the
+  // registry record answers `builder-1@teamcli`, and its folder holds the file the send reads.
+  // The receiver is not that team's lead, so no rule admits the pair: only the grant can.
+  const outsideRoot = join(place.base, 'teamcli');
+  mkdirSync(join(outsideRoot, '.agents'), { recursive: true });
+  writeFileSync(
+    join(outsideRoot, '.agents', 'team.yaml'),
+    `format: 1\nproject: teamcli\ncoordinator: lead\noperator: lead\nworkspace:\n  mode: shared\nseats:\n${LEAD}  - role: builder\n    name: builder-1\n    label: builder-1\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n`,
+  );
+  const outsideBuilder = registerAgent(place.home, {
+    name: 'builder-1',
+    signing: { model: 'Test', version: '1', role: 'builder' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-code --model test',
+    reach: { team: 'teamcli', seat: 'builder-1', session: 'teamcli', pane: 'pane9', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(place.home, 'teamcli', {
+    project: 'teamcli',
+    entity: 'acme',
+    session: 'teamcli',
+    root: outsideRoot,
+    lobby: lobbyDir(place.home),
+    roster: [{ agent: outsideBuilder.id, seat: 'builder-1', role: 'builder' }],
+    lifecycle: 'running',
+    by: 'test',
+  });
+  // The record the owner wrote before signatures were read: it names the pair and admits nothing,
+  // and the refusal names it and prints the exact line that re-issues it signed.
+  const folder = join(place.home, '.config', 'team', 'grants');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, 'old-grant.yaml'),
+    `send:\n  from: lead@acme\n  to: builder-1@teamcli\nexpires: "2027-06-01T00:00:00.000Z"\n`,
+  );
+  const plain = await sent(place, ['builder-1@teamcli', 'hello'], leadSeat, sendHost(place));
+  expect(plain.code).toBe(1);
+  expect(plain.err).toContain('not signed by the owner');
+  expect(plain.err).toContain('"old-grant"');
+  expect(plain.err).toContain(
+    "team grant --send --from 'lead@acme' --to 'builder-1@teamcli' --expires '2027-06-01T00:00:00.000Z' --name 'old-grant'",
+  );
+  // The same refusal in the structured form, so the id the contract row names is the one a caller
+  // reads off the machine path.
+  const structured = await sent(place, ['builder-1@teamcli', 'hello', '--json'], leadSeat, sendHost(place));
+  expect(structured.code).toBe(1);
+  expect((JSON.parse(structured.out) as { error: { id: string } }).error.id).toBe('send.grant-invalid');
+  return plain;
+});
 scene('send.brief-memory', async (place) => {
   // The fixture's worker is stopped, which is its own refusal; the lead is open, and the
   // transport is read before the draft or any drop is touched.

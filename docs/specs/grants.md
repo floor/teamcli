@@ -90,14 +90,32 @@ A grant is out of the active set when a revocation names its `name@generation` p
 
 ### 3.4. Send-grant record (`send`)
 
-An unsigned record in the same grants folder naming one admitted pair (`src/send/grants.ts`). A record missing any field is not a grant and is left out.
+An owner-signed record in the same grants folder naming one admitted pair, written by `team grant
+--send …` (`src/send/grants.ts`, `src/permissions/manage.ts`). The signature is the owner's
+approval key over the tag `team-send-grant-v1\n` and the payload `{ name, send: { from, to },
+expires }`; the file's stem is the name, and a `name:` field an older record carries is read
+(trimmed) as the name and covered by the signature. The reader verifies every record. One that
+carries no signature, or whose signature does not verify, admits nothing; a send through it refuses
+with `send.grant-invalid` (exit 1), naming the record and printing the exact `team grant --send`
+line that recreates it signed. A record missing any field is not a grant and is left out.
 
 | Field | Type | Required | Default | Since | Meaning |
 |---|---|---|---|---|---|
 | `send.from` | string | yes | — | 0.5.0 | The sender: an agent id, `seat@team`, or `session/seat` |
-| `send.to` | string | yes | — | 0.5.0 | The receiver, same spellings; a bare seat is the sender's own team's |
+| `send.to` | string | yes | — | 0.5.0 | The receiver, same spellings; a bare seat is the sender's own team's; `orchestrator@<entity>` is the lead seat of a team of the sender's own entity, and names nothing across entities |
 | `expires` (or `expiry`, `expires_at`, `expiresAt`) | string (ISO 8601) | yes | — | 0.5.0 | When the grant stops; must parse |
-| `name` | string | no | the file stem | 0.5.0 | The record's name in reports |
+| `name` | string | no | the file stem | 0.5.0 | The record's name in reports; the signature covers it |
+| `signature` | string (hex) | yes | — | 0.5.11 | The owner's approval key over the tag and the name, pair and expiry above |
+
+Records written before 0.5.11 carry no signature and admit nothing until the owner re-issues them
+signed with the line the refusal prints; the record's name, pair and expiry are the line's
+arguments. A name the writer reserves (`grant`, `delegate`, `revoke-…`), or one too long for the
+folder's file names, is printed as a safe stem, and a legacy expiry carrying a UTC offset is
+printed at the same instant in the canonical `Z` form, so the line runs as printed.
+`team grant --send` writes the JSON record whole through a temporary file of mode 0600
+and a rename, like every other record in the folder. When a record of that name is already there,
+it is the re-issue path and the write replaces `<name>.json`; an older file of the same name under
+another extension stays beside it, reads as unsigned, and admits nothing.
 
 ### 3.5. Entity create-grant
 
