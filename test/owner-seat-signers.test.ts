@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { createHash, generateKeyPairSync, sign as cryptoSign, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { addOwnerSigner, ownerSignerLabel, ownerSeatAnswerBytes, ownerSeatFile, ownerSeatInbox, registerOwnerSeat, verifyOwnerAnswer, webauthnChallenge, type OwnerSeatAnswer, type OwnerSeatKeyStore } from '../src/client/owner-seat.ts';
 import { actionApprovalsFolder, actionAuditFolder, actionRequestsFolder, setApprovalMode } from '../src/client/team-create.ts';
@@ -608,5 +608,87 @@ describe('approval mode none for team-create: one owner signature at setup, none
     expect(existsSync(join(actionApprovalsFolder(s.home), `${modeId}.json`))).toBe(false);
     // The rule the revoke request named is untouched by the change it admitted.
     expect(existsSync(join(actionApprovalsFolder(s.home), `${teamRule}.json`))).toBe(true);
+  });
+
+  // An owner-signer rule is signed for one repository, and its scope is that repository's parent
+  // folder. It admits its own folder's business, never a folder outside it: a mode record there
+  // would change approval for another repository, which no one signed for.
+  async function seatWithRule(s: ReturnType<typeof setup>, at: string): Promise<void> {
+    const teamRule = (await s.run(at, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(at, ['--approve-as-owner-seat', teamRule, 'always'])).code).toBe(0);
+    const ask = io(at);
+    ask.io.caller = { kind: 'seat', name: 'probe', pane: 'pane1' };
+    const approvals = { home: s.home, now: () => new Date(), ownerSeatStore: s.store };
+    expect(await runApprovals(['revoke', teamRule, '--request'], ask.io, approvals), ask.err()).toBe(0);
+    const request = /owner-seat request (oa_[0-9a-f]{24})/.exec(ask.out())?.[1];
+    expect(request).toBeDefined();
+    expect(approveOwnerAction(s.home, request!, 'always', s.store, new Date())).toMatchObject({ ok: true });
+  }
+
+  function approvalBytes(homePath: string): Record<string, string> {
+    const dir = actionApprovalsFolder(homePath);
+    return Object.fromEntries(readdirSync(dir).filter((name) => name.startsWith('am_')).sort()
+      .map((name) => [name, readFileSync(join(dir, name), 'utf8')]));
+  }
+
+  test('a folder rule changes no approval mode outside the folder it covers', async () => {
+    const s = setup('mode-scope-outside');
+    const first = repo(s.base, 'docs');
+    const outside = join(s.base, 'elsewhere');
+    mkdirSync(outside);
+    const outsideMode = (await s.run(first, ['--approval-mode', 'none', '--scope', outside, '--json'])).json.mode_id as string;
+    expect(outsideMode).toMatch(/^am_/);
+    await seatWithRule(s, first);
+    const control = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', join(s.base, 'code', 'shared'), '--json']);
+    expect(control.code, control.err).toBe(0);
+    const before = approvalBytes(s.home);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', outside, '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+    expect(approvalBytes(s.home)).toEqual(before);
+    expect(existsSync(join(actionApprovalsFolder(s.home), `${outsideMode}.json`))).toBe(true);
+  });
+
+  test('a link out of the covered folder changes no approval mode', async () => {
+    const s = setup('mode-scope-link');
+    const first = repo(s.base, 'docs');
+    const external = join(s.base, 'external');
+    mkdirSync(external);
+    symlinkSync(external, join(s.base, 'code', 'link'));
+    await seatWithRule(s, first);
+    const before = approvalBytes(s.home);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', join(s.base, 'code', 'link'), '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+    expect(approvalBytes(s.home)).toEqual(before);
+  });
+
+  test('a folder above the covered folder changes no approval mode', async () => {
+    const s = setup('mode-scope-above');
+    const first = repo(s.base, 'docs');
+    await seatWithRule(s, first);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first,
+      ['--approval-mode', 'per-action', '--scope', s.base, '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+  });
+
+  test('a folder rule revokes no rule outside the folder it covers', async () => {
+    const s = setup('revoke-scope-outside');
+    const first = repo(s.base, 'docs');
+    const elsewhere = home('revoke-scope-far');
+    const far = repo(elsewhere.base, 'far');
+    const farRule = (await s.run(far, ['--request', '--json'])).json.request_id as string;
+    expect((await s.run(far, ['--approve-as-owner-seat', farRule, 'always'])).code).toBe(0);
+    await seatWithRule(s, first);
+    const path = join(actionApprovalsFolder(s.home), `${farRule}.json`);
+    expect(existsSync(path)).toBe(true);
+    const seat = await s.runAs({ kind: 'seat', name: 'probe', pane: 'pane1' }, first, ['--revoke-approval', farRule, '--json']);
+    expect(seat.code, seat.out).toBe(1);
+    expect(seat.json.error.id).toBe('init.approval-refused');
+    expect(existsSync(path)).toBe(true);
   });
 });
