@@ -1383,7 +1383,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
     // The resume read refuses the record that is another agent's, and the relaunch starts fresh.
     expect(io.err).toContain('not resuming its recorded session (the record is another agent for this seat)');
-    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // The pull-only reason is the binder's own: the endpoint read it made proves no thread.
+    expect(io.out).toContain('pull-only: the Codex endpoint socket is not listening (ENOENT)');
     // The managed launch did its part: endpoint and incarnation are recorded, bound to each other.
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.presence_binding).toBe(BOUND);
@@ -1497,7 +1498,8 @@ describe('team restart resumes the seat\'s own recorded session', () => {
     const io = testIo(fixture.root, { kind: 'owner' });
 
     expect(await runRestart(['worker'], io, run.sources), io.err).toBe(0);
-    expect(io.out).toContain('pull-only: the seat state names no agent session');
+    // Several threads prove nothing; the summary says which reading refused it.
+    expect(io.out).toContain("pull-only: its Codex endpoint holds 2 threads; none is proven to be this seat's");
     const seat = readState(fixture.dir).sessions.acme?.seats.worker;
     expect(seat?.agent_session).toBeUndefined();
     expect(findAgent(fixture.home, { team: teamIdOf(fixture.root), seat: 'worker' })?.reach.agent_session).toBe('ses_old');
