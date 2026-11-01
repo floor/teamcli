@@ -10,6 +10,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SignedEventRecord } from '../src/bus/log.ts';
+import { startBus } from '../src/bus/server.ts';
 import { WEBHOOK_POLICY, deliverWebhook, makeWebhookDelivery, webhookRoutesOf } from '../src/bus/webhook.ts';
 import { validateTeamFile } from '../src/file/validate.ts';
 
@@ -382,4 +383,49 @@ test('nothing the adapter reports contains the secret value', async () => {
 
   expect(said.lines.join('\n')).not.toContain('synthetic-secret-value');
   expect(readFileSync(hook.secretFile, 'utf8').trim()).toBe('synthetic-secret-value');
+});
+
+test('a running bus posts an accepted arrival to the seat\'s webhook adapter', async () => {
+  const base = scratch();
+  const hook = files(base, '');
+  const get = receiver(() => new Response('ok', { status: 204 }));
+  writeFileSync(hook.urlFile, get.url + '\n');
+  // The seat's drop folder, as the send writes it before the bus's first reconcile pass.
+  const root = join(base, 'acme');
+  const dir = join(root, '.agents', 'send-drops', 'acme', 'iris');
+  mkdirSync(dir, { recursive: true });
+  const drop = join(dir, 'msg-1');
+  writeFileSync(drop, 'from lead\n\nhello from the bus scene\n');
+  const lines: string[] = [];
+
+  const started = await startBus({
+    root,
+    team: teamWith(base, hook),
+    home: base,
+    stderr: (text) => lines.push(text),
+    reconcileIntervalMs: 0,
+  });
+  expect(started.kind).toBe('serving');
+  if (started.kind !== 'serving') return;
+  try {
+    for (let i = 0; i < 200 && get.hits.length === 0; i += 1) await Bun.sleep(10);
+    expect(get.hits.length).toBe(1);
+    const hit = get.hits[0]!;
+    expect(hit.method).toBe('POST');
+    expect(hit.url).toBe('/routine');
+    expect(hit.authorization).toBe('Bearer synthetic-secret-value');
+    expect(hit.body).not.toContain('synthetic-secret-value');
+    const carrying = JSON.parse(hit.body) as { v: number; event: SignedEventRecord };
+    expect(carrying.v).toBe(1);
+    expect(carrying.event.payload.kind).toBe('message.arrived');
+    expect(carrying.event.payload.to).toBe('iris');
+    expect(carrying.event.payload.record_id).toBe('msg-1');
+    expect(carrying.event.payload.from).toBe('lead');
+    // Delivered or not, the drop file the seat's pull reads stays the backup.
+    expect(existsSync(drop)).toBe(true);
+    expect(readFileSync(drop, 'utf8')).toBe('from lead\n\nhello from the bus scene\n');
+    expect(lines.join('\n')).not.toContain('not delivered');
+  } finally {
+    await started.handle.close();
+  }
 });
