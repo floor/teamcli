@@ -102,8 +102,9 @@ Options:
   --help      print this text
 
 Every command but team client general-grant also takes --general <grant.json> --key <client.key>:
-a general grant the owner signed, covering the command and this team's entity, runs it as the owner,
-with no terminal. up, init and config read it themselves; every other command is admitted here.
+a general grant the owner signed over every entity and covering the command runs it as the owner,
+with no terminal; a grant that lists entities is refused until 0.5.11. up, init and config read it
+themselves; every other command is admitted here.
 
 The team is the registry record. Edit it with team config. .agents/team.yaml is only an input to team migrate.
 
@@ -214,8 +215,9 @@ export async function main(argv: string[], io: Io): Promise<number> {
   // before any option parsing, file reading, caller check or herdr call in the command itself.
   if (rest.includes('--help') || rest.includes('-h')) return printHelp(io, command.USAGE);
   // The general door (src/client/general-door.ts): `--general <grant.json> --key <client.key>` on
-  // any command is verified here, once, for that command's op and this team's entity; an admitted
-  // run reaches the command as the owner, with the two options taken off its line.
+  // any command is verified here, once, for the op the line reaches; a grant that lists entities
+  // is refused until 0.5.11. An admitted run reaches the command as the owner, with the two
+  // options taken off its line.
   const door = generalDoor(name, rest, io);
   if (door.kind === 'usage') {
     if (door.json) writeJsonError(io, 'team.general-usage', door.why, null);
@@ -226,6 +228,11 @@ export async function main(argv: string[], io: Io): Promise<number> {
     if (door.json) writeJsonError(io, 'team.general-refused', door.why, null);
     else io.stderr(`team ${name}: ${door.why}\n`);
     return 1; // exit: team.general-refused
+  }
+  if (door.kind === 'target') {
+    if (door.json) writeJsonError(io, 'team.general-target', door.why, null);
+    else io.stderr(`team ${name}: ${door.why}\n`);
+    return 1; // exit: team.general-target
   }
   if (door.kind === 'admitted' && !door.json) io.stderr(`team ${name}: admitted by general grant ${door.grant.grant_id} (${door.grant.client_id})\n`);
   rest = door.argv;

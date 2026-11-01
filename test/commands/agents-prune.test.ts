@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Caller } from '../../src/caller.ts';
 import { generalDoor } from '../../src/client/general-door.ts';
-import { issueOwnerGeneralGrant } from '../../src/client/general-grant.ts';
+import { issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL } from '../../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../../src/client/records.ts';
 import { runAgents, type AgentsJson } from '../../src/commands/agents.ts';
 import { agentsDir, getAgent, registerAgent, type Agent, type AgentLifecycle } from '../../src/registry/agents.ts';
@@ -354,7 +354,7 @@ describe('team agents prune', () => {
     expect(doc.counts).toMatchObject({ listed: 1, to_retire: 1, retired: 1, failed: 0 });
   });
 
-  test('a general grant scoped to one entity lists and retires only that entity', async () => {
+  test('a scoped general grant is refused until 0.5.11; a wildcard grant prunes as the owner does', async () => {
     const where = place(ALPHA);
     // The world sits in the OS temp directory, outside every repository. A client key may not sit
     // in the OS temp directory, so for the door calls the OS temp directory is another, empty
@@ -377,7 +377,10 @@ describe('team agents prune', () => {
       const files = writeClientKeyFiles(join(where.home, '.config', 'team-client', 'probe'), pair);
       if (!files.ok) throw new Error(files.why);
       installKey(where.home, JSON.parse(readFileSync(join(import.meta.dir, '..', 'fixtures', 'key.json'), 'utf8')));
-      const issued = issueOwnerGeneralGrant(where.home, {
+      const io = testIo(where.root, { kind: 'owner-no-tty' });
+      io.env.HOME = where.home;
+      // A grant that lists entities is refused before the command runs, even for --apply.
+      const scoped = issueOwnerGeneralGrant(where.home, {
         clientId: 'probe',
         publicKey: pair.publicKey,
         entities: ['alpha'],
@@ -385,9 +388,21 @@ describe('team agents prune', () => {
         mayIssue: false,
         expires: new Date(NOW.getTime() + 86_400_000),
       }, NOW);
+      if (!scoped.ok) throw new Error(scoped.why);
+      const scopedDoor = generalDoor('agents', ['prune', '--apply', '--general', scoped.path, '--key', files.keyPath], io, NOW);
+      expect(scopedDoor.kind).toBe('target');
+      if (scopedDoor.kind === 'target') expect(scopedDoor.why).toBe(SCOPED_GRANT_REFUSAL);
+      expect(getAgent(where.home, inside.id)?.lifecycle).toBe('stopped');
+      // The wildcard is the owner's own path, so the run takes the owner's machine scope.
+      const issued = issueOwnerGeneralGrant(where.home, {
+        clientId: 'probe',
+        publicKey: pair.publicKey,
+        entities: ['*'],
+        ops: ['*'],
+        mayIssue: false,
+        expires: new Date(NOW.getTime() + 86_400_000),
+      }, NOW);
       if (!issued.ok) throw new Error(issued.why);
-      const io = testIo(where.root, { kind: 'owner-no-tty' });
-      io.env.HOME = where.home;
       const dryDoor = generalDoor('agents', ['prune', '--json', '--general', issued.path, '--key', files.keyPath], io, NOW);
       expect(dryDoor.kind).toBe('admitted');
       if (dryDoor.kind !== 'admitted') return;
@@ -396,7 +411,7 @@ describe('team agents prune', () => {
       const dry = await runAgents(dryDoor.argv, dryDoor.io, { home: where.home, now: () => NOW });
       const plan = JSON.parse(io.out) as AgentsJson;
       expect(dry).toBe(1);
-      expect(plan.records.map((one) => one.id)).toEqual([inside.id]);
+      expect(plan.records.map((one) => one.id)).toEqual([inside.id, outside.id]);
       const applyDoor = generalDoor('agents', ['prune', '--apply', '--general', issued.path, '--key', files.keyPath], io, NOW);
       expect(applyDoor.kind).toBe('admitted');
       if (applyDoor.kind !== 'admitted') return;
@@ -405,8 +420,7 @@ describe('team agents prune', () => {
       const code = await runAgents(applyDoor.argv, applyDoor.io, { home: where.home, now: () => NOW });
       expect(code).toBe(0);
       expect(getAgent(where.home, inside.id)?.lifecycle).toBe('retired');
-      expect(getAgent(where.home, outside.id)?.lifecycle).toBe('stopped');
-      expect(getAgent(where.home, outside.id)?.orphaned_at ?? null).toBeNull();
+      expect(getAgent(where.home, outside.id)?.lifecycle).toBe('retired');
     } finally {
       if (savedTmp === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = savedTmp;
