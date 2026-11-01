@@ -8,6 +8,7 @@ import { admitGeneral } from '../client/general-grant.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
 import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
+import { ownerSeatRuleAdmits } from '../client/owner-action-step.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -236,6 +237,8 @@ export async function runInit(
   }
   // Owner-seat approval of a team creation (src/client/team-create.ts). Each of these forms runs
   // without the owner terminal: the authority is an owner signer's signature, never the caller.
+  // The revoke is the one that reads the caller: it is the owner's act, admitted by her terminal
+  // or by an owner-signer's always rule, as `team approvals revoke` admits it.
   const actionHome = home ?? homedir();
   const store = sources.ownerSeatStore ?? systemOwnerSeatKeyStore();
   const now = sources.now?.() ?? new Date();
@@ -300,10 +303,22 @@ export async function runInit(
     actionDone('answered', 'team init: approval modes', { modes: listed.modes, ignored: listed.ignored });
     actionOutcome = 'done';
   } else if (args.values['revoke-approval'] !== undefined) {
-    const revoked = revokeTeamCreateRule(actionHome, args.values['revoke-approval']);
-    if (!revoked.ok) actionRefusal(revoked.why);
-    else actionDone('answered', 'team init: approval rule revoked', { rule_id: args.values['revoke-approval'] });
-    actionOutcome = revoked.ok ? 'done' : 'refused';
+    // Revoking is the owner's, on the same gate `team approvals revoke` reads: her terminal
+    // outside herdr, or an owner-signer's `team-revoke-approval` always rule covering this
+    // folder. The rule carries the owner's signature, so a seat admitted by it still acts as
+    // the owner's answer, never on its own say-so.
+    const caller = callerOf(io);
+    const seatSources = { home: actionHome, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
+    if (!isOwner(caller) && !ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources)) {
+      const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside herdr' });
+      actionRefusal(detached ?? `only the owner revokes an approval rule, from a terminal outside herdr; this call is ${describeCaller(caller)}`);
+      actionOutcome = 'refused';
+    } else {
+      const revoked = revokeTeamCreateRule(actionHome, args.values['revoke-approval']);
+      if (!revoked.ok) actionRefusal(revoked.why);
+      else actionDone('answered', 'team init: approval rule revoked', { rule_id: args.values['revoke-approval'] });
+      actionOutcome = revoked.ok ? 'done' : 'refused';
+    }
   }
   let seatApproved = false;
   if (actionOutcome === null && args.values.execute !== undefined) {
