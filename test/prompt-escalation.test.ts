@@ -71,6 +71,9 @@ const permission = 'Bash command\n\n  chmod +x run.sh\n\nDo you want to proceed?
 const plan = readFileSync(new URL('./fixtures/claude-code/2.1.289/permission-plan-wide-plain.txt', import.meta.url), 'utf8');
 const held = readFileSync(new URL('./fixtures/claude-code/2.1.302/held.txt', import.meta.url), 'utf8');
 const PLAN_TEXT = 'Claude has written up a plan and is ready to execute. Would you like to proceed?';
+// The agent's own question, the third dialog the grace may answer.
+const asked = readFileSync(new URL('./fixtures/claude-code/2.1.289/question-plain.txt', import.meta.url), 'utf8');
+const ASKED_TEXT = 'Which filename should I use for the file?';
 
 const fine: Machine = { loadPerCore: 1, memoryFree: 50, diskFree: 200e9, swapTotal: 9e9, swapFree: 8e9, swapUsed: 1e9 };
 
@@ -289,6 +292,23 @@ describe('a plan approval and a confirmation climb on the same clock as any prom
       text: "worker-1 is still at a plan approval prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told",
       to: 'owner',
     }]);
+  });
+});
+
+describe('a question climbs on the same clock, so the grace can answer it wherever it is seen', () => {
+  test('a worker held at a question climbs after the window, with the dialog’s own text in its first report', () => {
+    const memory = newMemory();
+    const stuck = live({ 'worker-1': { status: 'blocked', screen: asked } });
+    const first = at(stuck, 0, memory);
+    expect(first.reports.map((report) => report.key)).toEqual([expect.stringMatching(/^question:worker-1:[0-9a-f]{12}$/)]);
+    expect(first.reports[0]!.text).toBe(`worker-1 asked a question — "${ASKED_TEXT}": the operator's to act on`);
+    expect(at(stuck, 5 * MIN - 1, memory).reports).toEqual([]);
+    expect(at(stuck, 5 * MIN, memory).reports).toEqual([{
+      key: 'prompt-escalated:worker-1',
+      text: "worker-1 is still at a question prompt after 5 minutes: the team's lead has not cleared it, and the entity's lead and the owner are told",
+      to: 'owner',
+    }]);
+    expect(at(stuck, 60 * MIN, memory).reports).toEqual([]);
   });
 });
 
