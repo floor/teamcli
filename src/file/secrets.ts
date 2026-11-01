@@ -42,16 +42,25 @@ const URL_USERINFO = /[^\s/:@]+(?::[^\s/@]+)?@$/;
 /** The characters a prefixed credential's body is written in. */
 const TOKEN_BODY = '[A-Za-z0-9_+=-]';
 
+/** The prefix list as a regular-expression alternation, longest first. */
+const PREFIX_ALTERNATION = [...KEY_PREFIXES].sort((a, b) => b.length - a.length).map(escapePattern).join('|');
+
 /**
  * One key-shaped token wherever it sits: a known prefix followed by at least sixteen body
  * characters, with a non-token character (or the line's start) before it. Framing around a token
  * — a backtick, a bracket, a colon, an equals sign, a comma — is a boundary, not part of the
  * word; a prefix shape inside a longer word (`risk-…`) is not a token.
  */
-const KEY_TOKEN = new RegExp(
-  `(^|[^A-Za-z0-9_-])((?:${[...KEY_PREFIXES].sort((a, b) => b.length - a.length).map(escapePattern).join('|')})${TOKEN_BODY}{16,})`,
-  'g',
-);
+const KEY_TOKEN = new RegExp(`(^|[^A-Za-z0-9_-])((?:${PREFIX_ALTERNATION})${TOKEN_BODY}{16,})`, 'g');
+
+/** A row that ends in a known prefix and any body characters: the wrap left too little of the
+ *  token in this row for KEY_TOKEN to see it whole, so the next row decides. */
+const ROW_END_TOKEN = new RegExp(`(^|[^A-Za-z0-9_-])((?:${PREFIX_ALTERNATION})${TOKEN_BODY}*)$`);
+
+/** One token-body character, for asking whether a row starts with the token's continuation. */
+const TOKEN_CHARACTER = /[A-Za-z0-9_+=-]/;
+
+type Span = { start: number; end: number };
 
 /** A literal for a regular expression: a prefix is matched as written, not as a pattern. */
 function escapePattern(text: string): string {
@@ -94,6 +103,94 @@ function maskOnce(line: string, fs: FsReader): string {
   masked = masked.replace(KEY_TOKEN, (_whole, separator: string) => `${separator}[masked]`);
   masked = replaceWords(masked, (word) => looksRandom(word, fs));
   return masked;
+}
+
+/**
+ * Masks a screen: every row is masked as a line, and a credential the terminal wrapped over
+ * two or more rows is masked on both sides of each join, so joining the printed rows recovers
+ * nothing. The same patterns judge the join as judge a line — one source of truth — and only a
+ * span that crosses a join is taken from it: a token (however the wrap fell inside it), a URL's
+ * userinfo, a private-key header, or a random-looking word. A row that ends in a known prefix
+ * with too little body to be key-shaped on its own is masked from the prefix to its end when
+ * the next row begins with token characters. The row count never changes: a peek prints the
+ * same number of rows it read, and a sha or UUID that spans a wrap stays readable.
+ */
+export function maskSecretRows(rows: readonly string[], fs: FsReader = defaultFs): string[] {
+  const rowEnds: number[] = [];
+  let total = 0;
+  for (const row of rows) {
+    total += row.length;
+    rowEnds.push(total);
+  }
+  const spans = crossingSpans(rows.join(''), rowEnds, fs);
+  if (spans.length === 0) return rows.map((row) => maskSecretsLine(row, fs));
+  return rows.map((row, index) => {
+    const rowStart = index === 0 ? 0 : (rowEnds[index - 1] ?? 0);
+    const rowEnd = rowEnds[index] ?? 0;
+    const fragments: Span[] = [];
+    for (const span of spans) {
+      const start = Math.max(span.start, rowStart) - rowStart;
+      const end = Math.min(span.end, rowEnd) - rowStart;
+      if (start < end) fragments.push({ start, end });
+    }
+    if (fragments.length === 0) return maskSecretsLine(row, fs);
+    fragments.sort((a, b) => a.start - b.start);
+    const merged: Span[] = [];
+    for (const fragment of fragments) {
+      const last = merged[merged.length - 1];
+      if (last !== undefined && fragment.start <= last.end) last.end = Math.max(last.end, fragment.end);
+      else merged.push({ ...fragment });
+    }
+    let rebuilt = '';
+    let cursor = 0;
+    for (const fragment of merged) {
+      rebuilt += `${row.slice(cursor, fragment.start)}[masked]`;
+      cursor = fragment.end;
+    }
+    return maskSecretsLine(`${rebuilt}${row.slice(cursor)}`, fs);
+  });
+}
+
+/** The secret spans of the joined rows that cross at least one row join. */
+function crossingSpans(text: string, rowEnds: readonly number[], fs: FsReader): Span[] {
+  const spans: Span[] = [];
+  const crosses = (start: number, end: number): boolean => rowEnds.some((boundary) => start < boundary && boundary < end);
+
+  for (const match of text.matchAll(URL_USERINFO_URL)) {
+    const start = (match.index ?? 0) + match[0].indexOf('://') + 3;
+    const end = (match.index ?? 0) + match[0].length - 1;
+    // The whole URL decides the wrap, not the userinfo alone: a wrap right after the scheme
+    // puts the entire credential in the next row, where no line-level URL rule could see it.
+    if (crosses(match.index ?? 0, (match.index ?? 0) + match[0].length)) spans.push({ start, end });
+  }
+  for (const match of text.matchAll(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (crosses(start, end)) spans.push({ start, end });
+  }
+  for (const match of text.matchAll(KEY_TOKEN)) {
+    const start = (match.index ?? 0) + (match[1] ?? '').length;
+    const end = (match.index ?? 0) + match[0].length;
+    if (crosses(start, end)) spans.push({ start, end });
+  }
+  for (const match of text.matchAll(/(^|[\s"'=,;])([^\s"'=,;]+)/g)) {
+    const start = (match.index ?? 0) + (match[1] ?? '').length;
+    const end = (match.index ?? 0) + match[0].length;
+    if (crosses(start, end) && looksRandom(match[2] ?? '', fs)) spans.push({ start, end });
+  }
+  let rowStart = 0;
+  for (const rowEnd of rowEnds) {
+    if (rowEnd < text.length && TOKEN_CHARACTER.test(text[rowEnd] ?? '')) {
+      const tail = ROW_END_TOKEN.exec(text.slice(rowStart, rowEnd));
+      if (tail !== null) {
+        const start = rowStart + (tail.index ?? 0) + (tail[1] ?? '').length;
+        const head = /^[A-Za-z0-9_+=-]*/.exec(text.slice(rowEnd))?.[0] ?? '';
+        spans.push({ start, end: rowEnd + head.length });
+      }
+    }
+    rowStart = rowEnd;
+  }
+  return spans;
 }
 
 /** Replaces the words `shaped` accepts, keeping each separator exactly as it was. */
