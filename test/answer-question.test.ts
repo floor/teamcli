@@ -29,6 +29,7 @@ import type { DialogKind } from '../src/watch/dialog.ts';
 import { testIo } from './helpers.ts';
 
 const cursorIdle = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
+const cursorQuestion = readFileSync(new URL('./fixtures/cursor/2026.10.01/question.txt', import.meta.url), 'utf8');
 const FILE = ['--file', '.agents/team.yaml'];
 const NOW = new Date('2026-10-05T04:00:00.000Z');
 const VERSION = '2026.10.01-14929f9';
@@ -133,6 +134,22 @@ function fileFor(lobby: string, root: string, cli: string): string {
 /** A capture file as the pane handed it over: the whole text, unchanged. */
 function capture(path: string): string {
   return readFileSync(new URL(`./fixtures/${path}`, import.meta.url), 'utf8');
+}
+
+/** The cursor question capture with its one-row question wrapped onto the rows given, laid into
+ *  the box at the capture's own interior width. Builder-3's probe pair is two captures of one
+ *  pane that differ only in the continuation row, and rows built here differ the same way. */
+function wrappedQuestion(rows: readonly string[]): string {
+  const lines = cursorQuestion.split('\n');
+  const at = lines.findIndex((line) => line.includes('Which name should be used for the file?'));
+  if (at < 0) throw new Error('the cursor capture no longer holds the question row');
+  const reference = lines[at] as string;
+  const open = reference.indexOf('│');
+  const close = reference.lastIndexOf('│');
+  const room = close - open - 1;
+  const boxed = rows.map((row) => `${reference.slice(0, open + 1)} ${row.padEnd(room - 1)}${reference.slice(close)}`);
+  lines.splice(at, 1, ...boxed);
+  return lines.join('\n');
 }
 
 /** The team file of another project: a readable team, so the run reaches the cross-team check. */
@@ -496,6 +513,28 @@ describe('team answer <seat> question', () => {
     expect(run.err).toBe('lead: the two fresh reads of the pane do not agree on the dialog\n');
     expect(host.keys).toEqual([]);
     expect(host.reads).toBe(2);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
+  test('a wrapped question is read to its end, so the two captures differing in the continuation row disagree', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // Builder-3's probe: one pane, captured twice, the captures differing only in the row under
+    // the wrapped question. A reading that stops at the first row sees the same text twice and
+    // presses the key across the difference; the block is read to its end, so the two reads
+    // disagree and no key is pressed.
+    const writes = wrappedQuestion(['1. Which name should be used for the', 'file we write?']);
+    const names = wrappedQuestion(['1. Which name should be used for the', 'file we name?']);
+    const host = fake(home, 'lead', writes, { shipped: true });
+    let reads = 0;
+    host.pane = () => (reads++ === 0 ? writes : names);
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
+    expect(run.err).toBe('lead: the two fresh reads of the pane do not agree on the dialog\n');
+    expect(host.keys).toEqual([]);
+    expect(reads).toBe(2);
     expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
   });
 
