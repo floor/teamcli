@@ -17,6 +17,8 @@ import { codexEndpointSocket } from '../src/launch/codex-endpoint.ts';
 import { seatDeliveryClass } from '../src/launch/delivery-class.ts';
 import type { Machine } from '../src/watch/machine.ts';
 import { loadTeamFile } from '../src/file/load.ts';
+import { markStopped } from '../src/file/lines.ts';
+import { readTeamText, writeTeamText } from '../src/file/team-text.ts';
 import { RESTART_OUTPUT_SCHEMA } from '../src/output/schema.ts';
 import { findAgent, readAgents, recordAgentSession, registerAgent, updateAgent } from '../src/registry/agents.ts';
 import { recordedSeatSession } from '../src/registry/resume.ts';
@@ -26,6 +28,7 @@ import { approvalStanding } from '../src/store/store.ts';
 import { gateVerdict } from '../src/permissions/who.ts';
 import { emptySession, readState, updateState } from '../src/state.ts';
 import { CLAUDE_IDLE, claudeBox, gitEnv, shortSocketBase, testIo } from './helpers.ts';
+import { intoRegistry, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { assertJsonErrorShape, assertMatchesOutputSchema } from './helpers/output.ts';
 
 const NOW = new Date('2026-10-16T02:00:00Z');
@@ -965,6 +968,66 @@ describe('team restart <seat>', () => {
     const ioLocked = testIo(fixture.root, { kind: 'owner' });
     expect(await runRestart(['worker'], ioLocked, sources)).toBe(1);
     expect(ioLocked.err).toContain('another session-mutating run is holding');
+  });
+
+  // `remove --keep` writes the sign-off into the registry's record when the team lives there, and
+  // leaves `.agents/team.yaml` as it was. A seat restarting another from its own pane is handed
+  // that file as the session's launched pointer; read as a plain file it misses the mark the stop
+  // just wrote, relaunches the seat, and leaves send and register refusing it. The pointer is read
+  // through the seam instead: the registry's record is the team, and the refusal is the file
+  // seats' own, id and words.
+  test('refuses a registry team\'s signed-off seat from a launched pane, never the file it launched from', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    const stored = storedTeam(fixture.root, fixture.home);
+    if (stored === null) throw new Error('the fixture team is not in the registry');
+    await underRegistry(async () => {
+      expect(writeTeamText(fixture.file, markStopped(stored.text, 'worker'), { home: fixture.home, command: 'remove' }))
+        .toEqual({ ok: true, target: 'registry' });
+      // The mark is the registry's; the file the session was launched from is exactly as launched.
+      expect(storedTeam(fixture.root, fixture.home)?.text ?? '').toContain('stopped: true');
+      expect(readFileSync(fixture.file, 'utf8')).toBe(fixture.yaml);
+
+      updateState(fixture.dir, (state) => {
+        const session = (state.sessions.acme ??= emptySession());
+        session.launched_file = fixture.file;
+        session.seats.lead = { stage: 'ready', pane: 'pane-lead', workspace: 'ws-lead' };
+        session.seats.worker = { stage: 'ready', pane: 'pane-old', workspace: 'ws-old' };
+      });
+      noteLaunchedPane(fixture.home, fixture.file, 'pane-lead', 'acme');
+
+      const { sources, did } = makeHarness(fixture);
+      const io = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker'], io, sources)).toBe(1);
+      expect(io.err).toBe('team restart: worker is signed off; the owner takes the sign-off off in the file and runs team up\n');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+
+      const ioJson = testIo(fixture.root, { kind: 'seat', name: 'lead', pane: 'pane-lead', session: 'acme' });
+      expect(await runRestart(['worker', '--json'], ioJson, sources)).toBe(1);
+      assertJsonErrorShape(ioJson.out, { id: 'restart.signed-off', messageContains: 'worker is signed off' });
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
+  });
+
+  // The owner's own terminal carries no launched pointer: the same mark is read from the registry
+  // itself, and refuses the same way.
+  test('refuses a registry team\'s signed-off seat from the owner\'s own terminal', async () => {
+    const fixture = makeFixture();
+    intoRegistry(fixture.root, fixture.home);
+    const stored = storedTeam(fixture.root, fixture.home);
+    if (stored === null) throw new Error('the fixture team is not in the registry');
+    await underRegistry(async () => {
+      expect(writeTeamText(fixture.file, markStopped(readTeamText(fixture.file, { home: fixture.home }), 'worker'), { home: fixture.home, command: 'remove' }))
+        .toEqual({ ok: true, target: 'registry' });
+      const { sources, did } = makeHarness(fixture);
+      const io = testIo(fixture.root, { kind: 'owner' });
+      expect(await runRestart(['worker'], io, sources)).toBe(1);
+      expect(io.err).toBe('team restart: worker is signed off; the owner takes the sign-off off in the file and runs team up\n');
+      expect(did.closed).toEqual([]);
+      expect(did.created).toBe(0);
+    });
   });
 
   // The stop is a session mutation, so a restart stands aside while another run mutates the
