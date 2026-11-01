@@ -7,7 +7,7 @@ import type { Problem } from './types.ts';
 // slugs look like one. An absolute path that is a real directory is a location, not a value —
 // a machine's temp path is long, dotless and absolute — but the shape alone silences nothing:
 // a credential in path clothing (`/x/sk-…`) is not a directory, so it still warns.
-const KEY_PREFIXES = [
+export const KEY_PREFIXES = [
   'sk-', 'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'glpat-', 'xoxb-', 'xoxp-', 'xoxa-', 'xoxs-',
   'AKIA', 'ASIA', 'AIza', 'lin_api_', 'npm_', 'shpat_', 'dckr_pat_',
 ];
@@ -34,23 +34,62 @@ export function findSecrets(root: YamlNode, fs: FsReader = defaultFs): { refused
 }
 
 const URL_CREDENTIALS = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/i;
+const URL_CREDENTIALS_GLOBAL = new RegExp(URL_CREDENTIALS.source, 'gi');
+const URL_USERINFO = /[^\s/:@]+:[^\s/@]+@$/;
+
+/** The characters a prefixed credential's body is written in. */
+const TOKEN_BODY = '[A-Za-z0-9_+=-]';
+
+/**
+ * One key-shaped token wherever it sits: a known prefix followed by at least sixteen body
+ * characters, with a non-token character (or the line's start) before it. Framing around a token
+ * — a backtick, a bracket, a colon, an equals sign, a comma — is a boundary, not part of the
+ * word; a prefix shape inside a longer word (`risk-…`) is not a token.
+ */
+const KEY_TOKEN = new RegExp(
+  `(^|[^A-Za-z0-9_-])((?:${[...KEY_PREFIXES].sort((a, b) => b.length - a.length).map(escapePattern).join('|')})${TOKEN_BODY}{16,})`,
+  'g',
+);
+
+/** A literal for a regular expression: a prefix is matched as written, not as a pattern. */
+function escapePattern(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function isKeyShaped(word: string): boolean {
   return KEY_PREFIXES.some((prefix) => word.startsWith(prefix) && word.length >= prefix.length + 16);
 }
 
+/** No line needs more than a couple of passes; the bound only stops a pathological loop. */
+const MAX_MASK_PASSES = 4;
+
 /**
- * The same judgement `findSecrets` makes, applied to a line of a seat's screen: every word shaped
+ * The same judgement `findSecrets` makes, applied to a line of a seat's screen: every token shaped
  * like a key, every private-key header, every URL's userinfo and every random-looking word becomes
- * `[masked]`. One source of truth for both callers — a value the team-file check refuses or warns
- * about is a value a peek never prints. The randomness rule is shared as it is, including its
- * limits: `looksRandom` measures the entropy of the characters present, so a hex commit id cannot
- * clear its threshold and a UUID usually does not either.
+ * `[masked]`. The judgement is shared — a value the team-file check refuses or warns about is a
+ * value a peek never prints — and the token scan is deliberately stricter: a screen wraps a token
+ * in whatever punctuation the program printed, so the prefix is matched wherever it sits, while
+ * the team-file check still splits a value into words. The randomness rule is shared as it is,
+ * including its limits: `looksRandom` measures the entropy of the characters present, so a hex
+ * commit id cannot clear its threshold and a UUID usually does not either.
+ *
+ * Every pattern is global — a line can carry more than one URL or token — and the output is
+ * re-scanned until a pass changes nothing, so no known prefix or userinfo URL survives it.
  */
 export function maskSecretsLine(line: string, fs: FsReader = defaultFs): string {
-  let masked = line.replace(URL_CREDENTIALS, (match) => match.replace(/[^\s/:@]+:[^\s/@]+@$/, '[masked]@'));
+  let masked = line;
+  for (let pass = 0; pass < MAX_MASK_PASSES; pass += 1) {
+    const before = masked;
+    masked = maskOnce(masked, fs);
+    if (masked === before) break;
+  }
+  return masked;
+}
+
+function maskOnce(line: string, fs: FsReader): string {
+  let masked = line.replace(URL_CREDENTIALS_GLOBAL, (match) => match.replace(URL_USERINFO, '[masked]@'));
   masked = masked.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g, '[masked]');
-  masked = replaceWords(masked, (word) => isKeyShaped(word));
+  masked = masked.replace(KEY_TOKEN, (_whole, separator: string) => `${separator}[masked]`);
   masked = replaceWords(masked, (word) => looksRandom(word, fs));
   return masked;
 }
