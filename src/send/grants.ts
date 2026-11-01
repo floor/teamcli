@@ -70,6 +70,19 @@ export function readSendGrantReads(home: string = homedir()): SendGrantRead[] {
   return out;
 }
 
+/** The name a printed re-issue line writes: the record's own when `team grant --send` takes it,
+ *  else a safe stem made from it. An older record may carry a display name ("the review channel"),
+ *  which the writer refuses as a file stem; the line must be one the writer accepts. */
+export function reissueName(name: string): string {
+  if (RECORD_NAME_PATTERN.test(name)) return name;
+  const kept = name
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .slice(0, 64)
+    .replace(/[^A-Za-z0-9]+$/, '');
+  return kept === '' ? 'send-grant' : kept;
+}
+
 /** The line that recreates an unverified record signed, with the fields the record itself holds.
  *  Quoted so the owner can paste it as one command whatever the record spells. */
 export function sendGrantReissueLine(read: SendGrantRecord): string {
@@ -78,7 +91,7 @@ export function sendGrantReissueLine(read: SendGrantRecord): string {
     `--from ${shellWord(read.from)}`,
     `--to ${shellWord(read.to)}`,
     `--expires ${shellWord(read.expires)}`,
-    `--name ${shellWord(read.name)}`,
+    `--name ${shellWord(reissueName(read.name))}`,
   ].join(' ');
 }
 
@@ -94,6 +107,32 @@ export function unverifiedSendGrantRefusal(read: SendGrantRead, home: string = h
 
 /** A send grant to write: the pair, its expiry, and the file stem the record is named. */
 export type SendGrantRequest = { name: string; from: string; to: string; expires: string };
+
+/** One ISO-8601 UTC timestamp: a calendar date, a clock time to the second, an optional fraction,
+ *  and `Z`. New writes take this form only: `Date.parse` alone reads "June 1, 2027" and signs
+ *  "February 30" as March 2, and the expiry is signed as the text it is read back from. */
+const ISO_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/;
+
+/** The instant an ISO timestamp names, or null when the calendar has no such moment: the date
+ *  constructor rolls 2027-02-30 into March, so each field is read back and compared. */
+function isoInstant(text: string): number | null {
+  const match = ISO_TIMESTAMP.exec(text);
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const ms = match[7] === undefined ? 0 : Number(match[7].padEnd(3, '0'));
+  const at = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const back = new Date(at);
+  if (
+    back.getUTCFullYear() !== year || back.getUTCMonth() !== month - 1 || back.getUTCDate() !== day
+    || back.getUTCHours() !== hour || back.getUTCMinutes() !== minute || back.getUTCSeconds() !== second
+  ) return null;
+  return at;
+}
 
 /** A validated send grant, not yet signed or written. */
 export type SendGrantPlan = { ok: true; record: SendGrantRecord } | { ok: false; why: string };
@@ -119,9 +158,12 @@ export function planSendGrant(
   const toProblem = sideProblem(request.to, 'to', true);
   if (toProblem !== null) return { ok: false, why: toProblem };
   const expires = request.expires.trim();
-  const expMs = Date.parse(expires);
-  if (!Number.isFinite(expMs)) {
-    return { ok: false, why: `--expires "${request.expires}" is not a timestamp: an ISO date, such as ${new Date(now.getTime() + SEND_GRANT_MAX_DAYS * 86_400_000).toISOString()}` };
+  if (!ISO_TIMESTAMP.test(expires)) {
+    return { ok: false, why: `--expires "${request.expires}" is not an ISO timestamp: a UTC date and time, such as ${new Date(now.getTime() + SEND_GRANT_MAX_DAYS * 86_400_000).toISOString()}` };
+  }
+  const expMs = isoInstant(expires);
+  if (expMs === null) {
+    return { ok: false, why: `--expires "${expires}" is not a real date and time: the calendar has no such day` };
   }
   if (expMs <= now.getTime()) {
     return { ok: false, why: `--expires "${expires}" is not in the future: a send grant stops when it is written, so it would admit nothing` };

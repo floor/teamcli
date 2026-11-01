@@ -226,6 +226,40 @@ function grantsFolder(home: string): string {
   return join(home, '.config', 'team', 'grants');
 }
 
+/** The re-issue command the refusal prints, as one line. */
+function printedLine(text: string): string {
+  const line = text.split('\n').find((one) => one.startsWith('team grant --send '));
+  if (line === undefined) throw new Error(`no re-issue line in: ${text}`);
+  return line;
+}
+
+/** One printed command line as its shell words: single quotes group, `'\''` is one quote. */
+function shellWords(line: string): string[] {
+  const words: string[] = [];
+  let word = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const ch = line.charAt(index);
+    if (!quoted && ch === '\\' && line[index + 1] === "'") {
+      word += "'";
+      index += 1;
+      continue;
+    }
+    if (ch === "'") {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && /\s/.test(ch)) {
+      if (word !== '') words.push(word);
+      word = '';
+      continue;
+    }
+    word += ch;
+  }
+  if (word !== '') words.push(word);
+  return words;
+}
+
 /** The signed record the owner's side writes: the file carries the pair and its expiry, and the
  *  signature covers the stem's name, the pair and the expiry. */
 function signSendRecord(
@@ -387,6 +421,30 @@ describe('team send: an unsigned record refuses and says how to re-issue it', ()
       'from builder@floor — admitted by: an owner-signed grant naming send (old-grant)\n\na note',
     ]);
   });
+
+  test('a legacy display name prints a name the writer takes, and that line runs as printed', async () => {
+    const w = world();
+    const folder = grantsFolder(w.home);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(
+      join(folder, 'legacy.yaml'),
+      `name: the review channel\nsend:\n  from: builder@floor\n  to: lead@teamcli\nexpires: "${FUTURE}"\n`,
+    );
+    const refused = sendAsBuilder(w, 'lead@teamcli');
+    expect(await refused.code).toBe(1);
+    // The refusal still names the record as it calls itself; the printed line carries a stem the
+    // writer accepts, which it would have refused with "is not a record name".
+    expect(refused.err()).toContain('"the review channel"');
+    expect(refused.err()).toContain("--name 'the-review-channel'");
+    const line = printedLine(refused.err());
+    const owner = testIo(w.root, { kind: 'owner' });
+    const wrote = runGrant(shellWords(line).slice(2), owner, { home: w.home });
+    expect(await wrote).toBe(0);
+    expect(readSendGrants(w.home)).toEqual([
+      { name: 'the-review-channel', from: 'builder@floor', to: 'lead@teamcli', expires: FUTURE },
+    ]);
+    expect(await sendAsBuilder(w, 'lead@teamcli').code).toBe(0);
+  });
 });
 
 describe('team grant --send: the writer', () => {
@@ -447,6 +505,47 @@ describe('team grant --send: the writer', () => {
       expect(await code).toBe(2);
       expect(owner.err).toContain('team grant:');
     }
+  });
+
+  test('a date the calendar does not have is refused, not signed as the day it rolls to', async () => {
+    const w = world();
+    const owner = testIo(w.root, { kind: 'owner' });
+    // `Date.parse` reads 2027-02-30 as March 2; the record would then carry a day the owner never saw.
+    const code = runGrant(
+      ['--send', '--from', 'builder@floor', '--to', 'orchestrator@floor', '--expires', '2027-02-30T00:00:00.000Z'],
+      owner,
+      { home: w.home },
+    );
+    expect(await code).toBe(2);
+    expect(owner.err).toContain('not a real date and time');
+    expect(existsSync(grantsFolder(w.home)) ? readdirSync(grantsFolder(w.home)) : []).toEqual([]);
+  });
+
+  test('a timestamp in another spelling is refused; the ISO form without a fraction is taken', async () => {
+    const w = world();
+    const loose = testIo(w.root, { kind: 'owner' });
+    const refused = runGrant(
+      ['--send', '--from', 'builder@floor', '--to', 'orchestrator@floor', '--expires', 'June 1, 2027'],
+      loose,
+      { home: w.home },
+    );
+    expect(await refused).toBe(2);
+    expect(loose.err).toContain('is not an ISO timestamp');
+    const owner = testIo(w.root, { kind: 'owner' });
+    const wrote = runGrant(
+      ['--send', '--from', 'builder@floor', '--to', 'orchestrator@floor', '--expires', '2027-06-01T00:00:00Z'],
+      owner,
+      { home: w.home },
+    );
+    expect(await wrote).toBe(0);
+    expect(readSendGrants(w.home)).toEqual([
+      {
+        name: 'builder-at-floor-to-orchestrator-at-floor',
+        from: 'builder@floor',
+        to: 'orchestrator@floor',
+        expires: '2027-06-01T00:00:00Z',
+      },
+    ]);
   });
 
   test('the writer refuses to write over a record of another kind', async () => {

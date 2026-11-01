@@ -42,11 +42,12 @@ grant does not expire. `--name` sets the record's file name; without it the name
 The `--send` form writes a send grant: the owner-signed record [`team send`](send.md) reads when
 no rule admits a pair. `--from` is the sender — an agent id, `seat@team` or `session/seat` — and
 `--to` the receiver in the same spellings, a bare seat, or the reserved `orchestrator@<entity>`,
-the lead seat of a team of the sender's own entity. `--expires` is required: an ISO timestamp in
-the future and at most 365 days ahead. `--name` sets the record's file name; without it the name
-is the pair as one slug, `seat-at-team-to-seat-at-team`. The record is signed with the owner's
-approval key and written whole into the shared grants folder; a write never replaces a standing
-grant, a revocation or a record of another kind under the same name. A same-stem send record is the
+the lead seat of a team of the sender's own entity. `--expires` is required: an ISO-8601 UTC
+timestamp, `YYYY-MM-DDTHH:MM:SS[.SSS]Z`, in the future and at most 365 days ahead — any other
+spelling, and a date the calendar does not have, are refused. `--name` sets the record's file
+name; without it the name is the pair as one slug, `seat-at-team-to-seat-at-team`. The record is
+signed with the owner's approval key and written whole into the shared grants folder; a write
+never replaces a standing grant, a revocation or a record of another kind under the same name. A same-stem send record is the
 re-issue path and is written over, `<name>.json`; an older file of the same name under another
 extension stays in the folder, admits nothing, and is reported as unsigned. It is owner-only, like
 every grant form, and a general grant that carries `grant` admits it with no prompt. A dry run
