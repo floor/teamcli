@@ -5,11 +5,12 @@
 // checkout. The word is the path's last segment, so the entity may carry dots and is taken by
 // stripping the suffix.
 //
-// The write is the owner's, at a terminal, or a seat's under the owner's general grant for that
-// entity: the grant names the entities it reaches, and the entity is checked against it here.
-// A charter is the owner's word for one folder, and this word is not a folder's, so the charter
-// does not admit it. There is no owner-seat request: the owner asked that relaxing the check
-// need no answer, and the grant is the standing answer.
+// The write is the owner's, at a terminal, or a seat's under the owner's general grant. 0.5.10
+// admits a wildcard grant only: a grant that lists entities is refused with the one sentence in
+// src/client/general-grant.ts before the op is checked, and the entity is not read. A charter is
+// the owner's word for one folder, and this word is not a folder's, so the charter does not admit
+// it. There is no owner-seat request: the owner asked that relaxing the check need no answer, and
+// the grant is the standing answer.
 
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';

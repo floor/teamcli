@@ -49,9 +49,10 @@ leaves.
 
 A path whose last segment is names.unique names an entity's own word in the owner's entities
 file (<entity>.names.unique): how far apart seat nicknames stay — entity, project, team or off.
-A set is the owner's, or a seat's under the owner's general grant for that entity; a charter
-covers a folder and does not reach it. It edits an entry the file already declares, keeps every
-other line and writes nothing else; get is any caller's.
+A set is the owner's, or a seat's under the owner's general grant: 0.5.10 admits a wildcard grant
+only, so one that lists entities is refused until 0.5.11, and the grant's operations must admit
+config. A charter covers a folder and does not reach it. It edits an entry the file already
+declares, keeps every other line and writes nothing else; get is any caller's.
 
 Exits 0 when the registry or a value is printed or a change is written (or there was
 nothing to change), 1 when the path holds nothing, the caller is not the owner, the

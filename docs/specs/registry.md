@@ -350,10 +350,10 @@ This area writes no registry of its own; its words are the fields above. It feed
   `entity` (the default, across every team of the entity), `project` (within one project), `team`
   (within one team) or `off`. The word is written by hand or set with `team config set
   <entity>.names.unique <word>` ([config](../commands/config.md)); the command is the owner's, at
-  a terminal, or a seat's under the owner's general grant that covers the entity and admits
-  `config` — a charter covers a folder and does not reach it — and it changes that one line of an
-  entry the file already declares, never creating one. A word the file does not spell leaves the
-  default in force. It is read where a nickname is newly set — `team config set`
+  a terminal, or a seat's under a wildcard general grant that admits `config` — 0.5.10 refuses a
+  grant that lists entities — a charter covers a folder and does not reach it, and it changes that
+  one line of an entry the file already declares, never creating one. A word the file does not
+  spell leaves the default in force. It is read where a nickname is newly set — `team config set`
   on a seat's label or a whole seat map, and `team init` — against the name a seat goes by: the
   persona its written label names when the nickname field could hold it, and the field otherwise,
   compared case-insensitively and never counted when it is the seat's own name. `team add` is not
@@ -387,5 +387,5 @@ This area writes no registry of its own; its words are the fields above. It feed
   written by TeamCLI at `up`, `restart`, the swap and `down` and only ever appended; not built at
   the tag.
 - **Amended** (2026-11-01): the entity bullet names the command that writes the `names.unique`
-  word — the owner's, or a seat's under the owner's general grant for that entity — where it said
-  the word was hand-written and the owner's alone.
+  word — the owner's, or a seat's under a wildcard general grant that admits `config` — where it
+  said the word was hand-written and the owner's alone.

@@ -21,7 +21,8 @@ every nickname the new team's text carries is newly set here, so a clash refuses
 with `init.name-taken`, naming the other team and seat and the word that would allow it, and
 nothing is written. A team that already carries a duplicate is never refused by this check. The
 word is set with [`team config set`](config.md) on `<entity>.names.unique` — the owner's, or a
-seat's under the owner's general grant for that entity; this command only reads it.
+seat's under a wildcard general grant that admits `config` (0.5.10 refuses a grant that lists
+entities); this command only reads it.
 
 ## Synopsis
 

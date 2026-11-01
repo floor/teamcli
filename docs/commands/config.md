@@ -68,10 +68,11 @@ with the four named before any file is opened. `get` is any caller's and prints 
 spells — a word the check does not spell is printed as the file has it, with a note on stderr that
 the default is in force.
 
-A set is the owner's, at a terminal, or a seat's under the owner's general grant whose entity
-scope covers this entity and whose operations admit `config`; the charter is the owner's word for
-one folder and does not reach it. There is no owner-seat request for this word: the grant is the
-standing answer, and the owner sets it directly when no grant covers the entity.
+A set is the owner's, at a terminal, or a seat's under the owner's general grant: 0.5.10 admits a
+wildcard grant only, so one that lists entities is refused until 0.5.11, and the grant's
+operations must admit `config`. The charter is the owner's word for one folder and does not reach
+it. There is no owner-seat request for this word: the grant is the standing answer, and the owner
+sets it directly when no grant admits it.
 
 | Outcome | Exit |
 | --- | --- |

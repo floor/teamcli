@@ -88,7 +88,7 @@ Every change is a signed record in the registry, logged in the team log, and rai
 4. Who may set:
    - the owner, at every level;
    - a team's lead, at `seat` and `team` level within its team, for the keys and values its role's policy allows (for example an allowed-models list);
-   - a seat holding the owner's general grant, for the keys and levels that grant names — the entity's `names.unique` word is written this way today, under a grant that lists the entity and admits `config`;
+   - a seat holding the owner's general grant, for the keys and levels that grant names — the entity's `names.unique` word is written this way today, under a wildcard grant that admits `config` (0.5.10 refuses a grant that lists entities);
    - the budget's circuit breaker (008), for the keys its policy names (for example moving a seat to a cheaper model at a pace mark), logged and reversible.
 5. `get` never shows a secret. Keys that reference credentials hold keychain references only.
 6. There are no per-key top-level commands (`team model`, `team effort`): every setting goes through `team config` at the levels above a seat, or through `team settings` for a seat.
@@ -121,9 +121,9 @@ One key is written today and is not in this proposed table: `<entity>.names.uniq
 saying how far apart seat nicknames stay. It sits at the top of the entity's entry in
 `entities.yaml`, beside `liveness` and `policies` and not under `settings`, and is set today by the
 path form the command has — `team config set <entity>.names.unique <word>` (under the §3 forms,
-`team config set entity <entity> names.unique <word>`) — the owner's, or a seat's under the
-owner's general grant for that entity ([registry](registry.md),
-[config](../commands/config.md)).
+`team config set entity <entity> names.unique <word>`) — the owner's, or a seat's under a wildcard
+general grant that admits `config`; a grant that lists entities is refused until 0.5.11
+([registry](registry.md), [config](../commands/config.md)).
 
 ## 7. Open points
 
@@ -149,5 +149,5 @@ Storage (settled 2026-10-19, OD-20261018-08 and the orchestrator's ruling): sett
   with no `config.changed` event is reconciled by the bus's reconcile pass.
 - 2026-11-01: the entity's `names.unique` word named as the one key written today outside this
   table — set with `team config set <entity>.names.unique <word>` (the path form the command has
-  today), the owner's or a seat's under the owner's general grant for the entity, and edited in
-  place in an entry the file already declares.
+  today), the owner's or a seat's under a wildcard general grant that admits `config`, and edited
+  in place in an entry the file already declares.

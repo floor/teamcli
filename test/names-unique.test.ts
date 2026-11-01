@@ -10,7 +10,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
+import { issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { runConfig, type ConfigSources } from '../src/commands/config.ts';
 import { writeArchive } from '../src/commands/archive.ts';
@@ -357,7 +357,7 @@ describe('the other doors', () => {
     const grant = issueOwnerGeneralGrant(world.home, {
       clientId: 'iris',
       publicKey: pair.publicKey,
-      entities: ['floor'],
+      entities: ['*'],
       ops: ['config'],
       mayIssue: true,
       expires: new Date(NOW.getTime() + 86_400_000),
@@ -417,9 +417,10 @@ describe('the word is set through team config', () => {
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
 
-  test('a general grant sets the word for the entity it lists, and not another', async () => {
+  test('a general grant that lists entities is refused until 0.5.11, and nothing is written', async () => {
     const world = place({ acme: ACA, site: SITE });
     const file = entityFile(world);
+    const before = readFileSync(file, 'utf8');
     const pair = newClientKeyPair();
     const keys = writeClientKeyFiles(join(world.home, '.config', 'team-client', 'iris'), pair);
     if (!keys.ok) throw new Error(keys.why);
@@ -432,21 +433,33 @@ describe('the word is set through team config', () => {
       expires: new Date(NOW.getTime() + 86_400_000),
     });
     if (!grant.ok) throw new Error(grant.why);
-    const sources = sourcesOf(world);
-    const run = async (entity: string) => {
-      const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
-      const code = await runConfig(['set', `${entity}.names.unique`, 'team', '--general', grant.path, '--key', keys.keyPath], io, sources);
-      return { code, out: io.out, err: io.err };
-    };
-    const admitted = await run('floor');
-    expect(admitted.code, admitted.err).toBe(0);
-    expect(admitted.err).toContain('admitted by general grant');
+    const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
+    const code = await runConfig(['set', 'floor.names.unique', 'team', '--general', grant.path, '--key', keys.keyPath], io, sourcesOf(world));
+    expect(code).toBe(1);
+    expect(io.err).toContain(SCOPED_GRANT_REFUSAL);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  test('a wildcard general grant admitting config sets the word', async () => {
+    const world = place({ acme: ACA, site: SITE });
+    const file = entityFile(world);
+    const pair = newClientKeyPair();
+    const keys = writeClientKeyFiles(join(world.home, '.config', 'team-client', 'iris'), pair);
+    if (!keys.ok) throw new Error(keys.why);
+    const grant = issueOwnerGeneralGrant(world.home, {
+      clientId: 'iris',
+      publicKey: pair.publicKey,
+      entities: ['*'],
+      ops: ['config'],
+      mayIssue: true,
+      expires: new Date(NOW.getTime() + 86_400_000),
+    });
+    if (!grant.ok) throw new Error(grant.why);
+    const io = testIo(world.roots.site!, { kind: 'seat', name: 'builder-9', pane: 'pane1' });
+    const code = await runConfig(['set', 'floor.names.unique', 'team', '--general', grant.path, '--key', keys.keyPath], io, sourcesOf(world));
+    expect(code, io.err).toBe(0);
+    expect(io.err).toContain('admitted by general grant');
     expect(readFileSync(file, 'utf8')).toContain('unique: team');
-    const afterFloor = readFileSync(file, 'utf8');
-    const refused = await run('material');
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain('does not cover entity "material"');
-    expect(readFileSync(file, 'utf8')).toBe(afterFloor);
   });
 
   test('a word outside the four is refused, and nothing is written', async () => {
