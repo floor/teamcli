@@ -14,6 +14,7 @@ import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.
 import type { OwnerSeatKeyStore } from '../client/owner-seat.ts';
 import { resolveSeatOverrides, seatOverridesOf, seatSettingsOf, type SeatOverrides } from '../config/apply.ts';
 import { NOT_A_REPO } from '../file/load.ts';
+import { labelPersona } from '../file/sections/seats.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { Seat, TeamFile } from '../file/types.ts';
 import { agentList, agentStatus, paneForegroundCwd, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
@@ -4246,9 +4247,7 @@ const SOCKET_READ_BY = 'socket delivery';
  */
 function labelNameOf(team: TeamFile, seat: string): string | null {
   const found = team.seats.find((one) => one.name === seat);
-  if (found === undefined || found.labelWritten !== true) return null;
-  const name = (found.label.split('·')[0] ?? '').trim();
-  return name === '' ? null : name;
+  return found === undefined ? null : labelPersona(found);
 }
 
 /**

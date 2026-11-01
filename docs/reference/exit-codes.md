@@ -200,6 +200,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
+| `config.entity.unchanged` | `config` | 0 | the entity already writes that names.unique word; nothing was written | `team config set <entity>.names.unique off` |
+| `config.entity.value` | `config` | 0 | the entity's names.unique word is printed | `team config get <entity>.names.unique` |
+| `config.entity.written` | `config` | 0 | the entity's names.unique word was written | `team config set <entity>.names.unique off` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
 | `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
 | `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
@@ -207,12 +210,21 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.approval-refused` | `config` | 1 | the owner-seat request or approval was refused; nothing was written | `team config set <path> <value> --approval <request-id>` |
 | `config.charter` | `config` | 1 | the owner charter does not cover this edit | `team config set watch.unread_after 5m` |
 | `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
+| `config.entity.detached` | `config` | 1 | an entity's word was set with no terminal | `team config set <entity>.names.unique off` |
+| `config.entity.general-refused` | `config` | 1 | the general grant does not cover this entity or admit this set; nothing was written | `team config set <entity>.names.unique off --general <grant.json> --key <client.key>` |
+| `config.entity.names-value` | `config` | 1 | the word is not one of entity, project, team or off; nothing was written | `team config set <entity>.names.unique everywhere` |
+| `config.entity.no-value` | `config` | 1 | the entity's entry writes no names.unique word | `team config get <entity>.names.unique` |
+| `config.entity.not-owner` | `config` | 1 | an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant | `team config set <entity>.names.unique off` |
+| `config.entity.path` | `config` | 1 | the entity's entry cannot be set (no such entry, or a value on the way); nothing was written | `team config set <entity>.names.unique off` |
 | `config.general-refused` | `config` | 1 | the general grant does not admit this edit; nothing was written | `team config set <path> <value> --general <grant.json> --key <client.key>` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
+| `config.name-taken` | `config` | 1 | a nickname the change sets is already held by another team's seat; nothing was written | `team config set seats.worker.label "Cicero · implementer"` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
 | `config.path` | `config` | 1 | the path cannot be set (a value on the way, or no such list item); nothing was written | `team config set seats.ghost.cli claude` |
 | `config.editor` | `config` | 2 | the editor exited non-zero; nothing was written | `team config edit` |
+| `config.entity.unreadable` | `config` | 2 | the entities file cannot be read | `team config set <entity>.names.unique off` |
+| `config.entity.usage` | `config` | 2 | an entity-form invocation is not one of its forms | `team config set <entity>.names.unique` |
 | `config.invocation` | `config` | 2 | the invocation is not one of the command's forms | `team config` |
 | `config.no-record` | `config` | 2 | the team's record could not be read for an edit | `team config get project` |
 | `config.no-team` | `config` | 2 | no team is found for this folder to read or edit | `team config get project` |
@@ -347,6 +359,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.general-refused` | `init` | 1 | the general grant does not admit this create; nothing was written | `team init --general <grant.json> --key <client.key>` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
 | `init.legacy` | `init` | 1 | the record predates signed records | `team init --restore` |
+| `init.name-taken` | `init` | 1 | a nickname the restored team brings is already held by another team's seat; nothing was written | `team init --from-archive <folder>` |
 | `init.not-owner` | `init` | 1 | not the owner | `team init` |
 | `init.nothing` | `init` | 1 | there is nothing to restore | `team init --restore` |
 | `init.refused` | `init` | 1 | the stored record does not verify | `team init --restore` |
