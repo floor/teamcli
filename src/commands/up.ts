@@ -18,7 +18,7 @@ import { devModeCallerGate, devModeExpiryLine, devModeExpiryNote, devModeMark, l
 import { entityGrantAdmits, grantGate, logGranted } from '../grant.ts';
 import { dialogsTrustInForce } from '../permissions/dialogs-trust.ts';
 import { gateVerdict } from '../permissions/who.ts';
-import { TEAM_FILE } from '../file/load.ts';
+import { launchTeamFile, TEAM_FILE } from '../file/load.ts';
 import { leftoverNote, readTeamConfig } from '../file/team-config.ts';
 import { importForUp } from '../file/team-import.ts';
 import { derivedTrust, migrationText } from '../file/migrate.ts';
@@ -171,10 +171,11 @@ export type Launch = {
   createWorkspace(session: string, cwd: string, label: string): { pane: string; workspace: string } | null;
   paneRun(session: string, pane: string, command: string): boolean;
   /** Registers the seat's team inbox with its CLI, in the seat's folder, before its launch
-   *  command. `teamFile` is the team file the run read; the seat's folder may be a lobby with
-   *  none. Null when the profile carries no file route; a refusal leaves the seat on its drop
-   *  and typed legs. Absent on a world that registers nothing: fake launches and reads. */
-  registerInbox?(cli: string, seat: string, cwd: string, teamFile?: string): InboxRegistration | null;
+   *  command. `session` is the launch's own, which narrows the registry to the team the seat is
+   *  on; `teamFile` is the team file the run read, absent for a registry team's launch, whose
+   *  file need not exist. Null when the profile carries no file route; a refusal that stands
+   *  leaves the seat out. Absent on a world that registers nothing: fake launches and reads. */
+  registerInbox?(cli: string, seat: string, cwd: string, session: string, teamFile?: string): InboxRegistration | null;
   /** Starts and stops the managed Codex app-server endpoint a launch owns. Present on the shipped
    *  launch surface; a fake launch that omits it plans no endpoint, so no scene reaches a real
    *  process. */
@@ -295,8 +296,8 @@ const realLaunch: Launch = {
   sessionUp: sessionRunning,
   createWorkspace: (session, cwd, label) => workspaceCreate(cwd, label, aim(session)),
   paneRun: (session, pane, command) => paneRun(pane, command, aim(session)),
-  registerInbox: (cli, seat, cwd, teamFile) =>
-    registerInbox({ cli, seat, cwd, ...(teamFile === undefined ? {} : { file: teamFile }) }),
+  registerInbox: (cli, seat, cwd, session, teamFile) =>
+    registerInbox({ cli, seat, cwd, session, ...(teamFile === undefined ? {} : { file: teamFile }) }),
   codexEndpoint: {
     managed: (input) => launchCodexEndpoint(input),
     stop: (input) => stopSeatCodexEndpoint(input),
@@ -1910,7 +1911,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
     watchLine: (sources.watchCommand ?? watchCommand)(session),
     ...(watchFile ? { watchFile } : {}),
     ...(startBus ? { startBus, busAlive, busLabel: busLabel(team.project), busLine: (sources.busCommand ?? busCommand)() } : {}),
-    teamFile: loaded.path,
+    teamFile: launchTeamFile(loaded),
     cliHooks,
     ...(noLaunch ? {} : { briefEpochs: currentBriefEpochs(dir, session) }),
     home: sources.home,
@@ -2412,7 +2413,7 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
             stopManagedCodexEndpoint: (input: { dir: string; session: string; seat: string }) => launch.codexEndpoint!.stop(input),
           }),
       ...(launch.registerInbox
-        ? { registerInbox: (cli: string, seat: string, cwd: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, teamFile) }
+        ? { registerInbox: (cli: string, seat: string, cwd: string, session: string, teamFile?: string) => launch.registerInbox!(cli, seat, cwd, session, teamFile) }
         : {}),
       ...(launch.reportDisplayAgent
         ? { reportDisplayAgent: (session: string, pane: string, text: string) => launch.reportDisplayAgent!(session, pane, text) }
