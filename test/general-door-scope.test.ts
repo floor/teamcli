@@ -101,6 +101,10 @@ beforeAll(() => {
   alphaDownGrant = grantOf(['alpha'], ['down']);
   alphaAbandonGrant = grantOf(['alpha'], ['abandon']);
   wildcard = grantOf(['*'], ['*']);
+  // One seat name on two teams, the shape `team mcp serve` places by when no `--file` is given:
+  // the roster line names the team, and `--session` narrows between the two.
+  upsertTeam(home, teamIdOf(roots.beta), { roster: [{ agent: 'agent-b', seat: 'builder-7', role: 'builder' }] });
+  upsertTeam(home, teamIdOf(roots.gamma), { roster: [{ agent: 'agent-g', seat: 'builder-7', role: 'builder' }] });
 });
 
 afterAll(() => {
@@ -602,4 +606,211 @@ test('a word another option consumes is a value, for the op as for the target', 
   // team, not the `abandon` op: the scan consumed the word the flag spelling would have made.
   targetRefused(door('down', ['--session', '--abandon'], alphaDownGrant));
   admitted(door('down', ['--approval', '--abandon'], alphaDownGrant));
+});
+
+// An option written twice is read one way by the door and another by the command: the parser keeps
+// the last occurrence (`src/args.ts:29`), so a door that read the first would check a team the run
+// never reaches. A grant that lists entities refuses the line; a wildcard grant is unchanged. The
+// three spellings are `--name a --name b`, `--name=a --name b` and `--name a --name=b`.
+function repeated(option: string, first: string, last: string): string[][] {
+  return [
+    [`--${option}`, first, `--${option}`, last],
+    [`--${option}=${first}`, `--${option}`, last],
+    [`--${option}`, first, `--${option}=${last}`],
+  ];
+}
+
+test('down --file named twice: the line is refused rather than checked against one of the files', () => {
+  // The granted team first, then another team's file: the command would act on the other team.
+  for (const form of repeated('file', files.alpha, files.beta)) {
+    targetRefused(door('down', ['--dry-run', ...form], alphaGrant), 'named more than once');
+  }
+  // The other order too: the door does not pick a value, so neither position decides the line.
+  for (const form of repeated('file', files.beta, files.alpha)) {
+    targetRefused(door('down', ['--dry-run', ...form], alphaGrant), 'named more than once');
+  }
+  // The same file twice names one team and is still refused: the option is what the command
+  // reads once, not its value.
+  targetRefused(door('down', ['--dry-run', '--file', files.alpha, '--file', files.alpha], alphaGrant), 'named more than once');
+  // A grant that lists no entity resolves no target, exactly as before.
+  admitted(door('down', ['--dry-run', '--file', files.alpha, '--file', files.beta], wildcard));
+});
+
+test('every command whose --file is the team file refuses it named twice', () => {
+  for (const [name, words] of FILE_ROWS) {
+    const path = words[1] as string;
+    for (const form of repeated('file', files.alpha, path)) {
+      targetRefused(door(name, form, alphaGrant), 'named more than once');
+    }
+  }
+});
+
+test('--session named twice: the command would take the last session, so the line is refused', () => {
+  for (const name of ['add', 'brief', 'down', 'drops', 'mcp', 'watch', 'worktree']) {
+    for (const form of repeated('session', 'alpha', 'beta')) {
+      targetRefused(door(name, form, alphaGrant), 'named more than once');
+    }
+  }
+  admitted(door('down', ['--dry-run', '--session', 'alpha', '--session', 'beta'], wildcard));
+});
+
+test('registry-key targets named twice are refused the same way', () => {
+  targetRefused(door('status', ['--project', 'alpha', '--project', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('seats', ['--project', 'alpha', '--project', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('policy', ['set', 'seat-numbering', 'width=2', '--entity', 'alpha', '--entity', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('policy', ['set', 'seat-numbering', 'width=2', '--project', 'alpha', '--project', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('grant', ['--grant-team', 'alpha', '--grant-team', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('grant', ['--grant-entity', 'alpha', '--grant-entity', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('grant', ['--grant-project', 'alpha', '--grant-project', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('setup', ['--roots', roots.alpha, '--roots', roots.beta], alphaGrant), 'named more than once');
+  targetRefused(door('owner-seat', ['setup', '--team', 'owner', '--signer', 'touch-id', '--entity', 'alpha', '--entity', 'beta'], alphaGrant), 'named more than once');
+  // `--team` is a target option of its own on pause and resume, and of owner-seat's setup.
+  targetRefused(door('pause', ['--team', 'alpha', '--team', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('resume', ['--team', 'alpha', '--team', 'beta'], alphaGrant), 'named more than once');
+  targetRefused(door('pause', ['--seat', 'lead', '--seat', 'lead'], alphaGrant), 'named more than once');
+  targetRefused(door('owner-seat', ['setup', '--team', 'alpha', '--team', 'beta', '--signer', 'touch-id'], alphaGrant), 'named more than once');
+  // A wildcard grant still admits every one of them.
+  admitted(door('status', ['--project', 'alpha', '--project', 'beta'], wildcard));
+  admitted(door('grant', ['--grant-team', 'alpha', '--grant-team', 'beta'], wildcard));
+});
+
+test('pause --team twice: the last team is the one the command would pause, so the line is refused', () => {
+  for (const form of repeated('team', 'alpha', 'beta')) {
+    targetRefused(door('pause', form, alphaGrant), 'named more than once');
+  }
+  for (const form of repeated('team', 'beta', 'alpha')) {
+    targetRefused(door('pause', form, alphaGrant), 'named more than once');
+  }
+  admitted(door('pause', ['--team', 'alpha'], alphaGrant));
+});
+
+// The one command that reads an option as a whole list: every `--root` is collected
+// (`src/commands/daemon.ts:126`), so the door and the command read the same roots and a repeat
+// names no second team. The check still covers every root named.
+test('daemon --root twice: the command collects every root, so the door reads them the same way', () => {
+  admitted(door('daemon', ['install', '--dry-run', '--root', roots.alpha, '--root', roots.delta], alphaGrant));
+  refused(door('daemon', ['install', '--dry-run', '--root', roots.alpha, '--root', roots.beta], alphaGrant), 'does not cover entity "beta"');
+  refused(door('daemon', ['install', '--dry-run', `--root=${roots.alpha}`, '--root', roots.beta], alphaGrant), 'does not cover entity "beta"');
+});
+
+// `down --abandon` is the op-changing flag: the command reads one op, and the `=` spelling is the
+// parser's unknown option.
+test('down --abandon named twice, or with a value: the op the door reads is the one the command reads', () => {
+  refused(door('down', ['--abandon', '--abandon'], alphaAbandonGrant), 'named more than once');
+  // The `=` spelling is read as a value of `down`, so a grant that covers `down` reaches the
+  // refusal that names the spelling (a grant for `abandon` alone already refuses the op).
+  refused(door('down', [`--abandon=true`], alphaDownGrant), 'takes no value');
+  refused(door('down', ['--abandon', '--abandon=true'], alphaAbandonGrant), 'takes no value');
+  admitted(door('down', ['--abandon'], alphaAbandonGrant));
+  admitted(door('down', ['--abandon', '--abandon'], wildcard));
+});
+
+test('batch --do: a piece that names its target twice is refused the way its own line is', () => {
+  targetRefused(door('batch', ['--request', '--do', 'down', '--dry-run', '--file', files.alpha, '--file', files.beta], alphaGrant), 'named more than once');
+  targetRefused(door('batch', ['--request', '--do', 'down', '--dry-run', '--file', files.beta, '--file', files.alpha], alphaGrant), 'named more than once');
+  refused(door('batch', ['--request', '--do', 'send', 'builder-6@beta'], alphaGrant), 'does not cover entity "beta"');
+  admitted(door('batch', ['--request', '--do', 'down', '--dry-run', '--file', files.alpha], alphaGrant));
+});
+
+// `team mcp serve` without `--file` places the seat by the registry record whose roster holds it,
+// narrowed by `--session` (`src/mcp/serve.ts:605`): that record's team is the target.
+test('mcp serve --seat: the registry record that holds the seat names the team', () => {
+  // builder-7 is on beta's and gamma's rosters; the session narrows to one of them.
+  refused(door('mcp', ['serve', '--seat', 'builder-7', '--session', 'beta'], alphaGrant), 'does not cover entity "beta"');
+  admitted(door('mcp', ['serve', '--seat', 'builder-7', '--session', 'beta'], betaGrant));
+  refused(door('mcp', ['serve', '--seat', 'builder-7', '--session', 'gamma'], betaGrant), 'does not cover entity "gamma"');
+  admitted(door('mcp', ['serve', '--seat', 'builder-7', '--session', 'gamma'], allGrant));
+  // No session, or one no record names: the two holders stand, and the door cannot name one team.
+  targetRefused(door('mcp', ['serve', '--seat', 'builder-7'], alphaGrant), 'pass --file');
+  targetRefused(door('mcp', ['serve', '--seat', 'builder-7', '--session', 'nowhere'], alphaGrant), 'pass --file');
+  // `--file` is the launch's own team file, and it decides ahead of the roster.
+  admitted(door('mcp', ['serve', '--seat', 'builder-7', '--file', files.alpha, '--session', 'gamma'], alphaGrant));
+  refused(door('mcp', ['serve', '--seat', 'builder-7', '--file', files.alpha, '--session', 'gamma'], betaGrant), 'does not cover entity "alpha"');
+  targetRefused(door('mcp', ['serve', '--seat', 'no-such-seat'], alphaGrant), 'no registered team holds seat');
+  targetRefused(door('mcp', ['serve', '--seat', 'builder-7', '--seat', 'lead'], alphaGrant), 'named more than once');
+});
+
+// owner-seat setup without `--entity` records the team name as the entity
+// (`src/client/owner-seat.ts:196`), so that channel names the entity the grant must cover.
+test('owner-seat setup --team: the record\'s entity is the team name when --entity is absent', () => {
+  refused(door('owner-seat', ['setup', '--team', 'beta', '--signer', 'touch-id'], alphaGrant), 'does not cover entity "beta"');
+  admitted(door('owner-seat', ['setup', '--team', 'beta', '--signer', 'touch-id'], betaGrant));
+  admitted(door('owner-seat', ['setup', '--team', 'beta', '--signer', 'touch-id'], wildcard));
+});
+
+// `up` reads `--general` itself and resolves the file from the parse the launch runs on, so a
+// repeated option is read the same way twice: the launch's team is the last one named.
+test('up --file twice: the door checks the file the launch reads', async () => {
+  const last = await up(['--file', files.alpha, '--file', files.beta, '--dry-run'], betaGrant);
+  expect(last.err).toContain('admitted by general grant');
+  const other = await up(['--file', files.alpha, '--file', files.beta, '--dry-run'], alphaGrant);
+  expect(other.code).toBe(1);
+  expect(other.err).toContain('does not cover entity "beta"');
+});
+
+test('a repeated target option names the target exit id', async () => {
+  let out = '';
+  const io: Io = { stdout: (text) => { out += text; }, stderr: () => {}, cwd: roots.alpha, env: { HOME: home }, stdinIsTTY: false };
+  const code = await main(['down', '--dry-run', '--file', files.alpha, '--file', files.beta, '--json', '--general', alphaGrant, '--key', client.path], io);
+  expect(code).toBe(1);
+  expect(JSON.parse(out).error.id).toBe('team.general-target');
+});
+
+
+// The door decides on the values the command will act on after the command's own normalisation.
+// These scenes hold the padded spellings of every target option next to the plain ones: a padding
+// the command trims names the trimmed team, and a padding it does not trim names no team at all —
+// never silently this folder's team.
+test('a padded --file, --session, --root or registry key names no team', () => {
+  // `--file` is resolved as written, by the same loader the command calls.
+  targetRefused(door('down', ['--dry-run', '--file', ` ${files.beta} `], alphaGrant), 'cannot be resolved');
+  // A session key is matched as written; a padded one names no team.
+  targetRefused(door('down', ['--session', ' beta '], alphaGrant), 'session');
+  // `--root` is resolved as written.
+  targetRefused(door('daemon', ['run', '--root', ` ${roots.beta} `], alphaGrant), 'cannot be resolved');
+  // A registry key is matched as written.
+  targetRefused(door('status', ['--project', ' beta '], alphaGrant), 'can be resolved');
+  // A `--roots` list is trimmed part by part, by the command and the door alike.
+  admitted(door('setup', ['--signer', 'touch-id', '--roots', ` ${roots.alpha} `], alphaGrant));
+  refused(door('setup', ['--signer', 'touch-id', '--roots', ` ${roots.alpha} `], betaGrant), 'does not cover entity "alpha"');
+  // The comma lists of `grant` are trimmed the same way.
+  refused(door('grant', ['--client', 'master', '--allow-grant', '--grant-team', ' beta '], alphaGrant), 'does not cover entity "beta"');
+});
+
+test('pause and resume: --team and --seat are read with the trim the commands apply', () => {
+  admitted(door('pause', ['--team', ' alpha '], alphaGrant));
+  refused(door('pause', ['--team', ' beta '], alphaGrant), 'does not cover entity "beta"');
+  admitted(door('resume', ['--team', ' alpha '], alphaGrant));
+  refused(door('resume', ['--team', ' beta '], alphaGrant), 'does not cover entity "beta"');
+  admitted(door('pause', ['--seat', ' lead '], alphaGrant));
+  refused(door('resume', ['--seat', ' lead '], betaGrant), 'does not cover entity "alpha"');
+});
+
+test('policy --entity and --project are read with the trim and the project id the command uses', () => {
+  admitted(door('policy', ['set', 'entity', 'p', 'v', '--entity', ' alpha '], alphaGrant));
+  refused(door('policy', ['set', 'entity', 'p', 'v', '--entity', ' beta '], alphaGrant), 'does not cover entity "beta"');
+  admitted(door('policy', ['set', 'entity', 'p', 'v', '--project', ' beta '], betaGrant));
+  refused(door('policy', ['set', 'entity', 'p', 'v', '--project', ' beta '], alphaGrant), 'does not cover entity "beta"');
+  // The command keys the rule by `projectIdOf(name)`, so a differently-cased name is that record.
+  refused(door('policy', ['set', 'entity', 'p', 'v', '--project', 'Beta'], alphaGrant), 'does not cover entity "beta"');
+});
+
+test('a send address is read by the command\'s own parse, padded or mistyped', () => {
+  // A padded agent-id spelling is a plain seat to `parseSpec`, so it names this folder's team.
+  admitted(door('send', [' agt_0123456789ab ', 'hi'], alphaGrant));
+  refused(door('send', [' agt_0123456789ab ', 'hi'], betaGrant), 'does not cover entity "alpha"');
+  // A mistyped id is refused by that parse before any team is named.
+  targetRefused(door('send', ['agt_0123456789', 'hi'], alphaGrant), 'not an agent id');
+  // A padded `seat@team` keeps its scope; the padding is not part of the team named.
+  targetRefused(door('send', [' builder-6@beta ', 'hi'], alphaGrant), 'can be resolved');
+  // A `@nickname` is a seat of this folder's team, padded or not.
+  admitted(door('send', ['@builder-6 ', 'hi'], alphaGrant));
+  refused(door('send', ['@builder-6 ', 'hi'], betaGrant), 'does not cover entity "alpha"');
+});
+
+test('mcp serve: a padded seat or session places no team, as the command reads them', () => {
+  targetRefused(door('mcp', ['serve', '--seat', ' builder-7 '], alphaGrant), 'no registered team holds seat');
+  // A padded session does not narrow the two holders, exactly as the command's comparison does not.
+  targetRefused(door('mcp', ['serve', '--seat', 'builder-7', '--session', ' beta '], alphaGrant), 'pass --file');
+  targetRefused(door('mcp', ['serve', '--seat', 'builder-7', '--file', ` ${files.beta} `], alphaGrant), 'cannot be resolved');
 });

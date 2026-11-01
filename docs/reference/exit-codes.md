@@ -757,7 +757,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.version` | `team` | 0 | the version was printed | `team --version` |
 | `team.command-threw` | `team` | 1 | a command threw | `team init` |
 | `team.general-refused` | `team` | 1 | the general grant does not admit this command here (expired, another key, an op or entity it does not cover); nothing ran | `team status --general <grant.json> --key <client.key>` |
-| `team.general-target` | `team` | 1 | the team the command would act on cannot be resolved, so the general grant cannot be checked against it; nothing ran | `team status --project <name> --general <grant.json> --key <client.key>` |
+| `team.general-target` | `team` | 1 | the team the command would act on cannot be resolved, or a target-changing option is named more than once (the command would read one value and the door cannot check the other), so the general grant cannot be checked against it; nothing ran | `team status --project <name> --general <grant.json> --key <client.key>` |
 | `team.mcp-serve-restart-failed` | `team` | 1 | a stale inbox server could not start its fresh replacement, said why and left | `team mcp serve` |
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
