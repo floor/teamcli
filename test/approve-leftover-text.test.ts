@@ -1,12 +1,10 @@
 // The team-file approval step was removed in 0.5.0. No source string or docs page may name it as
 // something to do: a reader who follows the sentence would find no command. Internal comments may
-// still describe the stored approval as history; only the sentences that send someone to it are
-// refused here, so source comments are dropped before the scan while the contents of strings and
-// template literals are kept — a printed line is read even when it starts with `*` or `//`.
+// still describe the stored approval as history, so those few lines are exempted one by one below,
+// by exact file and exact line text with a reason; everything else is scanned as written.
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import * as ts from 'typescript';
 
 const ROOT = join(import.meta.dir, '..');
 const PHRASES = [
@@ -25,32 +23,36 @@ const PHRASES = [
   'reapprove',
 ];
 
+interface Exemption {
+  /** The file, relative to the repository root. */
+  file: string;
+  /** The line exactly as written there. */
+  line: string;
+  /** Why this line names no step a reader can follow. */
+  reason: string;
+}
+
+/** The lines that may describe the stored approval as history. The scan fails when an exempted
+ *  line leaves its file, so the list cannot go stale. */
+const EXEMPT: Exemption[] = [
+  {
+    file: 'src/grant.ts',
+    line: ' * `up`, `down`, `approve` and `reload` call this. It reads the live default file and the approval again on this',
+    reason: 'names when the live approval is read, not a step to approve anything',
+  },
+];
+
 /** Every run of whitespace as one space, so a phrase wrapped across a line in a help string or a
  *  docs paragraph is matched as it reads. */
 function flatten(text: string): string {
   return text.replace(/\s+/g, ' ');
 }
 
-/** The source text with its comments removed and every other character kept. A line inside a
- *  string or template literal is printed text, even when it starts with `*` or `//`; a comment is
- *  internal history and is dropped, with its newlines kept so it cannot join the lines around it. */
-function withoutComments(text: string): string {
-  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
-  let kept = '';
-  let cursor = 0;
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (token !== ts.SyntaxKind.SingleLineCommentTrivia && token !== ts.SyntaxKind.MultiLineCommentTrivia) continue;
-    kept += text.slice(cursor, scanner.getTokenStart());
-    kept += text.slice(scanner.getTokenStart(), scanner.getTextPos()).replace(/[^\n]/g, '');
-    cursor = scanner.getTextPos();
-  }
-  return kept + text.slice(cursor);
-}
-
-/** The refused phrases in one file's text, with source comments dropped and every run of
- *  whitespace read as one space. */
-function foundPhrases(raw: string, source: boolean): string[] {
-  const text = flatten(source ? withoutComments(raw) : raw);
+/** The refused phrases in one file's text: the file as written, less the exact lines exempted for
+ *  that file. */
+function foundPhrases(raw: string, file: string): string[] {
+  const exempt = EXEMPT.filter((entry) => entry.file === file).map((entry) => entry.line);
+  const text = flatten(raw.split('\n').filter((line) => !exempt.includes(line)).join('\n'));
   return PHRASES.filter((phrase) => text.includes(phrase));
 }
 
@@ -65,6 +67,15 @@ function filesUnder(dir: string, suffixes: readonly string[]): string[] {
   return found;
 }
 
+test('every exempted line is still in its file, so the list cannot go stale', () => {
+  const missing = EXEMPT.filter((entry) => {
+    const file = join(ROOT, entry.file);
+    if (!existsSync(file)) return true;
+    return !readFileSync(file, 'utf8').split('\n').includes(entry.line);
+  });
+  expect(missing.map((entry) => `${entry.file}: ${entry.reason}`)).toEqual([]);
+});
+
 test('no source or docs text names the removed approval step', () => {
   const files = [
     ...filesUnder(join(ROOT, 'src'), ['.ts']),
@@ -74,25 +85,26 @@ test('no source or docs text names the removed approval step', () => {
   ];
   const hits: string[] = [];
   for (const file of files) {
+    const name = relative(ROOT, file);
     const raw = readFileSync(file, 'utf8');
-    for (const phrase of foundPhrases(raw, file.endsWith('.ts'))) hits.push(`${relative(ROOT, file)}: ${phrase}`);
+    for (const phrase of foundPhrases(raw, name)) hits.push(`${name}: ${phrase}`);
   }
   expect(hits).toEqual([]);
 });
 
-test('a printed line inside a template is read whatever it starts with', () => {
+test('a printed line is read wherever it appears', () => {
   const raw = [
     'const asterisk = `',
     '* approve the file again',
     '`;',
-    'const slashes = `',
-    '// approve the team again',
-    '`;',
+    'const slashes = `${name}// approve the team again`;',
   ].join('\n');
-  expect(foundPhrases(raw, true)).toEqual(['approve the team again', 'approve the file again']);
+  expect(foundPhrases(raw, 'src/example.ts')).toEqual(['approve the team again', 'approve the file again']);
 });
 
-test('a real comment is still dropped', () => {
-  const raw = ['// approve the file again', '/* approve the team again */', 'const usage = "text";'].join('\n');
-  expect(foundPhrases(raw, true)).toEqual([]);
+test('an exempted line is exempt only exactly, and only in its own file', () => {
+  const entry = EXEMPT[0]!;
+  expect(foundPhrases(entry.line, entry.file)).toEqual([]);
+  expect(foundPhrases(entry.line, 'src/other.ts')).toEqual(['approval again']);
+  expect(foundPhrases(`${entry.line} `, entry.file)).toEqual(['approval again']);
 });
