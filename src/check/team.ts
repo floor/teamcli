@@ -37,7 +37,7 @@ import { declaredModel } from '../file/model.ts';
 import { isParseError, TEAM_FILE } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { isLeadSeat, relaunchRepair } from '../file/sections/lead.ts';
-import { displayAgent, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
+import { displayAgent, labelPersona, LEAD_NAME, workspaceLabel } from '../file/sections/seats.ts';
 import type { LoadResult, Problem, Seat, TeamFile } from '../file/types.ts';
 import { agentList, PANE_WINDOW, paneProcesses, paneRead, reportDisplayAgent, sessionRunning, workspaceList, workspaceRename, type PaneProcesses } from '../herdr.ts';
 import type { Io } from '../io.ts';
@@ -521,6 +521,7 @@ export function runTeamCheck(args: TeamCheckArgs, io: Io, sources: CheckSources)
   const notes = collapseNotes([
     ...delegateNotes(team),
     ...leadNameNotes(team),
+    ...nicknameDriftNotes(team),
     ...leadRoleNotes(team),
     // The default session moved to <entity>-<project>: the line the approval's own comparison
     // names, so the owner sees the old and the new session before the next launch.
@@ -822,6 +823,22 @@ function leadRoleNotes(team: TeamFile): string[] {
   const lead = team.seats.find((seat) => seat.name === team.orchestrator);
   if (lead === undefined || lead.role !== 'coordinator') return [];
   return [`the lead seat "${lead.name}" carries the 0.3.5/0.4 role word "coordinator"; the 0.5 word is "orchestrator" — sends reach it either way, since admission keys on the lead seat, not the role: set \`role: orchestrator\` on it when convenient`];
+}
+
+/**
+ * A seat whose `nickname:` field and whose written label name two different people. Display reads
+ * the label's persona first (src/send/names.ts:sessionDisplayName, and the roster line the header
+ * reads is re-marked from it at src/registry/sync.ts), so the seat sends under the label's name
+ * while the field says another. A config set on either name writes the other with it
+ * (src/config/edit.ts:syncSeatNames), so this is what a hand edit can leave. A note, not a
+ * difference: the team runs either way, and the label's word stands from the next launch.
+ */
+function nicknameDriftNotes(team: TeamFile): string[] {
+  return team.seats.flatMap((seat) => {
+    const persona = labelPersona(seat);
+    if (persona === null || seat.nickname === undefined || persona === seat.nickname) return [];
+    return [`seat "${seat.name}": its nickname is "${seat.nickname}" and its written label names "${persona}" — the label wins from the next launch, and a set on seats.${seat.name}.label writes the two together`];
+  });
 }
 
 /**
