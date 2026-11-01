@@ -63,6 +63,10 @@ export type SeatReach = {
   guardDir?: string;
 };
 
+/** The body a seat's webhook routine reads: the bus envelope, or the seat-inbox record shape. */
+export const WEBHOOK_BODY_SHAPES = ['event', 'inbox'] as const;
+export type WebhookBodyShape = (typeof WEBHOOK_BODY_SHAPES)[number];
+
 /**
  * The seat's webhook delivery adapter, when the file writes one: a routine that takes every
  * accepted signed message for the seat. The two values live in files, never in the record — the
@@ -72,6 +76,16 @@ export type SeatReach = {
 export type SeatWebhook = {
   urlFile: string;
   secretFile: string;
+  /**
+   * The header the secret authenticates, when the routine reads it somewhere other than the
+   * default. Set, the secret file's one line is that header's value verbatim — no scheme word is
+   * added. Absent, the adapter sends the form rows used before this field existed:
+   * `Authorization: Bearer <secret>`.
+   */
+  header?: string;
+  /** The body the routine reads: the bus envelope when absent, the seat-inbox record shape when
+   *  it says so. The record shape is flattened from the signed message the arrival names. */
+  body?: WebhookBodyShape;
 };
 
 export type Seat = {
