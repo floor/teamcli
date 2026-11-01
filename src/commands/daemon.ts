@@ -1,5 +1,5 @@
 // `team daemon`: the one machine-wide TeamCLI daemon. `run` is the foreground process the
-// system service manager starts (it hosts the existing send and bus servers in this one process
+// system's service manager starts (it hosts the existing send and bus servers in this one process
 // and serves the machine socket); `run --presence` additionally hosts the presence pipeline, and
 // `run --watch` hosts one watch per checkout on the same heartbeat; without a flag the daemon
 // hosts neither. `install` and `uninstall` write and register the user service unit through a
@@ -8,13 +8,18 @@
 // running daemon to inject one diagnostic fault into exactly one hosted watch: one request,
 // one route id, no process killed.
 //
+// The daemon's own start is admitted by the service manager's record of the job it started and
+// the unit file that job was started from — never by a process walk, which cannot tell a
+// service-managed child from an orphan reparented to the top. An install reports success only
+// after that daemon answers the machine socket, and takes the unit back out when it does not.
+//
 // The machine daemon holds no credential and reads no credential store. The broker feature is
 // not hosted in this build, and the catalogue's `daemon.broker` policy is off by default, so a
 // machine with no broker handler never falls back to the old per-clone broker.
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { readArgs } from '../args.ts';
 import { callerOf, describeCaller, isOwner } from '../caller.ts';
 import { devModeOwnerLiftAtCwd } from '../dev_mode.ts';
@@ -28,9 +33,17 @@ import {
 import { daemonHealth } from '../daemon/health.ts';
 import { failureAge } from '../daemon/health_display.ts';
 import { appendDaemonLog, startMachineDaemon, type MachineRootStatus, type StartMachineDaemonResult } from '../daemon/host.ts';
+import { DAEMON_LABEL } from '../daemon/paths.ts';
 import { currentCodexEndpoint } from '../daemon/presence/endpoint-state.ts';
 import { routeId, routeOf } from '../daemon/routes.ts';
-import { systemServiceManager, type ServiceManager, type ServiceProgram } from '../daemon/service.ts';
+import {
+  systemServiceManager,
+  type ServiceInstallFailure,
+  type ServiceManager,
+  type ServicePlan,
+  type ServiceProgram,
+  type ServiceRuntime,
+} from '../daemon/service.ts';
 import type { DaemonHost } from '../send/daemon.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { cleanedIo, type Command, type Io } from '../io.ts';
@@ -80,8 +93,8 @@ export type DaemonCommandSources = {
   start?: (input: Parameters<typeof startMachineDaemon>[0]) => Promise<StartMachineDaemonResult>;
   /** Injected for tests: the stop seam, as `broker` and `bus` take one. */
   stop?: (end: () => void) => () => void;
-  /** Injected for tests: the health reading that confirms a restored daemon answers, so a scene
-   *  never opens the machine socket. */
+  /** Injected for tests: the health reading that confirms the daemon an install started, or a
+   *  rollback restored, answers, so a scene never opens the machine socket. */
   health?: typeof daemonHealth;
   /** Injected for tests: the program the service manager will run; `null` means it can't be found. */
   program?: { execPath: string; entry: string } | null;
@@ -215,15 +228,43 @@ function rootsOf(parsed: Parsed, io: Io, home: string): { roots: string[] } | { 
   return { roots: [loaded.root] };
 }
 
-function localProgram(sources: DaemonCommandSources): { execPath: string; entry: string } | null {
+/**
+ * The files that make up the running CLI, as the service adapter must copy them. A build is a
+ * module tree under the package's `dist`, beside the relay package it imports and the manifest
+ * it reads its version from; a source run keeps the same shape one folder over. The nearest
+ * folder above the entry that carries a manifest is the package root, and the entry's own folder
+ * under it, the relay package beside it and that manifest are the whole program. Undefined when
+ * no manifest is found: the adapter then keeps the entry's own folder, exactly as a synthetic
+ * single-file scene needs.
+ */
+function programRuntime(entry: string): ServiceRuntime | undefined {
+  let folder = dirname(entry);
+  for (let up = 0; up < 8; up += 1) {
+    if (existsSync(join(folder, 'package.json'))) {
+      const include = [relative(folder, dirname(entry)) === '' ? '.' : relative(folder, dirname(entry))];
+      if (existsSync(join(folder, 'packages', 'relay'))) include.push('packages/relay');
+      include.push('package.json');
+      return { root: folder, include };
+    }
+    const parent = dirname(folder);
+    if (parent === folder) break;
+    folder = parent;
+  }
+  return undefined;
+}
+
+function localProgram(sources: DaemonCommandSources): { execPath: string; entry: string; runtime?: ServiceRuntime } | null {
   if (sources.program !== undefined) return sources.program;
   const entry = process.argv[1];
   if (entry === undefined || entry === '') return null;
+  let resolved = resolve(entry);
   try {
-    return { execPath: process.execPath, entry: realpathSync(entry) };
+    resolved = realpathSync(entry);
   } catch {
-    return { execPath: process.execPath, entry: resolve(entry) };
+    // An entry this process was started from but cannot resolve is still the path it runs.
   }
+  const runtime = programRuntime(resolved);
+  return { execPath: process.execPath, entry: resolved, ...(runtime === undefined ? {} : { runtime }) };
 }
 
 /**
@@ -252,13 +293,82 @@ function ownerAllows(io: Io, sources: DaemonCommandSources, json: boolean): bool
   return false;
 }
 
-function runAllowed(io: Io, startedBy: string, json: boolean): boolean {
+/** Whether two executable paths name the same file. A path that cannot be resolved is a
+ *  mismatch: the record is the identity, so an unreadable one is never a wildcard. */
+function sameExecutable(recorded: string | null | undefined, running: string): boolean {
+  if (recorded === null || recorded === undefined || recorded === '') return false;
+  try {
+    return realpathSync(recorded) === realpathSync(running);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the unit's remaining launch words are this process's own, in order and in full. */
+function sameWords(unit: readonly string[], own: readonly string[]): boolean {
+  return unit.length === own.length && unit.every((word, at) => word === own[at]);
+}
+
+/**
+ * Admits a start by the system's service manager from the manager's own record of the job it
+ * started, never from the process walk: a daemon the service manager starts has no ancestor it
+ * can read, and neither has an orphan reparented to the top, so the walk cannot tell them apart.
+ * The unit file is checked first (it is the file the daemon was started from, not a label from
+ * its surroundings), then the job's pid, then the record's program and the unit's own words.
+ * Each failure refuses with its own contract id; there is no fallback.
+ *
+ * The ceiling this proves is "the service manager started this process from a unit the user
+ * owns": any process of that same user can register a job under a label that is not loaded, so
+ * this is an identity check against mistakes, not a boundary against that user's attempt. The
+ * retained program the unit runs carries the same limit: its copy is verified before the unit is
+ * written, but a process of that user can replace it, or a folder in it, between that check and
+ * the manager's exec, exactly as it can rewrite the unit file.
+ */
+function serviceManaged(io: Io, home: string, sources: DaemonCommandSources, json: boolean): boolean {
+  const manager = sources.service !== undefined ? sources.service : systemServiceManager();
+  const refusal = (id: string, checked: string): false => {
+    const message = `only the owner or the system's service manager starts the machine daemon: ${checked}`;
+    refuse(io, json, 'daemon', { id, message, repair: null });
+    return false;
+  };
+  if (manager === null) {
+    return refusal('daemon.service-managed.unit', 'no unit file of this daemon\'s own can be read on this platform');
+  }
+  const unit = manager.unit(home);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  if (
+    unit === null
+    || unit.label !== DAEMON_LABEL
+    || uid === null
+    || unit.ownerUid !== uid
+    || unit.mode === null
+    || (unit.mode & 0o022) !== 0
+  ) {
+    return refusal('daemon.service-managed.unit', 'the unit file is not this daemon\'s own');
+  }
+  const job = manager.job(home);
+  if (job === null || job.pid !== process.pid) {
+    return refusal('daemon.service-managed.pid', 'the record of the job does not name this process');
+  }
+  if (
+    !sameExecutable(job.program, process.execPath)
+    || unit.programArguments === null
+    || !sameExecutable(unit.programArguments[0], process.execPath)
+    || !sameWords(unit.programArguments.slice(1), process.argv.slice(1))
+  ) {
+    return refusal('daemon.service-managed.program', 'the record and the unit do not run this executable with these words');
+  }
+  return true;
+}
+
+function runAllowed(io: Io, home: string, startedBy: string, json: boolean, sources: DaemonCommandSources): boolean {
   const caller = callerOf(io);
   if (isOwner(caller)) return true;
-  // The service unit starts the daemon with no terminal, as the owner's own user. That is the
-  // one no-terminal start admitted; a seat or a pane never starts the machine daemon.
-  if (caller.kind === 'owner-no-tty' && startedBy === 'service-manager') return true;
-  const message = `only the owner or the system service manager runs the machine daemon; this call is ${describeCaller(caller)}`;
+  // The service-managed start is admitted only by the service manager's own record of the job.
+  // The flag alone admits nothing: a seat that types it must still be the process the record
+  // names, running the unit's own words.
+  if (startedBy === 'service-manager') return serviceManaged(io, home, sources, json);
+  const message = `only the owner or the system's service manager runs the machine daemon; this call is ${describeCaller(caller)}`;
   refuse(io, json, 'daemon', { id: 'daemon.run-not-owner', message, repair: null, rule: 'owner-only' });
   return false;
 }
@@ -524,7 +634,7 @@ function statusLine(health: Awaited<ReturnType<typeof daemonHealth>>): string {
  */
 const INSTALL_STEPS: readonly string[] = [
   'the previous daemon, if the service manager holds one, is stopped before the new one is offered',
-  'the new daemon is started, offered again with a bounded, growing wait while the system service manager refuses',
+  'the new daemon is started, offered again with a bounded, growing wait while the system\'s service manager refuses',
   'if it still cannot start, the previous unit is put back and its daemon started again',
 ];
 
@@ -542,30 +652,95 @@ function installAgain(roots: readonly string[], parsed: Parsed): string {
   return parts.join(' ');
 }
 
-/** How long the command waits for a restored daemon to answer: the first probe at once, then the
- *  same bounded, growing waits the adapter gives a load. */
-const RESTORED_ANSWERS_WAIT_MS: readonly number[] = [100, 200, 400, 800, 1_000, 1_000, 1_000];
-const RESTORED_ANSWERS_PROBES = RESTORED_ANSWERS_WAIT_MS.length + 1;
+/** How long the command waits for a daemon to answer: the first probe at once, then the same
+ *  bounded, growing waits the adapter gives a load. */
+const ANSWERS_WAIT_MS: readonly number[] = [100, 200, 400, 800, 1_000, 1_000, 1_000];
+const ANSWERS_PROBES = ANSWERS_WAIT_MS.length + 1;
 
 /**
- * Confirms a restored daemon answers, through the same health reading `team status` uses. A load
- * the service manager accepted is registration, not proof that a program runs: after an in-place
- * refresh the restored unit may name bytes that cannot start, and the manager would still say
- * the load was taken. Bounded — eight probes over about 4.5 seconds — so a daemon that never
- * answers is reported as none rather than waited on.
+ * Confirms a daemon answers, through the same health reading `team status` uses. A load the
+ * service manager accepted is registration, not proof that a program runs: the unit an install
+ * just wrote, or the earlier one a rollback restored, may name bytes that cannot start, and the
+ * manager would still say the load was taken. Bounded — eight probes over about 4.5 seconds — so
+ * a daemon that never answers is reported as none rather than waited on. An install reports
+ * success only after this answers; a rollback is called one only after the restored daemon
+ * answers.
  */
-async function restoredDaemonAnswers(home: string, sources: DaemonCommandSources): Promise<boolean> {
+async function daemonAnswers(home: string, sources: DaemonCommandSources): Promise<boolean> {
   const health = sources.health ?? daemonHealth;
   const sleep = sources.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
-  for (let probe = 0; probe < RESTORED_ANSWERS_PROBES; probe += 1) {
+  for (let probe = 0; probe < ANSWERS_PROBES; probe += 1) {
     if (probe > 0) {
-      const wait = RESTORED_ANSWERS_WAIT_MS[probe - 1];
+      const wait = ANSWERS_WAIT_MS[probe - 1];
       if (wait !== undefined) await sleep(wait);
     }
     const reading = await health(home, { timeoutMs: 500 });
     if (reading.state === 'running' && reading.probe.state === 'answered') return true;
   }
   return false;
+}
+
+/**
+ * The one exit an install that leaves no new daemon reports through. The pre-flight plan that
+ * cannot read the program whole and a failure the adapter reports both end here, so the exit
+ * contract keeps one marker for the id.
+ */
+function installFailed(io: Io, parsed: Parsed, spec: Parameters<typeof refuse>[3]): number {
+  refuse(io, parsed.json, 'daemon', spec);
+  // exit: daemon.install-failed
+  return 1;
+}
+
+/**
+ * Reports an install that left no new daemon: a load the manager refused, or a unit whose daemon
+ * did not answer and was taken back out. A rollback is reported as one only after the daemon it
+ * started answers the same health probe; a rollback that started nothing answering takes the
+ * answer a lost rollback gives — no daemon, with the rerun command. Either way the line names
+ * what happened and exits 1, so an install never ends with no daemon and no message.
+ */
+async function reportInstallFailure(
+  failure: ServiceInstallFailure,
+  io: Io,
+  parsed: Parsed,
+  roots: readonly string[],
+  unitPath: string,
+  home: string,
+  sources: DaemonCommandSources,
+): Promise<number> {
+  appendDaemonLog(home, `install: ${failure.detail ?? failure.why}`, sources.now?.() ?? new Date());
+  let outcome = failure.outcome;
+  let why = failure.why;
+  if (outcome === 'restored' && !(await daemonAnswers(home, sources))) {
+    appendDaemonLog(home, 'install: the restored daemon did not answer the health probe', sources.now?.() ?? new Date());
+    outcome = 'lost';
+    why = `${failure.why}, but the restored daemon did not answer; no daemon is running`;
+  }
+  if (outcome === 'restored') {
+    refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rolled-back', message: why, repair: null });
+    // exit: daemon.install-rolled-back
+    return 1;
+  }
+  // No daemon is running: the line names the command that starts one again, and where a kept
+  // earlier unit is, so the failure is actionable without reading the log afterwards.
+  const again = installAgain(roots, parsed);
+  const repair = `the owner runs \`${again}\``;
+  const keptAt = failure.kept ? `; the previous unit is kept at ${unitPath}` : '';
+  if (outcome === 'lost') {
+    refuse(io, parsed.json, 'daemon', {
+      id: 'daemon.install-rollback-failed',
+      message: why,
+      repair,
+      plain: `${why}; ${repair} to start a daemon again${keptAt}`,
+    });
+    // exit: daemon.install-rollback-failed
+    return 1;
+  }
+  return installFailed(io, parsed, {
+    id: 'daemon.install-failed',
+    message: why,
+    repair,
+    plain: `${why}; ${repair} to try again${keptAt}`,
+  });
 }
 
 export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonCommandSources = {}): Promise<number> {
@@ -594,8 +769,11 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
 
   if (parsed.verb === 'run') {
     const startedBy = parsed.startedBy ?? 'manual';
-    if (!runAllowed(io, startedBy, parsed.json)) {
+    if (!runAllowed(io, home, startedBy, parsed.json, sources)) {
       // exit: daemon.run-not-owner
+      // exit: daemon.service-managed.pid
+      // exit: daemon.service-managed.program
+      // exit: daemon.service-managed.unit
       return 1;
     }
     const named = rootsOf(parsed, io, home);
@@ -720,7 +898,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
         removed: removed.removed,
       });
     } else if (removed.removed) {
-      io.stdout('team daemon: uninstalled; the system service manager no longer starts it\n');
+      io.stdout('team daemon: uninstalled; the system\'s service manager no longer starts it\n');
     } else {
       io.stdout('team daemon: not installed; nothing to remove\n');
     }
@@ -760,7 +938,19 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     // The installing shell's PATH, so the service finds herdr where the owner's shell does.
     ...(io.env.PATH !== undefined && io.env.PATH !== '' ? { path: io.env.PATH } : {}),
   };
-  const plan = manager.plan(home, fullProgram);
+  let plan: ServicePlan;
+  try {
+    plan = manager.plan(home, fullProgram);
+  } catch (error) {
+    // The plan names the retained copy the unit would run, and a program that cannot be read
+    // whole is refused before anything is written — by a dry run too, which must not promise a
+    // unit the install would then refuse. It leaves through the one install-failure site.
+    return installFailed(io, parsed, {
+      id: 'daemon.install-failed',
+      message: `the program this unit would run could not be read whole, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
+      repair: null,
+    });
+  }
   if (parsed.dryRun) {
     if (parsed.json) {
       writeJson(io, 'team.daemon-install', {
@@ -775,7 +965,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       });
     } else {
       io.stdout(
-        `team daemon: would install the machine daemon for ${String(named.roots.length)} checkout(s); the system service manager starts it at login and restarts it after a failure; nothing was written\n${INSTALL_STEPS.map((step) => `  - ${step}\n`).join('')}`,
+        `team daemon: would install the machine daemon for ${String(named.roots.length)} checkout(s); the system's service manager starts it at login and restarts it after a failure; nothing was written\n${INSTALL_STEPS.map((step) => `  - ${step}\n`).join('')}`,
       );
     }
     // exit: daemon.dry-run
@@ -783,47 +973,23 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
   }
   const installed = manager.install(home, fullProgram);
   if (!installed.ok) {
-    appendDaemonLog(home, `install: ${installed.detail ?? installed.why}`, sources.now?.() ?? new Date());
-    // A rollback is reported as one only after the daemon it started answers: a load the service
-    // manager accepted is registration, not proof that a program runs. A rollback that started
-    // nothing answering takes the same answer a lost rollback gives: no daemon, with the rerun
-    // command. Either way the line names what happened and exits 1, so an install never ends
-    // with no daemon and no message.
-    let outcome = installed.outcome;
-    let why = installed.why;
-    if (outcome === 'restored' && !(await restoredDaemonAnswers(home, sources))) {
-      appendDaemonLog(home, 'install: the restored daemon did not answer the health probe', sources.now?.() ?? new Date());
-      outcome = 'lost';
-      why = `${installed.why}, but the restored daemon did not answer; no daemon is running`;
-    }
-    if (outcome === 'restored') {
-      refuse(io, parsed.json, 'daemon', { id: 'daemon.install-rolled-back', message: why, repair: null });
-      // exit: daemon.install-rolled-back
-      return 1;
-    }
-    // No daemon is running: the line names the command that starts one again, and where a kept
-    // earlier unit is, so the failure is actionable without reading the log afterwards.
-    const again = installAgain(named.roots, parsed);
-    const repair = `the owner runs \`${again}\``;
-    const keptAt = installed.kept ? `; the previous unit is kept at ${plan.unitPath}` : '';
-    if (outcome === 'lost') {
-      refuse(io, parsed.json, 'daemon', {
-        id: 'daemon.install-rollback-failed',
-        message: why,
-        repair,
-        plain: `${why}; ${repair} to start a daemon again${keptAt}`,
-      });
-      // exit: daemon.install-rollback-failed
-      return 1;
-    }
-    refuse(io, parsed.json, 'daemon', {
-      id: 'daemon.install-failed',
-      message: why,
-      repair,
-      plain: `${why}; ${repair} to try again${keptAt}`,
-    });
-    // exit: daemon.install-failed
-    return 1;
+    return await reportInstallFailure(installed, io, parsed, named.roots, plan.unitPath, home, sources);
+  }
+  // A load the manager accepted is registration, not proof that a program runs. The install is
+  // reported only after the daemon it started answers the machine socket; a daemon that never
+  // answers is taken back out — or the earlier unit is put back — through the adapter's own
+  // undo, so a success line never stands for an empty machine.
+  if (!(await daemonAnswers(home, sources))) {
+    const failure: ServiceInstallFailure = installed.undo === undefined
+      ? {
+        ok: false,
+        why: 'the daemon the new unit started did not answer the health probe, and this manager kept no earlier definition to put back',
+        detail: 'the daemon did not answer the health probe within the probe window',
+        outcome: 'refused',
+        kept: false,
+      }
+      : installed.undo();
+    return await reportInstallFailure(failure, io, parsed, named.roots, plan.unitPath, home, sources);
   }
   if (parsed.json) {
     writeJson(io, 'team.daemon-install', {
@@ -832,7 +998,9 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
       dry_run: false,
       installed: true,
       unit_path: installed.unitPath,
-      program: plan.program,
+      // The words the unit was actually written with, retained entry included; a manager that
+      // reports none wrote the words the plan named.
+      program: installed.program ?? plan.program,
       roots: named.roots,
       // The removal is never silent: a structured run says it in a field, a plain run below in
       // a sentence.
@@ -840,7 +1008,7 @@ export async function runDaemon(argv: string[], rawIo: Io, sources: DaemonComman
     });
   } else {
     io.stdout(
-      `team daemon: installed for ${String(named.roots.length)} checkout(s); the system service manager starts it at login and restarts it after a failure\n`,
+      `team daemon: installed for ${String(named.roots.length)} checkout(s); the system's service manager starts it at login and restarts it after a failure\n`,
     );
     if (installed.droppedAuthorization === true) {
       io.stdout('team daemon: the earlier unit named a client key or a general grant; this unit was rewritten without either\n');
