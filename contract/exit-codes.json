@@ -249,6 +249,13 @@
     {
       "code": 1,
       "command": "add",
+      "id": "add.name-taken",
+      "meaning": "a nickname the addition brings is already held by another team's seat; nothing was added",
+      "trigger": "team add worker --like lead"
+    },
+    {
+      "code": 1,
+      "command": "add",
       "id": "add.never-approved",
       "meaning": "the file was never approved",
       "trigger": "team add worker"
@@ -1425,6 +1432,13 @@
     {
       "code": 1,
       "command": "config",
+      "id": "config.name-taken",
+      "meaning": "a nickname the change sets is already held by another team's seat; nothing was written",
+      "trigger": "team config set seats.worker.label \"Cicero · implementer\""
+    },
+    {
+      "code": 1,
+      "command": "config",
       "id": "config.no-value",
       "meaning": "the path holds nothing in the record",
       "trigger": "team config get watch.missing"
@@ -2373,6 +2387,13 @@
       "id": "init.legacy",
       "meaning": "the record predates signed records",
       "trigger": "team init --restore"
+    },
+    {
+      "code": 1,
+      "command": "init",
+      "id": "init.name-taken",
+      "meaning": "a nickname the restored team brings is already held by another team's seat; nothing was written",
+      "trigger": "team init --from-archive <folder>"
     },
     {
       "code": 1,

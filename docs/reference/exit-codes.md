@@ -41,6 +41,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `add.machine` | `add` | 1 | the machine is over a launch limit | `team add worker` |
 | `add.machine-again` | `add` | 1 | the machine goes over a launch limit before the seat starts | `team add worker` |
 | `add.merged-base` | `add` | 1 | workspace.base is required to read a merged end | `team add --temporary --like lead --until merged:topic` |
+| `add.name-taken` | `add` | 1 | a nickname the addition brings is already held by another team's seat; nothing was added | `team add worker --like lead` |
 | `add.never-approved` | `add` | 1 | the file was never approved | `team add worker` |
 | `add.no-like` | `add` | 1 | the file has no seat to copy | `team add --temporary --like missing --until result:out.md` |
 | `add.no-profile` | `add` | 1 | the seat has no launch profile | `team add worker` |
@@ -209,6 +210,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
 | `config.general-refused` | `config` | 1 | the general grant does not admit this edit; nothing was written | `team config set <path> <value> --general <grant.json> --key <client.key>` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
+| `config.name-taken` | `config` | 1 | a nickname the change sets is already held by another team's seat; nothing was written | `team config set seats.worker.label "Cicero · implementer"` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
 | `config.path` | `config` | 1 | the path cannot be set (a value on the way, or no such list item); nothing was written | `team config set seats.ghost.cli claude` |
@@ -345,6 +347,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.general-refused` | `init` | 1 | the general grant does not admit this create; nothing was written | `team init --general <grant.json> --key <client.key>` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
 | `init.legacy` | `init` | 1 | the record predates signed records | `team init --restore` |
+| `init.name-taken` | `init` | 1 | a nickname the restored team brings is already held by another team's seat; nothing was written | `team init --from-archive <folder>` |
 | `init.not-owner` | `init` | 1 | not the owner | `team init` |
 | `init.nothing` | `init` | 1 | there is nothing to restore | `team init --restore` |
 | `init.refused` | `init` | 1 | the stored record does not verify | `team init --restore` |
