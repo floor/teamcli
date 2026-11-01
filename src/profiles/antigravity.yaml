@@ -36,6 +36,15 @@ exit_clear: ctrl+u
 timeouts:
   idle: 90s
   exit: 30s
+# The dialog dismiss key the project's own captures recorded, the footer's skip key pressed in
+# a scratch session and the dialog left without an answer: `1.2.16/question-54.txt` and
+# `1.4.2/question.txt`, both "Escape dismissed it". The unsent-comments confirmation
+# (`1.2.16/question-unsent-54.txt`) was closed rather than dismissed, so it claims no key.
+question_answer:
+  - kind: question
+    key: escape
+    from: '1.2.16'
+    to: '1.4.2'
 # The predicate, label and extractor come from the registered
 # antigravity/1.2.16/trust.txt capture. That capture was taken in a fresh untrusted
 # temporary directory, not the lobby, so the record claims no lobby evidence.

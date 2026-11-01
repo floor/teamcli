@@ -34,7 +34,36 @@ describe('the question-answer records a profile lists', () => {
 
   test('a profile with no records answers nothing', () => {
     expect(questionAnswers(undefined)).toEqual([]);
-    expect(profileFor('claude-code')?.questionAnswers).toEqual([]);
+    expect(profileFor('codex')?.questionAnswers).toEqual([]);
+  });
+
+  test('the shipped profiles carry the dismiss keys their captures recorded', () => {
+    const claude = profileFor('claude-code');
+    if (!claude) throw new Error('no claude-code profile');
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.289')?.key).toBe('escape');
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302')?.key).toBe('escape');
+    expect(questionAnswerFor(claude.questionAnswers, 'plan approval', '2.1.289')?.key).toBe('escape');
+    // The held frame was captured but never dismissed: no key is claimed, so the answer layer
+    // refuses it rather than pressing a key the run did not record.
+    expect(questionAnswerFor(claude.questionAnswers, 'confirmation', '2.1.302')).toBeNull();
+
+    const cursor = profileFor('cursor');
+    if (!cursor) throw new Error('no cursor profile');
+    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16')?.key).toBe('escape');
+    expect(questionAnswerFor(cursor.questionAnswers, 'confirmation', '2026.10.01')?.key).toBe('escape');
+
+    const gemini = profileFor('gemini');
+    if (!gemini) throw new Error('no gemini profile');
+    expect(questionAnswerFor(gemini.questionAnswers, 'question', '0.64.0')?.key).toBe('escape');
+
+    const antigravity = profileFor('antigravity');
+    if (!antigravity) throw new Error('no antigravity profile');
+    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.4.2')?.key).toBe('escape');
+    // The unsent-comments dialog was closed from, not dismissed with a key.
+    expect(questionAnswerFor(antigravity.questionAnswers, 'confirmation', '1.2.16')).toBeNull();
+
+    // Grok's capture README records no dismissal key.
+    expect(profileFor('grok')?.questionAnswers).toEqual([]);
   });
 
   test('the lookup takes the record that names the kind and the version printed', () => {
