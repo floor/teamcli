@@ -147,7 +147,7 @@ function fake(home: string, root: string, screen: string, cli: 'cursor' | 'antig
       host.versions += 1;
       if (binary === 'cursor-agent') return '2026.10.01-14929f9';
       if (binary === 'agy') return '1.2.16';
-      if (binary === 'codex') return '0.157.0';
+      if (binary === 'codex') return 'codex-cli 0.157.0';
       return '0.0.0';
     },
     agents() {
@@ -314,6 +314,30 @@ describe('version matching', () => {
     expect(versionMatches(record, '2026.10.01')).toBe(false);
     expect(versionMatches(record, '2026.10.01-beta.1')).toBe(false);
     expect(versionMatches(record, '2026.10.01-14929f9 ')).toBe(false);
+  });
+
+  test('every shipped trust record is spelled as its CLI prints its version', () => {
+    // `codex --version` printed `codex-cli 0.161.0` in a scratch session on 2026-11-01, and the
+    // 0.160.0 and 0.161.0 capture READMEs record the same form; an exact record matches the
+    // printed text byte for byte, so 0.157.0's record carries the prefix too.
+    const codex = profileFor('codex')?.answers[0];
+    if (!codex) throw new Error('codex record');
+    expect(versionMatches(codex, 'codex-cli 0.157.0')).toBe(true);
+    expect(versionMatches(codex, '0.157.0')).toBe(false);
+    // The rest: cursor-agent prints its build string bare (the 2026.10.14 and 2026.10.16
+    // READMEs record that print), and `agy --version` prints the bare version.
+    const spelled = ['codex', 'cursor', 'antigravity'].flatMap((cli) =>
+      (profileFor(cli)?.answers ?? []).map((record) => `${cli} ${record.from} -> ${record.to}`));
+    expect(spelled).toEqual([
+      'codex codex-cli 0.157.0 -> codex-cli 0.157.0',
+      'cursor 2026.10.01-14929f9 -> 2026.10.01-14929f9',
+      'cursor 2026.10.14-0f9edde -> 2026.10.14-0f9edde',
+      'cursor 2026.10.16-e3cb207 -> 2026.10.16-e3cb207',
+      'antigravity 1.2.16 -> 1.2.16',
+      'antigravity 1.3.5 -> 1.3.5',
+      'antigravity 1.4.0 -> 1.4.1',
+      'antigravity 1.4.2 -> 1.4.2',
+    ]);
   });
 
   test('a closed range matches whole versions and nothing decorated', () => {
@@ -1299,7 +1323,7 @@ describe('team answer', () => {
     await approve(root, home);
     wait(dir, 'lead');
     const host = fake(home, root, codexRepo, 'cursor');
-    host.version = () => '0.157.0';
+    host.version = () => 'codex-cli 0.157.0';
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);

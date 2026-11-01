@@ -49,12 +49,15 @@ timeouts:
   idle: 90s
   exit: 30s
 # The folder-only layout, from the registered codex/0.157.0/trust-folder.txt capture: the
-# path is wrapped at column 51, continuing at indent 2. Codex is eligible only when the
-# record also names `lobby_evidence`, a capture of the same dialog in the real lobby; none
-# is registered, so this record answers nothing yet.
+# path is wrapped at column 51, continuing at indent 2. The versions are spelled as
+# `codex --version` prints them — `codex-cli 0.161.0`, measured 2026-11-01 in a scratch
+# session, and the 0.160.0 and 0.161.0 capture READMEs record the same form — because the
+# answer layer matches an exact record against that print byte for byte. Codex is eligible
+# only when the record also names `lobby_evidence`, a capture of the same dialog in the real
+# lobby; none is registered, so this record answers nothing yet.
 trust_answer:
-  - from: '0.157.0'
-    to: '0.157.0'
+  - from: 'codex-cli 0.157.0'
+    to: 'codex-cli 0.157.0'
     label: '1. Trust and continue'
     action: '31'
     capture: codex/0.157.0/trust-folder.txt
