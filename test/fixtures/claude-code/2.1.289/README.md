@@ -120,3 +120,16 @@ the throwaway directory names are left as they were.
 Not produced: a Bash-command permission prompt. `ls`, `mkdir`, a redirected `sort`
 and `python3 -c` all ran without a dialog in this scratch launch, so no such prompt
 could be provoked honestly with a harmless command.
+
+## No question answer record: no saved `--version` print
+
+The plan-approval dialog above was "Denied with Escape" and the question tool's choice screen
+"Dismissed with Escape without selecting anything": both keys were measured here. But no
+capture or note in this folder saves a `claude --version` print at 2.1.289 — the folder title
+names the build, which is not the print the answer layer compares against. A record that sends
+a key names one captured version, spelled as the CLI prints it, so the profile ships no
+question answer at 2.1.289, of either kind: a seat printing it is refused as a version with no
+answer rather than pressed on an inferred spelling. The dialog readings are unchanged — these
+captures still classify as plan approval, question and trust. The saved prints are in the later
+folders: `2.1.299/README.md` records `claude --version` printed `2.1.299 (Claude Code)`, and
+`2.1.302/README.md` the same for `2.1.302 (Claude Code)`.

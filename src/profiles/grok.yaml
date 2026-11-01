@@ -168,8 +168,9 @@ screen:
         - '^\s*Shift\+Tab:mode.*Ctrl\+c:cancel'
   # Where the answer widget's question sits, so a report can quote it: the bare `┃` row it
   # draws, then the question on the `┃` rows under it (`grok/1.0.52/question.txt`). A question
-  # the pane wraps over two rows is read whole (`grok/1.0.52/permission.txt`); the bare `┃` row
-  # under it ends the walk.
+  # the pane wraps over two rows is read whole (`grok/1.0.52/permission.txt`); the bare `┃`
+  # rows under it are the frame's own, read as blank rows are, so the walk passes them and
+  # reads on to the widget's first option row.
   # The widget's question sits under an empty `┃` row and ends at the first option row
   # (`┃  1 (○) alpha`, `┃  z (○) …`, 1.0.52/question.txt). A question wraps with the pane's
   # width, so the walk reads up to the marker rather than one row; six rows is the cap this
