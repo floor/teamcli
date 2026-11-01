@@ -119,3 +119,14 @@ with the typed text, where the test types, drawn in the box as `unsent.txt` draw
 captures draw the box's two rules at one width (53 columns in `idle.txt`; 54 in
 `folded-rules.txt`), so a window whose rules differ is not the frame they draw: the read
 fails closed and nothing is entered.
+
+## No question answer record: no saved `--version` print
+
+`question-54.txt` records the choice screen "Escape dismissed it; no option was chosen" — the
+key was measured here. But this README only names the build (`1.2.16`); it saves no `agy
+--version` print, and no other capture or note does. A record that sends a key names one
+captured version, spelled as the CLI prints it, so the profile ships no question answer at
+1.2.16: a seat printing it is refused as a version with no answer rather than pressed on an
+inferred spelling. The reading is unchanged — `question-54.txt` still classifies as a question.
+The saved prints are in the later folders: `1.3.5/README.md` records `agy --version` is 1.3.5,
+and each later folder the same through `1.4.2`.

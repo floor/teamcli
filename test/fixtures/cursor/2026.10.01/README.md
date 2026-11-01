@@ -273,3 +273,16 @@ was typed. The session was stopped and deleted. The standing-rules texts are wha
 The workspace line is replaced by `<workspace>` (in `rules-pasted-narrow.txt` it had
 wrapped over two rows at 27 columns and is folded back to one); the line is not part of a
 box.
+
+## No question answer record: no saved `--version` print
+
+`question.txt` records the choice box dismissed with Escape ("Escape each time"), and
+`permission-plan.txt` the mode switch "then Escape rejected it": both keys were measured here.
+But this README only names the build (`2026.10.01-14929f9`); it saves no `cursor-agent
+--version` print, and no other capture or note does. A record that sends a key names one
+captured version, spelled as the CLI prints it, so the profile ships no question answer at this
+build — the question and the confirmation record both go — and a seat printing it is refused as
+a version with no answer rather than pressed on an inferred spelling. The readings are
+unchanged: these captures still classify as a question and a confirmation. The saved prints are
+in the later folders: `2026.10.14/README.md` records `cursor-agent --version` printed
+`2026.10.14-0f9edde`, and `2026.10.16/README.md` printed `2026.10.16-e3cb207`.

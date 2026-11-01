@@ -41,10 +41,13 @@ describe('the question-answer records a profile lists', () => {
     const claude = profileFor('claude-code');
     if (!claude) throw new Error('no claude-code profile');
     // The answer layer compares the version `claude --version` prints, suffix and all.
-    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.289 (Claude Code)')?.key).toBe('escape');
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302 (Claude Code)')?.key).toBe('escape');
-    expect(questionAnswerFor(claude.questionAnswers, 'plan approval', '2.1.289 (Claude Code)')?.key).toBe('escape');
-    // No question was captured at 2.1.299, and a bare version is not the printed text.
+    // 2.1.289's plan-approval and question dialogs were both dismissed with Escape, but no
+    // capture or README saves a `claude --version` print at 2.1.289: the spelling is inferred.
+    // No record claims that build, of either kind, so it refuses rather than press an inferred key.
+    expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.289 (Claude Code)')).toBeNull();
+    expect(questionAnswerFor(claude.questionAnswers, 'plan approval', '2.1.289 (Claude Code)')).toBeNull();
+    // No record names 2.1.299 here, and a bare version is not the printed text.
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.299 (Claude Code)')).toBeNull();
     expect(questionAnswerFor(claude.questionAnswers, 'question', '2.1.302')).toBeNull();
     // The held frame was captured but never dismissed: no key is claimed, so the answer layer
@@ -62,8 +65,11 @@ describe('the question-answer records a profile lists', () => {
     const cursor = profileFor('cursor');
     if (!cursor) throw new Error('no cursor profile');
     expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16-e3cb207')?.key).toBe('escape');
-    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.01-14929f9')?.key).toBe('escape');
-    expect(questionAnswerFor(cursor.questionAnswers, 'confirmation', '2026.10.01-14929f9')?.key).toBe('escape');
+    // 2026.10.01's question box and mode switch were both dismissed with Escape, but its README
+    // only names the build: it saves no `cursor-agent --version` print, so no record claims that
+    // build, of either kind, and it refuses rather than press an inferred spelling.
+    expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.01-14929f9')).toBeNull();
+    expect(questionAnswerFor(cursor.questionAnswers, 'confirmation', '2026.10.01-14929f9')).toBeNull();
     expect(questionAnswerFor(cursor.questionAnswers, 'question', '2026.10.16')).toBeNull();
 
     const gemini = profileFor('gemini');
@@ -72,7 +78,18 @@ describe('the question-answer records a profile lists', () => {
 
     const antigravity = profileFor('antigravity');
     if (!antigravity) throw new Error('no antigravity profile');
-    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.4.2')?.key).toBe('escape');
+    // The choice screen was captured on every version the profile was tested against, and each
+    // capture's README records Escape dismissing it. A record also needs the build's own
+    // `agy --version` print saved, and the folders record one from 1.3.5 on: 1.2.16 only names
+    // its build, so it refuses rather than press a key under an inferred spelling.
+    for (const version of ['1.3.5', '1.4.0', '1.4.1', '1.4.2']) {
+      expect(questionAnswerFor(antigravity.questionAnswers, 'question', version)?.key).toBe('escape');
+    }
+    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.2.16')).toBeNull();
+    // A version the old `1.2.16`..`1.4.2` range admitted but no capture names is refused: no
+    // run pressed a key on it, so nothing may claim one.
+    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.2.17')).toBeNull();
+    expect(questionAnswerFor(antigravity.questionAnswers, 'question', '1.3.0')).toBeNull();
     // The unsent-comments dialog was closed from, not dismissed with a key.
     expect(questionAnswerFor(antigravity.questionAnswers, 'confirmation', '1.2.16')).toBeNull();
 

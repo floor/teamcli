@@ -55,23 +55,18 @@ timeouts:
 #   and "Escape dismissed it".
 # - `2026.10.01/permission-plan.txt`: the mode switch, "then Escape rejected it".
 # Cursor prints its build suffix in the version (`cursor-agent --version` printed
-# `2026.10.16-e3cb207`), so each record is the
-# printed version exactly — a range compares whole versions and would match neither build. The
-# captures' READMEs name them: `2026.10.01-14929f9` and `2026.10.16-e3cb207`. No confirmation
-# capture exists past the first, so that record is the one version.
+# `2026.10.16-e3cb207`, the print saved in its folder's README), so each record is the saved
+# printed version exactly — a range compares whole versions and would match no build. No record
+# claims `2026.10.01-14929f9`: its question box and mode switch were dismissed with Escape, but
+# its README only names the build; it saves no `cursor-agent --version` print, so the spelling
+# would be inferred, and the answer layer refuses that build rather than press one. The mode
+# switch is the only confirmation-shaped dialog captured, and it is that same build, so no
+# confirmation record is claimed at all.
 question_answer:
-  - kind: question
-    key: escape
-    from: '2026.10.01-14929f9'
-    to: '2026.10.01-14929f9'
   - kind: question
     key: escape
     from: '2026.10.16-e3cb207'
     to: '2026.10.16-e3cb207'
-  - kind: confirmation
-    key: escape
-    from: '2026.10.01-14929f9'
-    to: '2026.10.01-14929f9'
 # The predicate, label and extractor come from the registered
 # cursor/2026.10.01/trust.txt capture. That capture was taken in an untrusted temporary
 # directory, not the lobby, so the record claims no lobby evidence.

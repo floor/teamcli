@@ -33,19 +33,14 @@ exit_clear: ctrl+c
 # - `2.1.289/question-plain.txt` and `2.1.302/question.txt`: the question tool's choice screen,
 #   "Dismissed with Escape without selecting anything" and "Escape dismissed it".
 # The version the answer layer matches is what `claude --version` prints, which carries its own
-# suffix: `2.1.302 (Claude Code)` (`2.1.302/README.md`). A range compares whole versions and
-# would match neither print, so each record is one captured printed version exactly, as the
-# loader spells an exact record. The held cross-session frame (`2.1.302/held.txt`) has no
-# recorded dismissal, so no confirmation record is claimed.
+# suffix: `2.1.302 (Claude Code)`, the print saved in `2.1.302/README.md`. A range compares
+# whole versions and would match no print, so each record is one saved printed version exactly,
+# as the loader spells an exact record. No record claims 2.1.289: its dialogs were dismissed
+# with Escape, but no capture or README saves a `claude --version` print at 2.1.289, so its
+# spelling would be inferred — a record that sends a key names one printed version a run saved.
+# The held cross-session frame (`2.1.302/held.txt`) has no recorded dismissal, so no
+# confirmation record is claimed.
 question_answer:
-  - kind: plan approval
-    key: escape
-    from: '2.1.289 (Claude Code)'
-    to: '2.1.289 (Claude Code)'
-  - kind: question
-    key: escape
-    from: '2.1.289 (Claude Code)'
-    to: '2.1.289 (Claude Code)'
   - kind: question
     key: escape
     from: '2.1.302 (Claude Code)'
