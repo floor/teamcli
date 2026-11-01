@@ -1678,7 +1678,9 @@ describe('team answer', () => {
     grantTrust(root, home);
 
     const doctorSources: DoctorSources = {
-      version: () => '2026.10.01-14929f9',
+      // The screen is the 2026.10.14 capture, whose trust record is measured: the scene is
+      // about the waiting line, not the unmeasured version's refusal.
+      version: () => '2026.10.14-0f9edde',
       onPath: () => true,
       loggedIn: () => true,
       herdrVersion: () => '0.7.1',

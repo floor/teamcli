@@ -297,7 +297,9 @@ describe('doctor on both layouts for the seat the change does not help', () => {
     approveYaml(cursorWorkerYaml());
     workerWaitingAtTrust();
     const at = await runDoctorCmd(['--file', '.agents/team.yaml'], {
-      version: (binary) => (binary === 'cursor-agent' ? '2026.10.01-14929f9' : '2.1.288'),
+      // The record this scene reads is the 2026.10.14 capture's, the first measured trust
+      // answer: the folder rule is the subject, not the version's refusal.
+      version: (binary) => (binary === 'cursor-agent' ? '2026.10.14-0f9edde' : '2.1.288'),
       paneText: () => trustScreen(root),
       sessionRunning: () => true,
       agentList: () => [{ name: 'worker', agent: 'cursor-agent', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null }],
@@ -309,7 +311,7 @@ describe('doctor on both layouts for the seat the change does not help', () => {
     approveYaml(cursorWorkerYaml());
     workerWaitingAtTrust();
     const at = await runDoctorCmd(['--file', '.agents/team.yaml'], {
-      version: (binary) => (binary === 'cursor-agent' ? '2026.10.01-14929f9' : '2.1.288'),
+      version: (binary) => (binary === 'cursor-agent' ? '2026.10.14-0f9edde' : '2.1.288'),
       paneText: () => trustScreen(lobby),
       sessionRunning: () => true,
       agentList: () => [{ name: 'worker', agent: 'cursor-agent', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null }],

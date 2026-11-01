@@ -798,7 +798,9 @@ describe('the lobby gate', () => {
     const captured = readFileSync(join(import.meta.dir, '..', 'fixtures', 'cursor', '2026.10.01', 'trust.txt'), 'utf8');
     const screen = (folder: string) => captured.replace('<untrusted-directory>', folder);
     const sources = {
-      version: (binary: string) => (binary === 'cursor-agent' ? '2026.10.01-14929f9' : '2.1.288'),
+      // A measured trust version, so the folder rule below is the subject of the scene: the
+      // unmeasured 2026.10.01-14929f9 build would answer with the version's own refusal.
+      version: (binary: string) => (binary === 'cursor-agent' ? '2026.10.14-0f9edde' : '2.1.288'),
       paneText: () => screen(root),
       sessionRunning: () => true,
       agentList: () => [{ name: 'lead', agent: 'cursor-agent', pane: 'w0:p1', workspace: 'w0', status: 'idle', cwd: null }],
