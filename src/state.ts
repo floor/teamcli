@@ -416,6 +416,21 @@ export function emptySession(): SessionState {
   return { seats: {}, worktrees: {} };
 }
 
+/**
+ * The state's sessions map, built without a prototype: `sessions[name]` then finds the team's own
+ * record or nothing at all, never an object every object inherits. Session names are keys here,
+ * and a name like `__proto__` must be an ordinary own key if it is one at all; with a prototype
+ * in place, a lookup of a name the team does not hold would find the inherited object, and a
+ * write through it (`sessions[name] ??= emptySession()`) would reach the shared prototype. Every
+ * map that enters the program is built here — the missing file's empty state and the map a read
+ * returns — so every reader and writer works on a map of this shape.
+ */
+export function sessionMap(entries: Iterable<[string, SessionState]> = []): Record<string, SessionState> {
+  const map = Object.create(null) as Record<string, SessionState>;
+  for (const [name, record] of entries) map[name] = record;
+  return map;
+}
+
 /** Whether a value from the state file is the record `team hold` writes: a reason with text, a
  *  name and an instant that parse, and an `until`, when present, that parses too. Anything else
  *  is dropped at the read door, so a hand-edited file can never print what it made up. */
@@ -554,7 +569,7 @@ function isQueuedSwap(value: unknown): value is QueuedSwap {
 // The state in `dir` (the folder of the team file). A missing file is an empty state; a file
 // that can't be read as a state is an error, never silently replaced.
 export function readState(dir: string): State {  const path = join(dir, STATE_FILE);
-  if (!existsSync(path)) return { format: 1, sessions: {} };
+  if (!existsSync(path)) return { format: 1, sessions: sessionMap() };
   let parsed: unknown;
   try {
     // A file replaced under this reader (a writer that is not the atomic one) can parse as a
@@ -567,6 +582,10 @@ export function readState(dir: string): State {  const path = join(dir, STATE_FI
   if (!state || typeof state !== 'object' || state.format !== 1 || typeof state.sessions !== 'object' || !state.sessions) {
     throw new Error(`${path} is not a team state of format 1; move it aside and run the command again`);
   }
+  // The map is rebuilt without a prototype before any reader sees it (`sessionMap`): a file's
+  // sessions object is plain, so a lookup by a name the team does not hold would find what every
+  // object inherits. A record the file does hold under such a name stays an ordinary own key.
+  state.sessions = sessionMap(Object.entries(state.sessions));
   // The hold, cleaned at the same door: a record that is not the one `team hold` writes is
   // dropped here, so the reason, the name and the instants later readers print are the ones
   // the command wrote, never a hand-edited file's.
@@ -851,7 +870,12 @@ export function storedWatchRecord(dir: string, session: string): unknown {
     throw error;
   }
   const raw = JSON.parse(text) as { sessions?: Record<string, { watch?: unknown }> };
-  return raw?.sessions?.[session]?.watch;
+  // This reader parses the file itself, so its map is plain: an own key only, or a lookup by a
+  // name the file does not hold would return the inherited object instead of no record at all.
+  const sessions = raw?.sessions;
+  if (sessions === undefined || sessions === null || typeof sessions !== 'object') return undefined;
+  if (!Object.hasOwn(sessions, session)) return undefined;
+  return sessions[session]?.watch;
 }
 
 export function writeAtomic(path: string, text: string): void {

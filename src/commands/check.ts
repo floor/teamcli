@@ -11,6 +11,7 @@ import { loadConfig, type LoadConfig } from '../check/load.ts';
 import { realCheckSources, runTeamCheck, type CheckSources } from '../check/team.ts';
 import type { Io } from '../io.ts';
 import { hasJsonFlag, writeJsonError } from '../output/index.ts';
+import { sessionNameRefusal } from '../session-names.ts';
 import { runCommits, type CommitsRun } from './commits.ts';
 
 export { loadConfig };
@@ -100,6 +101,13 @@ function parse(argv: string[], options: readonly Option[], flags: readonly FlagO
     if (!option) return `unknown option ${argument}`;
     const value = inline ?? argv[++index];
     if (value === undefined || value === '') return `--${option} needs a value`;
+    // This command parses its own line (its old spelling keeps its bytes), so the session rule
+    // `readArgs` applies to every other command's `--session` is applied here too, before the
+    // check reaches the state it would key by the name (src/session-names.ts).
+    if (option === 'session') {
+      const refusal = sessionNameRefusal(value);
+      if (refusal !== null) return refusal;
+    }
     values[option] = value;
   }
   return { values, flags: taken, positional };

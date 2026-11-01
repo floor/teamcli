@@ -280,7 +280,9 @@ export function createPresenceIngester(input: PresenceIngestInput): PresenceInge
       return { kind: 'error', why: 'the seat state is not a team state of format 1' };
     }
     const sessions = state.sessions as Record<string, unknown>;
-    const one = sessions[session] as { seats?: unknown } | undefined;
+    // This reader parses the file itself, so its map is plain: only an own key is a record. A
+    // lookup by a name the file does not hold would find the object every object inherits.
+    const one = Object.hasOwn(sessions, session) ? (sessions[session] as { seats?: unknown } | undefined) : undefined;
     const seats = one !== null && typeof one === 'object' ? one.seats : undefined;
     const found = new Map<string, string>();
     if (seats !== null && typeof seats === 'object') {
