@@ -129,21 +129,21 @@ const settled = (cli: { waited: number[] }): number => cli.waited.reduce((sum, m
 describe('a box that swallows the first Enter', () => {
   test('is pressed again and the delivery is verified', async () => {
     const cli = fakeCli({ swallow: 1 });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a first Enter that works is the only one', async () => {
     const cli = fakeCli();
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('two swallowed Enters are still within the three tries', async () => {
     const cli = fakeCli({ swallow: 2 });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -152,7 +152,7 @@ describe('a box that swallows the first Enter', () => {
 describe('a box that never submits', () => {
   test('is not-submitted, with the text the box holds, after three tries', async () => {
     const cli = fakeCli({ swallow: Infinity });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -160,21 +160,21 @@ describe('a box that never submits', () => {
   test('each try waits longer: one, three, then nine seconds', async () => {
     expect(BACKOFF_MS).toEqual([1000, 3000, 9000]);
     const cli = fakeCli({ swallow: Infinity });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a seat working with the line still in the box is not verified', async () => {
     const cli = fakeCli({ keepsLine: true });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a box that the seat cleared but herdr never called working is delivered as taken, and gets no more Enters', async () => {
     const cli = fakeCli({ after: 'idle' });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -183,21 +183,21 @@ describe('a box that never submits', () => {
 describe('a faint suggestion in the box', () => {
   test('counts as empty: the line is typed, not held, and Enter is pressed once', async () => {
     const cli = fakeCli({ empty: 'suggestion' });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('is never taken for the trigger: a cleared box with no proof is delivered as taken, and no Enter follows', async () => {
     const cli = fakeCli({ empty: 'suggestion', after: 'idle' });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a blank box reads the same', async () => {
     const cli = fakeCli({ empty: 'blank' });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -206,28 +206,28 @@ describe('a faint suggestion in the box', () => {
 describe('a box or a pane that is not for typing', () => {
   test('text a person left in the box is held, and nothing is typed or sent', async () => {
     const cli = fakeCli({ preload: 'half a sentence' });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a dialog is unreachable, and gets no key', async () => {
     const cli = fakeCli({ dialog: capture('permission-read-wide-ansi.txt') });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a pane that will not take the text is unreachable', async () => {
     const cli = fakeCli({ refusesText: true });
-    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const result = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(result).toMatchObject({ outcome: 'unreachable', tries: 0 });
     expect(cli.enters).toBe(0);
   });
 
   test('a status herdr cannot read is unreachable', async () => {
     const cli = { ...fakeCli(), status: () => null };
-    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const result = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(result.outcome).toBe('unreachable');
     expect(cli.typed).toEqual([]);
   });
@@ -236,7 +236,7 @@ describe('a box or a pane that is not for typing', () => {
     const cli = fakeCli();
     const typeText = cli.typeText;
     cli.typeText = (pane, text) => typeText(pane, `${text} and something else`);
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -244,7 +244,7 @@ describe('a box or a pane that is not for typing', () => {
   test('an Enter herdr did not take, with the line still in the box, is not-submitted with that line', async () => {
     const cli = fakeCli();
     cli.pressEnter = () => false;
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -256,7 +256,7 @@ describe('a box or a pane that is not for typing', () => {
     cli.typeText = (pane, text) => (typeText(pane, text), true);
     cli.pressEnter = () => false;
     cli.readAnsi = () => screenWith(`${PROMPT}${FAINT('Try "fix typecheck errors"')}`);
-    const result = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const result = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(result).toMatchObject({ outcome: 'unreachable', tries: 0 });
   });
 });
@@ -266,7 +266,7 @@ describe('a box that cannot be read', () => {
     const cli = fakeCli();
     const blind: DeliverHost = { ...cli };
     delete blind.readAnsi;
-    const retired = await deliverTrigger(blind, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(blind, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -275,7 +275,7 @@ describe('a box that cannot be read', () => {
     const cli = fakeCli({ swallow: Infinity });
     const blind: DeliverHost = { ...cli };
     delete blind.readAnsi;
-    const retired = await deliverTrigger(blind, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(blind, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -286,14 +286,14 @@ describe('a seat whose status lags', () => {
 
   test('a cleared box and a transcript that shows the drop read is delivered, with no status change at all', async () => {
     const cli = fakeCli({ after: 'idle', transcript: [`\u25cf Read /tmp/drops/native/${DROP_ID} and do that.`, explored] });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('the same is delivered whatever the faint suggestion, or a blank box', async () => {
     const cli = fakeCli({ after: 'idle', empty: 'blank', transcript: [explored] });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -301,7 +301,7 @@ describe('a seat whose status lags', () => {
   test('the echo of the trigger in the transcript is not the drop being read: taken, not yet confirmed', async () => {
     const echo = [`\u276f Read /tmp/drops/native/${DROP_ID} and do that.`];
     const cli = fakeCli({ after: 'idle', transcript: echo });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -309,28 +309,28 @@ describe('a seat whose status lags', () => {
   test('an echo wrapped over rows is not the drop being read either, and ends taken', async () => {
     const echo = ['\u276f Read /tmp/drops/native/', `  ${DROP_ID} and do`, '  that.'];
     const cli = fakeCli({ after: 'idle', transcript: echo });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a status that moves late, inside the longer window, is delivered', async () => {
     const cli = fakeCli({ lagMs: 15_000 });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a status that never moves, and a transcript that shows nothing, is taken after the whole window', async () => {
     const cli = fakeCli({ lagMs: Infinity });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a transcript that shows the drop does not count while the box still holds the trigger', async () => {
     const cli = fakeCli({ keepsLine: true, after: 'idle', transcript: [explored] });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -339,7 +339,7 @@ describe('a seat whose status lags', () => {
     const cli = fakeCli({ after: 'idle', transcript: [explored] });
     const blind: DeliverHost = { ...cli };
     delete blind.readAnsi;
-    const retired = await deliverTrigger(blind, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(blind, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -350,28 +350,28 @@ describe('evidence has to come from this line', () => {
 
   test('a seat already working before Enter, still working after, with an empty box and no transcript, is taken', async () => {
     const cli = fakeCli({ statusBefore: 'working', after: 'working' });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a seat already working that finishes its turn is taken too: the box cleared', async () => {
     const cli = fakeCli({ statusBefore: 'working', after: 'done' });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a seat already working is delivered when the transcript shows the drop read', async () => {
     const cli = fakeCli({ statusBefore: 'working', after: 'working', transcript: [explored] });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
 
   test('a status that moved while the screen is a permission dialog is not delivered, and gets no key', async () => {
     const cli = fakeCli({ dialogAfterEnter: capture('permission-read-wide-ansi.txt') });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -380,7 +380,7 @@ describe('evidence has to come from this line', () => {
 describe('an unreadable box gets no second Enter', () => {
   test('a read that fails after a swallowed first Enter stops at one key, and is not-submitted with no box text', async () => {
     const cli = fakeCli({ swallow: Infinity, unreadAfterEnter: true });
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -395,7 +395,7 @@ describe('an unreadable box gets no second Enter', () => {
       if (cli.enters > 0 && reads++ < 2) return null;
       return read?.(pane) ?? null;
     };
-    const retired = await deliverTrigger(cli, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(cli, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -404,7 +404,7 @@ describe('an unreadable box gets no second Enter', () => {
     const cli = fakeCli({ lagMs: Infinity });
     const blind: DeliverHost = { ...cli };
     delete blind.readAnsi;
-    const retired = await deliverTrigger(blind, 'w1:p1', LINE, PROFILE);
+    const retired = await deliverTrigger(blind, 'pane1', LINE, PROFILE);
     expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
     expect(cli.typed).toEqual([]);
   });
@@ -457,11 +457,11 @@ describe('binding a pane to a session', () => {
       paneText: (session, pane) => (calls.push(`read ${session} ${pane}`), 'screen'),
     };
     const host = bindPane(native, 'acme');
-    host.typeText('w1:p1', 'x');
-    host.pressEnter('w1:p1');
-    host.status('w1:p1');
-    expect(host.readAnsi?.('w1:p1')).toBe('screen');
-    expect(calls).toEqual(['type acme w1:p1 x', 'enter acme w1:p1', 'status acme w1:p1', 'read acme w1:p1']);
+    host.typeText('pane1', 'x');
+    host.pressEnter('pane1');
+    host.status('pane1');
+    expect(host.readAnsi?.('pane1')).toBe('screen');
+    expect(calls).toEqual(['type acme pane1 x', 'enter acme pane1', 'status acme pane1', 'read acme pane1']);
   });
 
   test('a pane that cannot be read has no readAnsi', () => {
@@ -535,7 +535,7 @@ describe('unsent text in the box', () => {
     const sidecar = dropSidecar();
     try {
       const cli = draftCli({ screen: capture('unsent-typed-ansi.txt'), draft: 'Fix the' });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -554,7 +554,7 @@ describe('unsent text in the box', () => {
         why: 'over more than one drawn row, where a soft wrap cannot be told from a newline',
       });
       const cli = draftCli({ screen, draft: 'first row\nsecond row\n\nfourth row' });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -572,7 +572,7 @@ describe('unsent text in the box', () => {
         `${PROMPT}Please check the staging deployment logs for the billing\n  service before handing the parser work to the night team.`,
       );
       const cli = draftCli({ screen, draft: wide });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -588,7 +588,7 @@ describe('unsent text in the box', () => {
         draft: 'hurry please',
         working: true,
       });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -600,7 +600,7 @@ describe('unsent text in the box', () => {
     const sidecar = dropSidecar();
     try {
       const cli = draftCli({ screen: capture('unsent-paste-ansi.txt'), draft: '' });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -613,7 +613,7 @@ describe('unsent text in the box', () => {
     try {
       const gemini = readFileSync(join(import.meta.dir, 'fixtures', 'gemini', '0.64.0', 'unsent.txt'), 'utf8').replace(/\r\n/g, '\n');
       const cli = draftCli({ screen: gemini, draft: 'RULES_RECEIVED' });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, 'gemini');
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, 'gemini');
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -625,7 +625,7 @@ describe('unsent text in the box', () => {
     const sidecar = dropSidecar();
     try {
       const cli = draftCli({ screen: capture('unsent-typed-ansi.txt'), draft: 'Fix the', deafKeys: true });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -637,7 +637,7 @@ describe('unsent text in the box', () => {
     const sidecar = dropSidecar();
     try {
       const cli = draftCli({ screen: capture('unsent-typed-ansi.txt'), draft: 'Fix the', neverSubmits: true });
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -694,7 +694,7 @@ describe('unsent text in the box', () => {
     const sidecar = dropSidecar();
     try {
       const cli = lateClearCli(sidecar.line);
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
@@ -750,7 +750,7 @@ describe('unsent text in the box', () => {
     const sidecar = dropSidecar();
     try {
       const cli = unreadLeaveCli(sidecar.line);
-      const retired = await deliverTrigger(cli, 'w1:p1', sidecar.line, PROFILE);
+      const retired = await deliverTrigger(cli, 'pane1', sidecar.line, PROFILE);
       expect(retired).toEqual({ outcome: 'unreachable', tries: 0, reason: NO_PANE_MESSAGING });
       expect(cli.typed).toEqual([]);
     } finally {
