@@ -56,7 +56,12 @@ and exits 1; there is no fallback to the walk. The owner's terminal start stays 
 admission and reads no manager record. What this proves is that the service manager started this
 process from a unit this user owns; any process of that user can register a job under a label that
 is not loaded, so it is an identity check against mistakes, not a boundary against that user's
-deliberate attempt.
+deliberate attempt. The same limit covers the program the unit runs: the install keeps a copy of
+the whole program in the machine folder, checks that copy before it writes the unit, and keeps the
+folder holding the copies this user's own, with no group or other write; but a process of the same
+user can still replace the copy, or a folder in it, between that check and the service manager's
+exec — exactly as it can rewrite the unit file itself. The check catches drift and another user's
+write, not a race run by the same user.
 
 `run --presence` also hosts each checkout's presence pipeline: the spool ingester, the activity
 reconciler, the publisher and the per-seat health answer. Without the flag the daemon does not

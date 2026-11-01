@@ -19,7 +19,12 @@
 // copy. The package the owner later upgrades is not the program this tool's unit runs, and an
 // upgrade therefore never replaces code a running unit names. The copy's folder name is the
 // hash of its paths, modes and bytes; a folder already there is run only after it is verified
-// to be ours and byte-identical to that hash.
+// to be ours and byte-identical to that hash, and the folder holding the copies must be this
+// user's own directory that no group or other write reaches. What that proves is the copy that
+// is there when it is read: a writer running as this same user can still replace the copy, or a
+// folder inside it, between that check and the service manager's exec — exactly as it can
+// rewrite the unit file itself. That residue is the same same-user limit the admission below
+// states; this check is not a boundary against that user's deliberate attempt.
 //
 // The daemon's own start is admitted from the manager's record of the job it started and the
 // unit file that job runs — pid, program, label, owner, mode and the unit's own words — never
