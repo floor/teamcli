@@ -190,3 +190,59 @@ test('invalid recorded state refuses with an audit row instead of throwing', () 
   expect(result.caught).toBeUndefined(); expect(result.code).toBe(2); expect(result.out).toBe('');
   expect(result.reads).toEqual([]); audited(result, 'owner', 'refused peek.no-screen:');
 });
+
+
+function splitRows(value: string, cuts: number[]): string[] {
+  return [0, ...cuts].map((start, index, all) => value.slice(start, all[index + 1] ?? value.length));
+}
+const wrappedBody = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+for (const prefix of ['ghp_', 'sk-proj-']) {
+  const token = prefix + wrappedBody;
+  for (const cut of [1, 3, prefix.length, prefix.length + 10, token.length - 1]) {
+    test('a wrapped ' + prefix + ' key masks both rows at offset ' + cut, () => {
+      const rows = splitRows(token, [cut]);
+      const result = scene({ text: rows.join('\n') + '\n' });
+      expect(result.code).toBe(0); expect(result.out).toBe(rows.map(() => '[masked]').join('\n') + '\n');
+      expect(result.log).not.toContain(token); audited(result, 'owner', 'seat subject, 2 lines');
+    });
+  }
+  for (const cuts of [[1, 3], [prefix.length, prefix.length + 10], [10, 24]]) {
+    test('a wrapped ' + prefix + ' key masks all three rows at offsets ' + cuts.join('/'), () => {
+      const rows = splitRows(token, cuts);
+      const result = scene({ text: rows.join('\n') + '\n' });
+      expect(result.code).toBe(0); expect(result.out).toBe('[masked]\n[masked]\n[masked]\n');
+      audited(result, 'owner', 'seat subject, 3 lines');
+    });
+  }
+}
+const wrappedUrl = 'https://alice:synthetic-password@example.invalid/path';
+for (const cuts of [[3], [8], [10], [14], [wrappedUrl.indexOf('@') - 3], [8, 14], [10, wrappedUrl.indexOf('@') - 2]]) {
+  test('wrapped URL userinfo is fully masked across row offsets ' + cuts.join('/'), () => {
+    const rows = splitRows(wrappedUrl, cuts);
+    const userStart = wrappedUrl.indexOf('://') + 3;
+    const userEnd = wrappedUrl.indexOf('@');
+    let rowStart = 0;
+    const expected = rows.map(row => {
+      const start = Math.max(userStart, rowStart) - rowStart;
+      const end = Math.min(userEnd, rowStart + row.length) - rowStart;
+      rowStart += row.length;
+      return start < end ? row.slice(0, start) + '[masked]' + row.slice(end) : row;
+    });
+    const result = scene({ text: rows.join('\n') + '\n' });
+    expect(result.code).toBe(0); expect(result.out).toBe(expected.join('\n') + '\n');
+    expect(result.log).not.toContain('alice'); expect(result.log).not.toContain('synthetic-password');
+    audited(result, 'owner', 'seat subject, ' + rows.length + ' lines');
+  });
+}
+for (const cut of [1, 7, 20, 39]) {
+  test('a wrapped full SHA stays readable at offset ' + cut, () => {
+    const text = splitRows(sha, [cut]).join('\n') + '\n';
+    const result = scene({ text }); expect(result.code).toBe(0); expect(result.out).toBe(text);
+    expect(result.out).not.toContain('[masked]');
+  });
+}
+test('the reviewer two-row probe hides ghp_ plus ten characters and the following twenty-six', () => {
+  const result = scene({ text: 'ghp_0123456789\nabcdefghijklmnopqrstuvwxyz\n' });
+  expect(result.code).toBe(0); expect(result.out).toBe('[masked]\n[masked]\n');
+  expect(result.log).not.toContain('0123456789'); expect(result.log).not.toContain('abcdefghijklmnopqrstuvwxyz');
+});
