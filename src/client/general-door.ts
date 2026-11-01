@@ -12,8 +12,12 @@
 // none: what the line acts on is the command's own reading of it.
 //
 // Left to the command itself: `up`, `init` and `config`, which read `--general` with their own
-// admission (an owner-seat-shaped launch, a first record, a signed edit). Never admitted here:
-// `team client general-grant`, the one command that issues grants — a grant never issues itself.
+// admission (an owner-seat-shaped launch, a first record, a signed edit). The dispatcher still
+// reads two things from their line before the command sees it (see `ownGeneral`): a grant that
+// lists entities refuses there too, and `--general` beside the owner-seat door is a usage error,
+// so neither admission path can outrun the 0.5.10 rule. Everything else is the command's.
+// Never admitted here: `team client general-grant`, the one command that issues grants — a
+// grant never issues itself.
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import type { Io } from '../io.ts';
@@ -212,9 +216,45 @@ function opFlagProblem(command: string, scanned: Scan): string | null {
   return null;
 }
 
+/** The owner-seat options a grant has no meaning beside: each asks the owner (or answers her)
+ *  for this very run, which is what a grant already does. */
+const OWNER_SEAT_OPTIONS = ['request', 'approval', 'approvals', 'approve-as-owner-seat'];
+
+/**
+ * The line of an `OWN_GENERAL` command, read here before the command's own admission runs.
+ * Those commands hand `--general` to their own door, but their owner-seat branches (`--request`,
+ * `--approvals`, `--approval`, `--approve-as-owner-seat`) run first and return, so a grant that
+ * lists entities was never read on those paths. Two things are therefore settled first:
+ *
+ *  - a readable grant whose entities are not exactly `['*']` is refused with the one scoped
+ *    sentence (exit id `team.general-target`), whatever other options the line carries;
+ *  - `--general` beside an owner-seat option is refused as usage: the two doors have no defined
+ *    meaning together (`init` already refuses that combination in its own words when it gets
+ *    there; this makes the refusal reach the line whatever branch would have run).
+ *
+ * Everything else, including the key match and the op, stays with the command's own admission.
+ * A grant that cannot be read is left to it too, so each command keeps its own refusal id.
+ */
+function ownGeneral(name: string, rest: string[], io: Io, now: Date): Door | null {
+  const general = take(rest, 'general');
+  if (!general.present) return null;
+  const json = rest.includes('--json') || rest.some((word) => word.startsWith('--json='));
+  if (general.value !== undefined) {
+    const read = readGeneralGrant(io.env.HOME ?? homedir(), resolve(io.cwd, general.value), now);
+    if (read.ok) {
+      const wildcard = grantIsWildcard(read.grant);
+      if (!wildcard.ok) return { kind: 'target', why: wildcard.why, json };
+    }
+  }
+  const scanned = scan(rest, VALUED[name]);
+  const beside = OWNER_SEAT_OPTIONS.find((option) => scanned.flags.has(option) || (scanned.counts[option] ?? 0) > 0);
+  if (beside !== undefined) return { kind: 'usage', why: `--general is its own door: it takes no --${beside}`, json };
+  return { kind: 'pass', argv: rest, io };
+}
+
 /** The door's verdict for `team <name> <rest>`. Without `--general` it passes the line untouched. */
 export function generalDoor(name: string, rest: string[], io: Io, now: Date = new Date()): Door {
-  if (OWN_GENERAL.has(name)) return { kind: 'pass', argv: rest, io };
+  if (OWN_GENERAL.has(name)) return ownGeneral(name, rest, io, now) ?? { kind: 'pass', argv: rest, io };
   const general = take(rest, 'general');
   if (!general.present) return { kind: 'pass', argv: rest, io };
   const json = rest.includes('--json') || rest.some((word) => word.startsWith('--json='));

@@ -762,7 +762,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `team.presence-hook-invalid` | `team` | 1 | the presence hook's words can't be read | `team presence-hook --event turn-end` |
 | `team.presence-hook-refused` | `team` | 1 | the presence event could not be staged | `team presence-hook --event turn-end` |
 | `team.approve-removed` | `team` | 2 | the approve command was removed in 0.5.0 | `team approve` |
-| `team.general-usage` | `team` | 2 | --general is given without --key, or on the grant-issuing command | `team status --general <grant.json>` |
+| `team.general-usage` | `team` | 2 | --general is given without --key, on the grant-issuing command, or beside an owner-seat option (--request, --approval, --approvals, --approve-as-owner-seat) | `team status --general <grant.json>, or team init --request --general <grant.json> --key <client.key>` |
 | `team.no-command` | `team` | 2 | no command was given | `team` |
 | `team.unknown` | `team` | 2 | the command is unknown | `team nosuch` |
 | `tempo.set` | `tempo` | 0 | the tempo was written | `team tempo urgent` |
