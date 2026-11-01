@@ -502,7 +502,9 @@ describe('the grant fails closed', () => {
     const closed = await runGrant(['--client-request', '--via', g.path, '--key', w.grok.keyPath, ...upFlags(w).slice(0, -1).concat('--up')], viaUp.io, { home: w.home });
     expect(closed).toBe(2);
     expect(viaUp.err()).toContain('--up');
-    const asMaster = capture(w);
+    // The client's own shell, outside every pane, pinned so the suite's own placement cannot decide
+    // the answer; the request then meets the master-grant checks this row is about.
+    const asMaster = capture(w, { kind: 'unplaced', reason: "its parent processes can't be read to the top" });
     const code = await runGrant(['--client-request', '--via', g.path, '--key', w.grok.keyPath, '--client', 'grok-bot', '--entity', 'floor', '--public-key', w.grok.pubPath, '--team', 'docs'], asMaster.io, { home: w.home });
     expect(code).toBe(1);
     expect(asMaster.err()).toContain('up grant');

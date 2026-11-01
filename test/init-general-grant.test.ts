@@ -56,6 +56,19 @@ test('a detached run with no grant is refused init.detached', async () => {
   expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(false);
 });
 
+test('init --general from inside a team pane is admitted, dev mode on or off: an owner tool applies changes under a general grant', async () => {
+  const g = grant(['floor'], ['*']);
+  for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }]) {
+    rmSync(join(project, '.agents'), { recursive: true, force: true });
+    const io = testIo(project, { kind: 'seat', name: 'builder-5', pane: 'pane1' });
+    io.env = { ...process.env, ...env };
+    const code = await runInit(['--general', g.path, '--key', g.key], io, home, undefined, { ...noLogin, registryHome: home });
+    expect(code).toBe(0);
+    expect(io.err).toContain('admitted by general grant');
+    expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(true);
+  }
+});
+
 test('a general grant covering init on this entity admits the create with no owner terminal', async () => {
   const g = grant(['floor'], ['*']);
   const r = await run(['--general', g.path, '--key', g.key]);

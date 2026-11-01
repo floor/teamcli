@@ -1,8 +1,12 @@
 // The client pane guard on every grant-verified client form: `team up --client`, `team down
 // --client`, `team status --client` and the bundle ops all pass through `verifyClientUp`, which
-// places the caller before the grant or the key is read and refuses one inside a team pane. Dev
-// mode, the owner's switch, lifts it with its warning; an external client outside herdr is never
-// refused. Every seat, file, pane and home below is synthetic.
+// places the caller before the grant or the key is read and refuses one inside a team pane; the
+// grant-issuing paths (a `--client-request` sub-grant, a holder's `general-grant --via --key`)
+// place the caller the same way, while the general door and the own `--general` doors are
+// deliberately open to a pane caller (an owner tool applies changes under a general grant from
+// inside a team pane). The guard is a machine guard: dev mode, the owner's switch, never lifts it
+// (OD-20261019-49); an external client outside the terminal host is never refused. Every seat,
+// file, pane and home below is synthetic.
 import { afterEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -12,11 +16,12 @@ import type { Caller } from '../src/caller.ts';
 import { clientPaneGuard } from '../src/client/pane-guard.ts';
 import { enterClientForm } from '../src/client/client-form.ts';
 import { verifyClientUp } from '../src/client/up-grant.ts';
+import { runClient } from '../src/commands/client.ts';
 import { gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-20T09:00:00Z');
-const LEAD: Caller = { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' };
-const HELPER: Caller = { kind: 'seat', name: 'helper', pane: 'w2:p1', session: 'acme' };
+const LEAD: Caller = { kind: 'seat', name: 'lead', pane: 'pane1', session: 'acme' };
+const HELPER: Caller = { kind: 'seat', name: 'helper', pane: 'pane2', session: 'acme' };
 const REFUSAL = 'a client key is not used from inside a team pane';
 
 const made: string[] = [];
@@ -59,7 +64,7 @@ seats:
 `);
   writeFileSync(join(root, '.agents', 'team.state.json'), `${JSON.stringify({
     format: 1,
-    sessions: { acme: { seats: { lead: { stage: 'ready', pane: 'w1:p1' }, helper: { stage: 'ready', pane: 'w2:p1' } }, worktrees: {} } },
+    sessions: { acme: { seats: { lead: { stage: 'ready', pane: 'pane1' }, helper: { stage: 'ready', pane: 'pane2' } }, worktrees: {} } },
   }, null, 2)}\n`);
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root, env: gitEnv(), stdio: 'ignore' });
   return { root, home };
@@ -86,7 +91,7 @@ for (const op of ['up', 'down', 'status'] as const) {
 
 test('an agentless team pane and a child under herdr are refused too', () => {
   const { root, home } = repo();
-  for (const caller of [{ kind: 'pane', pane: 'w3:p1' }, { kind: 'unplaced', reason: 'it runs under herdr' }] as Caller[]) {
+  for (const caller of [{ kind: 'pane', pane: 'pane3' }, { kind: 'unplaced', reason: 'it runs under herdr' }] as Caller[]) {
     const { verified } = verifyAs(root, home, caller, 'up');
     expect(verified.ok ? '' : verified.why).toContain(REFUSAL);
   }
@@ -101,21 +106,24 @@ test('an external client outside herdr passes the guard and meets the grant chec
   }
 });
 
-test('dev mode lifts the guard for the placed orchestrator, with the warning', () => {
+test('dev mode never lifts the guard, even for the placed orchestrator', () => {
   const { root, home } = repo();
   const io = testIo(root, LEAD);
   io.env = { TEAMCLI_DEV_MODE: '1' };
-  const verdict = clientPaneGuard(io, 'up', home);
-  expect(verdict.ok).toBe(true);
-  if (verdict.ok) expect(verdict.warning).toContain('dev mode continues');
+  const verdict = clientPaneGuard(io);
+  expect(verdict.ok).toBe(false);
+  if (!verdict.ok) {
+    expect(verdict.why).toContain(REFUSAL);
+    expect(verdict.why).not.toContain('dev mode');
+  }
   const { verified, io: run } = verifyAs(root, home, LEAD, 'up', { TEAMCLI_DEV_MODE: '1' });
-  expect(verified.ok ? '' : verified.why).not.toContain(REFUSAL);
-  expect(run.err).toContain('dev mode continues');
+  expect(verified.ok ? '' : verified.why).toContain(REFUSAL);
+  expect(run.err).not.toContain('dev mode continues');
 });
 
 test('without dev mode the orchestrator is refused like any seat', () => {
-  const { root, home } = repo();
-  expect(clientPaneGuard(testIo(root, LEAD), 'up', home).ok).toBe(false);
+  const { root } = repo();
+  expect(clientPaneGuard(testIo(root, LEAD)).ok).toBe(false);
 });
 
 test('the bundle ops entrance refuses a seat the same way', () => {
@@ -127,4 +135,25 @@ test('the bundle ops entrance refuses a seat the same way', () => {
     );
     expect(entered.ok ? '' : entered.why).toContain(REFUSAL);
   }
+});
+
+const OUTSIDE: Caller = { kind: 'unplaced', reason: "its parent processes can't be read to the top" };
+
+test("a holder's general-grant issue refuses a seat before the held grant is opened", () => {
+  const { root, home } = repo();
+  const pub = join(root, 'client.pub');
+  writeFileSync(pub, JSON.stringify({ public_key: 'ed25519:abc' }));
+  const argv = ['general-grant', '--to', 'worker', '--public-key', pub, '--via', 'missing-grant.json', '--key', 'missing.key'];
+  for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }]) {
+    const io = testIo(root, HELPER);
+    io.env = { HOME: home, ...env };
+    expect(runClient(argv, io, home)).toBe(1);
+    expect(io.err).toContain(REFUSAL);
+  }
+  // The control: the client's own shell reaches the held grant read, not the guard.
+  const outside = testIo(root, OUTSIDE);
+  outside.env = { HOME: home };
+  expect(runClient(argv, outside, home)).toBe(1);
+  expect(outside.err).toContain('cannot be read as a general grant');
+  expect(outside.err).not.toContain(REFUSAL);
 });

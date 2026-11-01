@@ -8,8 +8,10 @@
 // is `on`, a placed seat that is a team's orchestrator — the file's resolved lead, whether it
 // was spelled by `coordinator:` or by `leads: true` — may run the owner-only authority edits —
 // grant, delegate, revoke, policy set/unset, `check --repair`, `remove --abandon`, `down
-// --abandon`, `broker` and `tempo` — and each admitted run prints the same `dev mode continues`
-// warning and writes the same audit line (the command, the caller, and dev mode's source). The
+// --abandon`, `broker`, `tempo` and the daemon's install, uninstall and fault-watch — and may
+// record an install under an unapproved `installer:` designation the live file validates — and
+// each admitted run prints the same `dev mode continues` warning and writes the same audit line
+// (the command, the caller, and dev mode's source). The
 // team a lead stands in is found twice: the file the command runs against, in its own session;
 // and, when that file does not name the caller, the main team above it — a registered team whose
 // root strictly contains the target's, whose file names the same entity and makes the caller its
@@ -18,8 +20,8 @@
 // team file and state place it. A lead outside that scope — a sibling team's, another
 // entity's — is no admission. The role alone is never the proof: the caller must be placed on
 // the pane its own team's state records for it, in that team's session. Swap guards, load
-// guards, the public-action refusals and every other owner gate are untouched; with dev mode
-// `off` every one of these gates refuses exactly as before.
+// guards, the client pane guard, the public-action refusals and every other owner gate are
+// untouched; with dev mode `off` every one of these gates refuses exactly as before.
 //
 // The machine-scoped `development-mode` record stands above all
 // of this. While a record is present and verified, it governs both halves: `local-fast` lifts

@@ -66,6 +66,20 @@ for (const [label, argv] of lines) {
   });
 }
 
+const inPane = { kind: 'seat', name: 'builder-5', pane: 'pane1' } as const;
+
+test('a seat inside a team pane is admitted, dev mode on or off: an owner tool applies changes under a general grant', async () => {
+  for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }] as Record<string, string>[]) {
+    let out = '';
+    let err = '';
+    const io: Io = { stdout: (t) => { out += t; }, stderr: (t) => { err += t; }, cwd, env: { ...process.env, HOME: home, ...env }, stdinIsTTY: false, caller: inPane };
+    const code = await main(['daemon', 'status', '--general', all, '--key', a.path], io);
+    expect(code).toBe(0);
+    expect(`${err}${out}`).toContain('admitted by general grant');
+    expect(`${err}${out}`).not.toContain('a client key is not used from inside a team pane');
+  }
+});
+
 test('an unplaced caller (parent chain unreadable) is admitted as the owner too', async () => {
   const { generalDoor } = await import('../src/client/general-door.ts');
   const io: Io = { stdout: () => {}, stderr: () => {}, cwd, env: { ...process.env, HOME: home }, stdinIsTTY: false, caller: { kind: 'unplaced', reason: "its parent processes can't be read to the top" } };

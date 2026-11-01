@@ -575,13 +575,13 @@ export function runClientMessages(args: Args, io: Io, sources: { home: string; n
     }
   }
   // The pane guard, judged before the grant or the key is opened (see src/client/pane-guard.ts).
-  const pane = clientPaneGuard(io, 'messages', sources.home);
+  // It is a machine guard: no dev-mode setting lifts it (OD-20261019-49).
+  const pane = clientPaneGuard(io);
   if (!pane.ok) {
     if (json) io.stdout(errorDoc('messages.client-pane', pane.why));
     else io.stderr(`team messages: refused: ${pane.why}\n`);
     return 1; // exit: messages.client-pane
   }
-  if (pane.warning !== undefined) io.stderr(`${pane.warning}\n`);
   const limit = clientLimitOf(args.values.limit);
   if (limit === null) return usage(`--limit is a page bound between 1 and ${String(CLIENT_READ_MAX_LIMIT)}`);
 
