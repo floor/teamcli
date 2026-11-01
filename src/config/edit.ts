@@ -184,6 +184,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     // exit: config.charter
     return 1;
   }
+  let liftAudit: (() => void) | null = null;
   if (gate.kind !== 'admit' && !seatApproved) {
     const caller = callerOf(rawIo);
     const detached = detachedRefusal(caller);
@@ -197,11 +198,13 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
       // Dev mode's owner admission for exactly this gate, read through the one resolver the
       // sibling owner-only writers use: a placed orchestrator continues with the warning and
       // the audit line; the owner's own path above is untouched, and every other caller keeps
-      // this refusal byte for byte.
+      // this refusal byte for byte. The audit waits for the write below: this gate answers
+      // before the change is validated, and a refused or unchanged run writes no record line.
       const lift = devModeOwnerLiftAtCwd(rawIo, {
         command: 'config',
         refusal: message,
         home,
+        audit: 'later',
         ...(sources.now !== undefined ? { now: sources.now() } : {}),
       });
       if (lift === null || !lift.lifted) {
@@ -209,6 +212,7 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
         // exit: config.not-owner
         return 1;
       }
+      liftAudit = lift.audit;
       io.stderr(`${lift.warning}\n`);
     }
   }
@@ -298,6 +302,9 @@ export async function runTeamRecordEdit(argv: string[], rawIo: Io, sources: Conf
     // exit: config.invalid
     return 1;
   }
+  // The record is on disk: only now does the lead's admission leave its audit line. Every
+  // refusal above returned with the folder as it was.
+  if (liftAudit !== null) liftAudit();
   if (kept !== null) rmSync(resolve(kept, '..'), { recursive: true, force: true });
   const checked = validateTeamFile(next);
   // A seat whose launch line this edit changed: its agent record's launch recipe follows, so the
