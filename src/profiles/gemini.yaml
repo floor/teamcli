@@ -33,6 +33,14 @@ exit_clear: ctrl+c
 timeouts:
   idle: 90s
   exit: 30s
+# The dialog dismiss key the project's own capture recorded: `0.64.0/question.txt`, the
+# question tool's box (`No, suggest changes (esc)`, `Esc to cancel`), "Escape dismissed it;
+# nothing was written."
+question_answer:
+  - kind: question
+    key: escape
+    from: '0.64.0'
+    to: '0.64.0'
 # From `--help` and 0.64.0 source: Gemini CLI loads `GEMINI.md` context files and
 # `.gemini/settings.json` from the working directory at start.
 startup_reads:

@@ -49,6 +49,22 @@ input:
 timeouts:
   idle: 90s
   exit: 30s
+# The dialog dismiss keys this project's own captures recorded, each the footer's cancel/skip
+# key pressed in a scratch session and the dialog left without an answer:
+# - `2026.10.01/question.txt` and `2026.10.16/question.txt`: the choice box, "Escape each time"
+#   and "Escape dismissed it".
+# - `2026.10.01/permission-plan.txt`: the mode switch, "then Escape rejected it".
+# The two question captures bracket the range; no confirmation capture exists past 2026.10.01,
+# so that record is exact.
+question_answer:
+  - kind: question
+    key: escape
+    from: '2026.10.01'
+    to: '2026.10.16'
+  - kind: confirmation
+    key: escape
+    from: '2026.10.01'
+    to: '2026.10.01'
 # The predicate, label and extractor come from the registered
 # cursor/2026.10.01/trust.txt capture. That capture was taken in an untrusted temporary
 # directory, not the lobby, so the record claims no lobby evidence.
