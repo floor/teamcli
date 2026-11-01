@@ -580,7 +580,7 @@ describe('the ordinary send native leg (Codex)', () => {
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
 
     // One queue process, bound to the very socket the probe read, under the same thread.
     expect(calls).toEqual([
@@ -636,7 +636,7 @@ describe('the ordinary send native leg (Codex)', () => {
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     // The live probe still read the active thread; the pointer was still handed to its queue.
     expect(server.requests).toEqual([
       { method: 'initialize' },
@@ -845,7 +845,7 @@ exit 1
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(calls).toEqual([
       ['queue', '--remote', `unix://${socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
@@ -1211,7 +1211,7 @@ describe('the implied native-first default for a Codex receiver', () => {
 
     expect(code).toBe(0);
     expect(err).toBe('');
-    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); queued; ${SEAT} reads it at its next turn (pull-only)\n`);
+    expect(out).toBe(`team acme, session "${SESSION}"\n${SEAT}: sent (unconfirmed) (native, 0 ms); woken through its runtime queue\n`);
     expect(calls).toEqual([
       ['queue', '--remote', `unix://${server.socketPath}`, '--thread', THREAD_ID, '--message', pointerOf(scene)],
     ]);
