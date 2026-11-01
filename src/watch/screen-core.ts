@@ -506,13 +506,18 @@ export type QuestionReading = { text: string; complete: boolean };
  * anchor row itself (`inline`).
  *
  * The live dialog is drawn at the bottom of the pane, and the transcript above it may quote an
- * older dialog with the same anchor. The lowest anchored block with any text is the live one,
- * however its walk stopped — at the profile's end marker, at the supported rows, or at the
+ * older dialog with the same anchor. The lowest anchored block with question text is the live
+ * one, however its walk stopped — at the profile's end marker, at the supported rows, or at the
  * window's edge — and its own end is its completeness: a marker reaches the block's end, a row
  * cap or a window edge returns it cut. A whole block quoted above the live one therefore never
  * certifies the current question. A block anchored inside another block's span is that block
  * read from a later row (a frame row repeated down the box) and is passed over, and a match that
  * reads no text at all — a profile's frame row can carry the anchor pattern — is passed over too.
+ * The widget's own chrome rows (the screen stage's rows) are not question text: a walk that
+ * reaches one ends there, cut, and a walk that reads no question text at all before the chrome
+ * is no reading. The test is on the rows the walk reads, never on the anchor row — every
+ * supported Grok question anchor is a bare `┃` frame row, and the live question under it is
+ * read all the same.
  *
  * With an end marker named, a blank row (one the strips empty, frame included) is part of the
  * block, not its end: the walk passes it and reads on to the marker, and only reaching the
@@ -533,12 +538,25 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
   };
   const inline = spec.inline !== null;
   const step = spec.before !== null ? -1 : 1;
+  // The widget's own rows, as the profile declares them: the screen stage's line patterns for
+  // this kind, plus the pane chrome every stage shares. The patterns are written for the pane's
+  // rows, so each is tried on the raw row and on the stripped one.
+  const stage = kind === 'question' ? data.question : kind === 'plan approval' ? data.plan_approval : data.confirmation;
+  const chromePatterns: LinePattern[] = [
+    ...(data.chrome ?? []).map((match) => ({ match, except: [] })),
+    ...(stage?.rules ?? []).flatMap((rule) => [...(rule.all ?? []), ...(rule.any ?? [])]),
+  ];
+  const lineIsChrome = (pattern: LinePattern, line: string): boolean =>
+    pattern.match.test(line) && !pattern.except.some((except) => except.test(line));
+  const isChrome = (text: string, raw: string): boolean =>
+    chromePatterns.some((pattern) => lineIsChrome(pattern, raw) || lineIsChrome(pattern, text));
   // From one anchor: the rows that survive their strips. The anchor row itself is taken in the
   // inline reading and is never tested as its own end marker. The walk stops at the marker
-  // (`marker`), at the supported row count (`rows`), at a blank row that ends a markerless block
-  // (`blank`), or at the window's edge (`window`); `stop` is the row it stopped on. Rows keep the
-  // pane's order, so a `before` walk prepends the rows it climbs past.
-  type WalkEnd = 'marker' | 'rows' | 'blank' | 'window';
+  // (`marker`), at the widget's own chrome (`chrome`), at the supported row count (`rows`), at a
+  // blank row that ends a markerless block (`blank`), or at the window's edge (`window`); `stop`
+  // is the row it stopped on. Rows keep the pane's order, so a `before` walk prepends the rows
+  // it climbs past.
+  type WalkEnd = 'marker' | 'chrome' | 'rows' | 'blank' | 'window';
   const walk = (anchorAt: number): { taken: string[]; stop: number; end: WalkEnd } => {
     const taken: string[] = [];
     let index = inline ? anchorAt : anchorAt + step;
@@ -553,6 +571,12 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
           continue;
         }
         return { taken, stop: index, end: 'blank' };
+      }
+      // The widget's own chrome is not the question: the block ends there, exactly as at the
+      // profile's end marker, and because the marker was not reached the reading is cut. The
+      // inline anchor row is the dialog's own text, as it is for the marker above.
+      if (!(inline && index === anchorAt) && isChrome(row, plain[index] as string)) {
+        return { taken, stop: index, end: 'chrome' };
       }
       if (taken.length === spec.rows) return { taken, stop: index, end: 'rows' };
       if (step < 0) taken.unshift(row);
@@ -570,15 +594,6 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
     if (pattern.test(line)) anchors.push(at);
   });
   type Reading = { anchor: number; stop: number; taken: string[]; end: WalkEnd };
-  // Every reading with text opens a block, however its walk stopped — at the marker, at the row
-  // cap, or at the window's edge — and a window-stopped block reads complete: false. The one
-  // exception is a frame row's anchor: a row the strips empty is the pane's own frame (grok's
-  // bare `┃` rows run past the option marker into the box's footer chrome), so a walk the
-  // window stopped from such a row proves no block; a frame row still opens one when its walk
-  // reaches the marker or the row cap.
-  const anchorHasText = (reading: Reading): boolean => textRow(plain[reading.anchor] as string, strip) !== '';
-  const isBlock = (reading: Reading): boolean =>
-    spec.until === null || reading.end !== 'window' || anchorHasText(reading);
   // The span a block covers, for spotting an anchor that sits inside it. A cap-cut block's span
   // reaches to the end marker the walk did not get to read; a markerless block's is where its
   // walk stopped.
@@ -603,18 +618,17 @@ export function questionTextOf(data: ScreenData, lines: string[], kind: Screen['
     if (taken.length === 0) continue;
     readings.push({ anchor, stop, taken, end });
   }
-  // The live dialog is drawn at the bottom: the lowest block no block above it contains is the
-  // one on screen now. Its own completeness is the reading — an older block above it never
-  // certifies the current question, and a window-cut live block is returned cut, never shadowed
-  // by a whole block quoted above it.
-  const blocks = readings.filter(isBlock);
-  const live = blocks
-    .filter((block) => !blocks.some((other) => other !== block && inside(other, block.anchor)))
+  // The live dialog is drawn at the bottom: the lowest reading no reading above it contains is
+  // the one on screen now. Every reading here holds question text — the walk stopped before the
+  // widget's chrome, so a chrome-only match never became one. Its own completeness is the
+  // reading — an older block above it never certifies the current question, and a window-cut
+  // live block is returned cut, never shadowed by a whole block quoted above it.
+  const live = readings
+    .filter((block) => !readings.some((other) => other !== block && inside(other, block.anchor)))
     .reduce<Reading | null>((lowest, block) => (lowest === null || block.anchor > lowest.anchor ? block : lowest), null);
   if (live !== null) return { text: live.taken.join(' '), complete: spec.until === null || live.end === 'marker' };
-  // No block reads: the lowest reading with text is returned cut, and the answer layer refuses it.
-  const lowest = readings[0];
-  return lowest === undefined ? null : { text: lowest.taken.join(' '), complete: false };
+  // No reading at all: the dialog's text could not be read, and null says so.
+  return null;
 }
 
 /**
