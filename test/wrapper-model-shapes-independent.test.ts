@@ -10,14 +10,13 @@ import { join } from 'node:path';
 import { runSend } from '../src/commands/send.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
-import { recordBody } from './helpers.ts';
+import { recordBody, wrapperPane } from './helpers.ts';
 import { dropDir, fake, filed, owner, scripted, world, type World } from './send-native-fixtures.ts';
 
 const LEAD_PANE = 'fixture-pane-lead';
 
 const claudeScreen = (model: string) =>
   `❯ \n${'─'.repeat(40)}\n  main · …/acme · ${model} · S: $1.2 · W: 12%\n  ⏵⏵ bypass permissions on\n`;
-const banner = (id: string) => `  ${id} · API Usage Billing\n`;
 
 type Signing = { model: string; version: string };
 
@@ -65,7 +64,7 @@ describe('a wrapper declaration whose model carries its version', () => {
   async function expectDelivered(signing: Signing, launch: string, bannerId: string): Promise<void> {
     const made = world(['typed']);
     registerLead(made, signing, launch);
-    const { host } = sendHost(made, claudeScreen('Opus 4.6') + banner(bannerId));
+    const { host } = sendHost(made, wrapperPane(bannerId) + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(0);
@@ -78,7 +77,7 @@ describe('a wrapper declaration whose model carries its version', () => {
   async function expectHeld(signing: Signing, launch: string, bannerId: string): Promise<void> {
     const made = world(['typed']);
     registerLead(made, signing, launch);
-    const { host, pane } = sendHost(made, claudeScreen('Opus 4.6') + banner(bannerId));
+    const { host, pane } = sendHost(made, wrapperPane(bannerId) + claudeScreen('Opus 4.6'));
     const io = owner(made.root);
 
     expect(await runSend(['lead', 'hello'], io, host)).toBe(1);

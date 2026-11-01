@@ -21,7 +21,7 @@ import { enqueueSwap } from '../src/swap/queue.ts';
 import { compare, type Live } from '../src/status/compare.ts';
 import { runningModel } from '../src/status/statusline.ts';
 import { watchLabel } from '../src/watch/pane.ts';
-import { testIo, withWas } from './helpers.ts';
+import { testIo, withWas, wrapperPane } from './helpers.ts';
 import { assertJsonErrorShape } from './helpers/output.ts';
 
 const example = readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8');
@@ -480,7 +480,7 @@ describe('team status', () => {
       approveOnDisk();
       const shown = built();
       const pane = paneOf(shown, 'deepseek-acme');
-      live = { ...shown, screens: { ...shown.screens, [pane]: `  ${one.banner} · API Usage Billing\n${claudeScreen('Opus 5.5')}` } };
+      live = { ...shown, screens: { ...shown.screens, [pane]: wrapperPane(one.banner) + claudeScreen('Opus 5.5') } };
       const { code, out } = await status();
       // The banner line is not the composer, so the row's state word alone is unread; the model
       // column is the reading this scene is about.

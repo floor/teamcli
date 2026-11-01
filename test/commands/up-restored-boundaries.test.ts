@@ -493,7 +493,7 @@ describe('team up, a restored session: boundaries', () => {
     const live = () => list().map((a) => (a.name === 'deepseek-acme' ? { ...a, session: 'kept' } : a));
     made.launch.agents = live;
     made.launch.paneText = (_session, pane) =>
-      pane === RECORDED_PANE ? `deepseek-v4.1-flash · API Usage Billing\n${IDLE}` : IDLE;
+      pane === RECORDED_PANE ? IDLE.replace('Opus 5.5 · Acme billing', 'deepseek-v4.1-flash · API Usage Billing') : IDLE;
     const keys: string[] = [];
     made.launch.typeText = () => { keys.push('type'); return true; };
     made.launch.pressEnter = () => { keys.push('enter'); return true; };

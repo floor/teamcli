@@ -125,6 +125,13 @@ export function claudeBox(text: string): string {
   return lines.join('\n');
 }
 
+/** A launch wrapper's pane: the welcome box's measured two lines (`test/fixtures/banner/`), its
+ *  model line the provider's id, above a plain composer. A banner line anywhere else on the pane
+ *  is not the surface the reader reads. */
+export function wrapperPane(id: string): string {
+  return `\n ▐▛███▛█   Claude Code v2.1.291\n▝▜██████▀  ${id} · API Usage Billing\n ▝▝   ▝▝   /w/acme\n`;
+}
+
 export type AgyRuleShape = 'close-short' | 'close-long' | 'open-short';
 
 /** The captured Antigravity idle frame with one of its two rules redrawn at another width: the
