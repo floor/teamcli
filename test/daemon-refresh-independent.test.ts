@@ -1,7 +1,7 @@
 // Independent refresh scenes. All homes, binaries and manager responses are synthetic.
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runDaemon } from '../src/commands/daemon.ts';
@@ -176,3 +176,35 @@ test('a first install whose load never succeeds finishes within six seconds of w
   expect(document.loads).toBeLessThanOrEqual(10);
   expect(document.elapsed).toBeLessThan(7_000);
 }, 12_000);
+
+for (const json of [false, true]) {
+  test(`recovery output keeps synthetic grant and key contents private (${json ? 'structured' : 'plain'})`, async () => {
+    const fixture = refreshFixture();
+    fixture.seedPrevious();
+    fixture.setPolicy('reject-all');
+    const key = join(fixture.home, 'synthetic-client.key');
+    const grant = join(fixture.home, 'synthetic-grant.json');
+    const keyMaterial = 'synthetic-private-key-material-DO-NOT-PRINT';
+    const grantContents = JSON.stringify({ synthetic: true, proof: 'synthetic-grant-proof-DO-NOT-PRINT' });
+    writeFileSync(key, keyMaterial, { mode: 0o600 });
+    writeFileSync(grant, grantContents, { mode: 0o600 });
+    const io = testIo(fixture.root, { kind: 'owner' });
+    const code = await runDaemon(['install', '--root', fixture.root, '--presence', '--watch', ...(json ? ['--json'] : [])], {
+      ...io, general: { key, grant },
+    }, { home: fixture.home, program: fixture.program, service: fixture.manager });
+
+    expect(code).toBe(1);
+    expect(fixture.events.some((event) => event.unit.includes(key) && event.unit.includes(grant))).toBe(true);
+    const output = io.out + io.err;
+    expect(output).not.toContain(keyMaterial);
+    expect(output).not.toContain(grantContents);
+    expect(output).not.toContain('synthetic-grant-proof-DO-NOT-PRINT');
+    const recovery = json ? (JSON.parse(io.out) as ErrorDocument).error.repair ?? '' : io.err;
+    expect(recovery).toContain('team daemon install');
+    expect(recovery).toContain(fixture.root);
+    expect(recovery).toContain('--presence');
+    expect(recovery).toContain('--watch');
+    expect(readFileSync(key, 'utf8')).toBe(keyMaterial);
+    expect(readFileSync(grant, 'utf8')).toBe(grantContents);
+  });
+}
