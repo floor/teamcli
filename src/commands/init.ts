@@ -7,8 +7,8 @@ import { readArgs } from '../args.ts';
 import { admitGeneral } from '../client/general-grant.ts';
 import { callerLabel, callerOf, describeCaller, detachedRefusal, isOwner } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
-import { admitOwnerAction, approveOwnerAction, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
-import { ownerSeatRuleAdmits } from '../client/owner-action-step.ts';
+import { admitOwnerAction, approveOwnerAction, canonicalRoot, createOwnerActionRequest, OWNER_ACTION_ID_PATTERN } from '../client/owner-action.ts';
+import { ownerSeatRuleAdmits, ownerSeatRuleFolder } from '../client/owner-action-step.ts';
 import { devModeCallerGate, devModeExpiryNote, logDevMode, logDevModeState, resolveDevMode } from '../dev_mode.ts';
 import { TEAM_FILE, findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -293,14 +293,25 @@ export async function runInit(
     // that signature succeeds; `per-action` and `always-rule` remove nothing at all until the
     // caller is admitted here.
     const caller = callerOf(io);
+    const owner = isOwner(caller);
     const seatSources = { home: actionHome, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
-    if (!isOwner(caller) && !ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources)) {
+    const scope = args.values.scope;
+    // The folder this call changes, canonicalized exactly as setApprovalMode writes it. A rule
+    // that admits the caller must cover that folder too: a mode record outside the rule's scope
+    // would change approval for another repository, which the owner never signed for.
+    const target = scope === undefined ? null : canonicalRoot(resolve(io.cwd, scope));
+    const ruleFolder = ownerSeatRuleFolder(io.cwd);
+    if (!owner && !ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources)) {
       const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside the terminal host' });
       actionRefusal(detached ?? `only the owner changes an approval mode, from a terminal outside the terminal host; this call is ${describeCaller(caller)}`);
       actionOutcome = 'refused';
+    } else if (!owner && (target === null || ruleFolder === null || !isSameOrInside(ruleFolder, target))) {
+      actionRefusal(scope === undefined
+        ? '--approval-mode needs --scope <folder>'
+        : `the owner-seat rule that admits this caller covers ${ruleFolder ?? 'no folder'}; ${scope} is outside it, and a mode change is the owner's for the folder it changes; this call is ${describeCaller(caller)}`);
+      actionOutcome = 'refused';
     } else {
       const assertion = assertionFile(args.values.assertion, io.cwd);
-      const scope = args.values.scope;
       const set = scope === undefined
         ? { ok: false as const, why: '--approval-mode needs --scope <folder>' }
         : setApprovalMode(actionHome, 'team-create', args.values['approval-mode'], resolve(io.cwd, scope), store, now, {
@@ -321,13 +332,24 @@ export async function runInit(
     // covering this folder. The rule carries the owner's signature, so a seat admitted by it
     // still acts as the owner's answer, never on its own say-so.
     const caller = callerOf(io);
+    const owner = isOwner(caller);
     const seatSources = { home: actionHome, now: () => now, ...(sources.ownerSeatStore ? { ownerSeatStore: sources.ownerSeatStore } : {}) };
-    if (!isOwner(caller) && !ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources)) {
+    const ruleId = args.values['revoke-approval']!;
+    // The rule being revoked carries the folder it covers. A caller admitted by an owner-seat
+    // rule may revoke only a rule inside that rule's own folder: deleting a rule elsewhere would
+    // change approval for a repository the owner never signed for.
+    const ruleFolder = ownerSeatRuleFolder(io.cwd);
+    const targetRule = owner ? undefined : listTeamCreateRules(actionHome, store, now).rules.find((rule) => rule.rule_id === ruleId);
+    const targetScope = targetRule === undefined ? null : canonicalRoot(targetRule.scope);
+    if (!owner && !ownerSeatRuleAdmits('team-revoke-approval', io.cwd, false, seatSources)) {
       const detached = detachedRefusal(caller, { who: 'the owner', where: 'a terminal outside the terminal host' });
       actionRefusal(detached ?? `only the owner revokes an approval rule, from a terminal outside the terminal host; this call is ${describeCaller(caller)}`);
       actionOutcome = 'refused';
+    } else if (!owner && (ruleFolder === null || targetScope === null || !isSameOrInside(ruleFolder, targetScope))) {
+      actionRefusal(`the owner-seat rule that admits this caller covers ${ruleFolder ?? 'no folder'}; rule ${ruleId} ${targetRule === undefined ? 'is not a rule the owner signed, so the folder it covers cannot be checked' : `covers ${targetScope}, outside it`}; this call is ${describeCaller(caller)}`);
+      actionOutcome = 'refused';
     } else {
-      const revoked = revokeTeamCreateRule(actionHome, args.values['revoke-approval']);
+      const revoked = revokeTeamCreateRule(actionHome, ruleId);
       if (!revoked.ok) actionRefusal(revoked.why);
       else actionDone('answered', 'team init: approval rule revoked', { rule_id: args.values['revoke-approval'] });
       actionOutcome = revoked.ok ? 'done' : 'refused';
