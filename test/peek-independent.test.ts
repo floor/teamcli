@@ -274,3 +274,40 @@ for (const [prefix, cut] of [['ghp_', 2], ['lin_api_', 5]] as const) {
     expect(result.out.trimEnd().split('\n').slice(1).map(row => row.trim())).toEqual(['[masked]', '[masked]']);
   });
 }
+
+const entropyWords = [
+  'Zx9Kq2LmN4pR7sT1uV3wY6aB8cD0eF2gH5jK9mN',
+  'Q7vLm9R2sT8uW3xY5zA1bC6dE0fG4hI8jK2lM7nO9pQ=',
+  'aA0bB1cC2dD3eE4fF5gG6hH7iI8jJ9kK0lL1mM2',
+  'M8vQ2nR7sT1uV3wY6aB8cD0eF2gH5jK9mN4pL6rZ0xC',
+];
+for (const [index, word] of entropyWords.entries()) {
+  for (const padding of [' ', '    ']) {
+    test('a prefixless entropy credential masks both rows after ordinary context: ' + index + '/' + padding.length, () => {
+      const rows = ['done', word.slice(0, 20) + padding, word.slice(20)];
+      const result = scene({ text: rows.join('\n') + '\n' });
+      expect(result.code).toBe(0);
+      expect(result.out.trimEnd().split('\n').slice(1).map(row => row.trim())).toEqual(['[masked]', '[masked]']);
+      expect(result.log).not.toContain(word);
+    });
+  }
+}
+for (const word of entropyWords.slice(0, 2)) {
+  test('a prefixless entropy credential masks all three padded rows: ' + word.slice(0, 4), () => {
+    const rows = ['done', ...splitRows(word, [12, 28]).map(row => row + '  ')];
+    const result = scene({ text: rows.join('\n') + '\n' });
+    expect(result.code).toBe(0);
+    expect(result.out.trimEnd().split('\n').slice(1).map(row => row.trim())).toEqual(['[masked]', '[masked]', '[masked]']);
+  });
+}
+for (const rows of [
+  ['-----BEGIN ', 'OPENSSH PRIVATE KEY-----'],
+  ['-----BEGIN RSA ', 'PRIVATE KEY-----'],
+  ['-----BEGIN ', 'EC PRIVATE ', 'KEY-----'],
+]) {
+  test('a wrapped private-key header is masked on every row: ' + rows.join('/'), () => {
+    const result = scene({ text: rows.join('\n') + '\n' });
+    expect(result.code).toBe(0);
+    expect(result.out.trimEnd().split('\n').map(row => row.trim())).toEqual(rows.map(() => '[masked]'));
+  });
+}
