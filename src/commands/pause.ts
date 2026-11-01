@@ -19,7 +19,7 @@ import { cleanedIo, type Command, type Io } from '../io.ts';
 import { logLine } from '../log.ts';
 import { plainLine } from '../launch/plain.ts';
 import { hasJsonFlag, writeJson, writeJsonError } from '../output/index.ts';
-import { pauseStops, resolveTargets, targetName, type PauseTarget, type TargetFailure } from '../pause/targets.ts';
+import { pauseStops, resolveTargets, type PauseTarget, type TargetFailure } from '../pause/targets.ts';
 import { emptySession, pauseText, stopText, updateState, type PauseRecord } from '../state.ts';
 
 // `team pause` stops the team taking new work: `team next` claims nothing while the record
@@ -74,12 +74,12 @@ export async function runPause(argv: string[], io: Io, sources: PauseSources = r
   const all = args.flags.has('all');
   let seat: string | undefined;
   if (args.values.seat !== undefined) {
-    seat = targetName(args.values.seat);
+    seat = plainLine(args.values.seat).trim();
     if (seat === '') return invocation(out, '--seat needs a seat name', json);
   }
   let team: string | undefined;
   if (args.values.team !== undefined) {
-    team = targetName(args.values.team);
+    team = plainLine(args.values.team).trim();
     if (team === '') return invocation(out, '--team needs a team name', json);
   }
   if (args.values.client !== undefined && seat !== undefined) return invocation(out, '--client pauses the one team its grant names and takes no --seat', json);

@@ -6,7 +6,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readArgs } from '../src/args.ts';
 import type { Caller } from '../src/caller.ts';
@@ -61,6 +61,7 @@ import { writePolicySet } from '../src/policy/sources.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { teamIdOf } from '../src/registry/teams.ts';
 import { keyOf, signDomain } from '../src/store/keys.ts';
+import { fixtureBase } from './helpers.ts';
 
 const POLICY = 'client-grant-max-duration';
 const TEAM_ID = 'aaaaaaaaaaaa';
@@ -126,7 +127,7 @@ function fakeStore(): OwnerSeatKeyStore & { prompts: string[] } {
  *  down and bundle grants, and one client key. A client key may not sit in the OS temp directory,
  *  so the world is under the working directory like the other client suites. */
 function world(label: string, options: { projectId?: string } = {}) {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), `.client-duration-${label}-`)));
+  const base = fixtureBase(`.client-duration-${label}-`);
   made.push(base);
   const home = join(base, 'home');
   const teamRoot = join(base, 'floor');

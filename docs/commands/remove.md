@@ -45,9 +45,8 @@ and again under the grant lock before the first effect; it must carry `remove` a
 Without `--client` the refusal below is unchanged. The run is never the owner's, and it is narrower than the
 owner's: `--keep`, `--abandon`, `--file` and `--session` are refused with `--client` (exit 2), a seat marked
 `human: true` is never removed, and the orchestrator and the operator are never removed (exit 1,
-`remove.client-refused`). The approval record is not touched: the roster change is for the owner to approve with
-the owner seat, and the closing line says so. Removing a seat does not end `team up --client`, because a removed
-seat is no difference to the fingerprints the owner signed. The run is logged as `client-remove-authorized: …`.
+`remove.client-refused`). Removing a seat does not end `team up --client`: a removed seat needs no new
+signature. The run is logged as `client-remove-authorized: …`.
 
 ## Who may run it
 

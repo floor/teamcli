@@ -1504,7 +1504,7 @@ Usage:
 
 ### Who may run it
 
-`owner-only` — writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it for an entity the grant covers (`team init --general <grant> --key <client.key>`)
+`owner-only` — writing a team where none exists is the owner's act in 0.5.0: no create-bounds exist yet, so no agent holds `create`; since 0.5.7 an owner-signed general grant covering `init` (or every op, `*`) admits it (`team init --general <grant> --key <client.key>`), and a grant that lists entities is refused until 0.5.11
 
 ### Flags
 

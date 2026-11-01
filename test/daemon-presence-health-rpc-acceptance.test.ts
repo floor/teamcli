@@ -385,7 +385,7 @@ describe('the existing health answer carries fresh per-route presence', () => {
 });
 
 describe('the client merges only what the answering epoch proves', () => {
-  const ROOT = '/private/tmp/presence-rpc-world';
+  const ROOT = join(realpathSync(tmpdir()), 'presence-rpc-world');
 
   function stateOf(home: string, overrides: Partial<DaemonState> = {}): DaemonState {
     return {
@@ -486,7 +486,7 @@ describe('the client merges only what the answering epoch proves', () => {
     // A well-formed answer for a root this record does not carry is never invented into it.
     served.set({
       ...snapshotOf(state),
-      roots: [{ root: '/private/tmp/another-route', presence: {
+      roots: [{ root: join(realpathSync(tmpdir()), 'another-route'), presence: {
         session: SESSION, state: 'serving', healthy: true, checkedAt: iso(Date.now()), why: null,
       } }],
     });

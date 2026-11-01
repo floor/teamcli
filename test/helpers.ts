@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
 import type { Seen, StoredReading } from '../src/budgets/readings.ts';
 import type { Caller } from '../src/caller.ts';
 import { PROFILES } from '../src/clis.ts';
@@ -162,13 +163,29 @@ export function capturedWorkspaceEntry(workspaceId: string, label: string) {
   };
 }
 
+/** The runtime temp folder, the one these captured entries name: the capture's own temp folder is
+ *  not part of any contract a scene reads, so the fixture takes this machine's. */
+const TEMP = realpathSync(tmpdir());
+
+/** The short base for a fixture that binds a unix socket: the POSIX temp folder `/tmp` when it
+ *  exists (4 bytes on Linux, 12 on macOS as the real path), else the runtime temp folder. A unix
+ *  socket path has a 100-byte limit, so a socket fixture must not sit under a deep temp folder;
+ *  every other fixture keeps the runtime temp folder. */
+export function shortSocketBase(): string {
+  try {
+    return realpathSync('/tmp');
+  } catch {
+    return realpathSync(tmpdir());
+  }
+}
+
 /** The `herdr 0.7.1` `pane list` entry, as captured. */
 export function capturedPaneEntry(paneId: string, workspaceId: string, terminalId = 'term_65dd8274742df1') {
   return {
     agent_status: 'unknown',
-    cwd: '/private/tmp',
+    cwd: TEMP,
     focused: true,
-    foreground_cwd: '/private/tmp',
+    foreground_cwd: TEMP,
     pane_id: paneId,
     revision: 0,
     tab_id: `${workspaceId}:t1`,
@@ -184,7 +201,7 @@ export function capturedProcessInfo(paneId: string, shellPid: number, foreground
   return {
     foreground_process_group_id: shellPid,
     foreground_processes: [
-      { argv: ['-zsh'], argv0: 'zsh', cmdline: '-zsh', cwd: '/private/tmp', name: 'zsh', pid: foregroundPid },
+      { argv: ['-zsh'], argv0: 'zsh', cmdline: '-zsh', cwd: TEMP, name: 'zsh', pid: foregroundPid },
     ],
     pane_id: paneId,
     shell_pid: shellPid,
@@ -295,4 +312,29 @@ export function gitEnv(): NodeJS.ProcessEnv {
     delete env[name];
   }
   return env;
+}
+
+/**
+ * A world's base folder, under a scratch root outside the OS temp directory and outside the
+ * checkout. A client key refuses to sit under the temp folder, so a fixture whose synthetic HOME
+ * holds one cannot live in temp — and a checkout may itself sit under temp, so neither can the
+ * fixture be placed beside the checkout by assumption. The root is `TEAMCLI_TEST_SCRATCH` when it
+ * names one, else `<home>/.cache/teamcli-tests`; a root the placement rule would refuse is an
+ * error, never silently used. Callers create what they need under the returned folder and remove
+ * it themselves.
+ */
+export function fixtureBase(prefix: string): string {
+  const checkout = resolve(import.meta.dir, '..');
+  const named = process.env.TEAMCLI_TEST_SCRATCH;
+  const root = resolve(named !== undefined && named !== '' ? named : join(homedir(), '.cache', 'teamcli-tests'));
+  mkdirSync(root, { recursive: true });
+  const real = realpathSync(root);
+  const temp = realpathSync(tmpdir());
+  if (real === temp || real.startsWith(temp + sep)) {
+    throw new Error(`the fixture scratch root "${real}" overlaps the OS temp directory; name a root outside it with TEAMCLI_TEST_SCRATCH`);
+  }
+  if (real === checkout || real.startsWith(checkout + sep)) {
+    throw new Error(`the fixture scratch root "${real}" is inside the checkout; name a root outside it with TEAMCLI_TEST_SCRATCH`);
+  }
+  return realpathSync(mkdtempSync(join(real, prefix)));
 }

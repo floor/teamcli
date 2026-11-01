@@ -2,15 +2,16 @@
 // `--general <grant.json> --key <client.key>` through the dispatcher, admitted as the owner with no
 // terminal; every refusal is the door's own, before the command runs.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { commands, main } from '../src/cli.ts';
-import { GENERAL_OPS, issueOwnerGeneralGrant, type GrantOp } from '../src/client/general-grant.ts';
+import { GENERAL_OPS, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import type { Io } from '../src/io.ts';
 import { installKey } from '../src/store/keys.ts';
+import { fixtureBase } from './helpers.ts';
 
-const base = realpathSync(mkdtempSync(join(process.cwd(), '.gg-test-door-')));
+const base = fixtureBase('.gg-test-door-');
 const home = join(base, 'home');
 const cwd = join(base, 'plain');
 const savedHome = process.env.HOME;
@@ -112,10 +113,13 @@ test('an expired grant is refused', async () => {
   expect(ran.err).toContain('has expired');
 });
 
-test('an entity the grant does not cover is refused', async () => {
+test('a grant that lists entities is refused until 0.5.11, before anything runs', async () => {
   const ran = await run(['status', '--general', grant(['*'], ['material']), '--key', a.path]);
   expect(ran.code).toBe(1);
-  expect(ran.err).toContain('entity');
+  expect(ran.err).toContain(SCOPED_GRANT_REFUSAL);
+  const json = await run(['status', '--json', '--general', grant(['*'], ['material']), '--key', a.path]);
+  expect(json.code).toBe(1);
+  expect(JSON.parse(json.out).error.id).toBe('team.general-target');
 });
 
 test('--general without --key is a usage error', async () => {

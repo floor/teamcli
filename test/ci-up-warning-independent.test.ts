@@ -39,8 +39,21 @@ let home = '';
 let lobby = '';
 let file = '';
 
+// The runner configures no git identity, and the host's own guess is not something a scene can
+// rely on: every fixture commit names a synthetic author and committer. A failure keeps git's
+// stderr, so the cause is read next time, not guessed.
 function git(cwd: string, ...args: string[]): void {
-  execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'ignore', env: gitEnv() });
+  const env = gitEnv();
+  env.GIT_AUTHOR_NAME = 'Fixture';
+  env.GIT_AUTHOR_EMAIL = 'fixture@example.invalid';
+  env.GIT_COMMITTER_NAME = 'Fixture';
+  env.GIT_COMMITTER_EMAIL = 'fixture@example.invalid';
+  try {
+    execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env });
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? '').trim();
+    throw new Error(`git ${args.join(' ')} failed in ${cwd}: ${stderr === '' ? (error as Error).message : stderr}`);
+  }
 }
 
 function checked(text: string): TeamFile {

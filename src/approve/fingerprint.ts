@@ -212,22 +212,9 @@ export const WATCH_CHECKS_CHANGED = '`watch.checks` changed';
 
 /** One line per difference, as `status`, `doctor` and the refusals print it. */
 export function describe(difference: Difference): string {
-  return describeWith(difference, true);
-}
-
-/**
- * The config report's form of the same line: this build has no command that re-approves, so the
- * removed advice is left out and the option that still works stays beside the difference.
- */
-export function describeWithoutApproval(difference: Difference): string {
-  return describeWith(difference, false);
-}
-
-function describeWith(difference: Difference, approve: boolean): string {
   if (difference.kind === 'section' && difference.moved) {
     const { from, to } = difference.moved;
-    const keep = `set \`session: ${from}\` to keep the old one`;
-    return `\`session\` changed: "${from}" -> "${to}", the new default session (<entity>-<project>); ${approve ? `approve the file again, or ${keep}` : keep}`;
+    return `\`session\` changed: "${from}" -> "${to}", the new default session (<entity>-<project>); set \`session: ${from}\` to keep the old one`;
   }
   if (difference.kind === 'section') return `\`${difference.name}\` changed`;
   if (difference.kind === 'seat-new') return `seat ${difference.name} is not in the last approval`;

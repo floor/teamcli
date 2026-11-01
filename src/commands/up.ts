@@ -5,8 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { budgetsInForceOf, ceilingsOf, notInForce, watchInForceOf } from '../approve/approval.ts';
 import { KEY_ISOLATION_LINE, activeClientUpGrant, withClientGrantLock, type ClientUpGrantRecord } from '../client/records.ts';
 import { verifyClientUp } from '../client/up-grant.ts';
-import { grantCoversEntity, grantCoversOp, grantKeyMatches, readGeneralGrant, type GrantVerdict } from '../client/general-grant.ts';
-import { launchEntities } from '../client/general-door.ts';
+import { admitGeneral } from '../client/general-grant.ts';
 import { ownerAuthorized, upFingerprint } from '../approve/owner-token.ts';
 import { ownerSeatRuleAdmits, ownerSeatStep } from '../client/owner-action-step.ts';
 import { spawnInheritedBus } from '../bus/supervise.ts';
@@ -1167,45 +1166,18 @@ export async function runUp(argv: string[], io: Io, sources: UpSources, internal
   // A general grant (src/client/general-grant.ts): the owner signed this principal once for this
   // entity, so the run is admitted as an owner-seat approval would admit it, with no request.
   if (args.values.general !== undefined) {
-    const home = sources.home ?? homedir();
-    const at = sources.now?.() ?? new Date();
-    const read = readGeneralGrant(home, resolve(io.cwd, args.values.general), at);
-    let refusal: { id: 'up.general-refused' | 'up.general-target'; why: string } | null = null;
-    if (!read.ok) {
-      refusal = { id: 'up.general-refused', why: read.why };
-    } else {
-      const grant = read.grant;
-      const keyed: GrantVerdict = grantKeyMatches(home, grant, resolve(io.cwd, args.values.key as string));
-      const covered: GrantVerdict = keyed.ok ? grantCoversOp(grant, 'up') : keyed;
-      if (!covered.ok) refusal = { id: 'up.general-refused', why: covered.why };
-      // The launch's own team, for a grant that lists entities: the file `--file` names, the
-      // session `--session` names, else this folder's. A grant listing every entity reads no
-      // target, as the door reads none for it.
-      else if (!grant.entities.includes('*')) {
-        const target = launchEntities(io, home, args.values.file, args.values.session);
-        if (!target.ok) refusal = { id: 'up.general-target', why: target.why };
-        else {
-          for (const entity of target.entities) {
-            const aimed = grantCoversEntity(grant, entity);
-            if (!aimed.ok) {
-              refusal = { id: 'up.general-refused', why: aimed.why };
-              break;
-            }
-          }
-        }
-      }
-      if (refusal === null) stderrLine(`team up: admitted by general grant ${grant.grant_id} (${grant.client_id})\n`);
-    }
-    if (refusal?.id === 'up.general-target') {
-      refuse(io, json, 'up', { id: 'up.general-target', message: refusal.why, repair: null });
-      // exit: up.general-target
-      return 1;
-    }
-    if (refusal !== null) {
-      refuse(io, json, 'up', { id: 'up.general-refused', message: refusal.why, repair: null });
+    let entity: string | null = null;
+    try {
+      const here = readTeamConfig(io.cwd, { home: sources.home, checkOnly: true });
+      if (here.ok) entity = here.team.entity;
+    } catch {}
+    const general = admitGeneral(sources.home ?? homedir(), resolve(io.cwd, args.values.general), resolve(io.cwd, args.values.key!), 'up', entity, sources.now?.() ?? new Date());
+    if (!general.ok) {
+      refuse(io, json, 'up', { id: 'up.general-refused', message: general.why, repair: null });
       // exit: up.general-refused
       return 1;
     }
+    stderrLine(`team up: admitted by general grant ${general.grant.grant_id} (${general.grant.client_id})\n`);
   }
   const seatStep = args.values.general !== undefined
     ? { kind: 'admitted' as const }

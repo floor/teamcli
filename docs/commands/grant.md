@@ -51,8 +51,7 @@ never replaces a standing grant, a revocation or a record of another kind under 
 same-stem send record is the re-issue path and is written over, `<name>.json`; an older file of
 the same name under another extension stays in the folder, admits nothing, and is reported as
 unsigned. It is owner-only, like every grant form, and a general grant that carries `grant` admits
-it with no prompt — a listed grant only for a pair whose two sides it covers by entity, each side
-read as a send address; a wildcard grant is unchanged. A dry run refuses exactly what a write
+it with no prompt. A dry run refuses exactly what a write
 refuses and prints the record it would write.
 
 In the third form `--public-key` reads the public side of a client key pair written by

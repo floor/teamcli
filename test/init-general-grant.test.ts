@@ -1,15 +1,16 @@
-// Under the working folder, not the OS temp folder: a client key never sits under the temp folder.
+// Under the shared fixture root, not the OS temp folder and not the checkout: a client key never
+// sits under the temp folder.
 // `team init --general`: an owner-signed general grant covering `init` admits a create with no
 // owner terminal, for an entity the grant covers; everything else is refused, fail-closed.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
-import { issueHeldGeneralGrant, issueOwnerGeneralGrant, type GrantOp } from '../src/client/general-grant.ts';
+import { issueHeldGeneralGrant, issueOwnerGeneralGrant, SCOPED_GRANT_REFUSAL, type GrantOp } from '../src/client/general-grant.ts';
 import { newClientKeyPair, writeClientKeyFiles } from '../src/client/records.ts';
 import { installKey } from '../src/store/keys.ts';
-import { gitEnv, testIo } from './helpers.ts';
+import { gitEnv, fixtureBase, testIo } from './helpers.ts';
 
 let base: string;
 let home: string;
@@ -18,7 +19,7 @@ const detached = { kind: 'owner-no-tty' } as const;
 const noLogin = { loggedIn: () => false };
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(join(process.cwd(), '.gg-init-test-')));
+  base = fixtureBase('.gg-init-test-');
   home = join(base, 'home');
   mkdirSync(join(home, '.config', 'team'), { recursive: true });
   installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
@@ -57,7 +58,7 @@ test('a detached run with no grant is refused init.detached', async () => {
 });
 
 test('init --general from inside a team pane is admitted, dev mode on or off: an owner tool applies changes under a general grant', async () => {
-  const g = grant(['floor'], ['*']);
+  const g = grant(['*'], ['*']);
   for (const env of [{}, { TEAMCLI_DEV_MODE: '1' }]) {
     rmSync(join(project, '.agents'), { recursive: true, force: true });
     const io = testIo(project, { kind: 'seat', name: 'builder-5', pane: 'pane1' });
@@ -69,8 +70,8 @@ test('init --general from inside a team pane is admitted, dev mode on or off: an
   }
 });
 
-test('a general grant covering init on this entity admits the create with no owner terminal', async () => {
-  const g = grant(['floor'], ['*']);
+test('a wildcard general grant covering init admits the create with no owner terminal', async () => {
+  const g = grant(['*'], ['*']);
   const r = await run(['--general', g.path, '--key', g.key]);
   expect(r.err).toContain('admitted by general grant');
   expect(r.code).toBe(0);
@@ -90,15 +91,16 @@ test('a general grant without init is refused init.general-refused, nothing writ
   expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(false);
 });
 
-test('a general grant for another entity is refused', async () => {
+test('a grant that lists entities is refused until 0.5.11, with the one sentence and nothing written', async () => {
   const g = grant(['material'], ['*']);
   const r = await run(['--general', g.path, '--key', g.key]);
   expect(r.code).toBe(1);
-  expect(r.err).toContain('does not cover entity "floor"');
+  expect(r.out + r.err).toContain(SCOPED_GRANT_REFUSAL);
+  expect(existsSync(join(project, '.agents', 'team.yaml'))).toBe(false);
 });
 
 test('the wrong key, a tampered grant and a missing --key are refused', async () => {
-  const g = grant(['floor'], ['init']);
+  const g = grant(['*'], ['init']);
   expect((await run(['--general', g.path, '--key', holder('other').path])).code).toBe(1);
   expect((await run(['--general', g.path])).code).toBe(1);
   const disk = JSON.parse(readFileSync(g.path, 'utf8'));
@@ -109,8 +111,8 @@ test('the wrong key, a tampered grant and a missing --key are refused', async ()
 });
 
 test('self-grant is still refused: a holder never issues init to itself', () => {
-  const g = grant(['floor'], ['*']);
-  const self = issueHeldGeneralGrant(home, g.path, g.key, { clientId: 'iris', publicKey: g.who.pub, entities: ['floor'], ops: ['init'], mayIssue: false, expires: new Date(Date.now() + 3_600_000) });
+  const g = grant(['*'], ['*']);
+  const self = issueHeldGeneralGrant(home, g.path, g.key, { clientId: 'iris', publicKey: g.who.pub, entities: ['*'], ops: ['init'], mayIssue: false, expires: new Date(Date.now() + 3_600_000) });
   expect(self.ok).toBe(false);
 });
 

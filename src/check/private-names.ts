@@ -270,9 +270,11 @@ function addScratch(path: string, files: readonly string[]): boolean {
   return added.status === 0;
 }
 
-/** Runs the authoritative engine with the pattern on standard input; stderr is never forwarded. */
+/** Runs the authoritative engine with the pattern on standard input; stderr is never forwarded.
+ *  `-a` reads every file as text: a NUL byte makes git call a file binary, and skipping it would
+ *  hide the names it carries. */
 function grep(repo: string, pattern: string, pathspec: string): { status: number; stdout: string } {
-  const run = spawnSync('git', ['-C', repo, 'grep', '--no-color', '-z', '-n', '-I', '-E', '-f', '-', '--', pathspec], {
+  const run = spawnSync('git', ['-C', repo, 'grep', '--no-color', '-z', '-n', '-a', '-E', '-f', '-', '--', pathspec], {
     input: `${pattern}\n`,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -483,6 +485,20 @@ function labelPath(path: string): string {
   return path.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
 }
 
+/** The message of a raw commit object, after its header block: the first empty line ends the
+ *  headers (a continuation line always carries a leading space), and every byte after it is the
+ *  message, NUL bytes included. */
+function messageAfterHeaders(object: string): string | null {
+  let start = 0;
+  while (start < object.length) {
+    const end = object.indexOf('\n', start);
+    if (end === -1) return null;
+    if (end === start) return object.slice(end + 1);
+    start = end + 1;
+  }
+  return null;
+}
+
 /**
  * Builds the pre-push corpus: every added line of the diff against `base`, then every line of
  * every commit message on `base..HEAD`. Removed lines are not read; a line that stays unchanged
@@ -493,11 +509,13 @@ function labelPath(path: string): string {
  * lines follow, and exactly those lines are consumed, so added content can never be mistaken for
  * a file header and a path is never derived from anything but a `+++ ` header. Renames are turned
  * into a deletion and an addition (`--no-renames`) so the new side always carries a full path.
+ * `--text` gives a binary-looking file the same hunks as a text one: a NUL byte must not keep the
+ * lines it carries out of the corpus.
  */
 export function privateDiffCorpus(root: string, base: string): { corpus: PrivateCorpus } | { problem: string } {
   const diff = spawnSync(
     'git',
-    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', base, '--'],
+    ['-C', root, 'diff', '--unified=0', '--no-color', '--no-ext-diff', '--no-renames', '--text', base, '--'],
     { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 },
   );
   if (diff.error !== undefined || diff.status !== 0) return { problem: `cannot read the diff against ${base}` };
@@ -559,12 +577,15 @@ export function privateDiffCorpus(root: string, base: string): { corpus: Private
   });
   if (commits.error !== undefined || commits.status !== 0) return { problem: `cannot read the commits since ${base}` };
   for (const sha of commits.stdout.split('\n').filter(Boolean)) {
-    const body = spawnSync('git', ['-C', root, 'log', '-1', '--format=%B', sha], {
+    const body = spawnSync('git', ['-C', root, 'cat-file', 'commit', sha], {
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
     });
     if (body.error !== undefined || body.status !== 0) return { problem: `cannot read a commit message since ${base}` };
-    const message = body.stdout.replace(/\n$/, '');
+    // `git log --format=%B` stops at a NUL byte in the message; the commit object holds the bytes
+    // after it, and `git cat-file` prints the object whole, so the message is read from there.
+    const message = messageAfterHeaders(body.stdout);
+    if (message === null) return { problem: `cannot read a commit message since ${base}` };
     for (const [index, text] of message.split('\n').entries()) {
       lines.push(text);
       where.push(`commit:${sha}:${String(index + 1)}`);
@@ -587,7 +608,11 @@ export function scanPrivateLines(lines: readonly string[], sources: readonly Pri
   }
   try {
     writeFileSync(join(scratch.path, 'empty.txt'), '', { mode: 0o600 });
-    writeFileSync(join(scratch.path, 'lines.txt'), lines.length === 0 ? '' : `${lines.join('\n')}\n`, { mode: 0o600 });
+    // `git grep -I` reads one NUL anywhere in a file as a binary marker and skips that file whole,
+    // so a single NUL-bearing line would hide every other line. The bytes are removed instead: the
+    // line stays text, its number is unchanged, and a name split by a NUL reads as the name it spells.
+    const corpus = lines.map((line) => line.replace(/\0/g, ''));
+    writeFileSync(join(scratch.path, 'lines.txt'), corpus.length === 0 ? '' : `${corpus.join('\n')}\n`, { mode: 0o600 });
     if (!addScratch(scratch.path, ['empty.txt', 'lines.txt'])) {
       return { problem: 'cannot stage the private diff scratch repository' };
     }

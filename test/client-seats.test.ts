@@ -4,7 +4,7 @@
 
 import { afterAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { approvalOf } from '../src/approve/approval.ts';
 import { newClientKeyPair, clientKeyDir, resolveEntityCoordinator, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
@@ -13,6 +13,7 @@ import { validateTeamFile } from '../src/file/validate.ts';
 import { registerAgent } from '../src/registry/agents.ts';
 import { storePath, writeApproval } from '../src/store/store.ts';
 import { keyOf } from '../src/store/keys.ts';
+import { fixtureBase } from './helpers.ts';
 
 const TEAM_ID = 'aaaaaaaaaaaa';
 const NOW = new Date('2026-10-19T12:00:00.000Z');
@@ -43,7 +44,7 @@ ${seat('orchestrator', '    leads: true\n')}${seat('zeus')}${seat('steward')}${s
 function world(label: string, clients: string, options: { approve?: boolean; approved?: string; entity?: string; client?: string; entities?: string } = {}) {
   const entity = options.entity ?? 'floor';
   const clientId = options.client ?? 'grok-bot';
-  const base = realpathSync(mkdtempSync(join(process.cwd(), `.client-seats-${label}-`)));
+  const base = fixtureBase(`.client-seats-${label}-`);
   made.push(base);
   const home = join(base, 'home');
   const root = join(base, entity);

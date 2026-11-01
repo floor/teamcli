@@ -3,10 +3,11 @@ import { afterAll, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Caller } from '../src/caller.ts';
 import type { Io } from '../src/io.ts';
+import { fixtureBase } from './helpers.ts';
 
 const subject = process.env.TEAM_GPT_SUBJECT_ROOT ?? resolve(import.meta.dir, '..');
 const load = (path: string) => import(pathToFileURL(join(subject, 'src', path)).href);
@@ -16,7 +17,7 @@ const { runClientSend } = await load('client/send.ts');
 const { runClientMessages } = await load('client/inbox.ts');
 const { verifyClientUp } = await load('client/up-grant.ts');
 const { generalDoor } = await load('client/general-door.ts');
-const { issueOwnerGeneralGrant, readGeneralGrant, admitGeneral } = await load('client/general-grant.ts');
+const { issueOwnerGeneralGrant, readGeneralGrant, admitGeneral, SCOPED_GRANT_REFUSAL } = await load('client/general-grant.ts');
 const records = await load('client/records.ts');
 const { keyOf } = await load('store/keys.ts');
 const { writeDevelopmentMode, readDevelopmentMode } = await load('development_mode.ts');
@@ -34,7 +35,7 @@ process.env.TEAM_CONFIG_SOURCE = 'file';
 afterAll(() => { if (configSource === undefined) delete process.env.TEAM_CONFIG_SOURCE; else process.env.TEAM_CONFIG_SOURCE = configSource; });
 // Real key hygiene is exercised: fixture homes sit outside the host's temporary directory and
 // outside the fixture checkout. No process HOME or real owner store is changed or read.
-const base = fs.realpathSync(fs.mkdtempSync(join(dirname(resolve(import.meta.dir, '..')), 'gpt-dev-fixtures-')));
+const base = fixtureBase('gpt-dev-fixtures-');
 let serial = 0;
 const modes = ['env-on', 'env-off', 'machine-on', 'machine-off'] as const;
 type Mode = typeof modes[number];
@@ -224,9 +225,10 @@ test('V91: an external holder really issues within its general grant', async () 
   const shown = JSON.parse(io.out), read = readGeneralGrant(at.home, shown.path, new Date());
   expect(read.ok).toBe(true); expect(read.grant.parent).toBe(at.parent.grant.grant_id);
   expect(read.grant.client_id).toBe('child');
-  expect(admitGeneral(at.home, shown.path, at.childFiles.keyPath, 'status', 'fixture').ok).toBe(true);
-  expect(admitGeneral(at.home, shown.path, at.childFiles.keyPath, 'down', 'fixture').ok).toBe(false);
-  expect(admitGeneral(at.home, shown.path, at.childFiles.keyPath, 'status', 'elsewhere').ok).toBe(false);
+  // The child verifies; it lists entities, so 0.5.10's door refuses it until 0.5.11.
+  const held = admitGeneral(at.home, shown.path, at.childFiles.keyPath, 'status', 'fixture');
+  expect(held.ok).toBe(false);
+  if (!held.ok) expect(held.why).toBe(SCOPED_GRANT_REFUSAL);
 });
 
 test('V92: an external caller can still generate a real client key', () => {

@@ -29,6 +29,7 @@ import { runForget } from '../src/commands/forget.ts';
 import { runAgents } from '../src/commands/agents.ts';
 import { actionApprovalsFolder } from '../src/client/team-create.ts';
 import { runDaemon, type DaemonCommandSources } from '../src/commands/daemon.ts';
+import type { DaemonHealth } from '../src/daemon/health.ts';
 import type { DaemonHealthSnapshot } from '../src/daemon/protocol.ts';
 import { FAULT_WHY, faultRequestPath, faultResultPath, writeFaultRequest } from '../src/daemon/fault.ts';
 import { daemonSocketPath } from '../src/daemon/paths.ts';
@@ -128,7 +129,7 @@ import { fakeFetch, fixture, happy, json, URLS, type Answers } from './release/w
 import { runImport } from '../src/commands/import.ts';
 import { intoRegistry, realRegistryTouched, storedTeam, underRegistry } from './helpers/registry-team.ts';
 import { runMigrate } from '../src/commands/migrate.ts';
-import { CLAUDE_IDLE, claudeBox, deliverBriefs, gitEnv, testIo } from './helpers.ts';
+import { CLAUDE_IDLE, claudeBox, deliverBriefs, fixtureBase, gitEnv, testIo } from './helpers.ts';
 
 const NOW = new Date('2026-10-04T09:00:00Z');
 const owner = { kind: 'owner' } as const;
@@ -1129,9 +1130,10 @@ scene('check.herdr', async (place) => {
 });
 
 // The keygen scenes need a home outside the OS temp tree: the placement rule refuses a key
-// directory that overlaps it, and every other scene's place lives under mkdtemp's tree.
+// directory that overlaps it, and every other scene's place lives under mkdtemp's tree. The base
+// comes from the shared fixture root, so it also stays outside a checkout that sits in temp.
 function clientHome(label: string): string {
-  return realpathSync(mkdtempSync(join(process.cwd(), `.client-exit-${label}-`)));
+  return fixtureBase(`.client-exit-${label}-`);
 }
 
 function ranClient(place: Place, argv: string[], home: string = place.home, caller: Caller = owner): Ran {
@@ -3348,20 +3350,17 @@ scene('team.version', async (place) => show(await entry(['--version'], testIo(pl
 scene('team.general-usage', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json')], testIo(place.root, owner)), '--general needs --key'));
 scene('team.general-refused', async (place) => show(await entry(['status', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], testIo(place.root, owner)), 'cannot be read as a general grant'));
 scene('team.general-target', async (place) => {
-  // A grant that lists entities makes the door resolve the team the line acts on first; a project
-  // the registry does not hold is one the grant cannot be checked against, so nothing runs.
-  const home = clientHome('general-target');
+  const home = clientHome('gg-target');
   try {
     installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
     const pair = newClientKeyPair();
-    const keyDir = clientKeyDir(home, 'a');
-    const written = writeClientKeyFiles(keyDir, pair);
+    const written = writeClientKeyFiles(clientKeyDir(home, 'a'), pair);
     if (!written.ok) throw new Error(written.why);
-    const issued = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pair.publicKey, entities: ['acme'], ops: ['status'], mayIssue: false, expires: new Date(Date.now() + 86_400_000) });
-    if (!issued.ok) throw new Error(issued.why);
+    const scoped = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pair.publicKey, entities: ['alpha'], ops: ['*'], mayIssue: false, expires: new Date(Date.now() + 86_400_000) });
+    if (!scoped.ok) throw new Error(scoped.why);
     const io = testIo(place.root, owner);
     io.env.HOME = home;
-    return show(await entry(['status', '--project', 'no-such-project', '--general', issued.path, '--key', join(keyDir, 'client.key')], io), 'can be resolved');
+    return show(await entry(['status', '--general', scoped.path, '--key', written.keyPath], io), 'scoped general grants arrive in 0.5.11; use a wildcard grant or the owner path');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -4380,6 +4379,28 @@ const daemonSnapshot: DaemonHealthSnapshot = {
   features: { broker: 'absent' },
 };
 
+/** The health reading the restored-daemon check needs: a daemon that answered its probe. */
+function answeringHealth(): DaemonHealth {
+  return {
+    daemon: 'teamcli',
+    socket: join('/synthetic', 'daemon.sock'),
+    state: 'running',
+    running: true,
+    pid: 42,
+    uid: 501,
+    since: '2026-10-20T10:00:00.000Z',
+    startedBy: 'service-manager',
+    version: 'test',
+    gitHead: null,
+    heartbeatAt: '2026-10-20T10:00:05.000Z',
+    features: { broker: 'absent' },
+    stuck: [],
+    roots: [],
+    probe: { state: 'answered', at: '2026-10-20T10:00:06.000Z' },
+    why: null,
+  };
+}
+
 function daemonSources(place: Place, overrides: Partial<DaemonCommandSources> = {}): DaemonCommandSources {
   return {
     home: place.home,
@@ -4524,10 +4545,46 @@ scene('daemon.install-failed', async (place) => {
   return show(
     await daemonRan(place, ['install'], owner, {
       service: fakeDaemonService({
-        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null }),
+        install: () => ({ ok: false, why: 'the system service manager refused to start the daemon', detail: null, outcome: 'refused', kept: false }),
       }),
     }),
     'the system service manager refused to start the daemon',
+  );
+});
+scene('daemon.install-rolled-back', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({
+          ok: false,
+          why: 'the system service manager refused to start the new daemon; the previous one was put back and started again',
+          detail: 'the load exited 5: Input/output error; the earlier unit was put back and its daemon started',
+          outcome: 'restored',
+          kept: true,
+        }),
+      }),
+      // The rollback is reported after the restored daemon answers, as the live command does.
+      health: async () => answeringHealth(),
+    }),
+    'the previous one was put back and started again',
+  );
+});
+scene('daemon.install-rollback-failed', async (place) => {
+  write(place, TEAM);
+  return show(
+    await daemonRan(place, ['install'], owner, {
+      service: fakeDaemonService({
+        install: () => ({
+          ok: false,
+          why: 'the system service manager refused to start the new daemon, and the previous one could not be started again; no daemon was started',
+          detail: 'the load exited 5: Input/output error; the earlier unit was put back, and the load exited 5: Input/output error',
+          outcome: 'lost',
+          kept: true,
+        }),
+      }),
+    }),
+    'no daemon was started',
   );
 });
 scene('daemon.run-not-owner', async (place) =>
@@ -4921,7 +4978,7 @@ function clientWorld(place: Place, options: { inbox?: boolean } = {}): {
   grantId: string;
   recipientId: string;
 } {
-  const base = realpathSync(mkdtempSync(join(process.cwd(), '.team-exit-client-')));
+  const base = fixtureBase('.team-exit-client-');
   const home = join(base, 'home');
   mkdirSync(home, { recursive: true });
   const ownerKey = keyOf(home);
@@ -6763,23 +6820,6 @@ scene('up.approval-requested', async (place) => {
 scene('up.general-refused', async (place) => {
   approve(place, TEAM);
   return show(await up(place, ['--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], other, upSources(place)), 'cannot be read as a general grant');
-});
-scene('up.general-target', async (place) => {
-  // The launch's own team is the file it names; a listed grant makes `up` resolve it before the
-  // run, and a file that cannot be read leaves the grant nothing to be checked against.
-  const home = clientHome('up-general-target');
-  try {
-    installKey(home, JSON.parse(readFileSync(join(import.meta.dir, 'fixtures', 'key.json'), 'utf8')));
-    const pair = newClientKeyPair();
-    const keyDir = clientKeyDir(home, 'a');
-    const written = writeClientKeyFiles(keyDir, pair);
-    if (!written.ok) throw new Error(written.why);
-    const issued = issueOwnerGeneralGrant(home, { clientId: 'a', publicKey: pair.publicKey, entities: ['acme'], ops: ['up'], mayIssue: false, expires: new Date(Date.now() + 86_400_000) });
-    if (!issued.ok) throw new Error(issued.why);
-    return show(await up(place, ['--file', 'missing.yaml', '--general', issued.path, '--key', join(keyDir, 'client.key')], other, upSources(place, { home })), 'cannot be resolved');
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
 });
 scene('up.approval-refused', async (place) => {
   approve(place, TEAM);

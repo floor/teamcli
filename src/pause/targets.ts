@@ -11,7 +11,7 @@ import { withoutFileOffer } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import type { TeamFile } from '../file/types.ts';
 import type { Io } from '../io.ts';
-import { plainLine, plainText } from '../launch/plain.ts';
+import { plainText } from '../launch/plain.ts';
 import { findTeams, readTeams } from '../registry/teams.ts';
 import type { PauseStop, SeatState, SessionState, WorktreeState } from '../state.ts';
 
@@ -35,16 +35,6 @@ export type TargetFailure = {
 };
 
 export type TargetResult = { ok: true; targets: PauseTarget[]; skipped: string[] } | TargetFailure;
-
-/**
- * The team or seat name a `--team` or `--seat` line acts on: the flag's text with the terminal
- * taken out and the surrounding space trimmed. The commands and the general door both read
- * their names through this one step, so the team the door checks against a grant is the team
- * the command pauses or resumes — a padded spelling names the same team in both.
- */
-export function targetName(raw: string): string {
-  return plainLine(raw).trim();
-}
 
 /**
  * The teams or seats one run acts on. `key` is the positional the caller typed, if any;
