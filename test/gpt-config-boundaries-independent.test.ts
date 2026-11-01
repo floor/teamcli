@@ -80,11 +80,27 @@ for (const [vi,verb] of ['get','set','unset'].entries()) for (const [ni,name] of
    const path=[...prefix,name].join('.');
    const argv=verb==='set'?[verb,path,'41','--request','--json']:verb==='unset'?[verb,path,'--request','--json']:[verb,path,'--json'];
    const result=await f.run(argv);
-   const summary={exit:result.code,usage:JSON.parse(result.out).error?.id==='config.usage',presented:f.presented(),diskSame:disk(f.base)===before,sharedSame:same(proto,snap())};
-   expect(summary).toEqual({exit:2,usage:true,presented:0,diskSame:true,sharedSame:true});
+   const error=JSON.parse(result.out).error;
+   const message=`${path}: "${name}" cannot be addressed: every object inherits that name, and the record does not hold it as its own key`;
+   const summary={exit:result.code,usage:error?.id==='config.usage',message:error?.message,presented:f.presented(),diskSame:disk(f.base)===before,sharedSame:same(proto,snap())};
+   expect(summary).toEqual({exit:2,usage:true,message,presented:0,diskSame:true,sharedSame:true});
   }
  });
 }
+const invocationCases: Array<{ argv: string[]; message: string }> = [
+ {argv:['get'],message:'a path is required'},
+ {argv:['set','watch.unread_after'],message:'a value is required: team config set <path> <value>'},
+ {argv:['get','watch.unread_after','extra'],message:'unexpected "extra"'},
+ {argv:['get','watch.unread_after','--request'],message:'--request and --approval take set or unset'},
+ {argv:['set','watch.unread_after','1','--general','fixture-grant'],message:'--general and --key go together'},
+];
+for (const [index,row] of invocationCases.entries()) test(`C5${index}: invocation refusal keeps its exact message and code`,async()=>{
+ const f=fixture(),before=disk(f.base),proto=snap();
+ const result=await f.run([...row.argv,'--json']);
+ const error=JSON.parse(result.out).error;
+ expect({exit:result.code,id:error?.id,message:error?.message,presented:f.presented(),diskSame:disk(f.base)===before,sharedSame:same(proto,snap())})
+  .toEqual({exit:2,id:'config.usage',message:row.message,presented:0,diskSame:true,sharedSame:true});
+});
 test('C40: direct editor leaves shared descriptors unchanged',()=>{
  for (const name of names) {
   const before=snap();let unchanged=false,refused=false;
