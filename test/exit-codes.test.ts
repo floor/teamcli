@@ -3362,8 +3362,8 @@ scene('team.command-threw', async (place) => {
   return show(await entry(['init'], testIo(root, owner)), 'team:');
 });
 
-const CURSOR_TRUST = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
-const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
+const CURSOR_TRUST = readFileSync(new URL('./fixtures/cursor/2026.10.14/trust.txt', import.meta.url), 'utf8');
+const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.14/idle.txt', import.meta.url), 'utf8');
 
 /** The owner's live grant, the way `team grant @team --capabilities dialogs.trust` writes it. */
 function trustGranted(home: string, root: string): void {
@@ -3413,7 +3413,7 @@ function answerHost(place: Place, screen: string, opts: { version?: string; send
   let status = 'idle';
   const host: AnswerHost & { keys: string[] } = {
     keys: [],
-    version: () => opts.version ?? '2026.10.01-14929f9',
+    version: () => opts.version ?? '2026.10.14-0f9edde',
     agents: () => [{ name: 'lead', pane: 'w1:p1', workspace: 'w1' }],
     pane: () => text,
     sendKey: (_session, _pane, key) => {
@@ -3511,7 +3511,7 @@ scene('answer.process', async (place) => {
       worktrees: {},
     };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   const host = answerHost(place, screen);
   host.processInfo = () => ({ shell: 400, foreground: [500] });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, host), 'not the one team launched');
@@ -3574,7 +3574,7 @@ scene('answer.label', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not the trust dialog');
 });
 scene('answer.folder', async (place) => {
@@ -3584,7 +3584,7 @@ scene('answer.folder', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not an exact trust entry');
 });
 scene('answer.recovery', async (place) => {
@@ -3603,7 +3603,7 @@ scene('answer.ready', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
 });
 

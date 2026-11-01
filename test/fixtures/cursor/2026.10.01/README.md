@@ -273,3 +273,12 @@ was typed. The session was stopped and deleted. The standing-rules texts are wha
 The workspace line is replaced by `<workspace>` (in `rules-pasted-narrow.txt` it had
 wrapped over two rows at 27 columns and is folded back to one); the line is not part of a
 box.
+
+## No trust answer record for these captures
+
+`trust.txt` and `trust-54.txt` show the workspace trust dialog, and neither answered it: the
+workspace was closed, and Escape returned to the shell. The profile ships no trust answer at
+`2026.10.01-14929f9` — a trust answer sends a key, and a key-sending record names one
+captured version a run answered. A seat at this dialog is refused as a version with no trust
+answer, never pressed on a key no run pressed. The measured answers are with the later
+captures: `2026.10.14/trust.txt` and `2026.10.16/trust.txt` were each "answered with `a`".

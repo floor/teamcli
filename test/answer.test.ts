@@ -21,9 +21,18 @@ import { rulesFilePath } from '../src/launch/rules-file.ts';
 import { readScreen } from '../src/watch/screen.ts';
 import { testIo } from './helpers.ts';
 
-const cursorTrust = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
-const cursorIdle = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
-const agyTrust = readFileSync(new URL('./fixtures/antigravity/1.2.16/trust.txt', import.meta.url), 'utf8');
+// The trust scenes run at the versions whose own capture answered the dialog: cursor-agent
+// 2026.10.14 ("answered with `a`") and agy 1.3.5 (idle.txt is the same directory after Enter
+// on the marked row). The two captures whose dialog was only dismissed are read beside them,
+// for the refusal scene.
+const cursorTrust = readFileSync(new URL('./fixtures/cursor/2026.10.14/trust.txt', import.meta.url), 'utf8');
+const cursorIdle = readFileSync(new URL('./fixtures/cursor/2026.10.14/idle.txt', import.meta.url), 'utf8');
+const agyTrust = readFileSync(new URL('./fixtures/antigravity/1.3.5/trust.txt', import.meta.url), 'utf8');
+// The two trust dialogs no capture answered: both READMEs record Escape quitting them back to
+// the shell, so no key was pressed on those versions, and their profiles ship no record for
+// them. A scene pins the refusal on the exact capture those READMEs describe.
+const cursorUnansweredTrust = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
+const agyUnansweredTrust = readFileSync(new URL('./fixtures/antigravity/1.2.16/trust.txt', import.meta.url), 'utf8');
 const codexFolder = readFileSync(new URL('./fixtures/codex/0.157.0/trust-folder.txt', import.meta.url), 'utf8');
 const codexWide = readFileSync(new URL('./fixtures/codex/0.157.0/trust-folder-163.txt', import.meta.url), 'utf8');
 const codexRepo = readFileSync(new URL('./fixtures/codex/0.157.0/trust.txt', import.meta.url), 'utf8');
@@ -158,8 +167,8 @@ function fake(home: string, root: string, screen: string, cli: 'cursor' | 'antig
     set screen(value: string) { text = value; },
     version(binary: string) {
       host.versions += 1;
-      if (binary === 'cursor-agent') return '2026.10.01-14929f9';
-      if (binary === 'agy') return '1.2.16';
+      if (binary === 'cursor-agent') return '2026.10.14-0f9edde';
+      if (binary === 'agy') return '1.3.5';
       if (binary === 'codex') return 'codex-cli 0.161.0';
       return '0.0.0';
     },
@@ -229,8 +238,8 @@ describe('what the captures show', () => {
     expect(extractFolder(codexExtract, codexFolder)).toBe('<untrusted-scratch-directory-placeholder-sandbox>/codex');
     expect(extractFolder(codexExtract, codexWide)).toBe('<untrusted-scratch-directory-placeholder-sandbox>/codex');
     expect(extractFolder(codexExtract, codexRepo)).toBeNull();
-    expect(extractFolder(cursorRecord.extract, cursorTrust)).toBe('<untrusted-directory>');
-    expect(extractFolder(agyRecord.extract, agyTrust)).toBe('<project-worktree>');
+    expect(extractFolder(cursorRecord.extract, cursorTrust)).toBe('<workspace>');
+    expect(extractFolder(agyRecord.extract, agyTrust)).toBe('<workspace>');
     expect(labelMatches(cursorRecord, cursorTrust)).toBe(true);
     expect(labelMatches(agyRecord, agyTrust)).toBe(true);
     expect(agyTrust).toContain('> Yes, I trust this folder');
@@ -337,18 +346,17 @@ describe('version matching', () => {
 
   test('every shipped trust record is spelled as its CLI prints its version', () => {
     // A trust record sends a key, so each names one captured version, spelled as that CLI
-    // prints it. Codex ships none: its folder-trust captures record Escape and no answer, and
-    // no capture records `codex --version` at 0.157.0 (test/fixtures/codex/0.157.0/README.md).
+    // prints it. Three captures whose dialog was only ever dismissed ship no record:
+    // codex 0.157.0 (no capture records `codex --version` at 0.157.0), cursor
+    // 2026.10.01-14929f9 and antigravity 1.2.16 (both READMEs record Escape and no answer).
     expect(profileFor('codex')?.answers).toEqual([]);
     // The rest: cursor-agent prints its build string bare (the 2026.10.14 and 2026.10.16
     // READMEs record that print), and `agy --version` prints the bare version.
     const spelled = ['cursor', 'antigravity'].flatMap((cli) =>
       (profileFor(cli)?.answers ?? []).map((record) => `${cli} ${record.from} -> ${record.to}`));
     expect(spelled).toEqual([
-      'cursor 2026.10.01-14929f9 -> 2026.10.01-14929f9',
       'cursor 2026.10.14-0f9edde -> 2026.10.14-0f9edde',
       'cursor 2026.10.16-e3cb207 -> 2026.10.16-e3cb207',
-      'antigravity 1.2.16 -> 1.2.16',
       'antigravity 1.3.5 -> 1.3.5',
       'antigravity 1.4.0 -> 1.4.0',
       'antigravity 1.4.1 -> 1.4.1',
@@ -376,7 +384,7 @@ describe('team answer', () => {
     await approve(root, home);
     // The pane shows a trust dialog and herdr names the agent: without the mark every check
     // below would pass and the key would be pressed.
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(io.out).toBe('');
@@ -394,7 +402,7 @@ describe('team answer', () => {
       await approve(root, home);
       wait(dir, 'lead');
       const source = cli === 'cursor' ? cursorTrust : agyTrust;
-      const token = cli === 'cursor' ? '<untrusted-directory>' : '<project-worktree>';
+      const token = '<workspace>';
       const host = fake(home, root, withPath(source, token, lobby), cli);
       const boxed = cli === 'cursor' ? cursorBox : agyBox;
       // The sanity the fake's box builder has to prove: a one-line text — the only shape the
@@ -436,7 +444,7 @@ describe('team answer', () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
-    const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
+    const trust = withPath(cursorTrust, '<workspace>', lobby);
 
     // The ordering the reviewer's crash probe needed: at the moment the host is asked
     // for the key, the state already reads recovery.
@@ -480,7 +488,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
+    const trust = withPath(cursorTrust, '<workspace>', lobby);
     const thrown = fake(home, root, trust, 'cursor');
     thrown.sendKey = () => { throw new Error('herdr died'); };
     const io = testIo(root, { kind: 'owner' });
@@ -513,7 +521,7 @@ describe('team answer', () => {
     // did not make — and the refusal is past the key. The seat stays in the recovery state the
     // key's send recorded, never `ready`, and the owner runs `answer` again once it is repaired.
     mkdirSync(join(storePath('acme', root, home), 'rules', 'lead.md'), { recursive: true, mode: 0o700 });
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual(['a']);
@@ -537,7 +545,7 @@ describe('team answer', () => {
     await approve(root, spaced);
     grantTrust(root, spaced);
     wait(dir, 'lead');
-    const host = fake(spaced, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(spaced, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual(['a']);
@@ -554,7 +562,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     // The paste renders with one character changed: the box never reads back as the line, so
     // Enter is not pressed. The line this run typed is cleared with the profile's key, and
     // the seat stays in the recovery the trust key recorded.
@@ -574,7 +582,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const path = rulesFilePath('acme', root, home, 'lead') as string;
     // The box takes the line whole — and in the same moment other bytes land in the file.
     // The box reads back as the line, Enter is one call away, and the last look before it
@@ -596,7 +604,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     // The key lands and the seat goes straight into a turn: its screen shows the idle
     // prompt, its status says working, and the delivery refuses to type into a seat
     // mid-turn — the key is sent, the line never typed, and the seat keeps the recovery
@@ -618,7 +626,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const calls: string[] = [];
     for (const name of ['standing', 'agents', 'version', 'pane', 'foregroundCwd', 'list', 'sendKey', 'rename', 'foreground', 'status', 'type', 'enter'] as const) {
       const inner = (host as unknown as Record<string, (...args: unknown[]) => unknown>)[name];
@@ -640,20 +648,20 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     const cases: { name: string; screen: string; version?: string; waiting?: Record<string, unknown>; message: string; versions?: number }[] = [];
-    const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
-    const parent = withPath(cursorTrust, '<untrusted-directory>', join(home, '.config', 'team'));
-    const child = withPath(cursorTrust, '<untrusted-directory>', join(lobby, 'child'));
-    const sibling = withPath(cursorTrust, '<untrusted-directory>', join(home, '.config', 'team', 'other'));
+    const trust = withPath(cursorTrust, '<workspace>', lobby);
+    const parent = withPath(cursorTrust, '<workspace>', join(home, '.config', 'team'));
+    const child = withPath(cursorTrust, '<workspace>', join(lobby, 'child'));
+    const sibling = withPath(cursorTrust, '<workspace>', join(home, '.config', 'team', 'other'));
     symlinkSync(lobby, join(home, '.config', 'team', 'link'));
-    const linked = withPath(cursorTrust, '<untrusted-directory>', join(home, '.config', 'team', 'link'));
+    const linked = withPath(cursorTrust, '<workspace>', join(home, '.config', 'team', 'link'));
     const two = trust.replace(lobby, `${lobby}\n│    ${lobby}                      │`);
-    const none = cursorTrust.replace(/.*<untrusted-directory>.*\n/, '');
+    const none = cursorTrust.replace(/.*<workspace>.*\n/, '');
     const label = trust.replace('[a] Trust this workspace', '[a] Trust this workspacX');
     cases.push(
       { name: 'label', screen: label, message: 'lead: the pane is not the trust dialog' },
-      { name: 'trailing slash', screen: withPath(cursorTrust, '<untrusted-directory>', `${lobby}/`), message: 'lead: the dialog does not show the lobby as written: the owner answers it through team up' },
-      { name: 'double slash', screen: withPath(cursorTrust, '<untrusted-directory>', lobby.replace('/team/', '//team/')), message: 'lead: the dialog does not show the lobby as written: the owner answers it through team up' },
-      { name: 'dot segment', screen: withPath(cursorTrust, '<untrusted-directory>', lobby.replace('/team/', '/./team/')), message: 'lead: the dialog does not show the lobby as written: the owner answers it through team up' },
+      { name: 'trailing slash', screen: withPath(cursorTrust, '<workspace>', `${lobby}/`), message: 'lead: the dialog does not show the lobby as written: the owner answers it through team up' },
+      { name: 'double slash', screen: withPath(cursorTrust, '<workspace>', lobby.replace('/team/', '//team/')), message: 'lead: the dialog does not show the lobby as written: the owner answers it through team up' },
+      { name: 'dot segment', screen: withPath(cursorTrust, '<workspace>', lobby.replace('/team/', '/./team/')), message: 'lead: the dialog does not show the lobby as written: the owner answers it through team up' },
       { name: 'two paths', screen: two, message: 'lead: the dialog does not show exactly one folder' },
       { name: 'no path', screen: none, message: 'lead: the dialog does not show exactly one folder' },
       { name: 'parent', screen: parent, message: 'lead: ask the owner to add this exact folder to trust and answer through team up' },
@@ -709,7 +717,7 @@ describe('team answer', () => {
     wait(dir, 'lead');
     const old = join(root, 'worktrees', 'acme', '.lobby');
     mkdirSync(old, { recursive: true });
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', old), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', old), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);
@@ -736,7 +744,7 @@ describe('team answer', () => {
           worktrees: {},
         };
       });
-      const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
+      const trust = withPath(cursorTrust, '<workspace>', lobby);
       const host = fake(home, root, trust, 'cursor');
       return { root, home, lobby, dir, trust, host };
     }
@@ -1136,7 +1144,7 @@ describe('team answer', () => {
           worktrees: {},
         };
       });
-      const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+      const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
       const sent: string[] = [];
       const orig = host.sendKey.bind(host);
       host.sendKey = (session, pane, key) => {
@@ -1155,7 +1163,7 @@ describe('team answer', () => {
       writeFileSync(join(dir, 'team.yaml'), file(lobby));
       await approve(root, home);
       wait(dir, 'lead');
-      const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+      const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
       host.agents = () => [
         { name: 'lead', pane: 'w1:p1', workspace: 'w1' },
         { name: 'lead', pane: 'w1:p2', workspace: 'w1' },
@@ -1183,7 +1191,7 @@ describe('team answer', () => {
           worktrees: {},
         };
       });
-      const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+      const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
       host.agents = () => [{ name: 'extra', pane: 'w1:p4', workspace: 'w1' }];
       const io = testIo(root, { kind: 'owner' });
       expect(await runAnswer([...FILE, 'extra', 'trust'], io, host)).toBe(1);
@@ -1201,7 +1209,7 @@ describe('team answer', () => {
     // The reviewer's case probe: on a case-insensitive volume the path lands on the
     // lobby and is a wrong spelling; on a case-sensitive one it is a folder outside
     // the lobby. The reading that sends less refuses either.
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby.toUpperCase()), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby.toUpperCase()), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);
@@ -1227,7 +1235,7 @@ describe('team answer', () => {
       writeFileSync(join(dir, 'team.yaml'), file(lobby, cli));
       await approve(root, home);
       const source = cli === 'cursor' ? cursorTrust : agyTrust;
-      const token = cli === 'cursor' ? '<untrusted-directory>' : '<project-worktree>';
+      const token = '<workspace>';
       wait(dir, 'lead');
       const host = fake(home, root, withPath(source, token, hidden), cli);
       host.foregroundCwd = () => hidden;
@@ -1243,7 +1251,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const plain = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const plain = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const done = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], done, plain)).toBe(0);
     expect(plain.keys).toEqual(['a']);
@@ -1254,7 +1262,7 @@ describe('team answer', () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
-    const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
+    const trust = withPath(cursorTrust, '<workspace>', lobby);
 
     // The pane reports the lobby-plus-space folder — one the owner may have deleted after
     // the CLI started there — while the dialog's row trims to the lobby: the byte equality
@@ -1292,7 +1300,7 @@ describe('team answer', () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
-    const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
+    const trust = withPath(cursorTrust, '<workspace>', lobby);
     // The screen shows the lobby exactly and the pane is in it; the name beside it still
     // refuses — it is the folder the row's trimmed end could have hidden — whatever
     // whitespace follows the lobby's name.
@@ -1322,7 +1330,7 @@ describe('team answer', () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby, 'antigravity'));
     await approve(root, home);
-    const trust = withPath(agyTrust, '<project-worktree>', lobby);
+    const trust = withPath(agyTrust, '<workspace>', lobby);
     for (const screen of [trust.replace('> Yes, I trust this folder', '  Yes, I trust this folder'), trust.replace('enter Confirm', 'enter ConfirX')]) {
       wait(dir, 'lead');
       const host = fake(home, root, screen, 'antigravity');
@@ -1360,7 +1368,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const policy = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const policy = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const policyIo = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], policyIo, policy)).toBe(1);
     expect(policy.keys).toEqual([]);
@@ -1377,7 +1385,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const seat = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const seat = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const seatIo = testIo(root, { kind: 'seat', name: 'helper', pane: 'w1:p2' });
     expect(await runAnswer(['lead', 'trust'], seatIo, seat)).toBe(1);
     expect(seat.keys).toEqual([]);
@@ -1388,12 +1396,35 @@ describe('team answer', () => {
     expect(lost.err).toBe('its parent processes can\'t be read to the top\n');
   });
 
+  test('the versions whose trust dialog no capture answered are refused, never pressed', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby));
+    await approve(root, home);
+    wait(dir, 'lead');
+    const older = fake(home, root, withPath(cursorUnansweredTrust, '<untrusted-directory>', lobby), 'cursor');
+    older.version = () => '2026.10.01-14929f9';
+    const olderIo = testIo(root, { kind: 'owner' });
+    expect(await runAnswer([...FILE, 'lead', 'trust'], olderIo, older)).toBe(1);
+    expect(older.keys).toEqual([]);
+    expect(olderIo.err).toBe('lead: this version has no trust answer\n');
+
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, 'antigravity'));
+    await approve(root, home);
+    wait(dir, 'lead');
+    const agy = fake(home, root, withPath(agyUnansweredTrust, '<project-worktree>', lobby), 'antigravity');
+    agy.version = () => '1.2.16';
+    const agyIo = testIo(root, { kind: 'owner' });
+    expect(await runAnswer([...FILE, 'lead', 'trust'], agyIo, agy)).toBe(1);
+    expect(agy.keys).toEqual([]);
+    expect(agyIo.err).toBe('lead: this version has no trust answer\n');
+  });
+
   test('a revocation ends trust answering at the next dialog', async () => {
     const { root, home, lobby, dir } = world();
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const io = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
     expect(await runAnswer(['lead', 'trust'], io, host)).toBe(0);
     expect(host.keys).toEqual(['a']);
@@ -1402,7 +1433,7 @@ describe('team answer', () => {
     // restart and no file edit in between.
     revokeTrust(home);
     wait(dir, 'lead');
-    const after = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const after = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const again = testIo(root, { kind: 'seat', name: 'lead', pane: 'w1:p1', session: 'acme' });
     expect(await runAnswer(['lead', 'trust'], again, after)).toBe(1);
     expect(after.keys).toEqual([]);
@@ -1415,7 +1446,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
 
     // A seat that is not the coordinator logs by its own name, never as the owner or a class.
     const seat = testIo(root, { kind: 'seat', name: 'helper', pane: 'w1:p2' });
@@ -1442,7 +1473,7 @@ describe('team answer', () => {
     wait(dir, 'lead');
     // No approval on this machine: trust answering is the grant's to give, not an approval's,
     // so the dialog is answered on a machine that never approved the file.
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(0);
     expect(host.keys).toEqual(['a']);
@@ -1450,7 +1481,7 @@ describe('team answer', () => {
 
     await approve(root, home);
     wait(dir, 'lead');
-    const hanging = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const hanging = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     let release = () => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let held = false;
@@ -1473,7 +1504,7 @@ describe('team answer', () => {
     for (let i = 0; i < 50 && !held; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(hanging.keys).toEqual(['a']);
     const second = testIo(root, { kind: 'owner' });
-    const other = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const other = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     expect(await runAnswer([...FILE, 'lead', 'trust'], second, other)).toBe(1);
     expect(other.keys).toEqual([]);
     expect(second.err).toBe('lead: another command holds it\n');
@@ -1546,7 +1577,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby).replace(`trust:\n  - ${lobby}\n  - ${root}`, 'trust:\n  - .'));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], io, host)).toBe(1);
     expect(host.keys).toEqual([]);
@@ -1555,7 +1586,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const refused = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const refused = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     refused.sendKey = () => false;
     const refusedIo = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, 'lead', 'trust'], refusedIo, refused)).toBe(1);
@@ -1571,7 +1602,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const host = fake(home, root, withPath(cursorTrust, '<untrusted-directory>', lobby), 'cursor');
+    const host = fake(home, root, withPath(cursorTrust, '<workspace>', lobby), 'cursor');
     const io = testIo(root, { kind: 'owner' });
     expect(await runAnswer([...FILE, '--json', 'lead', 'trust'], io, host)).toBe(0);
     expect(io.err).toBe('');
@@ -1614,7 +1645,7 @@ describe('team answer', () => {
     writeFileSync(join(dir, 'team.yaml'), file(lobby));
     await approve(root, home);
     wait(dir, 'lead');
-    const trust = withPath(cursorTrust, '<untrusted-directory>', lobby);
+    const trust = withPath(cursorTrust, '<workspace>', lobby);
     const live: Live = {
       running: true,
       agents: [{ name: 'lead', agent: 'cursor', pane: 'w1:p1', workspace: 'w1', status: 'idle', cwd: null }],
