@@ -196,7 +196,9 @@ for (const json of [false, true]) {
     }, { home: fixture.home, program: fixture.program, service: fixture.manager, health: fixture.health, sleep: fixture.healthSleep });
 
     expect(code).toBe(1);
-    expect(fixture.events.some((event) => event.unit.includes(key) && event.unit.includes(grant))).toBe(true);
+    // The grant and key admitted the install; neither is ever written into a unit it offers.
+    expect(fixture.events.some((event) => event.unit.includes(key) || event.unit.includes(grant))).toBe(false);
+    expect(fixture.events.every((event) => !event.unit.includes('--general') && !event.unit.includes('--key'))).toBe(true);
     const output = io.out + io.err;
     expect(output).not.toContain(keyMaterial);
     expect(output).not.toContain(grantContents);
