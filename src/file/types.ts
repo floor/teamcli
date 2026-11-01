@@ -63,6 +63,17 @@ export type SeatReach = {
   guardDir?: string;
 };
 
+/**
+ * The seat's webhook delivery adapter, when the file writes one: a routine that takes every
+ * accepted signed message for the seat. The two values live in files, never in the record — the
+ * record holds the two absolute paths and nothing that authenticates. Reading the files at POST
+ * time keeps a rotated URL or secret working without rewriting the team file.
+ */
+export type SeatWebhook = {
+  urlFile: string;
+  secretFile: string;
+};
+
 export type Seat = {
   role: string;
   name: string;
@@ -138,6 +149,13 @@ export type Seat = {
    * keeps the digest it had.
    */
   inbound?: CrossSessionInbound;
+  /**
+   * The seat's webhook delivery adapter, when the file writes one: the routine every accepted
+   * signed message for the seat is POSTed to, with the drop file kept as the backup. Its two
+   * paths are fields of the built seat like every other, so writing one is a change the owner
+   * approves, and a file that writes none keeps the digest it had.
+   */
+  webhook?: SeatWebhook;
   /** The seat's reach grant, when the file writes one. Absent means not reachable — unchanged. */
   reach?: SeatReach;
   /**

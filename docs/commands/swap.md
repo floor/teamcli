@@ -76,7 +76,8 @@ workspace from the new declaration. The conversation resumes when the CLI stays 
 sessions and a session id is recorded; otherwise the new conversation reads the handover already
 written at the path the record names — nothing is typed into the old conversation to ask for one.
 Once the pane is ready the run reads the model back: the profile's own reading first, then the
-launch wrapper's `· API Usage Billing` banner. A screen that
+launch wrapper's `· API Usage Billing` id, read only on the model line under the CLI's welcome
+header — a pane with no header, or with more than one, names no current model. A screen that
 shows neither is reported as `read-back: unread`, and unread never claims a match. The record is
 removed once the pane is ready, the file's declaration was written and the read-back agrees or is
 unread; a declaration write that failed or a different model is reported as a failed swap, and the

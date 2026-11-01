@@ -63,7 +63,7 @@ import { reachProjectionNote, writeReachProjection } from '../reach/projection.t
 import { registerEnd, registerLaunch } from '../registry/sync.ts';
 import { beginSession } from '../sessions/registry.ts';
 import { refreshAgentAddress } from '../send/address.ts';
-import { senderNameModeFor, sessionDisplayName } from '../send/names.ts';
+import { seatSessionName, senderNameModeFor } from '../send/names.ts';
 import { teamIdOf } from '../registry/teams.ts';
 import { emptySession, mintSeatId, readState, updateState, withLock, type SeatState, type SessionState } from '../state.ts';
 import { approvalStanding, recordLedger, storePath, type Ceilings, type Standing } from '../store/store.ts';
@@ -746,6 +746,10 @@ export async function runAdd(argv: string[], io: Io, sources: AddSources = realS
     // exit: add.placed
     return 1;
   }
+  // Nothing here is held to the entity's `names.unique` word: an add never sets a new nickname.
+  // A plain `team add` writes `label: <name>`, the seat's own name, and a copy repeats the
+  // source's `nickname:` line, which the file's own check refuses as a duplicate above (exit 2)
+  // before this point. A team file's own wording is the only nickname an add can bring.
   // The session this run addresses — `--session`, or the caller's own placement — reads its own
   // recorded lobby, which is the file's own unless the run names another.
   const runTeam = { ...prepared.team, session };
@@ -1382,12 +1386,11 @@ function seatPlan(
     ...(seat.human ? { human: true as const } : {}),
     // An option seat's launch line and a message seat's rules file both come from the live file.
     rules: rulesOf(team, seat, root, undefined, origin),
-    sessionName: sessionDisplayName({
-      seat: seat.name,
-      nickname: seat.nickname ?? null,
+    sessionName: seatSessionName(seat, {
       team: teamIdOf(root),
       teamName: team.project,
       mode: senderNameModeFor({ home, root, seat: seat.name, file: team }),
+      seats: team.seats,
     }),
     ...seatDeliveryOf(standing, team, seat, root, home, true, origin),
     ...(start.lobby ? { lobby: true } : {}),

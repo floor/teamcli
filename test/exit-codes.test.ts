@@ -16,7 +16,7 @@ import type { Caller } from '../src/caller.ts';
 import type { CheckSources } from '../src/check/team.ts';
 import { clientKeyDir, newClientKeyPair, writeClientGrant, writeClientKeyFiles } from '../src/client/records.ts';
 import { runAdd, type AddSources } from '../src/commands/add.ts';
-import { runAnswer, type AnswerHost } from '../src/commands/answer.ts';
+import { runAnswer, type AnswerHost, type PaneReading } from '../src/commands/answer.ts';
 import { runArchive, writeArchive } from '../src/commands/archive.ts';
 import { runAskShow } from '../src/commands/ask-show.ts';
 import { runApprove, type ApproveSources, type Waiting } from '../src/approve/command.ts';
@@ -38,6 +38,7 @@ import { writeDaemonState, type DaemonRootState } from '../src/daemon/state.ts';
 import runPresenceHook from '../src/daemon/presence/hook.ts';
 import type { ServiceManager } from '../src/daemon/service.ts';
 import type { HostedWatchState } from '../src/watch/hosted.ts';
+import type { StatusSource } from '../src/watch/status-events.ts';
 import { check, loadConfig, type LoadConfig } from '../src/commands/check.ts';
 import { runClient } from '../src/commands/client.ts';
 import { issueOwnerGeneralGrant } from '../src/client/general-grant.ts';
@@ -69,6 +70,7 @@ import { runOwnerSeat } from '../src/commands/owner-seat.ts';
 import { runRevoke } from '../src/commands/revoke.ts';
 import { runNext } from '../src/commands/next.ts';
 import { runPause } from '../src/commands/pause.ts';
+import { runPeek, type PeekSources } from '../src/commands/peek.ts';
 import { runPlan } from '../src/commands/plan.ts';
 import { runQueue } from '../src/commands/queue.ts';
 import { runPolicy } from '../src/commands/policy.ts';
@@ -101,6 +103,7 @@ import { planConfigSet, writeConfigSet } from '../src/config/sources.ts';
 import { delegateGate, type DelegateSources } from '../src/delegate.ts';
 import { listFolder } from '../src/file/landing.ts';
 import { findRoot, loadTeamFile } from '../src/file/load.ts';
+import { validateTeamFile } from '../src/file/validate.ts';
 import { runMcpServe } from '../src/mcp/serve.ts';
 import { grantGate, type GrantSources } from '../src/grant.ts';
 import { defaultFs, lobbyDir } from '../src/lobby/gate.ts';
@@ -117,6 +120,9 @@ import { agentsDir, registerAgent } from '../src/registry/agents.ts';
 import { projectsFile, ProjectsError } from '../src/registry/projects.ts';
 import { teamIdOf, teamsFile, upsertTeam } from '../src/registry/teams.ts';
 import { emptySession, updateState } from '../src/state.ts';
+import { profileFor } from '../src/profiles/index.ts';
+import type { Profile } from '../src/profiles/profile.ts';
+import type { QuestionAnswerRecord } from '../src/profiles/question-answer.ts';
 import type { Live } from '../src/status/compare.ts';
 import { installKey, keyOf, MESSAGE_DOMAIN, messageKeyOf, signDomain } from '../src/store/keys.ts';
 import { approvalStanding, storePath, writeApproval, type Standing } from '../src/store/store.ts';
@@ -182,6 +188,32 @@ workspace:
   mode: shared
 seats:
 ${LEAD}${WORKER}`;
+
+/** The same team, of the `floor` entity: a nickname check reads the entity entry the file names. */
+const FLOOR = TEAM.replace('project: acme\n', 'project: acme\nentity: floor\n');
+
+/** A seat whose written label names a person: the nickname another team's seat holds. */
+const CICERO = `  - role: implementer
+    name: reviewer
+    nickname: Cicero
+    label: Cicero · implementer
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+`;
+
+/** A second team of the same entity, its seat already carrying Cicero. */
+const SITE = `format: 1
+project: site
+entity: floor
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}${CICERO}`;
 
 const BUDGET = `format: 1
 project: acme
@@ -274,6 +306,35 @@ function layout(repo: boolean): Place {
 
 function write(place: Place, text: string): void {
   writeFileSync(place.file, text);
+}
+
+/** A home where `floor` holds seat nicknames across the entity, and a registered `site` team of
+ *  that entity already carries Cicero: the state a newly set nickname is refused from. The
+ *  registry and its stored text are the scene's own, under its temp home. */
+function floorHoldingCicero(place: Place): void {
+  const entities = join(place.home, '.config', 'team', 'entities.yaml');
+  mkdirSync(dirname(entities), { recursive: true });
+  writeFileSync(entities, `floor:\n  roots:\n    - ${place.base}\n  names:\n    unique: entity\n`);
+  const root = join(place.base, 'site');
+  mkdirSync(join(root, '.agents'), { recursive: true });
+  git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, '.agents', 'team.yaml'), SITE);
+  intoRegistry(root, place.home);
+  const parsed = validateTeamFile(SITE);
+  if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+  // The record `team up` writes: the index the nickname scan reads, beside the stored text.
+  upsertTeam(place.home, teamIdOf(root), {
+    project: parsed.team.project,
+    session: parsed.team.session,
+    root,
+    entity: parsed.team.entity ?? null,
+    roster: parsed.team.seats.map((seat, at) => ({
+      agent: `agt_${String(at + 1).padStart(12, '0')}`,
+      seat: seat.name,
+      role: seat.role,
+    })),
+    at: NOW.toISOString(),
+  });
 }
 
 function approve(place: Place, text: string): void {
@@ -1925,6 +1986,23 @@ scene('init.restored-archive', async (place) => {
   const dir = archiveIn(place, readFileSync(new URL('./fixtures/example.yaml', import.meta.url), 'utf8'));
   return show(await initial(place, ['--from-archive', dir]), 'from an archive');
 });
+scene('init.name-taken', async (place) => {
+  // Every nickname the archive's file carries is newly set here: one another team of the entity
+  // already holds refuses the whole run, before anything is written.
+  floorHoldingCicero(place);
+  const dir = archiveIn(place, `format: 1
+project: newteam
+entity: floor
+coordinator: lead
+operator: lead
+workspace:
+  mode: shared
+seats:
+${LEAD}${CICERO}`);
+  const ran = show(await initial(place, ['--from-archive', dir]), 'seat nicknames are unique across entity "floor"');
+  expect(existsSync(place.file), 'nothing written').toBe(false);
+  return ran;
+});
 scene('init.skeleton', async (place) => {
   const root = join(place.base, 'a b');
   mkdirSync(root);
@@ -2506,6 +2584,79 @@ scene('seats.not-yours', async (place) => {
   scene('config.written', async (place) => {
     write(place, TEAM);
     return show(await recordRun(place, ['set', 'seats.lead.label', 'boss']), 'set seats.lead.label');
+  });
+  scene('config.name-taken', async (place) => {
+    // The label names a person another team of the entity holds: refused before the record is
+    // touched, so the file still reads as it did.
+    write(place, FLOOR);
+    floorHoldingCicero(place);
+    const ran = show(
+      await recordRun(place, ['set', 'seats.lead.label', 'Cicero · coordinator']),
+      'seat nicknames are unique across entity "floor"',
+    );
+    expect(readFileSync(place.file, 'utf8'), 'nothing written').toBe(FLOOR);
+    return ran;
+  });
+
+  /** The owner's entities file in the place's home: `floor` writes the word, `material` has no
+   *  `names` map, and nothing else does. */
+  function entities(place: Place, word = 'project'): string {
+    const file = join(place.home, '.config', 'team', 'entities.yaml');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `floor:\n  roots:\n    - ~/Code\n  names:\n    unique: ${word}\nmaterial:\n  roots:\n    - ~/Work\n`);
+    return file;
+  }
+  async function entityRun(place: Place, argv: readonly string[], caller: Caller = owner): Promise<Ran> {
+    const io = testIo(place.root, caller);
+    return { code: await runConfig([...argv], io, { home: place.home, now: () => NOW }), out: io.out, err: io.err };
+  }
+  scene('config.entity.unchanged', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'project']), 'nothing changed');
+  });
+  scene('config.entity.value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['get', 'floor.names.unique']), 'project');
+  });
+  scene('config.entity.written', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'team']), 'set floor.names.unique');
+  });
+  scene('config.entity.detached', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], detachedCaller), 'terminal');
+  });
+  scene('config.entity.general-refused', async (place) => {
+    entities(place);
+    return show(
+      await entityRun(place, ['set', 'floor.names.unique', 'off', '--general', join(place.home, 'gg.json'), '--key', join(place.home, 'k')], detachedCaller),
+      'cannot be read as a general grant',
+    );
+  });
+  scene('config.entity.names-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'everywhere']), 'is not a names.unique word');
+  });
+  scene('config.entity.no-value', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['get', 'material.names.unique']), 'writes no names.unique');
+  });
+  scene('config.entity.not-owner', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off'], other), "only the owner, or a seat holding the owner's general grant");
+  });
+  scene('config.entity.path', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'omega.names.unique', 'off']), 'no entry for entity "omega"');
+  });
+  scene('config.entity.unreadable', async (place) => {
+    entities(place);
+    writeFileSync(join(place.home, '.config', 'team', 'entities.yaml'), 'floor:\n\troots: x\n');
+    return show(await entityRun(place, ['set', 'floor.names.unique', 'off']), 'a tab in the indentation');
+  });
+  scene('config.entity.usage', async (place) => {
+    entities(place);
+    return show(await entityRun(place, ['set', 'floor.names.unique']), 'a value is required');
   });
 }
 
@@ -3378,8 +3529,8 @@ scene('team.command-threw', async (place) => {
   return show(await entry(['init'], testIo(root, owner)), 'team:');
 });
 
-const CURSOR_TRUST = readFileSync(new URL('./fixtures/cursor/2026.10.01/trust.txt', import.meta.url), 'utf8');
-const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.01/idle.txt', import.meta.url), 'utf8');
+const CURSOR_TRUST = readFileSync(new URL('./fixtures/cursor/2026.10.14/trust.txt', import.meta.url), 'utf8');
+const CURSOR_IDLE = readFileSync(new URL('./fixtures/cursor/2026.10.14/idle.txt', import.meta.url), 'utf8');
 
 /** The owner's live grant, the way `team grant @team --capabilities dialogs.trust` writes it. */
 function trustGranted(home: string, root: string): void {
@@ -3417,6 +3568,39 @@ seats:
 `;
 }
 
+/** The same team with a stopped worker: the send path refuses a stopped receiving seat before
+ *  any leg, which is how a dismissal's owed decision line is made to fail. */
+function cursorTeamWithStoppedWorker(lobby: string, root: string, home: string): string {
+  trustGranted(home, root);
+  return `format: 1
+project: acme
+coordinator: lead
+operator: lead
+session: acme
+workspace:
+  mode: shared
+trust:
+  - ${lobby}
+  - ${root}
+seats:
+  - role: coordinator
+    name: lead
+    cli: cursor
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent
+  - role: worker
+    name: worker
+    cli: cursor
+    vendor: test
+    model: Grok
+    version: "4.7"
+    launch: cursor-agent
+    stopped: true
+`;
+}
+
 function cursorBox(text: string): string {
   const lines = text.split('\n');
   const body = [`  → ${lines[0] ?? ''}`, ...lines.slice(1).map((line) => `    ${line}`)].join('\n');
@@ -3429,7 +3613,7 @@ function answerHost(place: Place, screen: string, opts: { version?: string; send
   let status = 'idle';
   const host: AnswerHost & { keys: string[] } = {
     keys: [],
-    version: () => opts.version ?? '2026.10.01-14929f9',
+    version: () => opts.version ?? '2026.10.14-0f9edde',
     agents: () => [{ name: 'lead', pane: 'w1:p1', workspace: 'w1' }],
     pane: () => text,
     sendKey: (_session, _pane, key) => {
@@ -3441,6 +3625,7 @@ function answerHost(place: Place, screen: string, opts: { version?: string; send
     rename: () => true,
     foreground: () => ['cursor-agent'],
     foregroundCwd: () => lobbyDir(place.home),
+    processInfo: () => ({ shell: 400, foreground: [400, 401] }),
     list: (dir) => listFolder(dir),
     status: () => status,
     type: (_session, _pane, value) => {
@@ -3467,7 +3652,38 @@ async function answered(place: Place, argv: string[], caller: Caller, host: Answ
   return { code, out: io.out, err: io.err };
 }
 
-scene('answer.usage', async (place) => show(await answered(place, [], owner, answerHost(place, '')), 'a seat and trust are required'));
+// The version the scene's host prints, so the scene's own record matches it: a record names one
+// printed version exactly, and the capture switch moved the fixture from 2026.10.01-14929f9.
+const QUESTION_VERSION = '2026.10.14-0f9edde';
+const QUESTION_TEXT = 'Which name do you want to use?';
+
+/** The question-answer records a shipped profile does not carry yet: the scene's own, on the
+ *  shipped profile's other fields. The answer seam is the one place a profile's reading and
+ *  records arrive. */
+function questionProfile(records: QuestionAnswerRecord[] = [{ kind: 'question', key: 'escape', from: QUESTION_VERSION, to: QUESTION_VERSION }]) {
+  return (cli: string): Profile | null => {
+    const shipped = profileFor(cli);
+    return shipped ? { ...shipped, questionAnswers: records } : null;
+  };
+}
+
+/** A seat waiting at a question dialog, on the pane the host lists it at. */
+function waitingQuestion(place: Place, seat: string, pane: string): void {
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = {
+      seats: { [seat]: { stage: 'launched', pane, launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'question' } } },
+      worktrees: {},
+    };
+  });
+}
+
+/** One fresh reading of a pane: the kind word the screen shows, the question dialog it reads or
+ *  none, and whether the profile read that block to its end. */
+function questionReading(kind: string, text: string | null, complete = true): PaneReading {
+  return { kind, dialog: text === null ? { dialog: null } : { dialog: 'question', text, complete } };
+}
+
+scene('answer.usage', async (place) => show(await answered(place, [], owner, answerHost(place, '')), 'a seat and trust or question are required'));
 scene('answer.configuration', async (place) => show(await answered(place, ['lead', 'trust', '--file', 'missing.yaml'], owner, answerHost(place, '')), 'no team file'));
 scene('answer.caller', async (place) => {
   const lobby = lobbyDir(place.home);
@@ -3482,6 +3698,18 @@ scene('answer.file-owner', async (place) => {
 scene('answer.human', async (place) => {
   write(place, TWO.replace('    stopped: true\n', '    human: true\n'));
   return show(await answered(place, ['worker', 'trust'], owner, answerHost(place, '')), "worker: the pane is a human's");
+});
+scene('answer.identity', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', waiting: { state: 'waiting-owner', classification: 'question' } } }, worktrees: {} };
+  });
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'launched identity was not recorded');
 });
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);
@@ -3527,7 +3755,7 @@ scene('answer.process', async (place) => {
       worktrees: {},
     };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   const host = answerHost(place, screen);
   host.processInfo = () => ({ shell: 400, foreground: [500] });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, host), 'not the one team launched');
@@ -3590,7 +3818,7 @@ scene('answer.label', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not the trust dialog');
 });
 scene('answer.folder', async (place) => {
@@ -3600,7 +3828,7 @@ scene('answer.folder', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not an exact trust entry');
 });
 scene('answer.recovery', async (place) => {
@@ -3619,8 +3847,82 @@ scene('answer.ready', async (place) => {
   updateState(dirname(place.file), (state) => {
     state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
-  const screen = CURSOR_TRUST.replace('<untrusted-directory>', lobby);
+  const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');
+});
+scene('answer.question', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  host.sendHost = sendHost(place);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'answered question (question)');
+});
+scene('answer.delivery', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeamWithStoppedWorker(lobby, place.root, place.home));
+  waitingQuestion(place, 'worker', 'pane2');
+  const host = answerHost(place, '');
+  host.agents = () => [{ name: 'worker', pane: 'pane2', workspace: 'w1' }];
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', QUESTION_TEXT);
+  host.sendHost = sendHost(place);
+  return show(await answered(place, ['worker', 'question', '--file', place.file], owner, host), 'could not be delivered');
+});
+scene('answer.disagree', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  let reads = 0;
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', reads++ === 0 ? 'First name?' : 'Second name?');
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'do not agree');
+});
+scene('answer.permission', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('permission', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'permission prompt, which is never answered');
+});
+scene('answer.login', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('login', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'login prompt, which is never answered');
+});
+scene('answer.not-a-question', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('idle', null);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'not at a question, plan approval or confirmation dialog');
+});
+scene('answer.incomplete', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  waitingQuestion(place, 'lead', 'pane1');
+  const host = answerHost(place, '');
+  host.profile = questionProfile();
+  host.reading = () => questionReading('question', 'Which name should be used for the file we write, and which folder', false);
+  return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'runs past the rows this version reads');
 });
 
 // These returns are reached when a second validation disagrees with the first, or when no data
@@ -4627,6 +4929,27 @@ scene('daemon.stopped', async (place) =>
     }),
     'team daemon: stopped',
   ));
+scene('daemon.fatal', async (place) =>
+  show(
+    await daemonRan(place, ['run'], owner, {
+      start: async (input) => {
+        // The endpoint supervisor gave up: the run reports the reason and exits non-zero so the
+        // system's service manager starts a fresh daemon instead of reading a stop.
+        input.onFatal?.('the send endpoint could not be kept alive');
+        return {
+          kind: 'serving',
+          daemon: {
+            socketPath: join(place.home, 'daemon.sock'),
+            roots: [],
+            routes: [],
+            health: () => daemonSnapshot,
+            close: async () => {},
+          },
+        };
+      },
+    }),
+    'the send endpoint could not be kept alive',
+  ));
 scene('daemon.uninstalled', async (place) => {
   const service = fakeDaemonService();
   const ran = await daemonRan(place, ['uninstall'], owner, { service });
@@ -4745,6 +5068,69 @@ scene('next.policy', async (place) => {
 `);
   recordLead(place);
   return show(await nexted(place), 'tasks.policy.omit must not name id or title, the record itself');
+});
+
+// `team peek`: the screen comes from a standing-in source, never from a terminal host, and the
+// state records the pane the seat stands on.
+function peekSource(screen: string | null): StatusSource {
+  return {
+    async waitStatus() {
+      return { outcome: 'timeout', at: NOW.getTime() };
+    },
+    screenText: () => screen,
+  };
+}
+
+async function peeked(place: Place, argv: string[], caller: Caller = owner, screen: string | null = 'hello\n'): Promise<Ran> {
+  const io = testIo(place.root, caller);
+  const sources: PeekSources = { home: place.home, now: () => NOW, source: peekSource(screen) };
+  const code = await runPeek(argv, io, sources);
+  return { code, out: io.out, err: io.err };
+}
+
+function recordPeek(place: Place, name: string, pane: string): void {
+  updateState(join(place.root, '.agents'), (state) => {
+    (state.sessions.acme ??= emptySession()).seats[name] = { stage: 'ready', pane };
+  });
+}
+
+const PEEK_HUMAN = TEAM.replace('seats:\n', `seats:
+  - role: implementer
+    name: desk
+    label: desk
+    cli: claude-code
+    vendor: anthropic
+    model: Claude Opus
+    version: "5.5"
+    launch: claude --model claude-opus-5-5
+    human: true
+`);
+
+scene('peek.shown', async (place) => {
+  write(place, TEAM);
+  recordPeek(place, 'lead', 'pane1');
+  const ran = await peeked(place, ['lead']);
+  expect(ran.out).toBe('hello\n');
+  expect(ran.err).toBe('');
+  return ran;
+});
+scene('peek.unknown', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['ghost']), 'no seat named "ghost"');
+});
+scene('peek.owner-pane', async (place) => {
+  write(place, PEEK_HUMAN);
+  return show(await peeked(place, ['desk']), "is the owner's pane");
+});
+scene('peek.file', async (place) => show(await peeked(place, ['lead']), 'no team file'));
+scene('peek.invocation', async (place) => show(await peeked(place, []), 'a <seat> is required'));
+scene('peek.not-yours', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['lead'], other), 'this team is not yours to read');
+});
+scene('peek.no-screen', async (place) => {
+  write(place, TEAM);
+  return show(await peeked(place, ['lead']), 'no screen is readable');
 });
 
 async function planned(place: Place, argv: string[] = [], caller: Caller = leadSeat): Promise<Ran> {
@@ -5280,6 +5666,69 @@ scene('send.configuration', async (place) =>
 scene('send.refused', async (place) => {
   write(place, TWO);
   return show(await sent(place, ['missing', 'hello'], owner, sendHost(place)), 'it is not a declared seat');
+});
+scene('send.grant-invalid', async (place) => {
+  write(place, TEAM);
+  registeredLead(place);
+  // The caller is the file's own lead, placed on the pane the registry records for it: a seat
+  // sends only from the seat its session says it stands in.
+  updateState(join(place.root, '.agents'), (state) => {
+    const session = (state.sessions.acme ??= emptySession());
+    session.seats.lead = { stage: 'launched', workspace: 'w1', pane: leadSeat.pane };
+  });
+  // The team the record's `to` names, registered and laid out the way `up` writes both: the
+  // registry record answers `builder-1@teamcli`, and its folder holds the file the send reads.
+  // The receiver is not that team's lead, so no rule admits the pair: only the grant can.
+  const outsideRoot = join(place.base, 'teamcli');
+  mkdirSync(join(outsideRoot, '.agents'), { recursive: true });
+  writeFileSync(
+    join(outsideRoot, '.agents', 'team.yaml'),
+    `format: 1\nproject: teamcli\ncoordinator: lead\noperator: lead\nworkspace:\n  mode: shared\nseats:\n${LEAD}  - role: builder\n    name: builder-1\n    label: builder-1\n    cli: claude-code\n    vendor: anthropic\n    model: Claude Opus\n    version: "5.5"\n    launch: claude --model claude-opus-5-5\n`,
+  );
+  const outsideBuilder = registerAgent(place.home, {
+    name: 'builder-1',
+    signing: { model: 'Test', version: '1', role: 'builder' },
+    lab: 'test-lab',
+    cli: 'claude-code',
+    launcher: null,
+    launch: 'claude-code --model test',
+    reach: { team: 'teamcli', seat: 'builder-1', session: 'teamcli', pane: 'pane9', address: null },
+    mcp: [],
+    skills: [],
+    lifecycle: 'running',
+    by: 'up',
+  });
+  upsertTeam(place.home, 'teamcli', {
+    project: 'teamcli',
+    entity: 'acme',
+    session: 'teamcli',
+    root: outsideRoot,
+    lobby: lobbyDir(place.home),
+    roster: [{ agent: outsideBuilder.id, seat: 'builder-1', role: 'builder' }],
+    lifecycle: 'running',
+    by: 'test',
+  });
+  // The record the owner wrote before signatures were read: it names the pair and admits nothing,
+  // and the refusal names it and prints the exact line that re-issues it signed.
+  const folder = join(place.home, '.config', 'team', 'grants');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, 'old-grant.yaml'),
+    `send:\n  from: lead@acme\n  to: builder-1@teamcli\nexpires: "2027-06-01T00:00:00.000Z"\n`,
+  );
+  const plain = await sent(place, ['builder-1@teamcli', 'hello'], leadSeat, sendHost(place));
+  expect(plain.code).toBe(1);
+  expect(plain.err).toContain('not signed by the owner');
+  expect(plain.err).toContain('"old-grant"');
+  expect(plain.err).toContain(
+    "team grant --send --from 'lead@acme' --to 'builder-1@teamcli' --expires '2027-06-01T00:00:00.000Z' --name 'old-grant'",
+  );
+  // The same refusal in the structured form, so the id the contract row names is the one a caller
+  // reads off the machine path.
+  const structured = await sent(place, ['builder-1@teamcli', 'hello', '--json'], leadSeat, sendHost(place));
+  expect(structured.code).toBe(1);
+  expect((JSON.parse(structured.out) as { error: { id: string } }).error.id).toBe('send.grant-invalid');
+  return plain;
 });
 scene('send.brief-memory', async (place) => {
   // The fixture's worker is stopped, which is its own refusal; the lead is open, and the

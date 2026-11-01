@@ -10,7 +10,7 @@ import { insideProject, insideTrust, normalize } from '../paths.ts';
 import { hasVersionToken } from '../signature.ts';
 import { seatNumberOf } from '../../seat-names.ts';
 import type { Check } from '../check.ts';
-import type { Mode, Seat, SeatReach } from '../types.ts';
+import type { Mode, Seat, SeatReach, SeatWebhook } from '../types.ts';
 import type { LeadMark, Section } from './section.ts';
 import { valueOf } from './section.ts';
 import type { Budgeted } from './budgets.ts';
@@ -101,6 +101,16 @@ export const seats: Section = {
           enum: [...INBOUND_WORDS],
           $comment: 'the seat accepts cross-session socket frames: accept authorizes the socket leg for any launch; hold and refuse never dial it; with no word, a seat TeamCLI launched is authorized by its launch\'s crossSessionInbound accept, and any other launch still needs accept here',
         },
+        webhook: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            url_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents are the routine\'s URL, read at POST time; the URL itself is never written here, printed or logged' },
+            secret_file: { type: 'string', minLength: 1, $comment: 'absolute; the file whose contents authenticate the POST; it must be owned by the running user and readable by them alone (0600), and neither the path\'s value nor its contents are ever printed or logged' },
+          },
+          required: ['url_file', 'secret_file'],
+          $comment: 'the seat\'s webhook delivery adapter: every accepted signed message for the seat is POSTed to the routine, a 2xx answer is delivered, and the drop file stays as the backup; the two values are named by path, never stored here',
+        },
         count: { type: 'integer', minimum: 1 },
         reach: {
           type: 'object',
@@ -142,7 +152,7 @@ function readSeats(
   for (const item of entry.value.items) {
     const fields = check.fields(item, 'a seat', [
       'role', 'name', 'nickname', 'cli', 'vendor', 'account', 'model_from', 'model', 'version', 'display', 'launch', 'cwd', 'label', 'effort', 'mode',
-      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'inbound', 'reach', 'delivery_order', 'sender_name', 'liveness',
+      'parked', 'stopped', 'count', 'leads', 'assistant', 'human', 'inbound', 'webhook', 'reach', 'delivery_order', 'sender_name', 'liveness',
     ]);
     if (item.kind !== 'map') continue;
     const line = item.line;
@@ -218,6 +228,10 @@ function readSeats(
     // `human`, omitted when the file writes none — every file that writes none keeps the
     // digest it had, and a written word is part of the digest the owner approves.
     const inbound = check.oneOf<CrossSessionInbound>(fields.get('inbound'), `${at}: inbound`, [...INBOUND_WORDS]);
+    // The seat's webhook adapter, when the file writes one. A field of the built seat like
+    // `inbound`, omitted when the file writes none — every file that writes none keeps the
+    // digest it had, and a written one is part of the digest the owner approves.
+    const webhook = readWebhook(fields.get('webhook'), at, check);
     const count = check.whole(fields.get('count'), `${at}: count`, 1) ?? 1;
     if (assistant && count > 1) {
       check.fail(assistantField?.value.line ?? line, `\`assistant\` on "${name}" can't be a seat with count`);
@@ -279,6 +293,8 @@ function readSeats(
         ...(human ? { human: true as const } : {}),
         // Omitted when the file writes no inbound word, for the same reason.
         ...(inbound ? { inbound } : {}),
+        // Omitted when the file configures no webhook adapter, for the same reason.
+        ...(webhook ? { webhook } : {}),
         ...(modelFrom ? { modelFrom } : {}),
         ...(mode ? { mode } : {}),
         ...(reach ? { reach } : {}),
@@ -310,6 +326,19 @@ export function defaultLabel(model: string, version: string): string {
 export function workspaceLabel(seat: { name: string; role: string; label: string; labelWritten?: boolean }): string {
   if (seat.labelWritten) return seat.label;
   return `${seat.name} · ${seat.role}`;
+}
+
+/**
+ * The persona a written label names: the text before its middle dot, trimmed — the name people
+ * call the seat by, and the name the launch gives its session. A written label with no middle dot
+ * is the name whole. A seat whose label the file did not write has none: its stored label is the
+ * model and version, and its workspace title its seat name and role. Display only; the record's
+ * `nickname:` is the address and is kept equal to this word by every config write.
+ */
+export function labelPersona(seat: { label: string; labelWritten?: boolean }): string | null {
+  if (seat.labelWritten !== true) return null;
+  const name = (seat.label.split('·')[0] ?? '').trim();
+  return name === '' ? null : name;
 }
 
 /** Line 2's display_agent: the display, a space, then the effort, or `default` when the file sets
@@ -348,6 +377,38 @@ function readLiveness(entry: YamlEntry | undefined, at: string, check: Check): P
     out[field.key as keyof LivenessThresholds] = value.value;
   }
   return bad || Object.keys(out).length === 0 ? undefined : out;
+}
+
+/** The seat's webhook adapter: two absolute paths, both required. The values they name are
+ *  read at POST time and never enter the record. */
+function readWebhook(entry: YamlEntry | undefined, at: string, check: Check): SeatWebhook | undefined {
+  if (!entry) return undefined;
+  const node = entry.value;
+  if (node.kind !== 'map') {
+    if (!(node.kind === 'scalar' && node.value === null)) {
+      check.fail(node.line, `${at}: webhook must be a map of url_file and secret_file`);
+      return undefined;
+    }
+    check.fail(node.line, `${at}: webhook.url_file is required`);
+    check.fail(node.line, `${at}: webhook.secret_file is required`);
+    return undefined;
+  }
+  const fields = check.fields(node, `${at}: webhook`, ['url_file', 'secret_file']);
+  const urlFile = readWebhookPath(check.required(fields.get('url_file'), `${at}: webhook.url_file`, node.line), `${at}: webhook.url_file`, fields.get('url_file'), check);
+  const secretFile = readWebhookPath(check.required(fields.get('secret_file'), `${at}: webhook.secret_file`, node.line), `${at}: webhook.secret_file`, fields.get('secret_file'), check);
+  if (urlFile === undefined || secretFile === undefined) return undefined;
+  return { urlFile, secretFile };
+}
+
+function readWebhookPath(
+  value: string | undefined, name: string, entry: YamlEntry | undefined, check: Check,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (!isAbsolute(value)) {
+    check.fail(entry?.value.line ?? 0, `${name} must be an absolute path`);
+    return undefined;
+  }
+  return value;
 }
 
 function readEffort(
@@ -471,6 +532,59 @@ export function nicknameProblem(
     }
   }
   return null;
+}
+
+/**
+ * The name each seat goes by, by seat name: the persona its written label names when the
+ * `nickname:` field could hold it, and the record's own `nickname:` field otherwise — null when
+ * the seat carries no name beyond its seat name. A word the field could not hold is display
+ * alone: a space or an accent in a label (a name is letters, digits, ".", "_" and "-"), the
+ * reserved `lead`, and any word another seat's name or `nickname:` already carries stay a
+ * workspace title, never a roster nickname. Every reader of the name — a roster line
+ * (src/registry/sync.ts), each launch name (src/send/names.ts) and the header a message opens
+ * with — reads this one answer, so a label like "Jane Doe · implementer" cannot break the address
+ * that already works, and the record and the label can never name two people.
+ *
+ * Seats are read in file order and one word never names two of them: every seat's name and field
+ * nickname is held from the start, so a label never takes a word the field has already given a
+ * seat, and of two labels naming one word the earlier keeps it and the later keeps its field. A
+ * label that names the seat itself adds no second name — the seat's name is already its own and
+ * unique in the team — so it stands even for the legacy seat named `lead`.
+ */
+export function seatNicknames(
+  seats: ReadonlyArray<{ name: string; nickname?: string; label: string; labelWritten?: boolean }>,
+): Map<string, string | null> {
+  const held = new Set<string>();
+  for (const seat of seats) {
+    held.add(seat.name);
+    if (seat.nickname !== undefined) held.add(seat.nickname);
+  }
+  const out = new Map<string, string | null>();
+  const projected = new Set<string>();
+  for (const seat of seats) {
+    const persona = labelPersona(seat);
+    // Names the field has given another seat: a label's word never takes one.
+    const elsewhere = new Set(held);
+    elsewhere.delete(seat.name);
+    if (seat.nickname !== undefined) elsewhere.delete(seat.nickname);
+    const ownName = persona !== null && persona === seat.name;
+    const usable = persona !== null && SEAT_NAME.test(persona)
+      && (ownName || (persona !== LEAD_NAME && !elsewhere.has(persona) && !projected.has(persona)));
+    const name = usable ? persona : seat.nickname ?? null;
+    out.set(seat.name, name);
+    if (name !== null) projected.add(name);
+  }
+  return out;
+}
+
+/** One seat's name, read by the same rule as `seatNicknames`: the label's persona when the field
+ *  could hold it, else the record's own `nickname:` field. */
+export function seatNickname(
+  seats: ReadonlyArray<{ name: string; nickname?: string; label: string; labelWritten?: boolean }>,
+  seat: { name: string; nickname?: string; label: string; labelWritten?: boolean },
+): string | null {
+  const name = seatNicknames(seats).get(seat.name);
+  return name === undefined ? seat.nickname ?? null : name;
 }
 
 /** One report per nickname: the second seat carrying it, or the seat whose human name an

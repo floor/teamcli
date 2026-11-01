@@ -21,6 +21,8 @@
     "vendor notice",
     "provider error",
     "rate limit",
+    "plan approval",
+    "confirmation",
     "unknown"
   ],
   "cells": {
@@ -46,7 +48,7 @@
         "undocumented": 0
       },
       "question": {
-        "real": 6,
+        "real": 5,
         "constructed": 0,
         "undocumented": 0
       },
@@ -75,6 +77,16 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "plan approval": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "unknown": {
         "real": 5,
         "constructed": 1,
@@ -98,7 +110,7 @@
         "undocumented": 0
       },
       "permission": {
-        "real": 10,
+        "real": 8,
         "constructed": 0,
         "undocumented": 0
       },
@@ -132,8 +144,18 @@
         "constructed": 1,
         "undocumented": 0
       },
+      "plan approval": {
+        "real": 2,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
+        "real": 1,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "unknown": {
-        "real": 4,
+        "real": 3,
         "constructed": 11,
         "undocumented": 0
       }
@@ -160,7 +182,7 @@
         "undocumented": 0
       },
       "question": {
-        "real": 0,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -189,6 +211,16 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "plan approval": {
+        "real": 2,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "unknown": {
         "real": 10,
         "constructed": 4,
@@ -212,7 +244,7 @@
         "undocumented": 0
       },
       "permission": {
-        "real": 3,
+        "real": 2,
         "constructed": 0,
         "undocumented": 0
       },
@@ -243,6 +275,16 @@
       },
       "rate limit": {
         "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "plan approval": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
+        "real": 1,
         "constructed": 0,
         "undocumented": 0
       },
@@ -303,6 +345,16 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "plan approval": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "unknown": {
         "real": 1,
         "constructed": 0,
@@ -356,6 +408,16 @@
         "undocumented": 0
       },
       "rate limit": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "plan approval": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
         "real": 0,
         "constructed": 0,
         "undocumented": 0
@@ -417,6 +479,16 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "plan approval": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "unknown": {
         "real": 0,
         "constructed": 0,
@@ -474,6 +546,16 @@
         "constructed": 0,
         "undocumented": 0
       },
+      "plan approval": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
+      "confirmation": {
+        "real": 0,
+        "constructed": 0,
+        "undocumented": 0
+      },
       "unknown": {
         "real": 0,
         "constructed": 1,
@@ -510,7 +592,7 @@
             "undocumented": 0
           },
           "question": {
-            "real": 2,
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
@@ -536,6 +618,16 @@
           },
           "rate limit": {
             "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
@@ -592,6 +684,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -653,6 +755,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 1,
             "constructed": 0,
@@ -706,6 +818,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -767,6 +889,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 1,
             "constructed": 0,
@@ -798,7 +930,7 @@
             "undocumented": 0
           },
           "permission": {
-            "real": 8,
+            "real": 6,
             "constructed": 0,
             "undocumented": 0
           },
@@ -828,6 +960,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -889,6 +1031,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 1,
             "constructed": 0,
@@ -946,8 +1098,18 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 1,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
-            "real": 2,
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           }
@@ -999,6 +1161,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -1068,6 +1240,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 2,
             "constructed": 2,
@@ -1125,6 +1307,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 7,
             "constructed": 0,
@@ -1153,7 +1345,7 @@
             "undocumented": 0
           },
           "question": {
-            "real": 0,
+            "real": 2,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1178,6 +1370,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 2,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -1213,7 +1415,7 @@
             "undocumented": 0
           },
           "permission": {
-            "real": 1,
+            "real": 0,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1244,6 +1446,16 @@
           },
           "rate limit": {
             "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 1,
             "constructed": 0,
             "undocumented": 0
           },
@@ -1300,6 +1512,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -1361,6 +1583,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 1,
             "constructed": 0,
@@ -1418,6 +1650,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 0,
             "constructed": 0,
@@ -1471,6 +1713,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -1540,6 +1792,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 1,
             "constructed": 0,
@@ -1605,6 +1867,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 2,
             "constructed": 0,
@@ -1658,6 +1930,16 @@
             "undocumented": 0
           },
           "rate limit": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
             "real": 0,
             "constructed": 0,
             "undocumented": 0
@@ -1727,6 +2009,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 0,
             "constructed": 0,
@@ -1792,6 +2084,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 0,
             "constructed": 0,
@@ -1849,6 +2151,16 @@
             "constructed": 0,
             "undocumented": 0
           },
+          "plan approval": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
+          "confirmation": {
+            "real": 0,
+            "constructed": 0,
+            "undocumented": 0
+          },
           "unknown": {
             "real": 0,
             "constructed": 1,
@@ -1872,8 +2184,8 @@
       "unknown": "reason not stated"
     },
     "codex": {
-      "question": "reason not stated",
-      "exit question": "reason not stated"
+      "exit question": "reason not stated",
+      "confirmation": "reason not stated"
     },
     "cursor": {
       "idle": "reason not stated",
@@ -1974,7 +2286,7 @@
     {
       "file": "antigravity/1.2.16/question-unsent-54.txt",
       "cli": "antigravity",
-      "kind": "question",
+      "kind": "confirmation",
       "provenance": "capture"
     },
     {
@@ -2238,13 +2550,13 @@
     {
       "file": "claude-code/2.1.289/permission-plan-wide-ansi.txt",
       "cli": "claude-code",
-      "kind": "permission",
+      "kind": "plan approval",
       "provenance": "capture"
     },
     {
       "file": "claude-code/2.1.289/permission-plan-wide-plain.txt",
       "cli": "claude-code",
-      "kind": "permission",
+      "kind": "plan approval",
       "provenance": "capture"
     },
     {
@@ -2382,7 +2694,7 @@
     {
       "file": "claude-code/2.1.302/held.txt",
       "cli": "claude-code",
-      "kind": "unknown",
+      "kind": "confirmation",
       "provenance": "capture"
     },
     {
@@ -2794,6 +3106,30 @@
       "provenance": "capture"
     },
     {
+      "file": "codex/0.161.0/plan-approval-ansi.txt",
+      "cli": "codex",
+      "kind": "plan approval",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/plan-approval.txt",
+      "cli": "codex",
+      "kind": "plan approval",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question-ansi.txt",
+      "cli": "codex",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
+      "file": "codex/0.161.0/question.txt",
+      "cli": "codex",
+      "kind": "question",
+      "provenance": "capture"
+    },
+    {
       "file": "codex/0.161.0/ready-context-used-bare.txt",
       "cli": "codex",
       "kind": "idle",
@@ -2964,7 +3300,7 @@
     {
       "file": "cursor/2026.10.01/permission-plan.txt",
       "cli": "cursor",
-      "kind": "permission",
+      "kind": "confirmation",
       "provenance": "capture"
     },
     {

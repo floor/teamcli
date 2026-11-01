@@ -39,7 +39,21 @@ import { vendorNoticeRange } from '../watch/screen.ts';
 import type { SessionEndReason } from '../sessions/registry.ts';
 import { endpointCleanupHost } from './endpoint-cleanup.ts';
 
-export type ScreenKind = 'idle' | 'working' | 'permission' | 'trust' | 'question' | 'exit question' | 'vendor notice' | 'provider error' | 'rate limit' | 'unsent' | 'unknown';
+export type ScreenKind =
+  | 'idle'
+  | 'working'
+  | 'permission'
+  | 'plan approval'
+  | 'confirmation'
+  | 'login'
+  | 'trust'
+  | 'question'
+  | 'exit question'
+  | 'vendor notice'
+  | 'provider error'
+  | 'rate limit'
+  | 'unsent'
+  | 'unknown';
 
 /** What a live `up` or `down` can do, apart from deciding it. Tests stand in for all of it. */
 /** What one live exit typing ended in. `true`: the box read back as the typed text and the
@@ -1373,7 +1387,7 @@ export async function executePlan(
         let freshAfterMissing = false;
         let herdrIdleBefore = false;
         const pollMs = IDLE_POLL_MS;
-        let outcome: 'idle' | 'permission' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' = 'timeout';
+        let outcome: 'idle' | 'permission' | 'plan approval' | 'confirmation' | 'login' | 'trust' | 'question' | 'vendor notice' | 'provider error' | 'rate limit' | 'ended' | 'timeout' = 'timeout';
         let last: ScreenKind = 'unknown';
         let endedRead: string | null = null;
         let endedFor = 0;
@@ -1496,7 +1510,7 @@ export async function executePlan(
             outcome = 'idle';
             break;
           }
-          if (kind === 'permission' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
+          if (kind === 'permission' || kind === 'plan approval' || kind === 'confirmation' || kind === 'login' || kind === 'trust' || kind === 'question' || kind === 'vendor notice' || kind === 'provider error' || kind === 'rate limit') {
             outcome = kind;
             break;
           }
@@ -1518,7 +1532,7 @@ export async function executePlan(
           break;
         }
         const workspace = here.workspace ?? places.get(op.seat)?.workspace;
-        if (outcome === 'permission' || outcome === 'trust' || outcome === 'question' || outcome === 'vendor notice' || outcome === 'provider error' || outcome === 'rate limit') {
+        if (outcome === 'permission' || outcome === 'plan approval' || outcome === 'confirmation' || outcome === 'login' || outcome === 'trust' || outcome === 'question' || outcome === 'vendor notice' || outcome === 'provider error' || outcome === 'rate limit') {
           const reading = outcome === 'trust' ? 'trust' : outcome;
           if (host.dialog) {
             // The seat's owner decides what happens next, at their own keyboard. The identity is

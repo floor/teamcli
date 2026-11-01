@@ -6,10 +6,10 @@
 
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { callerLabel, callerOf } from '../caller.ts';
 import { charterGate } from '../charter/check.ts';
-import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, boundWords, createOwnerActionRequest, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
+import { admitOwnerAction, admitOwnerActionByRule, approveOwnerAction, boundWords, canonicalRoot, createOwnerActionRequest, type OwnerAction, type OwnerActionAdmission } from './owner-action.ts';
 import { readOwnerSeat, systemOwnerSeatKeyStore, type OwnerSeatKeyStore } from './owner-seat.ts';
 import { findRoot } from '../file/load.ts';
 import { readTeamConfig } from '../file/team-config.ts';
@@ -119,6 +119,18 @@ export function ownerSeatRuleAdmits(action: OwnerAction, cwd: string, dry: boole
   } catch {
     return false;
   }
+}
+
+/**
+ * The folder an owner-seat `always` rule covers when it admits a caller at `cwd`: the parent of
+ * the canonical repository root, exactly the scope `ruleFor` matches. Null outside a repository.
+ * An action that changes another folder as well as the caller (`init --approval-mode --scope`)
+ * checks its target against this folder: the rule admits its own folder's business and no
+ * folder outside it.
+ */
+export function ownerSeatRuleFolder(cwd: string): string | null {
+  const root = findRoot(cwd);
+  return root === null ? null : dirname(canonicalRoot(root));
 }
 
 /** Presents one owner-action request to the owner seat's Touch ID signer. `why` is null when no

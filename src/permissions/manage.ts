@@ -41,6 +41,7 @@ import {
   type GrantRequest,
   type RevocationRequest,
 } from './grants.ts';
+import { planSendGrant, writeSendGrant } from '../send/grants.ts';
 
 /** A `team grant <seat|@team> --capabilities …` invocation, as far as its flags. */
 export type StandingGrantEdit = {
@@ -177,6 +178,110 @@ export function runStandingGrant(rawIo: Io, edit: StandingGrantEdit, options: Au
     }
     return 'refused';
   }
+}
+
+/** A `team grant --send …` invocation: the pair the record admits, its expiry, and its name. */
+export type SendGrantEdit = { from: string; to: string; expires: string; name?: string };
+
+/**
+ * Writes one owner-signed send grant: the record `team send`'s grant rule reads when it admits a
+ * pair no other rule admits. The same gate as the standing grant — a charter block refuses, and a
+ * caller that is not the owner refuses unless the dev-mode lift applies — because it writes the
+ * same kind of owner-signed authority. The name is the pair's slug (`seat-at-team-to-seat-at-
+ * team`) or `--name`, under the folder's reserved words; the record is signed with the owner's
+ * approval key and written by `writeSendGrant`, never by this layer. A dry run refuses exactly
+ * what a write refuses and prints the one record it would write.
+ */
+export function runSendGrant(rawIo: Io, edit: SendGrantEdit, options: AuthorityEditOptions = {}): AuthorityEditResult {
+  const io = cleanedIo(rawIo);
+  const json = Boolean(options.json);
+  const caller = walkCaller(io);
+  const home = options.home ?? homedir();
+  const gate = charterGate(home, { operation: 'grant', cwd: io.cwd });
+  if (gate.kind === 'block') {
+    if (json) writeJsonError(rawIo, 'grant.refused', plainText(gate.message), `the owner widens the charter with team setup --edit`, 1, 'owner-only');
+    else io.stderr(`team grant: ${gate.message}\n`);
+    return 'refused';
+  }
+  if (gate.kind !== 'admit' && !isOwner(caller)) {
+    const msg = `only the owner runs this, from a terminal outside herdr; this call is ${describeCaller(caller)}`;
+    // The owner's dev-mode admission for exactly this gate.
+    const lift = devModeOwnerLiftAtCwd(rawIo, { command: 'grant', refusal: msg, home: options.home ?? homedir() });
+    if (lift === null || !lift.lifted) {
+      if (json) {
+        writeJsonError(rawIo, 'grant.refused', plainText(msg), 'the owner runs `team grant --send` from a terminal outside herdr', 1, 'owner-only');
+      } else {
+        io.stderr(`team grant: ${msg}\n`);
+      }
+      return 'refused';
+    }
+    io.stderr(`${lift.warning}\n`);
+  }
+  const name = edit.name ?? sendGrantNameOf(edit.from, edit.to);
+  const nameProblem = recordNameProblem(name);
+  if (nameProblem !== null) {
+    if (json) writeJsonError(rawIo, 'grant.invalid', plainText(nameProblem), null);
+    else io.stderr(`team grant: ${nameProblem}\n`);
+    return 'invalid';
+  }
+  const request = { name, from: edit.from, to: edit.to, expires: edit.expires };
+  const plan = planSendGrant(home, request);
+  if (!plan.ok) {
+    if (json) writeJsonError(rawIo, 'grant.invalid', plainText(plan.why), null);
+    else io.stderr(`team grant: ${plan.why}\n`);
+    return 'invalid';
+  }
+  const record = plan.record;
+  if (options.dryRun) {
+    const summary = `grant: would write the send grant ${record.name} from ${record.from} to ${record.to}; expires ${record.expires}`;
+    if (json) {
+      writeJson(rawIo, 'team.grant', {
+        format: 1 as const,
+        dry_run: true,
+        status: 'dry-run',
+        action_summary: summary,
+        target: record.name,
+        plan: [{ step: 'grant', detail: summary, prefix: '+' as const }],
+      });
+    } else {
+      io.stdout(`${summary}\n`);
+    }
+    return 'ok';
+  }
+  const written = writeSendGrant(home, request);
+  if (!written.ok) {
+    if (json) writeJsonError(rawIo, 'grant.invalid', plainText(written.why), null);
+    else io.stderr(`team grant: ${written.why}\n`);
+    return 'invalid';
+  }
+  if (json) {
+    writeJson(rawIo, 'team.grant', {
+      format: 1 as const,
+      dry_run: false,
+      status: 'updated',
+      action_summary: 'grant: updated',
+      target: record.name,
+    });
+  } else {
+    io.stdout('grant: updated\n');
+  }
+  return 'ok';
+}
+
+/** The default name of a send grant: the pair as one slug, `seat-at-team-to-seat-at-team`, with
+ *  the file-name alphabet and the 64-character cap. A pair whose slug empties falls back to a
+ *  fixed word; the writer still checks it against the folder. */
+function sendGrantNameOf(from: string, to: string): string {
+  const slug = (side: string): string =>
+    side
+      .trim()
+      .toLowerCase()
+      .replace(/@/g, '-at-')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  const joined = `${slug(from)}-to-${slug(to)}`.replace(/-+$/g, '');
+  if (joined === '' || joined === '-to-') return 'send-grant';
+  return joined.slice(0, 64).replace(/-+$/g, '') || 'send-grant';
 }
 
 /** Writes the revocation of the standing grant `edit.name`, or explains what a write would do. */

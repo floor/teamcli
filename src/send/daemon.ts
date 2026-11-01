@@ -29,6 +29,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { stage as relayStage } from '../../packages/relay/index.js';
 import { createHostServer } from '../../packages/relay/host/server.js';
+import { seatNickname } from '../file/sections/seats.ts';
 import type { TeamFile } from '../file/types.ts';
 import { readTeamConfig } from '../file/team-config.ts';
 import { agentList, agentStatus, paneProcesses, paneRead, type PaneProcesses } from '../herdr.ts';
@@ -66,7 +67,8 @@ export const DELIVER_WAIT_MS = 15_000;
 export const POLL_READY_MS = 250;
 
 const NOFOLLOW = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
-const DIALOG = new Set(['question', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
+/** The screen kinds a send never types into: the box is the dialog's, and a message waits. */
+const DIALOG = new Set(['question', 'plan approval', 'confirmation', 'permission', 'trust', 'vendor notice', 'provider error', 'rate limit']);
 
 export type DaemonHost = {
   agents(session: string): { name: string; pane: string }[] | null;
@@ -977,7 +979,11 @@ function displayOf(
   const template = request.template
     ?? messageDisplayInForce({ home: host.home, root, team, now: host.now() });
   const declared = team.seats.find((seat) => seat.name === request.from);
-  const name = request.name ?? declared?.nickname ?? request.from;
+  // The caller's own name when it read one, else the name the seat goes by — its written label's
+  // persona when the nickname field could hold it, else the record's nickname
+  // (src/file/sections/seats.ts:seatNicknames) — the same answer the launch and the message
+  // header read.
+  const name = request.name ?? (declared === undefined ? null : seatNickname(team.seats, declared)) ?? request.from;
   const header = renderMessageDisplay(template, {
     name,
     seat: request.from,

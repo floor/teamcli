@@ -1,8 +1,9 @@
 # team config
 
-Two things: the team's own record, read and edited with `get`, `set`, `unset` and `edit` — what
+Three things: the team's own record, read and edited with `get`, `set`, `unset` and `edit` — what
 `.agents/team.yaml` used to hold, before [`team migrate`](migrate.md) moved it into the registry —
-and the settings registry, printed with `keys`.
+one word of the owner's entity record, at `<entity>.names.unique`; and the settings registry,
+printed with `keys`.
 
 ## The team's record: get, set, unset, edit
 
@@ -29,7 +30,7 @@ leaves.
 A record the registry holds is written there (`edited_by: config <verb>`);
 on the legacy `file` source the team file is written instead.
 
-Writes are the owner's, from a terminal outside herdr, as editing the file was; `get` is any
+Writes are the owner's, from a terminal outside a pane, as editing the file was; `get` is any
 caller's. The change is validated by the team-file validator before it is stored; the record it
 stores is the record the team runs.
 
@@ -38,6 +39,38 @@ stores is the record the team runs.
 | a value printed, a change written, or nothing to change | 0 |
 | the path holds nothing (`get`), cannot be set, the caller is not the owner, or the change does not validate | 1 |
 | a bad invocation, no team found, a record that cannot be read, or the editor failed | 2 |
+
+## The entity's record: names.unique
+
+    team config get <entity>.names.unique [--json]
+    team config set <entity>.names.unique <word>
+    team config set <entity>.names.unique <word> --general <grant.json> --key <client.key> [--json]
+
+A path whose last segment is `names.unique` names an entity's own word, not the team's record.
+`<entity>.names.unique` says how far apart seat nicknames stay — `entity` (the default, across
+every team of the entity), `project` (within one project), `team` (within one team) or `off` — and
+lives with the rest of the entity's entry in the owner's entities file
+(`~/.config/team/entities.yaml`). [`team init`](init.md) and the nicknames `team config set` places
+on a seat's label read it. It reads no team, so the form runs outside a checkout, and the entity
+name may itself carry dots (the last segment is the word).
+
+The form edits that one line of an entry the file already declares: it creates no entry, keeps
+every other line (comments included) and writes nothing else; a word outside the four is refused
+with the four named before any file is opened. `get` is any caller's and prints what the entry
+spells — a word the check does not spell is printed as the file has it, with a note on stderr that
+the default is in force.
+
+A set is the owner's, at a terminal, or a seat's under the owner's general grant: 0.5.10 admits a
+wildcard grant only, so one that lists entities is refused until 0.5.11, and the grant's
+operations must admit `config`. The charter is the owner's word for one folder and does not reach
+it. There is no owner-seat request for this word: the grant is the standing answer, and the owner
+sets it directly when no grant admits it.
+
+| Outcome | Exit |
+| --- | --- |
+| the word printed, set, or already written | 0 |
+| the caller is neither the owner nor admitted by the grant, the word is not one of the four, or the file declares no such entry or word | 1 |
+| the invocation is not one of the forms, or the entities file cannot be read | 2 |
 
 ## The settings registry: keys
 

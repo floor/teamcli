@@ -54,8 +54,9 @@ import {
   type EventAppendInput,
   type SignedEventRecord,
 } from './log.ts';
-import { reconcilePass } from './reconcile.ts';
+import { createReconcileState, reconcilePassAsync } from './reconcile.ts';
 import { readEntityOrchestrator, readSeatResolver } from './seats.ts';
+import { makeWebhookDelivery } from './webhook.ts';
 import type { SeatRecipientResolver } from './kinds.ts';
 
 /** The serving bus's process marker, beside its socket. */
@@ -164,11 +165,16 @@ export type StartBusInput = {
   extraPrivilegedKinds?: readonly EventKind[];
   additiveRouting?: Partial<Record<EventKind, readonly string[]>>;
   now?: () => Date;
+  /** The webhook delivery every fanned-out record passes through: the built-in adapter reads
+   *  each seat's configured adapter row, and a caller may inject its own for a scene. */
+  deliver?: (record: SignedEventRecord) => void;
 };
 
 export type BusHandle = {
   close(): Promise<void>;
-  reconcileNow(): SignedEventRecord[];
+  /** The pass in flight, or a new one started now; the pass yields between slices, so a caller
+   *  that does not await it does not stop the bus's own answers. */
+  reconcileNow(): Promise<SignedEventRecord[]>;
 };
 
 export type StartBusResult =
@@ -669,7 +675,12 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     const sockets = new Set<Socket>();
     const subscribers = new Set<LiveSubscriber>();
 
+    // Every fanned-out record also reaches the seat's webhook adapter; it never throws and never
+    // awaits, so a pass or a publish is never failed by a routine.
+    const deliver = input.deliver ?? makeWebhookDelivery({ team: input.team, stderr: input.stderr });
+
     const fanOut = (record: SignedEventRecord): void => {
+      deliver(record);
       for (const sub of subscribers) {
         if (!matchesSubscriber(record, sub.seat, sub.kinds, routingTeam, input.additiveRouting, resolveSeat)) continue;
         if (sub.queue.length >= sub.bufferLimit) {
@@ -695,8 +706,20 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
       }
     };
 
-    const runReconcile = (): SignedEventRecord[] => {
-      const res = reconcilePass({
+    // One cache across this bus's passes. The pass runs in slices and yields between them, so a
+    // large store never blocks the bus's event loop; `reconcileNow` joins a pass already in
+    // flight instead of starting a second one over the same records.
+    const reconcileState = createReconcileState();
+    // Aborted by close. A pass in flight stops between slices and before its next append, and
+    // every start path refuses once it is aborted, so the closing bus writes no event after
+    // close resolves. The records it did not reach are not lost: no cursor advanced past them,
+    // and the next bus process's first pass finds them again.
+    const closing = new AbortController();
+    let reconcileRun: Promise<SignedEventRecord[]> | null = null;
+    const runReconcile = (): Promise<SignedEventRecord[]> => {
+      if (closing.signal.aborted) return Promise.resolve([]);
+      if (reconcileRun !== null) return reconcileRun;
+      const run = reconcilePassAsync({
         project: input.team.project,
         root: input.root,
         session: input.team.session,
@@ -706,12 +729,21 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
         kept: input.keptLogFiles,
         ...(input.heldThresholdSeconds !== undefined ? { heldThresholdSeconds: input.heldThresholdSeconds } : {}),
         onEvent: fanOut,
+        state: reconcileState,
+        signal: closing.signal,
+      }).then(
+        (res) => (res.ok ? res.raised : []),
+        (error: unknown) => {
+          input.stderr(`team bus: reconcile failed: ${error instanceof Error ? error.message : String(error)}\n`);
+          return [];
+        },
+      );
+      reconcileRun = run;
+      void run.finally(() => {
+        if (reconcileRun === run) reconcileRun = null;
       });
-      return res.ok ? res.raised : [];
+      return run;
     };
-
-    // Initial reconcile pass at bus start (Amendment 01 §4.2).
-    runReconcile();
 
     const server = createServer((socket) => {
       sockets.add(socket);
@@ -735,28 +767,45 @@ async function startBusWalk(input: StartBusInput, path: string): Promise<StartBu
     // pid, while it serves. A marker whose pid is gone is a bus that died; `team up` starts one.
     writeBusMarker(input.root, now());
 
+    // Initial reconcile pass at bus start (Amendment 01 §4.2). The listener is already bound, so
+    // the pass's own yields let a liveness probe and a subscriber connect while it runs.
+    await runReconcile();
+
     const timer =
       reconcileIntervalMs > 0
         ? setInterval(() => {
-            try {
-              runReconcile();
-            } catch (error) {
-              input.stderr(`team bus: reconcile failed: ${error instanceof Error ? error.message : String(error)}\n`);
-            }
+            // The pass answers its own failures; an interval tick never starts a second pass.
+            void runReconcile();
           }, reconcileIntervalMs)
         : undefined;
     timer?.unref?.();
 
+    let closingPromise: Promise<void> | null = null;
     const handle: BusHandle = {
       reconcileNow: runReconcile,
-      close: () =>
-        new Promise<void>((done) => {
+      close: () => {
+        if (closingPromise !== null) return closingPromise;
+        // Cancel before waiting: the pass in flight stops at its next boundary, and every later
+        // start answers empty. Close resolves only after the pass has stopped, so no record is
+        // appended after it — the endpoint it owns is released with its last write behind it.
+        closing.abort();
+        closingPromise = (async () => {
+          const running = reconcileRun;
+          if (running !== null) {
+            try {
+              await running;
+            } catch {
+              // The pass answers its own failures; close has nothing to add.
+            }
+          }
           if (timer !== undefined) clearInterval(timer);
           subscribers.clear();
           for (const socket of sockets) socket.destroy();
           clearBusMarker(input.root);
-          server.close(() => done());
-        }),
+          await new Promise<void>((done) => server.close(() => done()));
+        })();
+        return closingPromise;
+      },
     };
     return { kind: 'serving', cleared, handle };
   }

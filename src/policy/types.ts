@@ -73,8 +73,8 @@ export type Policy<V extends PolicyValue = PolicyValue> = {
 export const POLICY_DOMAIN = 'team-policy-v1\n';
 
 /**
- * The EIGHT everyday operations whose caller gate `dev-mode` lifts when `on`
- * (`reload` was added last).
+ * The TEN everyday operations whose caller gate `dev-mode` lifts when `on`
+ * (`reload` and `rename` were added last, and `peek` after them: the one lift that only reads).
  * Never reaches `grant`, `delegate`, `revoke`, `approve`, `create`, `agree`, `leads`,
  * `remove --abandon`, `broker`, `tempo`, or a delegate's file-editing `add`.
  */
@@ -88,6 +88,7 @@ export const DEV_MODE_OPERATIONS = [
   'init',
   'reload',
   'rename',
+  'peek',
 ] as const;
 
 export type DevModeOperation = (typeof DEV_MODE_OPERATIONS)[number];

@@ -509,7 +509,12 @@ describe('trust dialog resume and pane naming', () => {
       };
     });
 
-    const trustScreen = readFileSync(join(import.meta.dir, 'fixtures/antigravity/1.2.16/trust.txt'), 'utf8').replace('<project-worktree>', lobby);
+    // The 1.3.5 captures: its README records `idle.txt` as the same directory after Enter on
+    // the marked trust row, so its record is an answer a run measured. The 1.2.16 captures
+    // record Escape quitting the dialog, so that version ships no trust answer and a seat
+    // there would be refused — the scene answers at 1.3.5, where the answer was measured.
+    const idle135 = readFileSync(join(import.meta.dir, 'fixtures/antigravity/1.3.5/idle.txt'), 'utf8');
+    const trustScreen = readFileSync(join(import.meta.dir, 'fixtures/antigravity/1.3.5/trust.txt'), 'utf8').replace('<workspace>', lobby);
     let screen = trustScreen;
     let status = 'idle';
     let named = false;
@@ -520,11 +525,11 @@ describe('trust dialog resume and pane naming', () => {
     const agyBox = (value: string) => {
       const [first = '', ...rest] = value.split('\n');
       const body = [`> ${first}`, ...rest.map((line) => `  ${line}`)].join('\n');
-      return AGY_IDLE.replace('\n>\n', `\n${body}\n`);
+      return idle135.replace('\n>\n', `\n${body}\n`);
     };
 
     const host: AnswerHost = {
-      version: () => '1.2.16',
+      version: () => '1.3.5',
       agents: () => [
         { name: 'lead', pane: 'w1:p1', workspace: 'w1' },
         { name: named ? 'operator-1' : '', pane: 'w46:p1', workspace: 'w46' },
@@ -532,7 +537,7 @@ describe('trust dialog resume and pane naming', () => {
       pane: (_session, pane) => (pane === 'w46:p1' ? screen : undefined),
       sendKey: (_session, pane, key) => {
         keys.push(`${pane}:${key}`);
-        screen = AGY_IDLE;
+        screen = idle135;
         return true;
       },
       rename: (_session, pane, name) => {
@@ -550,7 +555,7 @@ describe('trust dialog resume and pane naming', () => {
         return true;
       },
       enter: () => {
-        screen = AGY_IDLE;
+        screen = idle135;
         status = 'working';
         return true;
       },

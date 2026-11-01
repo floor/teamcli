@@ -80,27 +80,35 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `agents.registry` | `agents` | 1 | the team registry cannot be read | `team agents prune` |
 | `agents.stale` | `agents` | 1 | the dry run found records to retire | `team agents prune` |
 | `agents.invocation` | `agents` | 2 | the invocation cannot be read | `team agents prune --nope` |
+| `answer.question` | `answer` | 0 | the question dialog was answered: dismissed with the recorded key, and the seat sent the decision line | `team answer lead question` |
 | `answer.ready` | `answer` | 0 | the trust dialog was answered and the seat is ready | `team answer lead trust` |
 | `answer.action` | `answer` | 1 | the recorded key was not sent | `team answer lead trust` |
 | `answer.ambiguous` | `answer` | 1 | herdr lists more than one agent of this name | `team answer lead trust` |
 | `answer.another-pane` | `answer` | 1 | the state records another pane for the caller's seat | `team answer lead trust` |
-| `answer.caller` | `answer` | 1 | the caller may not answer a trust dialog | `team answer lead trust` |
+| `answer.caller` | `answer` | 1 | the caller may not answer a dialog | `team answer lead trust` |
+| `answer.delivery` | `answer` | 1 | the dialog was dismissed, but the decision line could not be delivered; the recovery stays recorded | `team answer lead question` |
 | `answer.detached` | `answer` | 1 | a run with no terminal | `team answer lead trust` |
+| `answer.disagree` | `answer` | 1 | two fresh reads of the pane do not agree on the dialog | `team answer lead question` |
 | `answer.file-owner` | `answer` | 1 | --file is the owner's | `team answer lead trust --file .agents/team.yaml` |
 | `answer.folder` | `answer` | 1 | the dialog's folder is not the lobby's exact trust entry | `team answer lead trust` |
 | `answer.human` | `answer` | 1 | the seat is a human's pane; no dialog key is pressed and no rules line is typed | `team answer lead trust` |
+| `answer.identity` | `answer` | 1 | the seat's launched identity was not recorded; no process in its pane can be checked against it | `team answer lead question` |
+| `answer.incomplete` | `answer` | 1 | the question runs past the rows this version reads; it is not answered | `team answer lead question` |
 | `answer.label` | `answer` | 1 | the trust choice is not the recorded one | `team answer lead trust` |
+| `answer.login` | `answer` | 1 | the pane is at a login prompt; it is never answered | `team answer lead question` |
 | `answer.no-pane` | `answer` | 1 | the state records no pane for the caller's seat | `team answer lead trust` |
+| `answer.not-a-question` | `answer` | 1 | the pane is not at a question, plan approval or confirmation dialog | `team answer lead question` |
+| `answer.permission` | `answer` | 1 | the pane is at a permission prompt, including trust to run a command; it is never answered | `team answer lead question` |
 | `answer.policy` | `answer` | 1 | the dialogs.trust grant is not in force | `team answer lead trust` |
 | `answer.process` | `answer` | 1 | the process in the pane is not the one team launched | `team answer lead trust` |
-| `answer.recovery` | `answer` | 1 | the trust answer did not complete: the seat stays in recovery | `team answer lead trust` |
+| `answer.recovery` | `answer` | 1 | the answer did not complete: the seat stays in recovery | `team answer lead trust` |
 | `answer.screen` | `answer` | 1 | the pane is not the trust dialog | `team answer lead trust` |
 | `answer.session-owner` | `answer` | 1 | --session is the owner's | `team answer lead trust --session other` |
-| `answer.state` | `answer` | 1 | the seat is not waiting at a trust dialog | `team answer lead trust` |
+| `answer.state` | `answer` | 1 | the seat is not waiting at the dialog this word answers | `team answer lead trust` |
 | `answer.unverified` | `answer` | 1 | the name is not a declared seat | `team answer lead trust` |
-| `answer.version` | `answer` | 1 | this version has no trust answer | `team answer lead trust` |
-| `answer.configuration` | `answer` | 2 | the team file cannot be read | `team answer lead trust --file missing.yaml` |
-| `answer.usage` | `answer` | 2 | the invocation is not a seat and trust | `team answer` |
+| `answer.version` | `answer` | 1 | this version has no answer for the dialog | `team answer lead trust` |
+| `answer.configuration` | `answer` | 2 | the team file cannot be read, or the decision line would go to another team | `team answer lead trust --file missing.yaml` |
+| `answer.usage` | `answer` | 2 | the invocation is not a seat and trust or question | `team answer` |
 | `approvals.approval-requested` | `approvals` | 0 | an owner-seat request for this revoke was recorded and sent to the owner seat | `team approvals revoke <id...> --request` |
 | `approvals.listed` | `approvals` | 0 | the always rules were listed | `team approvals list` |
 | `approvals.revoked` | `approvals` | 0 | the always rules were removed | `team approvals revoke <id...>` |
@@ -200,6 +208,9 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `commits.since-missing` | `commits` | 2 | since doesn't name a commit | `team commits check HEAD --since missing` |
 | `commits.since-unreachable` | `commits` | 2 | since is not reachable from the ref | `team commits check HEAD --since topic` |
 | `config.approval-requested` | `config` | 0 | an owner-seat request for this set or unset was recorded and sent to the owner seat; nothing was written | `team config set <path> <value> --request` |
+| `config.entity.unchanged` | `config` | 0 | the entity already writes that names.unique word; nothing was written | `team config set <entity>.names.unique off` |
+| `config.entity.value` | `config` | 0 | the entity's names.unique word is printed | `team config get <entity>.names.unique` |
+| `config.entity.written` | `config` | 0 | the entity's names.unique word was written | `team config set <entity>.names.unique off` |
 | `config.shown` | `config` | 0 | the settings registry is printed | `team config keys` |
 | `config.unchanged` | `config` | 0 | the edit changes nothing; nothing was written | `team config set project acme` |
 | `config.value` | `config` | 0 | the value at the path is printed | `team config get project` |
@@ -207,12 +218,21 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `config.approval-refused` | `config` | 1 | the owner-seat request or approval was refused; nothing was written | `team config set <path> <value> --approval <request-id>` |
 | `config.charter` | `config` | 1 | the owner charter does not cover this edit | `team config set watch.unread_after 5m` |
 | `config.detached` | `config` | 1 | an edit was run with no terminal | `team config set watch.unread_after 5m` |
+| `config.entity.detached` | `config` | 1 | an entity's word was set with no terminal | `team config set <entity>.names.unique off` |
+| `config.entity.general-refused` | `config` | 1 | the general grant does not cover this entity or admit this set; nothing was written | `team config set <entity>.names.unique off --general <grant.json> --key <client.key>` |
+| `config.entity.names-value` | `config` | 1 | the word is not one of entity, project, team or off; nothing was written | `team config set <entity>.names.unique everywhere` |
+| `config.entity.no-value` | `config` | 1 | the entity's entry writes no names.unique word | `team config get <entity>.names.unique` |
+| `config.entity.not-owner` | `config` | 1 | an entity's word was set by a caller that is neither the owner nor admitted by the owner's general grant | `team config set <entity>.names.unique off` |
+| `config.entity.path` | `config` | 1 | the entity's entry cannot be set (no such entry, or a value on the way); nothing was written | `team config set <entity>.names.unique off` |
 | `config.general-refused` | `config` | 1 | the general grant does not admit this edit; nothing was written | `team config set <path> <value> --general <grant.json> --key <client.key>` |
 | `config.invalid` | `config` | 1 | the changed record does not validate; nothing was written | `team config set seats.lead.cli nope` |
+| `config.name-taken` | `config` | 1 | a nickname the change sets is already held by another team's seat; nothing was written | `team config set seats.worker.label "Cicero · implementer"` |
 | `config.no-value` | `config` | 1 | the path holds nothing in the record | `team config get watch.missing` |
 | `config.not-owner` | `config` | 1 | an edit was run by a caller that is not the owner | `team config set watch.unread_after 5m` |
 | `config.path` | `config` | 1 | the path cannot be set (a value on the way, or no such list item); nothing was written | `team config set seats.ghost.cli claude` |
 | `config.editor` | `config` | 2 | the editor exited non-zero; nothing was written | `team config edit` |
+| `config.entity.unreadable` | `config` | 2 | the entities file cannot be read | `team config set <entity>.names.unique off` |
+| `config.entity.usage` | `config` | 2 | an entity-form invocation is not one of its forms | `team config set <entity>.names.unique` |
 | `config.invocation` | `config` | 2 | the invocation is not one of the command's forms | `team config` |
 | `config.no-record` | `config` | 2 | the team's record could not be read for an edit | `team config get project` |
 | `config.no-team` | `config` | 2 | no team is found for this folder to read or edit | `team config get project` |
@@ -228,6 +248,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `daemon.stopped` | `daemon` | 0 | the daemon served until it was stopped | `team daemon run` |
 | `daemon.uninstalled` | `daemon` | 0 | the user service unit was removed, or was not installed | `team daemon uninstall` |
 | `daemon.entry-missing` | `daemon` | 1 | the CLI entry cannot be found, so the service unit cannot be written | `team daemon install` |
+| `daemon.fatal` | `daemon` | 1 | a hosted endpoint could not be kept alive, so the daemon exited for the system's service manager to restart it | `team daemon run` |
 | `daemon.fault-daemon` | `daemon` | 1 | the machine daemon is not running, so there is no hosted watch to fault | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-not-reached` | `daemon` | 1 | the daemon did not fault the watch: it answered not reached, or the wait ended first; nothing was killed | `team daemon fault-watch --root <folder> --route <id>` |
 | `daemon.fault-pending` | `daemon` | 1 | a fault request is already waiting for the daemon, so no second request was written | `team daemon fault-watch --root <folder> --route <id>` |
@@ -347,6 +368,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `init.general-refused` | `init` | 1 | the general grant does not admit this create; nothing was written | `team init --general <grant.json> --key <client.key>` |
 | `init.git-silent` | `init` | 1 | git doesn't answer for this folder | `team init` |
 | `init.legacy` | `init` | 1 | the record predates signed records | `team init --restore` |
+| `init.name-taken` | `init` | 1 | a nickname the restored team brings is already held by another team's seat; nothing was written | `team init --from-archive <folder>` |
 | `init.not-owner` | `init` | 1 | not the owner | `team init` |
 | `init.nothing` | `init` | 1 | there is nothing to restore | `team init --restore` |
 | `init.refused` | `init` | 1 | the stored record does not verify | `team init --restore` |
@@ -434,6 +456,13 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `pause.file` | `pause` | 2 | the team file can't be read | `team pause` |
 | `pause.invocation` | `pause` | 2 | the invocation can't be read | `team pause --all --json` |
 | `pause.team` | `pause` | 2 | the name is neither a declared seat nor a registered team, or names more than one | `team pause other` |
+| `peek.shown` | `peek` | 0 | the seat's last lines were printed, masked where a line looks like a credential | `team peek lead` |
+| `peek.owner-pane` | `peek` | 1 | the named seat is a person's pane, and the owner's pane is never read | `team peek desk` |
+| `peek.unknown` | `peek` | 1 | the team declares no seat by that name | `team peek ghost` |
+| `peek.file` | `peek` | 2 | the team file can't be read | `team peek lead` |
+| `peek.invocation` | `peek` | 2 | the invocation can't be read | `team peek lead --lines 0` |
+| `peek.no-screen` | `peek` | 2 | no screen is readable: no pane is recorded, no reader stands, or the read failed | `team peek lead` |
+| `peek.not-yours` | `peek` | 2 | the caller is not the owner or a seat the read gate places on its recorded pane | `team peek lead` |
 | `plan.none` | `plan` | 0 | nothing is takeable | `team plan` |
 | `plan.shown` | `plan` | 0 | the takeable queue was printed | `team plan` |
 | `plan.broker` | `plan` | 1 | no broker is running, or its answer was not one this build knows | `team plan` |
@@ -685,6 +714,7 @@ The check keeps this list complete against ordinary changes to the commands (a n
 | `send.client-pane` | `send` | 1 | a client invocation ran inside a team pane (a herdr seat or its child) and was refused before the grant or key was opened | `team send --client client-grant.json --key client.key orchestrator@floor hello` |
 | `send.client-refused` | `send` | 1 | a client grant invocation was refused before any record was written | `team send --client missing.json --key client.key orchestrator@floor hello` |
 | `send.detached` | `send` | 1 | a run with no terminal | `team send --list` |
+| `send.grant-invalid` | `send` | 1 | a send grant names this pair but is not signed by the owner (it is unsigned, or its signature does not verify); nothing was sent, and the refusal prints the record's name and the exact team grant --send line that recreates it signed | `team send native@other hello` |
 | `send.held` | `send` | 1 | the message is on disk and the pane was left untouched | `team send worker hello` |
 | `send.not-submitted` | `send` | 1 | the trigger was typed and the seat never took it | `team send worker hello` |
 | `send.refused` | `send` | 1 | nothing was sent, on purpose | `team send missing hello` |

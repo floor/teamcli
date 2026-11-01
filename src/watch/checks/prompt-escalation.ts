@@ -11,16 +11,20 @@ import { minutes, type Report, type SeatObservation, type TeamCheck } from '../c
 // lead and the owner from the start — so no timer is kept for it. One climb per prompt spell; a
 // watch restarted mid-spell starts the clock again, and reports again rather than staying quiet.
 // Nothing here types into a pane: a climb is a report and an event, never a keystroke.
-type Prompt = 'permission' | 'vendor notice' | 'rate limit';
+type Prompt = 'permission' | 'plan approval' | 'confirmation' | 'question' | 'vendor notice' | 'rate limit';
 
 type Spell = { prompt: Prompt; since: number; escalated: boolean };
 
 /** The prompt a seat is held at, in the words of the at-prompt event the watch publishes: a
- *  permission or trust dialog, the CLI's own vendor notice, and a usage limit the screen draws.
- *  The provider error is a block, not a prompt, and is not this check's. */
+ *  permission or trust dialog, the answerable dialogs — a plan approval, a confirmation and the
+ *  agent's own question — the CLI's own vendor notice, and a usage limit the screen draws. The
+ *  provider error is a block, not a prompt, and is not this check's. */
 function promptOf(seat: SeatObservation): Prompt | null {
   if (!seat.running) return null;
   if (seat.attention === 'permission') return 'permission';
+  if (seat.attention === 'plan approval') return 'plan approval';
+  if (seat.attention === 'confirmation') return 'confirmation';
+  if (seat.attention === 'question') return 'question';
   if (seat.attention === 'vendor notice') return 'vendor notice';
   if (!seat.working && seat.screen.kind === 'rate limit') return 'rate limit';
   return null;
