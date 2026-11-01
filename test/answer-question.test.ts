@@ -152,6 +152,39 @@ function wrappedQuestion(rows: readonly string[]): string {
   return lines.join('\n');
 }
 
+/** The cursor question capture with the rows given laid into the box under the question row, one
+ *  blank box row between the paragraphs when a `''` is among them: an interior blank row is the
+ *  block's own, and the paragraph after it belongs to the question. */
+function questionWithParagraphs(rows: readonly string[]): string {
+  const lines = cursorQuestion.split('\n');
+  const at = lines.findIndex((line) => line.includes('Which name should be used for the file?'));
+  if (at < 0) throw new Error('the cursor capture no longer holds the question row');
+  const reference = lines[at] as string;
+  const open = reference.indexOf('│');
+  const close = reference.lastIndexOf('│');
+  const room = close - open - 1;
+  const boxed = rows.map((row) => `${reference.slice(0, open + 1)} ${row.padEnd(room - 1)}${reference.slice(close)}`);
+  lines.splice(at + 1, 0, ...boxed);
+  return lines.join('\n');
+}
+
+/** The capture with an older question box laid into the transcript above the live one: the stale
+ *  copy carries the same header and an option row of its own, so only the live block nearest the
+ *  bottom is the dialog the pane stands at. */
+function staleQuestionAbove(): string {
+  const stale = [
+    ' ┌─────────────────────────────────────────────────┐',
+    ' │ Question 1 of 1                                 │',
+    ' │ Old question from the transcript?               │',
+    ' │                                                 │',
+    ' │   › [ ] stale.txt                               │',
+    ' └─────────────────────────────────────────────────┘',
+  ];
+  const retained = cursorQuestion.replace('\n\n\n ┌', ['', ...stale, ' ┌'].join('\n'));
+  if (retained === cursorQuestion) throw new Error('the cursor capture no longer holds its transcript rows');
+  return retained;
+}
+
 /** The capture's dialog box alone: the prompt the seat wrote above it is pane scrollback, and a
  *  tall block keeps the box top inside the reader's last-20-row window only when it goes. */
 function boxOnly(screen: string): string {
@@ -543,6 +576,51 @@ describe('team answer <seat> question', () => {
     const host = fake(home, 'lead', writes, { shipped: true, printed: '2026.10.16-e3cb207' });
     let reads = 0;
     host.pane = () => (reads++ === 0 ? writes : names);
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
+    expect(run.err).toBe('lead: the two fresh reads of the pane do not agree on the dialog\n');
+    expect(host.keys).toEqual([]);
+    expect(reads).toBe(2);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
+  test('an interior blank row is the block\'s own, so two captures differing in the paragraph after it disagree', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // Builder-3's command probe: one pane, captured twice, the captures differing only in the
+    // paragraph below a blank row inside the box. A reading that ends the block at the blank row
+    // sees the same question twice and presses the key; the block is read to its marker, so the
+    // paragraph after the blank is read and the two reads disagree — no key is pressed.
+    const first = boxOnly(questionWithParagraphs(['Use the first package.', '', 'Use the second package.']));
+    const other = boxOnly(questionWithParagraphs(['Use the first package.', '', 'Use the other package.']));
+    const host = fake(home, 'lead', first, { shipped: true, printed: '2026.10.16-e3cb207' });
+    let reads = 0;
+    host.pane = () => (reads++ === 0 ? first : other);
+    const run = io(root);
+    expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
+    expect(run.err).toBe('lead: the two fresh reads of the pane do not agree on the dialog\n');
+    expect(host.keys).toEqual([]);
+    expect(reads).toBe(2);
+    expect(readState(dir).sessions.acme?.seats.lead?.waiting?.state).toBe('waiting-owner');
+  });
+
+  test('a stale question quoted above the live one never wins, so changing only the live question refuses', async () => {
+    const { root, home, lobby, dir } = world();
+    writeFileSync(join(dir, 'team.yaml'), file(lobby, root));
+    await approve(root, home);
+    wait(dir, 'lead', { classification: 'question' });
+    // Operator-3's command probe: the transcript above the live dialog quotes an older question
+    // with the same header. A reading that takes the first anchor sees the same stale text twice
+    // and presses the key across a live change; the reader takes the whole block nearest the
+    // bottom, so changing only the live question makes the two reads disagree — no key is pressed.
+    const retained = boxOnly(staleQuestionAbove());
+    const changed = retained.replace('Which name should be used for the file?', 'Which file name did the live dialog ask for?');
+    expect(changed).not.toBe(retained);
+    const host = fake(home, 'lead', retained, { shipped: true, printed: '2026.10.16-e3cb207' });
+    let reads = 0;
+    host.pane = () => (reads++ === 0 ? retained : changed);
     const run = io(root);
     expect(await runAnswer([...FILE, 'lead', 'question'], run, host)).toBe(1);
     expect(run.err).toBe('lead: the two fresh reads of the pane do not agree on the dialog\n');
