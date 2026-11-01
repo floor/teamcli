@@ -8,7 +8,7 @@ const fixtureRoot = fileURLToPath(new URL('../../cross-send-independent-fixtures
 mkdirSync(fixtureRoot, { recursive: true });
 const bases: string[] = [];
 afterAll(() => { if (bases.length > 0) spawnSync('trash', bases, { timeout: 20_000 }); }, 30_000);
-type Result = { code: number; out: string; err: string; records: { team: string; body: string }[]; paneWrites: number; home: string; issued?: boolean; before?: Result; line?: string; repair?: Result; after?: Result; verified?: { name: string; from: string; to: string }[]; expectedPair?: { from: string; to: string }; grantFiles?: string[] };
+type Result = { code: number; out: string; err: string; records: { team: string; body: string }[]; paneWrites: number; home: string; issued?: boolean; before?: Result; line?: string; repair?: Result; after?: Result; verified?: { name: string; from: string; to: string; expires: string }[]; expectedPair?: { from: string; to: string }; grantFiles?: string[] };
 type PairInput = { words: string[]; entities: string[]; expectedPair: { from: string; to: string } };
 function scene(name: string, pair?: PairInput): Result {
   const base = realpathSync(mkdtempSync(join(fixtureRoot, 'scene-')));
@@ -89,7 +89,7 @@ function checkedPair(input: PairInput) {
   expect(result.code, result.out + result.err).toBe(0);
   expect(result.records).toEqual([]);
   expect(result.paneWrites).toBe(0);
-  expect(result.verified).toEqual([{ name: 'independent-pair', ...result.expectedPair, expires: expect.any(String) }]);
+  expect(result.verified).toEqual([{ name: 'independent-pair', ...result.expectedPair!, expires: expect.any(String) }]);
   expect(result.grantFiles).toHaveLength(1);
 }
 const inside = { from: 'architect@design', to: 'coordinator@product' };
