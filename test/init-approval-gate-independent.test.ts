@@ -5,7 +5,7 @@ import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { runInit } from '../src/commands/init.ts';
 import { main } from '../src/cli.ts';
 import type { Caller } from '../src/caller.ts';
@@ -173,3 +173,24 @@ test('a folder rule cannot change an approval mode at an outside requested scope
   expect(result.code).toBe(1); expect(JSON.parse(result.io.out).error.id).toBe('init.approval-refused');
   expect(after).toEqual(before);
 });
+
+
+for (const shape of ['symlink', 'parent'] as const) {
+  test('canonical target refusal: ' + shape + ' cannot escape the signed rule folder', async () => {
+    const w = world();
+    // The API signs w.base (the repository parent's folder) as the rule scope.
+    // A parent escape must therefore name dirname(w.base), outside that signed folder.
+    let target: string; let canonical: string;
+    if (shape === 'symlink') {
+      const outside = fs.realpathSync(fs.mkdtempSync(join(tmpdir(), 'ig-link-out-'))); bases.push(outside);
+      canonical = outside; target = join(w.root, 'linked-outside'); fs.symlinkSync(outside, target);
+    } else { canonical = dirname(w.base); target = canonical; }
+    const seeded = must(setApprovalMode(w.home, 'team-create', 'none', canonical, w.signer.store, NOW));
+    assert.ok(seeded.modeId); allow(w);
+    const control = await run(w, words(w, 'per-action'), callers.seat); expect(control.code, control.io.out).toBe(0);
+    const before = snapshot(w);
+    const result = await run(w, ['--approval-mode', 'per-action', '--scope', target], callers.seat);
+    expect(result.code, result.io.out).toBe(1); expect(JSON.parse(result.io.out).error.id).toBe('init.approval-refused');
+    expect(snapshot(w)).toEqual(before); expect(fs.realpathSync(target)).toBe(canonical);
+  });
+}
