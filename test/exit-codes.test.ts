@@ -3711,6 +3711,15 @@ scene('answer.identity', async (place) => {
   host.reading = () => questionReading('question', QUESTION_TEXT);
   return show(await answered(place, ['lead', 'question', '--file', place.file], owner, host), 'launched identity was not recorded');
 });
+scene('answer.trust-identity', async (place) => {
+  const lobby = lobbyDir(place.home);
+  mkdirSync(lobby, { recursive: true });
+  approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
+  updateState(dirname(place.file), (state) => {
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+  });
+  return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, '')), 'launched identity was not recorded');
+});
 scene('answer.no-pane', async (place) => {
   const lobby = lobbyDir(place.home);
   mkdirSync(lobby, { recursive: true });
@@ -3796,7 +3805,7 @@ scene('answer.version', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, CURSOR_TRUST, { version: '2026.10.02' })), 'no trust answer');
 });
@@ -3805,7 +3814,7 @@ scene('answer.screen', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, 'not a dialog\n')), 'not the trust dialog');
 });
@@ -3816,7 +3825,7 @@ scene('answer.label', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('[a] Trust this workspace', '[a] Trust this workspacX').replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not the trust dialog');
@@ -3826,7 +3835,7 @@ scene('answer.folder', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home).replace(`trust:\n  - ${lobby}\n  - ${place.root}`, 'trust:\n  - .'));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'not an exact trust entry');
@@ -3845,7 +3854,7 @@ scene('answer.ready', async (place) => {
   mkdirSync(lobby, { recursive: true });
   approve(place, cursorTeam(lobby, 'trust', place.root, place.home));
   updateState(dirname(place.file), (state) => {
-    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'w1:p1', waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
+    state.sessions.acme = { seats: { lead: { stage: 'launched', pane: 'pane1', launched: { shell: 400, cli: [401] }, waiting: { state: 'waiting-owner', classification: 'trust' } } }, worktrees: {} };
   });
   const screen = CURSOR_TRUST.replace('<workspace>', lobby);
   return show(await answered(place, ['lead', 'trust', '--file', place.file], owner, answerHost(place, screen)), 'answered trust');

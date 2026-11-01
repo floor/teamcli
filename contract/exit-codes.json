@@ -697,6 +697,13 @@
     {
       "code": 1,
       "command": "answer",
+      "id": "answer.trust-identity",
+      "meaning": "the seat's launched identity was not recorded; no process in its pane can be checked against it",
+      "trigger": "team answer lead trust"
+    },
+    {
+      "code": 1,
+      "command": "answer",
       "id": "answer.unverified",
       "meaning": "the name is not a declared seat",
       "trigger": "team answer lead trust"
